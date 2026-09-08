@@ -724,7 +724,9 @@ class TestVadReplacementCleanup:
         ar._user_silence_ev.clear()
         ar._vad_speech_started = True
         ar._ensure_user_turn_span = MagicMock(return_value=contextlib.nullcontext())
-        monkeypatch.setattr(audio_recognition_module.tracer, "use_span", lambda span: contextlib.nullcontext())
+        monkeypatch.setattr(
+            audio_recognition_module.tracer, "use_span", lambda span: contextlib.nullcontext()
+        )
 
         ar._update_vad(None)
 

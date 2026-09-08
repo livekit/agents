@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Tests that _llm_inference_task emits a FlushSentinel into text_ch as soon
 as a tool call arrives, so the in-progress TTS segment can be spoken without
 waiting for the entire tool round-trip.
@@ -12,6 +10,8 @@ Fix:
 - generation.py now sends FlushSentinel() into text_ch the moment the first
   tool call chunk arrives, *if* any text has already been generated.
 """
+
+from __future__ import annotations
 
 import asyncio
 
@@ -28,8 +28,8 @@ from livekit.agents.types import FlushSentinel
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.generation import (
-    _LLMGenerationData,
     _llm_inference_task,
+    _LLMGenerationData,
 )
 
 pytestmark = pytest.mark.unit
