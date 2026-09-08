@@ -29,6 +29,9 @@ LiveKit, Pipecat and from-scratch agent examples.
 Set `MAYA_API_KEY` in your server environment. Do not put it in browser code,
 URLs, source control, logs or coding-agent prompts.
 
+Custom `base_url` / `MAYA_BASE_URL` values must use HTTPS or WSS. Plain HTTP/WS,
+including loopback URLs, is rejected before any key or text is transmitted.
+
 ```python
 from livekit.agents import AgentSession
 from livekit.plugins import maya
@@ -52,18 +55,30 @@ speech recognition, an LLM, or LiveKit room credentials.
   signed 16-bit little-endian PCM; other formats fail instead of sounding wrong.
 - Base64 is decoded strictly. Split sample bytes and the final partial frame
   are preserved. Late frames from another context are ignored.
-- Slow first text does not consume the server response timeout. Empty turns
-  generate neither speech nor a nonexistent turn-closer.
+- Slow first text does not consume the server response timeout. After audio
+  progresses, a pause awaiting more LLM text does not abort the open turn.
+  New text re-arms the progress timeout; the final closer starts a bounded
+  audio/end wait. Text sends themselves are bounded too. Empty turns generate
+  neither speech nor a nonexistent turn-closer.
 - Cancellation stops the turn and discards its connection; the next turn
   cannot inherit abandoned audio. LiveKit handles clearing local playout.
 - Updating options selects a correctly configured connection for the next turn,
   without closing a currently active turn.
+- Closing the provider prevents new acquisitions and retires handshakes that
+  finish during shutdown, including directly constructed public streams.
 - Errors after audio receipt are not automatically retried, avoiding repeated
   speech. Authentication and malformed protocol errors are not retried either.
 
 The default LiveKit BlingFire tokenizer primarily splits western punctuation.
 Pass an appropriate `tokenizer=` when early danda-delimited sentence emission
 is required. This plugin does not rewrite, normalize, or translate input text.
+
+The v2 protocol has no per-sentence completion acknowledgements. Once audio has
+arrived while text input remains open, an idle provider cannot be distinguished
+from one waiting for the LLM. The progress timeout therefore resumes on new text
+or `end_input()`. Applications should also bound the LLM/overall turn and always
+end or cancel an abandoned input stream. No timeout policy can prove that every
+word was spoken; that needs end-to-end transcription or listening.
 
 ## Development and tests
 

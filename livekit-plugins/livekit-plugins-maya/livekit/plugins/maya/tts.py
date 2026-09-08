@@ -102,7 +102,8 @@ class TTS(tts.TTS):
             voice: Exact voice name for the chosen model. Defaults to Aarav.
             language: Documented language code; omit for mixed-language text.
             api_key: API key, or the MAYA_API_KEY environment variable.
-            base_url: API root, or MAYA_BASE_URL. Defaults to the public Maya endpoint.
+            base_url: HTTPS/WSS API root, or MAYA_BASE_URL. Defaults to the public
+                Maya endpoint. Unencrypted connections are not supported.
             http_session: Optional caller-owned aiohttp session.
             tokenizer: Sentence tokenizer. The default BlingFire tokenizer primarily
                 recognizes western punctuation; supply an Indic-aware tokenizer when
@@ -122,17 +123,16 @@ class TTS(tts.TTS):
         root = base_url if is_given(base_url) else os.getenv("MAYA_BASE_URL", DEFAULT_BASE_URL)
         parsed = urlsplit(root)
         if (
-            parsed.scheme not in ("http", "https", "ws", "wss")
+            parsed.scheme not in ("https", "wss")
             or not parsed.netloc
             or parsed.username
             or parsed.password
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("base_url must be an HTTP/WebSocket root without credentials or query")
-        scheme = {"https": "wss", "http": "ws"}.get(parsed.scheme, parsed.scheme)
+            raise ValueError("base_url must be an HTTPS/WSS root without credentials or query")
         self._url = urlunsplit(
-            (scheme, parsed.netloc, parsed.path.rstrip("/") + "/v1/tts/stream", "", "")
+            ("wss", parsed.netloc, parsed.path.rstrip("/") + "/v1/tts/stream", "", "")
         )
         self._session = http_session
         self._closed = False
@@ -157,7 +157,12 @@ class TTS(tts.TTS):
         """Stable provider name, independent of the selected model."""
         return "Maya Research"
 
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise APIError("Maya TTS is closed", retryable=False)
+
     async def _connect(self, timeout: float) -> _Connection:
+        self._ensure_open()
         settings = self._settings
         session = self._session or utils.http_context.http_session()
         try:
@@ -177,8 +182,10 @@ class TTS(tts.TTS):
             # aiohttp's 3.10 stubs omit the default decode_text overload.
             ws = cast(aiohttp.ClientWebSocketResponse, ws)
         try:
+            self._ensure_open()
             await asyncio.wait_for(ws.send_json(settings.start()), timeout)
             validate_metadata(await receive_json(ws, timeout))
+            self._ensure_open()
         except BaseException as exc:
             await ws.close()
             if isinstance(exc, (APIError, asyncio.CancelledError)):
@@ -195,14 +202,17 @@ class TTS(tts.TTS):
 
     @asynccontextmanager
     async def _connection(self, timeout: float) -> AsyncIterator[_Connection]:
-        if self._closed:
-            raise APIError("Maya TTS is closed", retryable=False)
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
+            self._ensure_open()
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise APITimeoutError()
             connection = await self._pool.get(timeout=remaining)
+            if self._closed:
+                self._pool.remove(connection)
+                await connection.ws.close()
+                self._ensure_open()
             if not connection.ws.closed and connection.settings == self._settings:
                 break
             # Settings belong to the socket. Retire only a socket acquired for a
@@ -222,7 +232,11 @@ class TTS(tts.TTS):
                 raise APIConnectionError("Maya websocket transport failed") from None
             raise
         else:
-            self._pool.put(connection)
+            if self._closed:
+                self._pool.remove(connection)
+                await connection.ws.close()
+            else:
+                self._pool.put(connection)
 
     def prewarm(self) -> None:
         """Prepare a connection without sending text or generating speech."""
@@ -247,17 +261,13 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
         """Synthesize a complete text input as an asynchronous audio stream."""
-        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
+        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a new incremental-text stream for one LiveKit segment."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
-        self._streams.add(stream)
-        return stream
+        return SynthesizeStream(tts=self, conn_options=conn_options)
 
     async def aclose(self) -> None:
         """Close owned streams and sockets, never a caller-provided HTTP session."""
@@ -271,8 +281,10 @@ class ChunkedStream(tts.ChunkedStream):
     """One-shot text synthesis through a pooled Maya WebSocket."""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        tts._ensure_open()
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._maya = tts
+        tts._streams.add(self)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         turn = Turn(utils.shortuuid())
@@ -289,7 +301,13 @@ class ChunkedStream(tts.ChunkedStream):
                 self._acquire_time = self._maya._pool.last_acquire_time
                 self._connection_reused = self._maya._pool.last_connection_reused
                 try:
-                    await send_text(connection.ws, turn, self._input_text, more=False)
+                    await send_text(
+                        connection.ws,
+                        turn,
+                        self._input_text,
+                        more=False,
+                        timeout=self._conn_options.timeout,
+                    )
                     await receive_audio(
                         connection.ws, turn, output_emitter, self._conn_options.timeout
                     )
@@ -305,8 +323,10 @@ class SynthesizeStream(tts.SynthesizeStream):
     """Incremental sentences sharing one Maya context and terminal closer."""
 
     def __init__(self, *, tts: TTS, conn_options: APIConnectOptions) -> None:
+        tts._ensure_open()
         super().__init__(tts=tts, conn_options=conn_options)
         self._maya = tts
+        tts._streams.add(self)
 
     async def _sentences(self) -> AsyncGenerator[str, None]:
         tokenizer = self._maya._tokenizer.stream()
@@ -353,13 +373,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                 self._connection_reused = self._maya._pool.last_connection_reused
                 tasks: list[asyncio.Task[None]] = []
                 try:
-                    await send_text(connection.ws, turn, first, more=True)
+                    await send_text(
+                        connection.ws, turn, first, more=True, timeout=self._conn_options.timeout
+                    )
                     self._mark_started()
 
                     async def send_remaining() -> None:
                         async for text in sentences:
-                            await send_text(connection.ws, turn, text, more=True)
-                        await send_text(connection.ws, turn, "", more=False)
+                            await send_text(
+                                connection.ws,
+                                turn,
+                                text,
+                                more=True,
+                                timeout=self._conn_options.timeout,
+                            )
+                        await send_text(
+                            connection.ws, turn, "", more=False, timeout=self._conn_options.timeout
+                        )
 
                     sender = asyncio.create_task(send_remaining())
                     receiver = asyncio.create_task(

@@ -16,7 +16,7 @@ import base64
 import binascii
 import contextlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
@@ -34,10 +34,14 @@ class Turn:
     input_closed: bool = False
     terminal: bool = False
     audio_bytes: int = 0
+    response_started_at: float | None = None
+    activity: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
 
-async def receive_json(ws: aiohttp.ClientWebSocketResponse, timeout: float) -> dict[str, Any]:
-    if timeout <= 0:
+async def receive_json(
+    ws: aiohttp.ClientWebSocketResponse, timeout: float | None
+) -> dict[str, Any]:
+    if timeout is not None and timeout <= 0:
         raise APITimeoutError()
     try:
         message = await ws.receive(timeout=timeout)
@@ -70,15 +74,56 @@ def validate_metadata(data: dict[str, Any]) -> None:
 
 
 async def send_text(
-    ws: aiohttp.ClientWebSocketResponse, turn: Turn, text: str, *, more: bool
+    ws: aiohttp.ClientWebSocketResponse, turn: Turn, text: str, *, more: bool, timeout: float
 ) -> None:
     # Mark before yielding: a partially completed send may already reach the server.
     turn.submitted = True
     if not more:
         turn.input_closed = True
-    await ws.send_json(
-        {"type": "text", "context_id": turn.context_id, "text": text, "continue": more}
+    # New text needs response progress, and the final closer needs a terminal.
+    # More input must not keep extending a wait that has received no audio.
+    if turn.response_started_at is None or not more:
+        turn.response_started_at = asyncio.get_running_loop().time()
+    turn.activity.set()
+    await asyncio.wait_for(
+        ws.send_json(
+            {"type": "text", "context_id": turn.context_id, "text": text, "continue": more}
+        ),
+        timeout,
     )
+
+
+async def _receive_turn_json(
+    ws: aiohttp.ClientWebSocketResponse, turn: Turn, timeout: float
+) -> dict[str, Any]:
+    # Keep one receive alive while the sender changes the deadline. Cancelling
+    # and recreating a receive on each input event could lose an incoming frame.
+    receive = asyncio.create_task(receive_json(ws, None))
+    try:
+        while True:
+            turn.activity.clear()
+            remaining = (
+                None
+                if turn.response_started_at is None
+                else turn.response_started_at + timeout - asyncio.get_running_loop().time()
+            )
+            if remaining is not None and remaining <= 0:
+                raise APITimeoutError()
+            changed = asyncio.create_task(turn.activity.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    (receive, changed), timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
+            if receive in done:
+                return receive.result()
+            if not done:
+                raise APITimeoutError()
+    finally:
+        receive.cancel()
+        await asyncio.gather(receive, return_exceptions=True)
 
 
 async def receive_audio(
@@ -86,9 +131,8 @@ async def receive_audio(
 ) -> None:
     carry = b""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
     while True:
-        data = await receive_json(ws, deadline - loop.time())
+        data = await _receive_turn_json(ws, turn, timeout)
         kind, context = data.get("type"), data.get("context_id")
         if kind == "error" and context in (None, turn.context_id):
             # Do not echo service bodies: they can contain submitted text or secrets.
@@ -102,7 +146,10 @@ async def receive_audio(
                 raise APIError("Maya returned invalid base64 audio", retryable=False) from None
             if not audio:
                 continue
-            deadline = loop.time() + timeout
+            # v2 has no per-sentence completion ACK. Once audio has progressed,
+            # an open input may simply be waiting for the LLM. Re-arm on new
+            # text; after the closer, every audio gap/end wait stays bounded.
+            turn.response_started_at = loop.time() if turn.input_closed else None
             turn.audio_bytes += len(audio)
             carry += audio
             complete = len(carry) - len(carry) % 2

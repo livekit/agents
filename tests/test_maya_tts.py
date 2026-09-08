@@ -91,7 +91,7 @@ class Socket:
             self.reply({"type": "end", "context_id": context})
             self.active.pop(context, None)
 
-    async def receive(self, *, timeout: float) -> SimpleNamespace:
+    async def receive(self, *, timeout: float | None) -> SimpleNamespace:
         return await asyncio.wait_for(self.queue.get(), timeout)
 
     async def close(self) -> None:
@@ -544,3 +544,196 @@ async def test_close_stops_active_stream_and_preserves_caller_session(service: S
     assert not service.closed
     with pytest.raises(APIError, match="closed"):
         await speak(engine, False)
+
+
+@pytest.mark.parametrize("url", ["http://example.com", "ws://example.com", "http://localhost"])
+def test_plaintext_base_url_is_rejected_before_connecting(url: str) -> None:
+    service = Service()
+    with pytest.raises(ValueError, match="base_url"):
+        service.engine(base_url=url)
+    assert not service.headers and not service.sockets
+
+
+async def test_acquisition_finishing_after_close_cannot_return_a_socket(
+    service: Service, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.ws_connect
+
+    async def blocked_connect(url: str, *, headers: dict[str, str]) -> Any:
+        entered.set()
+        await release.wait()
+        return await original(url, headers=headers)
+
+    monkeypatch.setattr(service, "ws_connect", blocked_connect)
+    engine = service.engine()
+
+    async def borrow() -> None:
+        async with engine._connection(0.5):
+            pass
+
+    task = asyncio.create_task(borrow())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await engine.aclose()
+        release.set()
+        with pytest.raises(APIError, match="closed"):
+            await asyncio.wait_for(task, 1)
+        assert all(socket.closed for socket in service.sockets)
+        assert not service.text_frames()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await engine.aclose()
+
+
+async def test_pause_between_sentences_is_not_a_maya_timeout(service: Service) -> None:
+    async with service.engine() as engine:
+        stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
+        # A partial next sentence gives the tokenizer lookahead without flush(),
+        # which would close this LiveKit segment to further push_text calls.
+        stream.push_text("First sentence. Second ")
+        await asyncio.wait_for(anext(stream), 1)
+        await asyncio.sleep(0.12)
+        assert not stream._task.done(), "A pause awaiting the LLM aborted the Maya turn"
+        stream.push_text("sentence.")
+        stream.end_input()
+        assert await asyncio.wait_for(collect(stream), 1)
+    texts = [f["text"] for f in service.text_frames() if f["text"].strip()]
+    assert " ".join("".join(texts).split()) == "First sentence. Second sentence."
+    assert len({f["context_id"] for f in service.text_frames()}) == 1
+
+
+@pytest.mark.parametrize("resume", ["text", "closer"])
+async def test_after_input_pause_provider_wait_is_bounded_again(
+    service: Service, resume: str
+) -> None:
+    async with service.engine() as engine:
+        stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
+        stream.push_text("First sentence. Second ")
+        await asyncio.wait_for(anext(stream), 1)
+        await asyncio.sleep(0.12)
+        assert not stream._task.done()
+        service.mode = "no-response"
+        if resume == "text":
+            stream.push_text("sentence. Third ")
+        else:
+            stream.end_input()
+        with pytest.raises(APIError, match="timed out"):
+            await asyncio.wait_for(collect(stream), 1)
+        assert service.cancels() and service.sockets[0].closed
+
+
+async def test_repeated_input_cannot_extend_an_unanswered_response(service: Service) -> None:
+    service.mode = "no-response"
+    async with service.engine() as engine:
+        stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.06))
+
+        async def feed() -> None:
+            while True:
+                stream.push_text("Another complete sentence. ")
+                await asyncio.sleep(0.01)
+
+        sender = asyncio.create_task(feed())
+        try:
+            with pytest.raises(APIError, match="timed out"):
+                await asyncio.wait_for(collect(stream), 0.8)
+        finally:
+            sender.cancel()
+            await asyncio.gather(sender, return_exceptions=True)
+        assert len(service.text_frames()) > 1
+        assert service.sockets[0].closed
+
+
+async def test_cancellation_while_waiting_for_more_input_closes_receive(service: Service) -> None:
+    async with service.engine() as engine:
+        stream = engine.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05))
+        stream.push_text("First sentence. Second ")
+        await asyncio.wait_for(anext(stream), 1)
+        await asyncio.sleep(0.12)
+        assert not stream._task.done()
+        await asyncio.wait_for(stream.aclose(), 1)
+        assert service.cancels() and service.sockets[0].closed
+        assert await speak(engine, False) == PCM
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_blocked_text_send_is_bounded(
+    service: Service, monkeypatch: pytest.MonkeyPatch, streaming: bool
+) -> None:
+    original = Socket.send_json
+
+    async def blocked_send(socket: Socket, frame: dict[str, Any]) -> None:
+        if frame["type"] == "text":
+            await asyncio.Event().wait()
+        await original(socket, frame)
+
+    monkeypatch.setattr(Socket, "send_json", blocked_send)
+    async with service.engine() as engine:
+        with pytest.raises(APIError, match="timed out"):
+            await asyncio.wait_for(speak(engine, streaming), 1)
+        assert service.cancels() and service.sockets[0].closed
+
+
+@pytest.mark.parametrize(
+    "mode", ["one-shot", "stream", "direct-one-shot", "direct-stream", "prewarm"]
+)
+async def test_public_shutdown_cancels_inflight_connect(
+    service: Service, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.ws_connect
+
+    async def blocked_connect(url: str, *, headers: dict[str, str]) -> Any:
+        entered.set()
+        await release.wait()
+        return await original(url, headers=headers)
+
+    monkeypatch.setattr(service, "ws_connect", blocked_connect)
+    engine = service.engine()
+    task = None
+    if mode == "prewarm":
+        engine.prewarm()
+    else:
+        if mode == "one-shot":
+            stream = engine.synthesize("Never send this.", conn_options=OPTIONS)
+        elif mode == "direct-one-shot":
+            stream = maya.ChunkedStream(
+                tts=engine, input_text="Never send this.", conn_options=OPTIONS
+            )
+        else:
+            stream = (
+                maya.SynthesizeStream(tts=engine, conn_options=OPTIONS)
+                if mode == "direct-stream"
+                else engine.stream(conn_options=OPTIONS)
+            )
+            stream.push_text("Never send this.")
+            stream.end_input()
+        task = asyncio.create_task(collect(stream))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        await asyncio.wait_for(engine.aclose(), 1)
+        release.set()
+        if task is not None:
+            await asyncio.wait_for(task, 1)
+        assert not service.text_frames()
+        assert all(socket.closed for socket in service.sockets)
+        assert not engine._pool._available
+    finally:
+        release.set()
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        await engine.aclose()
+
+
+@pytest.mark.parametrize("url", ["https://example.com/prefix/", "wss://example.com/prefix/"])
+async def test_encrypted_base_url_retains_path_prefix(service: Service, url: str) -> None:
+    async with service.engine(base_url=url) as engine:
+        assert await speak(engine, False) == PCM
+    assert service.urls == ["wss://example.com/prefix/v1/tts/stream"]
+
+
+def test_plaintext_environment_url_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAYA_BASE_URL", "http://example.com")
+    with pytest.raises(ValueError, match="HTTPS/WSS"):
+        Service().engine()
