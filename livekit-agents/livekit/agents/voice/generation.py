@@ -54,7 +54,7 @@ class _LLMGenerationData:
     text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
-    text_flushed: bool = False
+    pending_text: bool = False
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
@@ -253,6 +253,7 @@ async def _llm_inference_task(
         async for chunk in llm_node:
             # extract text content from either str or ChatChunk
             content: str | None = None
+            function_calls: list[llm.FunctionCall] = []
             generated = False
 
             if isinstance(chunk, str):
@@ -287,15 +288,7 @@ async def _llm_inference_task(
                             extra=tool.extra or {},
                         )
                         data.generated_functions.append(fnc_call)
-                        function_ch.send_nowait(fnc_call)
-
-                    # Flush the in-progress TTS segment as soon as we know a tool call
-                    # is starting. Without this, the TTS channel stays open until the
-                    # entire LLM task finishes (including tool execution), delaying
-                    # playback of any text the model already generated before the call.
-                    if data.generated_text and not data.text_flushed:
-                        data.text_flushed = True
-                        text_ch.send_nowait(FlushSentinel())
+                        function_calls.append(fnc_call)
 
                 if chunk.delta.extra:
                     data.generated_extra.update(chunk.delta.extra)
@@ -303,6 +296,7 @@ async def _llm_inference_task(
                 content = chunk.delta.content
 
             elif isinstance(chunk, FlushSentinel):
+                data.pending_text = False
                 text_ch.send_nowait(chunk)
                 content = None
             else:
@@ -321,7 +315,18 @@ async def _llm_inference_task(
                     first_content_at = now
                 last_content_at = now
                 data.generated_text += content
+                data.pending_text = True
                 text_ch.send_nowait(content)
+
+            if function_calls:
+                # Flush the current TTS segment at each tool boundary. Content
+                # from this same chunk is queued first, so spoken prefaces are
+                # included in the segment before tool execution starts.
+                if data.pending_text:
+                    data.pending_text = False
+                    text_ch.send_nowait(FlushSentinel())
+                for fnc_call in function_calls:
+                    function_ch.send_nowait(fnc_call)
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(

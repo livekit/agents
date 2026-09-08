@@ -61,6 +61,23 @@ def _tool_chunk(name: str, arguments: str = "{}") -> ChatChunk:
     )
 
 
+def _text_and_tool_chunk(text: str, name: str, arguments: str = "{}") -> ChatChunk:
+    return ChatChunk(
+        id="c",
+        delta=ChoiceDelta(
+            role="assistant",
+            content=text,
+            tool_calls=[
+                FunctionToolCall(
+                    name=name,
+                    arguments=arguments,
+                    call_id="call_001",
+                )
+            ],
+        ),
+    )
+
+
 def _fake_node(chunks: list[ChatChunk]):
     """Minimal LLM node fixture matching the io.LLMNode signature."""
 
@@ -191,3 +208,31 @@ class TestFlushSentinelOnToolCall:
 
         sentinels = [i for i in items if isinstance(i, FlushSentinel)]
         assert len(sentinels) == 1
+
+    async def test_flush_sentinel_after_text_in_same_tool_chunk(self) -> None:
+        chunks = [_text_and_tool_chunk("Let me check.", "get_weather")]
+        _, items = await _run(chunks)
+
+        assert isinstance(items[0], str)
+        assert items[0] == "Let me check."
+        assert isinstance(items[1], FlushSentinel)
+
+    async def test_text_between_tool_chunks_gets_flushed(self) -> None:
+        chunks = [
+            _text_chunk("First preface."),
+            _tool_chunk("first_tool"),
+            _text_chunk("Second preface."),
+            _tool_chunk("second_tool"),
+        ]
+        _, items = await _run(chunks)
+
+        assert [type(item) for item in items] == [
+            str,
+            FlushSentinel,
+            str,
+            FlushSentinel,
+        ]
+        assert [item for item in items if isinstance(item, str)] == [
+            "First preface.",
+            "Second preface.",
+        ]
