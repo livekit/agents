@@ -290,7 +290,16 @@ class _FrameSink:
 
     @property
     def owes_segment_end(self) -> bool:
-        return self._segments.owes_segment_end
+        """A captured segment has no completion report on the way to the runner.
+
+        Either the marker has not been decided yet, or it is decided and sitting
+        in the queue: the tracker clears its flag when the marker is *queued*,
+        while only the runner draining that queue turns it into a report. A
+        teardown between the two loses it.
+        """
+        if self._segments.owes_segment_end:
+            return True
+        return any(isinstance(item, AudioSegmentEnd) for item in self._deque)
 
     def force_segment_end(self) -> None:
         """Close a fed turn the server never rendered, so the session can proceed."""
@@ -780,6 +789,13 @@ class AvatarSession(BaseAvatarSession):
             options=options,
         )
         await self._avatar_runner.start()
+
+        if self._fatal_error is not None:
+            # A fatal that landed before the runner existed found no runner to
+            # tear down, so it scheduled no degrade - and its first-wins guard
+            # means no later event will either. Fail the start instead of
+            # installing an avatar that can never report playback.
+            raise OjinException(f"ojin session failed to start: {self._fatal_error}")
 
         # Not `output.audio = ...`: that replaces the whole chain and drops any
         # TranscriptSynchronizer or RecorderAudioOutput the session installed.
