@@ -247,23 +247,12 @@ class STT(stt.STT):
                 "endpointing."
             )
 
-        # Set default values for optional parameters
-        super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=include_partials if is_given(include_partials) else True,
-                diarization=enable_diarization if is_given(enable_diarization) else True,
-                aligned_transcript="chunk",
-                offline_recognize=False,
-            ),
-        )
-
         # Set STT options
         def _set(value: Any) -> Any:
             return value if is_given(value) else None
 
         # Create STT options from parameters
-        self._stt_options = STTOptions(
+        opts = STTOptions(
             language=LanguageCode(language),
             output_locale=_set(output_locale),
             domain=_set(domain),
@@ -279,8 +268,23 @@ class STT(stt.STT):
             prefer_current_speaker=_set(prefer_current_speaker),
         )
 
-        # Migrate / warn about any deprecated kwargs
-        _check_deprecated_args(kwargs, self._stt_options)
+        # Migrate / warn about any deprecated kwargs before anything reads the options
+        _check_deprecated_args(kwargs, opts)
+
+        # Capabilities mirror the resolved options, so a value that arrived through a
+        # deprecated alias is reflected too. Unset partials means the service default,
+        # which is on.
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=opts.include_partials is not False,
+                diarization=opts.enable_diarization is not False,
+                aligned_transcript="chunk",
+                offline_recognize=False,
+            ),
+        )
+
+        self._stt_options = opts
 
         # Validate config options
         errors = self._validate_stt_options()
