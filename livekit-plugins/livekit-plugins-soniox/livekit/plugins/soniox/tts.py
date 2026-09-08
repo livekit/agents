@@ -665,16 +665,6 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
         stream.char_starts += [start + offset] * len(char)
         stream.char_ends += [start + offset] * (len(char) - 1) + [end + offset]
     stream.char_text += "".join(chars)
-    # Where the next stream has to start from: pushed_duration() alone would
-    # place it too early, since it counts neither audio still queued in the
-    # emitter nor the tail frame the emitter holds back.
-    #
-    # Moving the shared timeline is as unrepeatable as publishing a word, even
-    # when these characters finish none: a replacement would start from the
-    # advanced value, past audio this attempt never produced. Either way the
-    # stream is spent and must not be replayed.
-    stream.produced_output = True
-    stream.timeline.end = max(stream.timeline.end, ends[-1] + offset)
 
     _emit_timed_words(stream)
 
@@ -690,6 +680,17 @@ def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
             timed_words[0] = _with_leading_separator(timed_words[0], stream.sent_text)
         stream.produced_output = True
         stream.emitter.push_timed_transcript(timed_words)
+
+        # Where a rotated stream has to start from: pushed_duration() alone
+        # would place it too early, counting neither audio still queued in the
+        # emitter nor the tail frame it holds back. Only published words move
+        # it, so a stream that goes on to be replayed leaves nothing behind for
+        # its replacement to inherit - characters still buffered as a
+        # possibly-incomplete word have not been spoken for yet. A stream that
+        # ends cleanly flushes them, which is when they count.
+        last_end = timed_words[-1].end_time
+        if is_given(last_end):
+            stream.timeline.end = max(stream.timeline.end, last_end)
 
     keep = len(stream.char_text)
     stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]

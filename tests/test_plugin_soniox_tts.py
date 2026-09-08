@@ -771,11 +771,13 @@ async def test_interrupting_a_reply_keeps_the_last_spoken_word() -> None:
     assert "".join(str(w) for w in words).strip() == SENTENCES[0].strip()
 
 
-async def test_advancing_the_timeline_spends_the_stream() -> None:
-    """Characters that finish no word still make a stream unreplayable.
+async def test_only_published_words_advance_the_timeline() -> None:
+    """Buffered characters move nothing until they are spoken for.
 
-    They move the segment timeline, and a replacement would start from the
-    advanced value - past audio the failed attempt never produced.
+    The timeline is what a rotated stream starts from, so advancing it on
+    characters that finish no word would hand a replacement an offset past
+    audio that was never produced - and would make a stream that emitted
+    nothing look unreplayable.
     """
     emitter = _RecordingEmitter()
     tts = soniox.TTS(api_key="fake-key")
@@ -785,9 +787,50 @@ async def test_advancing_the_timeline_spends_the_stream() -> None:
         opts=tts._opts,
     )
 
-    # "Hel" completes no word, so nothing is published
+    # "Hel" finishes no word: nothing published, nothing spent
     soniox_tts._accumulate_timestamps(data, _character_timestamps("Hel", 0.0))
-
     assert emitter.timed_words == []
-    assert data.timeline.end > 0.0
+    assert data.timeline.end == 0.0
+    assert data.produced_output is False
+
+    # "lo wo" completes "Hello ", which is published and does move the timeline
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("lo wo", 3 * _SECONDS_PER_CHAR))
+    assert [str(w) for w in emitter.timed_words] == ["Hello "]
+    assert data.timeline.end == pytest.approx(0.05)
     assert data.produced_output is True
+
+
+async def test_a_timestamp_only_partial_word_stays_replayable() -> None:
+    """Buffering characters is reversible, so it must not cost a replay.
+
+    A frame can carry timestamps that finish no word. Nothing reaches the
+    emitter, so a transient failure after it is still safe to replay - and
+    aborting the reply instead would cut the agent off for nothing.
+    """
+    fake = _FakeConnection(timestamps=True)
+    tts = soniox.TTS(api_key="fake-key")
+
+    async def _fake_current_connection(*, timeout: float) -> tuple[Any, float, bool]:
+        return fake, 0.0, True
+
+    tts._current_connection = _fake_current_connection  # type: ignore[method-assign]
+
+    stream = tts.stream()
+    emitter = _RecordingEmitter()
+    try:
+        active = await stream._open_stream(emitter, "req-1")  # type: ignore[arg-type]
+        soniox_tts._accumulate_timestamps(active.data, _character_timestamps("Hel", 0.0))
+
+        assert emitter.timed_words == []
+        assert active.data.produced_output is False
+
+        active.waiter.set_exception(APIStatusError("transient", status_code=429, retryable=True))
+        replacement = await stream._settle_stream(active, emitter, "req-1")  # type: ignore[arg-type]
+
+        assert replacement is not None
+        assert replacement.stream_id != active.stream_id
+        # the replacement inherits no advance from the attempt that emitted nothing
+        assert fake.time_offsets[-1] == 0.0
+    finally:
+        await stream.aclose()
+        await tts.aclose()
