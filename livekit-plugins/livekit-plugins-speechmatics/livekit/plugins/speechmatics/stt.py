@@ -166,7 +166,9 @@ class STT(stt.STT):
                 — in practice from the `vad` passed below, since LiveKit does not call
                 `finalize()` itself. Without a `vad`, `EXTERNAL` never closes a turn, so
                 nothing is finalized. `VAD` instead lets the STT service run its own VAD
-                and close turns itself. Defaults to `TurnDetectionMode.EXTERNAL`.
+                and close turns itself; pair it with `turn_detection="stt"` on the
+                `AgentSession`, which otherwise ignores the end-of-speech events this
+                plugin emits. Defaults to `TurnDetectionMode.EXTERNAL`.
 
             model: The transcription model to use, e.g. `"linden-1"`.
                 Defaults to the SDK's default model. Preferred over `operating_point`.
@@ -180,9 +182,9 @@ class STT(stt.STT):
 
             output_locale: Output locale for the STT model, e.g. `en-GB`. Optional.
 
-            include_partials: Emit interim word fragments from AddPartialSegment
-                messages. Affects only the formatted segment text — partials are always
-                used internally for speaker activity detection. Optional.
+            include_partials: Ask the service for partial segments, emitted as interim
+                transcripts. The service does not send them unless this is set, so
+                interim transcripts are off by default. Optional.
 
             enable_diarization: Attribute words to distinct speakers. Defaults to True.
 
@@ -237,7 +239,9 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
-                interim_results=True,
+                # The service withholds partial segments unless asked, so interim results
+                # are only available when `include_partials` is set.
+                interim_results=include_partials if is_given(include_partials) else False,
                 diarization=enable_diarization if is_given(enable_diarization) else True,
                 aligned_transcript="chunk",
                 offline_recognize=False,
@@ -920,6 +924,14 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
     # Removed — no replacement
     for name in (
         "end_of_utterance_mode",
+        "end_of_utterance_silence_trigger",
+        "end_of_utterance_max_delay",
+        "max_delay",
+        "punctuation_overrides",
+        "speaker_passive_format",
+        "focus_speakers",
+        "ignore_speakers",
+        "focus_mode",
         "chunk_size",
         "transcription_config",
         "audio_settings",
