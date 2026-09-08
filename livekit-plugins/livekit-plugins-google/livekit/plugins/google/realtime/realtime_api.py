@@ -1156,7 +1156,10 @@ class RealtimeSession(llm.RealtimeSession):
                             )
 
                     if response.server_content:
-                        self._handle_server_content(response.server_content)
+                        self._handle_server_content(
+                            response.server_content,
+                            defer_completion=response.tool_call is not None,
+                        )
                     if response.tool_call:
                         self._handle_tool_calls(response.tool_call)
                     if response.tool_call_cancellation:
@@ -1290,7 +1293,12 @@ class RealtimeSession(llm.RealtimeSession):
 
         self.emit("generation_created", generation_event)
 
-    def _handle_server_content(self, server_content: types.LiveServerContent) -> None:
+    def _handle_server_content(
+        self,
+        server_content: types.LiveServerContent,
+        *,
+        defer_completion: bool = False,
+    ) -> None:
         current_gen = self._current_generation
         if not current_gen:
             if self._rejected_tool_calls:
@@ -1379,7 +1387,9 @@ class RealtimeSession(llm.RealtimeSession):
             # interrupt agent if there is no pending user initiated generation
             self._handle_input_speech_started()
 
-        if server_content.turn_complete:
+        # Gemini may combine turn_complete with a tool call in one message. Keep the
+        # function channel open until the tool call handler has delivered the call.
+        if server_content.turn_complete and not defer_completion:
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
