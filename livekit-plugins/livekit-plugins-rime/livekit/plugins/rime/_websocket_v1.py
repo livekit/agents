@@ -630,7 +630,7 @@ def _check_context(envelope: proto.WebSocketResponse, expected: str) -> None:
 
 def _rime_error(error: proto.WebSocketError, *, fallback_request_id: str | None) -> APIError:
     kind = error.kind
-    if not kind or not error.message:
+    if not kind:
         return APIError("Rime v1 sent a malformed error", retryable=False)
     request_id = error.request_id if error.HasField("request_id") else fallback_request_id
     status_codes = {

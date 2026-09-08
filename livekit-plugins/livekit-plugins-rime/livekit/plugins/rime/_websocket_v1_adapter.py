@@ -271,41 +271,64 @@ async def _sentence_tokenized_input_events(
     output = utils.aio.Chan[str]()
 
     async def _drive_input() -> None:
-        sentence_stream = sentence_tokenizer.stream(language=language)
+        sentence_stream: tokenize.SentenceStream | None = None
         forward_task: asyncio.Task[None] | None = None
+        next_input_task: asyncio.Task[str | _DrainTokenizer] | None = None
+        input_iterator = aiter(input_events)
 
-        async def _forward_sentences() -> None:
-            async for event in sentence_stream:
+        async def _next_input() -> str | _DrainTokenizer:
+            return await anext(input_iterator)
+
+        async def _forward_sentences(stream: tokenize.SentenceStream) -> None:
+            async for event in stream:
                 text = event.token
                 if text and not text[-1].isspace():
                     text += " "
                 if text:
                     output.send_nowait(text)
 
-        def _start_forwarding() -> asyncio.Task[None]:
+        def _start_forwarding(stream: tokenize.SentenceStream) -> asyncio.Task[None]:
             return asyncio.create_task(
-                _forward_sentences(), name="rime-v1-sentence-tokenizer-output"
+                _forward_sentences(stream), name="rime-v1-sentence-tokenizer-output"
             )
 
         try:
-            forward_task = _start_forwarding()
-            async for event in input_events:
+            sentence_stream = sentence_tokenizer.stream(language=language)
+            forward_task = _start_forwarding(sentence_stream)
+            while True:
+                next_input_task = asyncio.create_task(_next_input(), name="rime-v1-next-input")
+                # A tokenizer failure must interrupt an open, idle input stream.
+                await asyncio.wait(
+                    (next_input_task, forward_task), return_when=asyncio.FIRST_COMPLETED
+                )
+                if forward_task.done():
+                    await forward_task
+                try:
+                    event = await next_input_task
+                except StopAsyncIteration:
+                    break
                 if isinstance(event, _DrainTokenizer):
                     sentence_stream.end_input()
                     await forward_task
                     sentence_stream = sentence_tokenizer.stream(language=language)
-                    forward_task = _start_forwarding()
+                    forward_task = _start_forwarding(sentence_stream)
                 else:
                     sentence_stream.push_text(event)
 
             sentence_stream.end_input()
             await forward_task
+        except Exception:
+            raise APIError("Rime sentence tokenization failed", retryable=False) from None
         finally:
-            if not sentence_stream.closed:
-                await sentence_stream.aclose()
-            if forward_task is not None:
-                await utils.aio.gracefully_cancel(forward_task)
-            output.close()
+            try:
+                if next_input_task is not None:
+                    await utils.aio.gracefully_cancel(next_input_task)
+                if forward_task is not None:
+                    await utils.aio.gracefully_cancel(forward_task)
+                if sentence_stream is not None and not sentence_stream.closed:
+                    await sentence_stream.aclose()
+            finally:
+                output.close()
 
     input_task = asyncio.create_task(_drive_input(), name="rime-v1-sentence-tokenizer-input")
     try:

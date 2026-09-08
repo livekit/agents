@@ -562,6 +562,54 @@ async def test_v1_uses_custom_tokenizer_behavior() -> None:
     ]
 
 
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+@pytest.mark.parametrize("failure_stage", ["stream", "push_text", "output", "end_input"])
+async def test_v1_tokenizer_failure_closes_stream(
+    websocket_protocol: str, failure_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.agents import APIError, tokenize
+
+    tokenizer = tokenize.basic.SentenceTokenizer()
+    tokens = tokenizer.stream()
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise ValueError(_SECRET)
+
+    async def fail_output(*args: Any, **kwargs: Any) -> None:
+        fail()
+
+    monkeypatch.setattr(tokenizer, "stream", lambda **kwargs: tokens)
+    if failure_stage == "stream":
+        monkeypatch.setattr(tokenizer, "stream", fail)
+    elif failure_stage == "output":
+        monkeypatch.setattr(type(tokens), "__anext__", fail_output)
+    else:
+        monkeypatch.setattr(tokens, failure_stage, fail)
+
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol, tokenizer=tokenizer)
+        stream = tts.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0, timeout=2)
+        )
+        try:
+            stream.push_text("Hello.")
+            if failure_stage == "end_input":
+                stream.end_input()
+            # Other failures must propagate even while input remains open.
+            with pytest.raises(APIError, match="Rime sentence tokenization failed") as exc_info:
+                await asyncio.wait_for(_collect(stream), timeout=1)
+            assert exc_info.value.retryable is False
+            _assert_exception_is_safe(exc_info.value)
+            if failure_stage != "stream":
+                assert tokens.closed
+            assert server.connections == 1
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+            if not tokens.closed:
+                await tokens.aclose()
+
+
 async def test_v1_local_flush_drains_text_before_end() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(server)
@@ -1179,6 +1227,50 @@ async def test_v1_maps_connection_scoped_error() -> None:
         await tts.aclose()
 
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+@pytest.mark.parametrize("message", [None, ""])
+@pytest.mark.parametrize(
+    "kind, status_code, retryable", [("unavailable", 503, True), ("unimplemented", 501, False)]
+)
+@pytest.mark.parametrize("explicit_request_id", [False, True])
+async def test_v1_maps_error_without_message(
+    websocket_protocol: str,
+    message: str | None,
+    kind: str,
+    status_code: int,
+    retryable: bool,
+    explicit_request_id: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _RimeV1Server(response_mode="error") as server:
+
+        async def respond(ws: web.WebSocketResponse, context_id: str) -> None:
+            error = {"kind": kind}
+            if message is not None:
+                error["message"] = message
+            if explicit_request_id:
+                error["requestId"] = "provider-request"
+            await server._send(ws, {"contextId": context_id, "error": error})
+
+        monkeypatch.setattr(server, "_respond_to_text", respond)
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        try:
+            stream.push_text("Hello.")
+            stream.end_input()
+            with pytest.raises(APIStatusError) as exc_info:
+                await _collect(stream)
+            assert exc_info.value.status_code == status_code
+            assert exc_info.value.retryable is retryable
+            assert exc_info.value.request_id == (
+                "provider-request" if explicit_request_id else "request-0"
+            )
+            assert exc_info.value.message == "Rime v1 request failed"
+        finally:
+            await stream.aclose()
+            await tts.aclose()
 
 
 async def test_v1_does_not_retry_unimplemented_error() -> None:
