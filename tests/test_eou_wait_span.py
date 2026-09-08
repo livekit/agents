@@ -199,7 +199,8 @@ async def test_wait_span_covers_last_speech_to_commit(span_exporter: InMemorySpa
 
 
 async def test_later_trigger_rearms_the_same_span(span_exporter: InMemorySpanExporter) -> None:
-    ar = _make_recognition(min_delay=0.3)
+    # the wait is long relative to the re-trigger so a slow CI runner cannot let it commit first
+    ar = _make_recognition(min_delay=1.0)
     ar._last_speaking_time = time.time()
 
     ar._run_eou_detection(llm.ChatContext(), trigger="vad")
