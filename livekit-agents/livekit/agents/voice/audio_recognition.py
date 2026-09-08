@@ -189,7 +189,8 @@ class _STTPipeline:
 
         Owns the generator lifecycle — never cancelled during handoff, only the
         consumer is swapped. On a retryable failure the long-lived stream is
-        recreated after a backoff; the session tolerance is what closes it.
+        recreated after a backoff; the session tolerance is what closes it. A
+        non-retryable failure closes *audio_ch*, since nothing will read it again.
         """
         from .agent import ModelSettings
 
@@ -217,6 +218,9 @@ class _STTPipeline:
                     # the stream already emitted this as an unrecoverable STTError and
                     # the session counted it; recreating would just hot-loop the failure
                     logger.warning("STT stream ended on a non-retryable error, not recreating")
+                    # nothing will read audio_ch again, so close it rather than let
+                    # _push_audio keep filling an unbounded queue for the whole session
+                    self._audio_ch.close()
                     return
                 logger.warning(
                     "STT stream ended on a retryable error, recreating",
@@ -742,7 +746,7 @@ class AudioRecognition:
         speech). VAD, AMD and the interruption channel always receive ``frame``.
         """
         self._sample_rate = frame.sample_rate
-        if self._stt_pipeline is not None:
+        if self._stt_pipeline is not None and not self._stt_pipeline.audio_ch.closed:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
                 self._stt_pipeline.input_started_at = time.time() - frame.duration
