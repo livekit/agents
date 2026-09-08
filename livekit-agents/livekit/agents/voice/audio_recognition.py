@@ -2064,7 +2064,11 @@ class AudioRecognition:
         if detection is not None and detection.is_recording():
             # the detector is still running: end it first so the child stays inside the parent
             self._eou_wait_floor_ns = time.time_ns()
-            detection.add_event("superseded", {trace_types.ATTR_EOU_OUTCOME: outcome})
+            detection.add_event(
+                "superseded",
+                {trace_types.ATTR_EOU_OUTCOME: outcome},
+                timestamp=self._eou_wait_floor_ns,
+            )
             detection.end(end_time=self._eou_wait_floor_ns)
         floor_ns, self._eou_wait_floor_ns = self._eou_wait_floor_ns, None
         if floor_ns is not None:
