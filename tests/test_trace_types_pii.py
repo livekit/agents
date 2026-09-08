@@ -166,11 +166,9 @@ SAFE_KEYS = frozenset(
         # interruptions, handoff, fallback, text input (enums, labels, sizes)
         "lk.interruption.source",
         "lk.playout.position",
-        "lk.false_interruption.resumed",
         "lk.previous_agent_label",
         "lk.fallback.label",
         "lk.fallback.index",
-        "lk.text_input.size",
         # rpc (semconv names, ids, sizes, codes; identities and payload are tagged)
         "rpc.method",
         "lk.rpc.request_id",

@@ -160,7 +160,7 @@ def _provider_attr(llm: LLM) -> dict[str, str]:
 
 
 def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
-    """Which instance a fallback event is about: its label, position, model and provider."""
+    """The instance that served: its label, position, model and provider."""
     return {
         trace_types.ATTR_FALLBACK_LABEL: llm.label,
         trace_types.ATTR_FALLBACK_INDEX: index,
@@ -185,8 +185,7 @@ class FallbackLLMStream(LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._fallback_adapter = llm
-        # the span this request was made under (llm_node, typically): it is told which
-        # instance served, per request, rather than reading the adapter's shared state later
+        # the span this request was made under (llm_node): told which instance served
         self._caller_span = trace.get_current_span()
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
@@ -323,10 +322,9 @@ class FallbackLLMStream(LLMStream):
 
                     served = _fallback_attrs(llm, i)
                     trace.get_current_span().set_attributes(served)
-                    # the request span and the caller's span were stamped with the instance
-                    # expected to serve; say which one did (gen_ai.response.model) and whose
-                    # provider. Read from `llm` here, not the adapter: concurrent requests
-                    # may be served by different instances
+                    # request-side attributes named the instance expected to serve; the
+                    # response side names the one that did (from `llm`, not the adapter:
+                    # concurrent requests may be served by different instances)
                     response_attrs = {
                         trace_types.ATTR_GEN_AI_RESPONSE_MODEL: llm.model,
                         **_provider_attr(llm),
@@ -336,9 +334,6 @@ class FallbackLLMStream(LLMStream):
                     self._caller_span.set_attributes(response_attrs)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
-                    trace.get_current_span().add_event(
-                        "fallback_provider_failed", _fallback_attrs(llm, i)
-                    )
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(

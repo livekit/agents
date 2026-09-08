@@ -75,17 +75,16 @@ async def test_barge_in_records_source_and_playout_position(
     ]
     assert len(interrupted) == 1
     turn = interrupted[0]
-    [event] = _events(turn, "interrupted")
-    assert (event.attributes or {})[trace_types.ATTR_INTERRUPTION_SOURCE] == "audio_activity"
+    assert (turn.attributes or {})[trace_types.ATTR_INTERRUPTION_SOURCE] == "audio_activity"
     position = (turn.attributes or {})[trace_types.ATTR_PLAYOUT_POSITION]
     assert isinstance(position, float)
     # ~2 s of the 10 s story had played (5.5 - 3.5), scaled by the speed factor
     assert 0.5 < position < 10.0 / speed
 
-    # the reply to "Stop!" was not interrupted and carries no event
+    # the reply to "Stop!" was not interrupted and names no source
     for turn in _spans(span_exporter, "agent_turn"):
         if turn is not interrupted[0]:
-            assert _events(turn, "interrupted") == []
+            assert trace_types.ATTR_INTERRUPTION_SOURCE not in (turn.attributes or {})
 
 
 # -- agent handoff --
@@ -232,14 +231,10 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     ]
     assert runs, "no llm_request_run under the fallback request"
     run = runs[-1]
-    [failed] = _events(run, "fallback_provider_failed")
-    assert (failed.attributes or {})[trace_types.ATTR_FALLBACK_LABEL] == primary.label
-    assert (failed.attributes or {})[trace_types.ATTR_FALLBACK_INDEX] == 0
     assert (run.attributes or {})[trace_types.ATTR_FALLBACK_LABEL] == secondary.label
     assert (run.attributes or {})[trace_types.ATTR_FALLBACK_INDEX] == 1
-    # the event names the failed instance's model; the run and the request span name the
-    # one that served: request = expected (the primary), response = who answered
-    assert (failed.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
+    # the run and the request span name the one that served: request = expected (the
+    # primary), response = who answered
     assert (run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == secondary.model
     request_attrs = request.attributes or {}
     assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model

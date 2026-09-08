@@ -325,9 +325,8 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if self._detect_task is not None and not self._detect_task.done():
             return
 
-        # the event fires from the reply that answers this user message, so the pass nests
-        # under that agent_turn: it is the agent's work on the turn. Fired from anywhere else
-        # (a skipped reply, user code editing the history) it falls back to the session root.
+        # under the agent_turn that answers this message when fired from its reply, else
+        # (a skipped reply, user code editing the history) under the session root
         parent = (
             otel_context.get_current()
             if trace.get_current_span().is_recording()
@@ -352,8 +351,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         if not isinstance(self._llm, LLM):
             return
 
-        # its own span, so the LLM call reads as keyterm detection rather than a second
-        # inference step of the reply it runs alongside
+        # its own span: otherwise the LLM call reads as a second inference step of the reply
         attributes: dict[str, Any] = {trace_types.ATTR_GEN_AI_REQUEST_MODEL: self._llm.model}
         if (provider := trace_types.gen_ai_provider_name(self._llm.provider)) is not None:
             attributes[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = provider

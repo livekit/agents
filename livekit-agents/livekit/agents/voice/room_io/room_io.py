@@ -521,13 +521,6 @@ class RoomIO:
         async def _read_text() -> None:
             try:
                 text = await reader.read_all()
-                self._emit_session_event(
-                    "text_input",
-                    {
-                        **telemetry_utils.participant_attributes(participant),
-                        trace_types.ATTR_TEXT_INPUT_SIZE: len(text.encode("utf-8")),
-                    },
-                )
                 result = text_input_cb(
                     session,
                     TextInputEvent(text=text, info=reader.info, participant=participant),

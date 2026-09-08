@@ -54,9 +54,7 @@ class SpeechHandle:
         self._agent_turn_context: otel_context.Context | None = None
         self._scheduled_at: float | None = None
         self._authorized_at: float | None = None
-        # telemetry: who interrupted this speech, recorded by the caller that knows
-        self._interrupt_source: str | None = None
-        self._interruption_recorded = False
+        self._interrupt_source: str | None = None  # set by whoever interrupts, for the trace
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 

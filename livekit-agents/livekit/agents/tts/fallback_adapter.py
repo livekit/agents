@@ -187,7 +187,7 @@ class FallbackAdapter(
 
 
 def _fallback_attrs(tts: TTS, index: int) -> dict[str, Any]:
-    """Which instance a fallback event is about: its label, position, model and provider."""
+    """The instance that served: its label, position, model and provider."""
     attrs: dict[str, Any] = {
         trace_types.ATTR_FALLBACK_LABEL: tts.label,
         trace_types.ATTR_FALLBACK_INDEX: index,
@@ -198,15 +198,10 @@ def _fallback_attrs(tts: TTS, index: int) -> dict[str, Any]:
     return attrs
 
 
-def _record_fallback_failure(tts: TTS, index: int) -> None:
-    trace.get_current_span().add_event("fallback_provider_failed", _fallback_attrs(tts, index))
-
-
 def _record_fallback_served(tts: TTS, index: int, *spans: trace.Span | None) -> None:
     """The instance that served: on the current (attempt) span, and as the response side of
-    ``spans`` (the adapter's request span and the caller's span, typically tts_node), which
-    were stamped with the instance expected to serve. Read from ``tts``, not the adapter:
-    concurrent requests may be served by different instances."""
+    ``spans`` (the adapter's request span and the caller's, tts_node). From ``tts``, not the
+    adapter: concurrent requests may be served by different instances."""
     attrs = _fallback_attrs(tts, index)
     trace.get_current_span().set_attributes(attrs)
     response_attrs = {
@@ -226,7 +221,7 @@ class FallbackChunkedStream(ChunkedStream):
     ) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._fallback_adapter = tts
-        # the span this request was made under (tts_node, typically); see _record_fallback_served
+        # the span this request was made under (tts_node); see _record_fallback_served
         self._caller_span = trace.get_current_span()
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
@@ -336,7 +331,6 @@ class FallbackChunkedStream(ChunkedStream):
                     _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                     return
                 except Exception:  # exceptions already logged inside _try_synthesize
-                    _record_fallback_failure(tts, i)
                     if tts_status.available:
                         tts_status.available = False
                         self._tts.emit(
@@ -531,7 +525,6 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return
                     except Exception:
-                        _record_fallback_failure(tts, i)
                         if tts_status.available:
                             tts_status.available = False
                             self._tts.emit(

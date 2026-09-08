@@ -239,17 +239,14 @@ def _record_user_turn_stages(span: trace.Span, user_metrics: llm.MetricsReport) 
 
 
 def _record_interruption(speech_handle: SpeechHandle) -> None:
-    """Once per speech: an ``interrupted`` event on its agent_turn span naming the source.
+    """Name what interrupted the speech on its agent_turn span.
 
-    Module-level for the same reason as ``_record_queue_wait``: reply tasks are driven with
-    stand-in activities in tests."""
-    if not speech_handle.interrupted or speech_handle._interruption_recorded:
+    Module-level: tests drive the reply tasks with stand-in activities."""
+    if not speech_handle.interrupted or speech_handle._agent_turn_context is None:
         return
-    speech_handle._interruption_recorded = True
     span = trace.get_current_span(context=speech_handle._agent_turn_context)
-    span.add_event(
-        "interrupted",
-        {trace_types.ATTR_INTERRUPTION_SOURCE: speech_handle._interrupt_source or "programmatic"},
+    span.set_attribute(
+        trace_types.ATTR_INTERRUPTION_SOURCE, speech_handle._interrupt_source or "programmatic"
     )
 
 
@@ -1420,12 +1417,19 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self, *, reuse_resources: _ReusableResources | None = None) -> None:
+    async def resume(
+        self,
+        *,
+        reuse_resources: _ReusableResources | None = None,
+        trace_context: otel_context.Context | None = None,
+    ) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
+            # not made current: _start_session spawns the tasks that live for the session
             span = tracer.start_span(
                 "resume_agent_activity",
+                context=trace_context,
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
@@ -2281,9 +2285,6 @@ class AgentActivity(RecognitionHooks):
                 # replying turn commit interrupts the paused handle.
                 self._update_paused_speech(self._current_speech, timeout)
                 audio_output.pause()
-                trace.get_current_span(context=self._current_speech._agent_turn_context).add_event(
-                    "playout_paused"
-                )
                 self._session._update_agent_state("listening")
                 self._on_end_of_agent_speech(ended_at=time.time())
                 if self.interruption_enabled:
@@ -2693,8 +2694,7 @@ class AgentActivity(RecognitionHooks):
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
-            # name the cause first: cancelling the pause interrupts the paused handle and
-            # waits for its generation, which records the interruption event on the way
+            # before the pause cancel: that is what interrupts the paused handle
             current_speech._set_interrupt_source("user_turn")
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
@@ -3218,14 +3218,17 @@ class AgentActivity(RecognitionHooks):
         forwarded_text = text_out.text if text_out else ""
         if speech_handle.interrupted and audio_output is not None:
             playback_ev = await audio_output.wait_for_playout()
-            current_span.set_attribute(
-                trace_types.ATTR_PLAYOUT_POSITION, playback_ev.playback_position
-            )
 
             played_own_frame = (
                 audio_out is not None
                 and audio_output.captured_playout_segments > audio_out.captured_segments_before
             )
+            if played_own_frame:
+                # wait_for_playout returns the previous segment's event when this speech
+                # never reached the output
+                current_span.set_attribute(
+                    trace_types.ATTR_PLAYOUT_POSITION, playback_ev.playback_position
+                )
             if (
                 audio_out is not None
                 and played_own_frame
@@ -3768,7 +3771,6 @@ class AgentActivity(RecognitionHooks):
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         _record_interruption(speech_handle)
         if speech_handle.interrupted and segment_outputs:
-            # how far into the reply the user cut in, summed over the played segments
             current_span.set_attribute(
                 trace_types.ATTR_PLAYOUT_POSITION,
                 sum(out.playback_position for out in segment_outputs),
@@ -4827,12 +4829,6 @@ class AgentActivity(RecognitionHooks):
                 resumed = True
                 logger.debug("resumed false interrupted speech", extra={"timeout": timeout})
 
-            trace.get_current_span(
-                context=self._paused_speech.handle._agent_turn_context
-            ).add_event(
-                "false_interruption",
-                {trace_types.ATTR_FALSE_INTERRUPTION_RESUMED: resumed},
-            )
             self._session.emit(
                 "agent_false_interruption", AgentFalseInterruptionEvent(resumed=resumed)
             )
@@ -4902,8 +4898,7 @@ class AgentActivity(RecognitionHooks):
             and not self._paused_speech.handle.interrupted
             and self._paused_speech.handle.allow_interruptions
         ):
-            # a final transcript or a committed turn ended the pause: the user did this
-            # (first cause wins, so audio_activity stays if the pause already named it)
+            # a final transcript or a committed turn ended the pause (first cause wins)
             self._paused_speech.handle._set_interrupt_source("user_turn")
             self._paused_speech.handle.interrupt()
             # ensure the generation is done — but only if a generation
