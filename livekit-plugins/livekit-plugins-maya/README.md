@@ -42,7 +42,10 @@ session = AgentSession(
 )
 ```
 
-Omit `language` for mixed-language input. A Maya key provides TTS only, not
+Omit `language` (or use `None`) for mixed-language input. To restore that mode
+after choosing a language, call `update_options(language=None)` on your TTS
+instance. Omitting the argument in `update_options` leaves the setting unchanged;
+an active turn retains its existing settings. A Maya key provides TTS only, not
 speech recognition, an LLM, or LiveKit room credentials.
 
 ## Streaming contract

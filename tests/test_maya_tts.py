@@ -12,6 +12,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, tokenize, tts
+from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import maya
 
 pytestmark = pytest.mark.unit
@@ -737,3 +738,50 @@ def test_plaintext_environment_url_is_rejected(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("MAYA_BASE_URL", "http://example.com")
     with pytest.raises(ValueError, match="HTTPS/WSS"):
         Service().engine()
+
+
+async def test_clear_language_omits_next_start_without_interrupting_active_turn(
+    service: Service,
+) -> None:
+    service.mode = "hold"
+    async with service.engine(language="hi") as engine:
+        old = engine.synthesize("An active Hindi turn.", conn_options=OPTIONS)
+        await asyncio.wait_for(anext(old), 1)
+        engine.update_options(language=None)
+        assert not service.sockets[0].closed
+        assert service.sockets[0].frames[0]["language"] == "hi"
+        service.mode = "normal"
+        assert await speak(engine, False) == PCM
+        assert "language" not in service.sockets[1].frames[0]
+        assert not service.sockets[0].closed
+        await old.aclose()
+
+
+def test_none_constructor_language_omits_the_field() -> None:
+    assert "language" not in Service().engine(language=None)._settings.start()
+
+
+def test_not_given_update_leaves_language_unchanged() -> None:
+    engine = Service().engine(language="hi")
+    engine.update_options(voice="Tarini", language=NOT_GIVEN)
+    assert engine._settings.start()["language"] == "hi"
+    engine.update_options(model="future-model")
+    assert engine._settings.start()["language"] == "hi"
+
+
+@pytest.mark.parametrize("name", ["model", "voice", "language"])
+@pytest.mark.parametrize("value", ["", " ", "bad\nvalue"])
+def test_invalid_option_update_is_atomic(name: str, value: str) -> None:
+    engine = Service().engine(language="hi")
+    original = engine._settings
+    with pytest.raises(ValueError):
+        engine.update_options(**{name: value})
+    assert engine._settings == original
+
+
+async def test_clearing_an_already_omitted_language_reuses_connection(service: Service) -> None:
+    async with service.engine() as engine:
+        assert await speak(engine, False) == PCM
+        engine.update_options(language=None)
+        assert await speak(engine, False) == PCM
+        assert len(service.sockets) == 1

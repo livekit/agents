@@ -89,7 +89,7 @@ class TTS(tts.TTS):
         *,
         model: TTSModels | str = "Maya Calyx",
         voice: str = "Aarav",
-        language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        language: NotGivenOr[TTSLanguages | str | None] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -100,7 +100,7 @@ class TTS(tts.TTS):
         Args:
             model: Exact server-supported model ID. Currently defaults to Maya Calyx.
             voice: Exact voice name for the chosen model. Defaults to Aarav.
-            language: Documented language code; omit for mixed-language text.
+            language: Documented language code; omit or use None for mixed-language text.
             api_key: API key, or the MAYA_API_KEY environment variable.
             base_url: HTTPS/WSS API root, or MAYA_BASE_URL. Defaults to the public
                 Maya endpoint. Unencrypted connections are not supported.
@@ -118,7 +118,11 @@ class TTS(tts.TTS):
         self._settings = _Settings(
             model=_nonempty(model, "model"),
             voice=_nonempty(voice, "voice"),
-            language=_nonempty(language, "language") if is_given(language) else NOT_GIVEN,
+            language=(
+                _nonempty(language, "language")
+                if is_given(language) and language is not None
+                else NOT_GIVEN
+            ),
         )
         root = base_url if is_given(base_url) else os.getenv("MAYA_BASE_URL", DEFAULT_BASE_URL)
         parsed = urlsplit(root)
@@ -248,14 +252,24 @@ class TTS(tts.TTS):
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
+        language: NotGivenOr[TTSLanguages | str | None] = NOT_GIVEN,
     ) -> None:
-        """Change settings for the next acquired turn; active turns keep their voice."""
+        """Change settings for the next turn without interrupting active turns.
+
+        Omitted arguments (NOT_GIVEN) leave their setting unchanged. Set language
+        to None to restore mixed-language mode and omit it from the next start.
+        """
         values: dict[str, str] = {}
-        for name, value in (("model", model), ("voice", voice), ("language", language)):
+        for name, value in (("model", model), ("voice", voice)):
             if is_given(value):
                 values[name] = _nonempty(value, name)
-        self._settings = replace(self._settings, **values)
+        settings = replace(self._settings, **values)
+        if is_given(language):
+            settings = replace(
+                settings,
+                language=NOT_GIVEN if language is None else _nonempty(language, "language"),
+            )
+        self._settings = settings
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
