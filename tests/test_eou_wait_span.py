@@ -317,6 +317,9 @@ async def test_resumed_speech_during_detection_keeps_the_child_inside(
     assert [e.name for e in detection.events] == ["superseded"]
     attrs = wait.attributes or {}
     assert attrs[trace_types.ATTR_EOU_OUTCOME] == "user_resumed"
+    # the delay in force is stamped when the wait opens, so a wait ended by resumed speech
+    # before the detector answered still carries it
+    assert trace_types.ATTR_EOU_DELAY in attrs
     assert attrs[trace_types.ATTR_EOU_WAIT_DURATION] == pytest.approx(
         (wait.end_time - wait.start_time) / 1e9
     )

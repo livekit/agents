@@ -1531,6 +1531,7 @@ class AudioRecognition:
                 user_turn_span,
                 trigger=trigger,
                 last_speaking_time=last_speaking_time,
+                endpointing_delay=endpointing_delay,
             )
 
             end_of_turn_probability: float | None = None
@@ -1701,7 +1702,8 @@ class AudioRecognition:
                                 prediction_event.detection_delay,
                             )
 
-            eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
+            if eou_wait_span.is_recording():  # the wait may have ended with resumed speech
+                eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
 
             extra_sleep = endpointing_delay
             if last_speaking_time:
@@ -2002,6 +2004,7 @@ class AudioRecognition:
         *,
         trigger: str,
         last_speaking_time: float | None,
+        endpointing_delay: float,
     ) -> trace.Span:
         """The turn's ``eou_wait`` span, created on the first end-of-turn trigger and back-dated
         to ``last_speaking_time``. Later triggers for the same turn (a late STT final, another
@@ -2015,7 +2018,13 @@ class AudioRecognition:
                 {trace_types.ATTR_EOU_SOURCE: trigger},
                 timestamp=self._eou_wait_floor_ns,
             )
-            span.set_attribute(trace_types.ATTR_EOU_SOURCE, trigger)
+            span.set_attributes(
+                {
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    # the delay in force now; a prediction may raise it later
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                }
+            )
             return span
 
         now = time.time()
@@ -2026,7 +2035,10 @@ class AudioRecognition:
             span = tracer.start_span(
                 "eou_wait",
                 start_time=started_at_ns,
-                attributes={trace_types.ATTR_EOU_SOURCE: trigger},
+                attributes={
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                },
             )
         self._eou_wait_span = span
         self._eou_wait_started_at_ns = started_at_ns
