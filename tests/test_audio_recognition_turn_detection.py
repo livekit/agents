@@ -12,7 +12,7 @@ Covered here:
    sub-``min_speech_duration`` VAD spike (no SOS/EOS) must not block the next commit.
 
 2. ``on_eot_prediction`` dedup across the vad-EOS and stt-final triggers that
-   share one resolved prediction future, and the ``update_turn_detector``
+   share one resolved prediction future, and the ``_update_turn_detector``
    swap wiring.
 
 3. The prediction-future lifecycle against VAD events: requests start
@@ -58,6 +58,7 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None
     ar._stt_pipeline = None
+    ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
     ar._turn_detection_mode = "vad"
@@ -583,7 +584,9 @@ class TestPredictionFutureLifecycle:
 
         assert ar._turn_detector_stream.predict.call_count == 0
         ar._hooks.on_eot_prediction.assert_not_called()
-        flush_warnings = [r for r in caplog.records if "already flushed" in r.getMessage()]
+        flush_warnings = [
+            r for r in caplog.records if "after turn has been committed" in r.getMessage()
+        ]
         assert len(flush_warnings) == 1
 
     async def test_predict_timeout_signals_fallback_and_drops_future(self) -> None:
@@ -688,7 +691,7 @@ class TestVadMinSilenceRequirement:
 
     def test_update_turn_detector_validates_pairing(self) -> None:
         """Integration: attaching an audio detector over a too-low VAD raises
-        through the ``update_turn_detector`` call site, before any stream is
+        through the ``_update_turn_detector`` call site, before any stream is
         built."""
         ar = _make_recognition_for_validation()
         ar._tasks = set()
@@ -697,7 +700,7 @@ class TestVadMinSilenceRequirement:
         detector = MagicMock(spec=_StreamingTurnDetector)
 
         with pytest.raises(ValueError, match="min_silence_duration"):
-            ar.update_turn_detector(detector)
+            ar._update_turn_detector(detector)
 
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None

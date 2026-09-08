@@ -42,7 +42,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import aio, is_given
 from livekit.agents.voice.io import TimedString
 
 from .log import logger
@@ -964,6 +964,7 @@ class TTS(tts.TTS):
         self._idle_connection_timeout = idle_connection_timeout
         self._pool: _ConnectionPool | None = None
         self._pool_lock = asyncio.Lock()
+        self._prewarm_task: asyncio.Task[None] | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
         self._sentence_tokenizer = (
             tokenizer
@@ -1087,7 +1088,11 @@ class TTS(tts.TTS):
         return self._session
 
     def prewarm(self) -> None:
-        asyncio.create_task(self._prewarm_impl())
+        # Don't replace a prewarm still in flight: the old task would lose its only
+        # reference, and aclose() cancels just the latest one, so it could build a
+        # pool after shutdown. Same guard as the soniox plugin.
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(self._prewarm_impl())
 
     async def _prewarm_impl(self) -> None:
         # Just ensure the pool is created - first acquire will establish a connection
@@ -1109,6 +1114,13 @@ class TTS(tts.TTS):
         return stream
 
     async def aclose(self) -> None:
+        # Cancel first: _prewarm_impl calls _get_pool, which builds a new pool when
+        # self._pool is None. A prewarm still in flight here would otherwise recreate
+        # the pool after it was closed, leaving a live connection nothing owns.
+        if self._prewarm_task is not None:
+            await aio.cancel_and_wait(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
 

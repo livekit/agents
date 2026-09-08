@@ -42,6 +42,7 @@ class _MayaServer:
         never_ends: bool = False,
         stray_context: bool = False,
         garbled_start: bool = False,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self.reject_start = reject_start
         self.error_on_text = error_on_text
@@ -49,6 +50,7 @@ class _MayaServer:
         self.never_ends = never_ends
         self.stray_context = stray_context
         self.garbled_start = garbled_start
+        self.metadata = metadata or {}
 
         self.start_frames: list[dict[str, Any]] = []
         self.text_frames: list[dict[str, Any]] = []
@@ -110,6 +112,7 @@ class _MayaServer:
                             "channels": 1,
                             "encoding": "pcm_s16le",
                             "session_id": "test-session",
+                            **self.metadata,
                         }
                     )
                 )
@@ -231,7 +234,7 @@ def test_api_key_argument_wins(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_provider_and_default_model() -> None:
     tts = maya.TTS(api_key="k")
     assert tts.provider == "Maya"
-    assert tts.model == "Maya 2 Native"
+    assert tts.model == "Maya Calyx"
 
 
 def test_supports_streaming() -> None:
@@ -262,19 +265,30 @@ def test_language_is_unset_by_default() -> None:
 
 
 def test_start_frame_selects_v2_and_carries_settings() -> None:
-    tts = maya.TTS(api_key="k", voice="Arjun", language="hi", model="Maya 2 Native Emotional")
+    tts = maya.TTS(api_key="k", voice="Aarav", language="hi", model="Maya Calyx")
     assert tts._opts.start_frame() == {
         "type": "start",
         "v2": True,
-        "voice": "Arjun",
+        "voice": "Aarav",
         "language": "hi",
-        "model": "Maya 2 Native Emotional",
+        "model": "Maya Calyx",
     }
 
 
 def test_start_frame_omits_unset_fields() -> None:
+    frame = maya.TTS(api_key="k", model=NOT_GIVEN)._opts.start_frame()
+    assert frame == {"type": "start", "v2": True, "voice": "Aarav"}
+
+
+def test_defaults_explicitly_select_the_current_model_and_voice() -> None:
     frame = maya.TTS(api_key="k")._opts.start_frame()
-    assert frame == {"type": "start", "v2": True, "voice": "Ananya"}
+    assert frame == {"type": "start", "v2": True, "voice": "Aarav", "model": "Maya Calyx"}
+
+
+def test_future_model_names_are_passed_through() -> None:
+    tts = maya.TTS(api_key="k", model="a-future-server-model")
+    assert tts.model == "a-future-server-model"
+    assert tts._opts.start_frame()["model"] == "a-future-server-model"
 
 
 def test_unverified_language_is_still_sent() -> None:
@@ -299,15 +313,15 @@ def test_ws_url_honours_a_self_hosted_base_url() -> None:
 
 def test_update_options() -> None:
     tts = maya.TTS(api_key="k")
-    tts.update_options(voice="Arjun", language="ta")
-    assert tts._opts.voice == "Arjun"
+    tts.update_options(voice="Tarini", language="ta")
+    assert tts._opts.voice == "Tarini"
     assert tts._opts.language == "ta"
 
 
 def test_update_options_preserves_unset_fields() -> None:
-    tts = maya.TTS(api_key="k", voice="Arjun", language="hi")
-    tts.update_options(voice="Ananya")
-    assert tts._opts.voice == "Ananya"
+    tts = maya.TTS(api_key="k", voice="Tarini", language="hi")
+    tts.update_options(voice="Aarav")
+    assert tts._opts.voice == "Aarav"
     assert tts._opts.language == "hi"
 
 
@@ -532,3 +546,83 @@ async def test_a_failed_handshake_closes_the_socket() -> None:
         assert opened, "no connection was attempted"
         assert all(ws.closed for ws in opened)
         await tts.aclose()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"sample_rate": 48000},
+        {"sample_rate": 0},
+        {"sample_rate": None},
+        {"sample_rate": "24000"},
+        {"channels": 2},
+        {"channels": None},
+        {"channels": True},
+        {"encoding": "pcm_f32le"},
+        {"encoding": "mp3"},
+        {"encoding": None},
+    ],
+)
+async def test_unsupported_audio_metadata_rejects_before_text_and_closes(
+    metadata: dict[str, Any],
+    streaming: bool,
+) -> None:
+    # Never feed a different rate/channel count/encoding into a 24 kHz mono
+    # PCM emitter: that changes speed/pitch or turns encoded bytes into noise.
+    async with _MayaServer(metadata=metadata) as server:
+        tts = server.tts()
+        session = tts._ensure_session()
+        real_ws_connect = session.ws_connect
+        opened: list[aiohttp.ClientWebSocketResponse] = []
+
+        async def _spy(*args: Any, **kwargs: Any) -> aiohttp.ClientWebSocketResponse:
+            ws = await real_ws_connect(*args, **kwargs)
+            opened.append(ws)
+            return ws
+
+        try:
+            with patch.object(session, "ws_connect", _spy):
+                with pytest.raises(APIError, match="audio format"):
+                    if streaming:
+                        stream = tts.stream(conn_options=_NO_RETRY)
+                        stream.push_text("Hello. ")
+                        stream.end_input()
+                        try:
+                            await _collect(stream)
+                        finally:
+                            await stream.aclose()
+                    else:
+                        await _synthesize(tts, "नमस्ते।")
+            assert server.text_frames == []
+            assert opened and all(ws.closed for ws in opened)
+        finally:
+            await tts.aclose()
+
+
+async def test_option_change_opens_a_connection_with_the_new_settings() -> None:
+    async with _MayaServer() as server:
+        tts = server.tts(language="hi")
+        try:
+            await _synthesize(tts, "नमस्ते।")
+            tts.update_options(voice="Tarini", language="en", model="future-model")
+            await _synthesize(tts, "Hello.")
+            assert server.connections == 2
+            assert [frame["voice"] for frame in server.start_frames] == ["Aarav", "Tarini"]
+            assert server.start_frames[-1]["model"] == "future-model"
+            assert server.start_frames[-1]["language"] == "en"
+        finally:
+            await tts.aclose()
+
+
+@pytest.mark.parametrize("samples", [1, 317, 480, 1259])
+async def test_final_partial_frame_preserves_every_pcm_sample(samples: int) -> None:
+    async with _MayaServer(samples_per_text=samples) as server:
+        tts = server.tts()
+        try:
+            audio = await _synthesize(tts, "Hello.")
+            expected = _pcm(samples)
+            assert audio[: len(expected)] == expected
+            assert not any(audio[len(expected) :])  # any frame padding is silence
+        finally:
+            await tts.aclose()

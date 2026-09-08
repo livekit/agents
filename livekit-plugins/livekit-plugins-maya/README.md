@@ -2,16 +2,22 @@
 
 Support for voice synthesis with the [Maya Research](https://www.mayaresearch.ai/) API.
 
-Ten Indian languages plus Indian English, with every voice speaking all eleven.
-A conversation runs over one persistent websocket with turn-level barge-in.
+The plugin integrates Maya Research voice models, rather than being named after
+one model generation. As of 8 September 2026, the public API documents **Maya Calyx**,
+with ten Indian languages plus Indian English. The default model is `Maya Calyx`
+and the default voice is `Aarav`; both are selected explicitly on the connection.
+A conversation uses a persistent websocket with turn-level cancellation.
 
 See [https://www.mayaresearch.ai/llm.txt](https://www.mayaresearch.ai/llm.txt) for more information.
+The public [Maya Research Cookbook](https://github.com/MayaResearch/maya-cookbook)
+has runnable TTS and voice-agent examples, API references, and coding-agent instructions.
 
 ## Installation
 
-```bash
-pip install livekit-plugins-maya
-```
+This plugin is proposed in [LiveKit PR 6899](https://github.com/livekit/agents/pull/6899)
+and is not yet an upstream release. To test it now, use the cookbook's
+[pinned LiveKit example](https://github.com/MayaResearch/maya-cookbook/tree/main/integrations/livekit).
+Once published, it will be installable as `livekit-plugins-maya`.
 
 ## Pre-requisites
 
@@ -24,11 +30,16 @@ You'll need an API key from Maya Research. It can be set as an environment varia
 ```python
 from livekit.plugins import maya
 
-tts = maya.TTS(voice="Ananya", language="hi")  # see Maya's docs for voices
+tts = maya.TTS(model="Maya Calyx", voice="Aarav", language="hi")
 ```
 
 Omit `language` for text that switches languages mid-sentence, so each part is
 pronounced with its own script's rules.
+
+Model and voice strings are passed through to Maya's API, so newly supported
+models do not need a renamed plugin. Consult the current API reference before
+changing them. This implementation emits 24 kHz mono signed 16-bit little-endian
+PCM and rejects incompatible startup metadata before sending text.
 
 ### Streaming Indic text
 
@@ -39,5 +50,5 @@ sentence as it is written. Pass a tokenizer that breaks on the danda to stream
 those replies as they are generated:
 
 ```python
-tts = maya.TTS(voice="Ananya", language="hi", tokenizer=my_indic_tokenizer)
+tts = maya.TTS(model="Maya Calyx", voice="Aarav", language="hi", tokenizer=my_indic_tokenizer)
 ```

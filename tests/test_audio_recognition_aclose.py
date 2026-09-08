@@ -1,13 +1,3 @@
-"""
-Tests to validate that AudioRecognition.aclose() handles pre-cancelled tasks gracefully.
-
-Before the fix, if _commit_user_turn_atask or _end_of_turn_task were cancelled
-before aclose() was called, awaiting them would raise CancelledError and
-propagate up, causing cleanup to fail.
-
-The fix wraps these awaits in try-except blocks to catch CancelledError.
-"""
-
 import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,8 +10,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 
 
 class TestAudioRecognitionAclose:
-    """Test cases for AudioRecognition.aclose() handling cancelled tasks."""
-
     def _create_audio_recognition(self) -> AudioRecognition:
         """Create an AudioRecognition instance with mocked dependencies."""
         with patch.object(AudioRecognition, "__init__", lambda self, *args, **kwargs: None):
@@ -113,22 +101,6 @@ class TestAudioRecognitionAclose:
 
     @pytest.mark.asyncio
     async def test_aclose_handles_precancelled_tasks_gracefully(self):
-        """
-        PROVES THE FIX: Both tasks are properly cleaned up even when pre-cancelled.
-
-        Fixed aclose() pattern:
-            if self._commit_user_turn_atask is not None:
-                try:
-                    await self._commit_user_turn_atask
-                except asyncio.CancelledError:
-                    pass  # <-- Catches the error, continues cleanup
-            # ... other cleanup ...
-            if self._end_of_turn_task is not None:
-                try:
-                    await self._end_of_turn_task
-                except asyncio.CancelledError:
-                    pass  # <-- This is now reached!
-        """
         audio_recognition = self._create_audio_recognition()
 
         async def long_running_task():
@@ -179,6 +151,31 @@ class TestAudioRecognitionAclose:
         release.set()
         await close_task
         assert task.done()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("task_attr", ["_commit_user_turn_atask", "_end_of_turn_task"])
+    async def test_aclose_propagates_cancellation_while_waiting_for_turn_task(
+        self, task_attr: str
+    ) -> None:
+        audio_recognition = self._create_audio_recognition()
+        started = asyncio.Event()
+
+        async def pending_task() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(pending_task())
+        await started.wait()
+        setattr(audio_recognition, task_attr, task)
+
+        close_task = asyncio.create_task(audio_recognition._aclose())
+        await asyncio.sleep(0)
+        close_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await close_task
+
+        assert task.cancelled()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

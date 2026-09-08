@@ -34,6 +34,12 @@ class LLMMetrics(_BaseMetrics):
 
     Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
     """
+    reasoning_tokens: int = 0
+    """The number of completion tokens spent on hidden reasoning.
+
+    Already counted in ``completion_tokens``; do not add it to totals. Not all providers
+    break reasoning out separately, and it is 0 when they don't.
+    """
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None

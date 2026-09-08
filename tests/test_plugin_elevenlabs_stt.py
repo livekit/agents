@@ -43,6 +43,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
+        secondary_languages=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
         previous_text=None,
@@ -50,6 +51,7 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
     stream._language = None
     stream._event_ch = _EventSink()
     stream._speaking = False
+    stream._last_partial_text = ""
     stream._start_time_offset = 0.0
     return stream
 
@@ -64,6 +66,60 @@ def _committed_transcript(text: str) -> dict:
         if text
         else [],
     }
+
+
+def _partial_transcript(text: str) -> dict:
+    return {"message_type": "partial_transcript", "text": text, "words": []}
+
+
+def _interim_texts(stream: elevenlabs_stt.SpeechStream) -> list[str]:
+    return [
+        event.alternatives[0].text
+        for event in stream._event_ch.events
+        if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+    ]
+
+
+def test_advancing_partial_transcripts_are_forwarded() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    stream._process_stream_event(_partial_transcript("yeah"))
+    stream._process_stream_event(_partial_transcript("yeah please"))
+
+    assert _interim_texts(stream) == ["yeah", "yeah please"]
+
+
+def test_re_sent_partial_transcript_is_dropped() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    for _ in range(5):
+        stream._process_stream_event(_partial_transcript("yeah please"))
+
+    assert _interim_texts(stream) == ["yeah please"]
+    assert [event.type for event in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.INTERIM_TRANSCRIPT,
+    ]
+
+
+def test_the_same_words_after_a_commit_are_forwarded_again() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5})
+
+    stream._process_stream_event(_partial_transcript("right"))
+    stream._process_stream_event(_committed_transcript("right"))
+    stream._process_stream_event(_partial_transcript("right"))
+
+    assert _interim_texts(stream) == ["right", "right"]
+
+
+def test_the_same_words_after_an_empty_commit_are_forwarded_again() -> None:
+    stream = _new_stream(server_vad=None)
+
+    stream._process_stream_event(_partial_transcript("right"))
+    stream._process_stream_event(_committed_transcript(""))
+    stream._process_stream_event(_partial_transcript("right"))
+
+    assert _interim_texts(stream) == ["right", "right"]
 
 
 def test_server_vad_commit_emits_end_of_speech() -> None:

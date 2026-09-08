@@ -1304,12 +1304,19 @@ class RealtimeSession(llm.RealtimeSession):
                 logger.warning("received server content but no active generation.")
             return
 
+        # With audio output and output transcription on, spoken words arrive through
+        # output_transcription. Model-turn text is not spoken and must not leak into captions.
+        forward_model_text = (
+            not self._realtime_model.capabilities.audio_output
+            or self._opts.output_audio_transcription is None
+        )
+
         if model_turn := server_content.model_turn:
             for part in model_turn.parts or []:
                 if part.thought:
                     # bypass reasoning output
                     continue
-                if part.text:
+                if part.text and forward_model_text:
                     current_gen.push_text(part.text)
                 if part.inline_data:
                     if current_gen.audio_ch.closed:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import pytest
 from google.genai import types
@@ -13,6 +16,41 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
+    """Whether this task is a genai client's ``aclose()`` left behind by a finalizer.
+
+    Keyed on the coroutine's defining module, not its name alone -- ``aclose``
+    is a common method name and this must not touch unrelated tasks. Coroutine
+    objects carry no ``__module__``, hence the walk through ``cr_frame``.
+    """
+    coro = task.get_coro()
+    if not (getattr(coro, "__qualname__", "") or "").endswith(".aclose"):
+        return False
+    frame = getattr(coro, "cr_frame", None)
+    module = frame.f_globals.get("__name__", "") if frame else ""
+    return module.startswith("google.genai")
+
+
+@pytest.fixture(autouse=True)
+async def _settle_genai_finalizers() -> AsyncIterator[None]:
+    """Finish the genai client teardown this test started, before the next one.
+
+    ``AsyncClient.__del__`` schedules ``aclose()`` on whatever event loop is
+    running when the collector reaches it, with no check for a client that was
+    already closed explicitly -- so even the sessions this module closes
+    properly leave a finalizer behind. Settled here, while this test still owns
+    the loop, those tasks would otherwise surface as leaked tasks in an
+    unrelated test in a later module.
+    """
+    yield
+    gc.collect()
+    if pending := [
+        task for task in asyncio.all_tasks() if not task.done() and _is_genai_client_teardown(task)
+    ]:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
 _PCM_FRAME = b"\x00\x01" * 240
@@ -38,6 +76,20 @@ async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Realti
         await session.aclose()
 
 
+@asynccontextmanager
+async def _make_configured_session(
+    monkeypatch: pytest.MonkeyPatch, **options: object
+) -> AsyncIterator[RealtimeSession]:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    session = RealtimeModel(**options).session()  # type: ignore[arg-type]
+    session._msg_ch.close()
+    await utils.aio.cancel_and_wait(session._main_atask)
+    try:
+        yield session
+    finally:
+        await session.aclose()
+
+
 def _audio_content(**kwargs: object) -> types.LiveServerContent:
     return types.LiveServerContent(
         model_turn=types.Content(
@@ -45,6 +97,166 @@ def _audio_content(**kwargs: object) -> types.LiveServerContent:
         ),
         **kwargs,  # type: ignore[arg-type]
     )
+
+
+async def _drain_generation(
+    event: llm.GenerationCreatedEvent,
+) -> tuple[str, int, list[str]]:
+    text = ""
+    audio_frames = 0
+    async for message in event.message_stream:
+        async for chunk in message.text_stream:
+            text += chunk
+        async for _frame in message.audio_stream:
+            audio_frames += 1
+
+    function_calls = [call.name async for call in event.function_stream]
+    return text, audio_frames, function_calls
+
+
+async def test_unspoken_model_text_is_omitted_in_audio_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(
+                    parts=[types.Part(text="call:getWeather{location:Seattle")]
+                ),
+                output_transcription=types.Transcription(text="Let me check."),
+            )
+        )
+
+        assert gen.output_text == "Let me check."
+        assert gen.text_ch.recv_nowait() == "Let me check."
+        assert gen.text_ch.empty()
+
+
+async def test_model_text_is_forwarded_in_text_modality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, modalities=[types.Modality.TEXT]) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="Hello there.")])
+            )
+        )
+
+        assert gen.output_text == "Hello there."
+        assert gen.text_ch.recv_nowait() == "Hello there."
+
+
+async def test_model_text_is_forwarded_without_output_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, output_audio_transcription=None) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="Hello there.")])
+            )
+        )
+
+        assert gen.output_text == "Hello there."
+        assert gen.text_ch.recv_nowait() == "Hello there."
+
+
+async def test_transcript_contains_only_output_transcription_with_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="call:assetGenerator{context:")])
+            )
+        )
+        session._handle_server_content(_audio_content())
+        session._handle_server_content(
+            types.LiveServerContent(output_transcription=types.Transcription(text="Tako je!"))
+        )
+        session._handle_server_content(types.LiveServerContent(generation_complete=True))
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("Tako je!", 1, [])
+
+
+async def test_tool_call_is_delivered_without_written_call_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="call:getWeather{location:")])
+            )
+        )
+        session._handle_tool_calls(
+            types.LiveServerToolCall(
+                function_calls=[
+                    types.FunctionCall(id="fc-1", name="getWeather", args={"location": "Seattle"})
+                ]
+            )
+        )
+
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("", 0, ["getWeather"])
+
+
+async def test_transcript_keeps_model_text_in_text_modality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, modalities=[types.Modality.TEXT]) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
+                turn_complete=True,
+            )
+        )
+
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("Hello there.", 0, [])
+
+
+async def test_transcript_keeps_model_text_without_output_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, output_audio_transcription=None) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+
+        session._handle_server_content(
+            types.LiveServerContent(
+                model_turn=types.Content(parts=[types.Part(text="Hello there.")]),
+                turn_complete=True,
+            )
+        )
+
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("Hello there.", 0, [])
 
 
 async def test_output_streams_close_on_generation_complete(

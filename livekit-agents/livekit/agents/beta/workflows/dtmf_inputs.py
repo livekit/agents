@@ -49,7 +49,6 @@ class GetDtmfTask(AgentTask[GetDtmfResult]):
         Args:
             num_digits: The number of digits to collect.
             ask_for_confirmation: Whether to ask for confirmation when agent has collected full digits.
-            repeat_instructions: The number of times to repeat the initial instructions.
             dtmf_input_timeout: The per-digit timeout.
             dtmf_stop_event: The DTMF event to stop collecting inputs.
             chat_ctx: The chat context to use.

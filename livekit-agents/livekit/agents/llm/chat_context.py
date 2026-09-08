@@ -711,7 +711,7 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["mistralai"]
+        self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
     ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
@@ -746,7 +746,9 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_conversations_ctx(self)
+            return _provider_format.mistralai.to_conversations_ctx(
+                self, inject_dummy_user_message=inject_dummy_user_message
+            )
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
@@ -764,14 +766,14 @@ class ChatContext:
         return 0
 
     def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
-        """Update an item with the same ID if it exists, otherwise append it."""
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
         idx = self.index_by_id(item.id)
         if idx is not None:
             if not allow_type_mismatch and item.type != self._items[idx].type:
                 raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
             self._items[idx] = item
         else:
-            self._items.append(item)
+            self.insert(item)
 
     async def _summarize(
         self,

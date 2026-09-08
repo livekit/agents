@@ -18,8 +18,10 @@ import asyncio
 import base64
 import json
 import os
+import sys
 import weakref
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, cast
 
 import aiohttp
 
@@ -45,7 +47,8 @@ SAMPLE_RATE = 24000
 checked against this on connect."""
 
 DEFAULT_BASE_URL = "https://tts.mayaresearch.ai"
-DEFAULT_VOICE = "Ananya"
+DEFAULT_MODEL: TTSModels = "Maya Calyx"
+DEFAULT_VOICE = "Aarav"
 
 
 @dataclass
@@ -80,14 +83,14 @@ class TTS(tts.TTS):
         *,
         voice: str = DEFAULT_VOICE,
         language: NotGivenOr[TTSLanguages | str] = NOT_GIVEN,
-        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = DEFAULT_MODEL,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         text_pacing: tts.SentenceStreamPacer | bool = False,
     ) -> None:
-        """Create a new instance of Maya TTS.
+        """Create a new instance of Maya Research TTS.
 
         A conversation runs over one persistent websocket, so the handshake is
         paid once rather than per utterance. Each agent turn is a Maya context:
@@ -97,13 +100,14 @@ class TTS(tts.TTS):
         See https://www.mayaresearch.ai/llm.txt for the API.
 
         Args:
-            voice (str, optional): Voice name, case-sensitive. Every voice speaks
-                every language. See Maya's docs for the current catalogue.
+            voice (str, optional): Voice name, case-sensitive. Defaults to ``Aarav``.
+                See Maya's docs for the current model's voice and language catalogue.
             language (TTSLanguages | str, optional): Language code. Omit it for text
                 that switches languages mid-sentence, so each part is pronounced with
                 its own script's rules.
             model (TTSModels | str, optional): Synthesis model. Defaults to
-                ``Maya 2 Native``. ``Maya 2 Global`` is HTTP-only and unavailable here.
+                ``Maya Calyx``, the currently documented model. Model names are
+                passed through so future supported models do not need a plugin release.
             api_key (str, optional): Maya API key. Falls back to the ``MAYA_API_KEY``
                 environment variable.
             base_url (str, optional): API base URL, for self-hosted deployments.
@@ -162,7 +166,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return self._opts.model if is_given(self._opts.model) else "Maya 2 Native"
+        return self._opts.model if is_given(self._opts.model) else "unknown"
 
     @property
     def provider(self) -> str:
@@ -212,6 +216,20 @@ class TTS(tts.TTS):
 
             if data.get("type") != "metadata":
                 raise APIError(f"Maya rejected the connection settings: {data}")
+
+            # The emitter advertises 24 kHz mono PCM before connecting. Reject
+            # incompatible metadata instead of silently changing pitch/speed or
+            # interpreting another encoding as signed 16-bit samples.
+            if (
+                type(data.get("sample_rate")) is not int
+                or data["sample_rate"] != self._opts.sample_rate
+                or type(data.get("channels")) is not int
+                or data["channels"] != NUM_CHANNELS
+                or data.get("encoding") != "pcm_s16le"
+            ):
+                raise APIConnectionError(
+                    "unsupported Maya audio format: expected 24000 Hz mono pcm_s16le"
+                )
         except asyncio.TimeoutError:
             await ws.close()
             raise APITimeoutError() from None
@@ -221,16 +239,14 @@ class TTS(tts.TTS):
             await ws.close()
             raise
 
-        if (rate := data.get("sample_rate")) and rate != self._opts.sample_rate:
-            logger.warning(
-                "Maya reported a sample rate this plugin does not emit",
-                extra={"reported": rate, "expected": self._opts.sample_rate},
-            )
-
         logger.debug(
             "established new Maya TTS websocket connection",
             extra={"maya_session_id": data.get("session_id")},
         )
+        if TYPE_CHECKING and sys.version_info < (3, 11):
+            # aiohttp omits its decode_text overloads on Python 3.10; the
+            # default still decodes text, as ClientWebSocketResponse declares.
+            return cast(aiohttp.ClientWebSocketResponse, ws)
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:

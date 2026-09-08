@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-TTSModels = Literal["Maya 2 Native", "Maya 2 Native Emotional"]
-"""Models available on the websocket. ``Maya 2 Global`` is HTTP-only."""
+TTSModels = Literal["Maya Calyx"]
+"""Currently documented Maya Research websocket model. Model strings are also
+accepted by the plugin; the service validates availability and voice compatibility."""
 
 TTSLanguages = Literal["hi", "bn", "gu", "kn", "ml", "mr", "or", "pa", "ta", "te", "en"]
 """Ten Indian languages plus ``en``, which is Indian English rather than a

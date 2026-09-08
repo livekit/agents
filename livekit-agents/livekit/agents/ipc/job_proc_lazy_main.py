@@ -26,7 +26,7 @@ from opentelemetry import trace
 from livekit import rtc
 
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
-from ..log import logger
+from ..log import _add_global_log_fields, logger
 from ..telemetry import trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
@@ -77,6 +77,7 @@ def proc_main(args: ProcStartArgs) -> None:
 
     log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
     log_handler = LogQueueHandler(log_cch)
+    _add_global_log_fields(log_handler)
     root_logger.addHandler(log_handler)
 
     job_proc = _JobProc(

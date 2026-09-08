@@ -76,7 +76,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their email address. If the user already stated one earlier "
+                "in this conversation, record it with update_email_address instead of asking again."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -162,16 +167,12 @@ EMAIL_REGEX = (
 PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
 
 AUDIO_SPECIFIC = """\
-Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
-- 'john dot doe at gmail dot com'
-- 'susan underscore smith at yahoo dot co dot uk'
-- 'dave dash b at protonmail dot com'
-- 'jane at example' (partial—prompt for the domain)
-- 'theo t h e o at livekit dot io' (name followed by spelling)
+Handle input as noisy voice transcription. Users say emails aloud.
 Normalize common spoken patterns silently:
 - Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
 - Convert 'at' to `@`.
 - Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- If only the part before the '@' is given, prompt for the domain.
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""
