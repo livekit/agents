@@ -658,19 +658,21 @@ class SpeechStream(stt.RecognizeStream):
 
                 if self._client:
                     for frame in frames:
-                        self._speech_duration += frame.duration
                         await self._client.send_audio(frame.data.tobytes())
 
                         # send_audio never raises: it closes the audio gate and drops
-                        # later frames. A session error is already raised as fatal in
-                        # _handle_message, so only a clean gate close is a lost connection.
-                        if (
-                            not self._client.is_ready_for_audio
-                            and self._client.session_error is None
-                        ):
-                            raise APIConnectionError(
-                                "lost connection to Speechmatics while sending audio"
-                            )
+                        # this and every later frame. A session error is already raised
+                        # as fatal in _handle_message, so only a clean gate close is a
+                        # lost connection.
+                        if not self._client.is_ready_for_audio:
+                            if self._client.session_error is None:
+                                raise APIConnectionError(
+                                    "lost connection to Speechmatics while sending audio"
+                                )
+                            break
+
+                        # Only audio the service accepted counts towards usage.
+                        self._speech_duration += frame.duration
 
             # No more input — let the VAD flush any pending event
             if self._vad_stream is not None:
