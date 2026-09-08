@@ -27,6 +27,9 @@ def _make_recognition() -> AudioRecognition:
     ar._stt_pipeline = MagicMock()  # type: ignore[attr-defined]
     # the input anchor lives on the pipeline (see _STTPipeline.input_started_at)
     ar._stt_pipeline.input_started_at = None  # type: ignore[attr-defined]
+    # the pump closes audio_ch when it stops reading; a MagicMock attribute is
+    # truthy, so it has to be set explicitly for the open case
+    ar._stt_pipeline.audio_ch.closed = False  # type: ignore[attr-defined]
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
@@ -69,6 +72,23 @@ def test_push_audio_skips_optional_consumers_when_unset() -> None:
 
     # Should not raise even when every downstream consumer is absent.
     ar._push_audio(_make_frame())
+
+
+def test_push_audio_skips_a_closed_stt_input() -> None:
+    """The pump closes audio_ch when it gives up on a non-retryable error.
+
+    Nothing reads it after that, so forwarding would fill an unbounded queue for
+    the rest of the session — and send_nowait on a closed Chan raises.
+    """
+    ar = _make_recognition()
+    ar._stt_pipeline.audio_ch.closed = True  # type: ignore[attr-defined]
+    frame = _make_frame()
+
+    ar._push_audio(frame)
+
+    ar._stt_pipeline.audio_ch.send_nowait.assert_not_called()  # type: ignore[attr-defined]
+    # the other consumers are unaffected
+    ar._vad_ch.send_nowait.assert_called_once_with(frame)  # type: ignore[attr-defined]
 
 
 def test_push_audio_records_sample_rate_and_input_start() -> None:
