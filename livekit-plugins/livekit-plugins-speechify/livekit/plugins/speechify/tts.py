@@ -51,6 +51,7 @@ from speechify.types.speech_stream_event import (
 
 from .log import logger
 from .models import Gender, TTSModels, VoiceType
+from .version import __version__
 
 DEFAULT_VOICE_ID = "dominic_32"
 DEFAULT_MODEL: TTSModels = "simba-3.2"
@@ -59,6 +60,7 @@ NUM_CHANNELS = 1
 AUDIO_FORMAT = "pcm"
 MIME_TYPE = "audio/pcm"
 CALLER_HEADER = "Speechify-Caller"
+CALLER_VERSION_HEADER = "Speechify-Caller-Version"
 
 
 @dataclass
@@ -169,7 +171,7 @@ class TTS(tts.TTS):
             # Timeout/limits mirror the openai plugin's owned-client defaults —
             # httpx's own 5s default is too short for longer synthesis requests.
             self._httpx_client = httpx.AsyncClient(
-                headers={CALLER_HEADER: "livekit"},
+                headers={CALLER_HEADER: "livekit", CALLER_VERSION_HEADER: __version__},
                 timeout=httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=5.0),
                 limits=httpx.Limits(
                     max_connections=50, max_keepalive_connections=50, keepalive_expiry=120
