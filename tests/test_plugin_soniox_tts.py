@@ -840,8 +840,9 @@ async def test_a_malformed_frame_does_not_splice_across_the_gap() -> None:
     """Skipping a bad frame must not join the characters on either side of it.
 
     The buffer holds the word that frame was going to finish. Letting the next
-    frame land on it turns "bro" + "ps" into "brops" - a word nobody spoke,
-    published with plausible timings.
+    frame land on it turns "bro" + "ps" into "brops" - a word nobody spoke.
+    Publishing either side alone is no better: "ps" is not a word either, so
+    characters are dropped until a boundary.
     """
     emitter = _RecordingEmitter()
     tts = soniox.TTS(api_key="fake-key")
@@ -865,7 +866,34 @@ async def test_a_malformed_frame_does_not_splice_across_the_gap() -> None:
     soniox_tts._accumulate_timestamps(data, _character_timestamps("ps high", 0.23))
 
     published = "".join(str(w) for w in emitter.timed_words)
-    assert "brops" not in published
-    # every published word is one the agent actually said
+    # every published word is a whole word the agent said. Substring checks are
+    # too weak here: "ps" is inside "jumps" but was never a word.
+    spoken_words = set(spoken.split())
     for word in published.split():
-        assert word in spoken, f"invented {word!r}"
+        assert word in spoken_words, f"invented {word!r}"
+
+
+async def test_resync_waits_for_a_boundary_across_frames() -> None:
+    """A frame that is still inside the broken word publishes nothing."""
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox ju")})  # malformed
+    assert data.resync_pending is True
+
+    # "mps" is the tail of the broken word, with no boundary in sight
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("mps", 0.22))
+    assert data.resync_pending is True
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick "
+
+    # the boundary arrives with the next frame, and alignment resumes after it
+    soniox_tts._accumulate_timestamps(data, _character_timestamps(" high up", 0.25))
+    assert data.resync_pending is False
+    soniox_tts._emit_timed_words(data, flush=True)
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick high up"

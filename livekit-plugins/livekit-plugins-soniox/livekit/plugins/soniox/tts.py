@@ -648,6 +648,9 @@ class _StreamData:
     # duration it is exact, counting output the emitter has accepted but not yet
     # turned into frames.
     produced_output: bool = False
+    # Set when a frame had to be skipped: characters are dropped until a word
+    # boundary, so the tail of the word the gap broke is never published alone.
+    resync_pending: bool = False
 
 
 def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
@@ -656,18 +659,29 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     starts: list[float] | None = timestamps.get("character_start_times_seconds")
     ends: list[float] | None = timestamps.get("character_end_times_seconds")
     if not (chars and starts and ends and len(chars) == len(starts) == len(ends)):
-        # These characters cannot be trusted, so they are skipped - but the
-        # buffer holds a word this frame was going to finish, and letting the
-        # next frame land on it would join the two sides of the gap into a word
-        # nobody spoke ("bro" + "ps" reads as "brops") and publish it with
-        # plausible timings. Publish what is already whole and drop the rest so
-        # the gap stays a boundary.
+        # These characters cannot be trusted, so they are skipped - but the gap
+        # falls in the middle of a word. Publish what is already whole, drop the
+        # prefix left in the buffer, and wait for a word boundary: joining the
+        # two sides would invent a word ("bro" + "ps" reads as "brops"), and
+        # keeping either side alone would publish a fragment as a word of its
+        # own. The word the gap swallowed is lost either way.
         logger.warning("Soniox TTS sent malformed timestamps, skipping the frame's characters")
         _emit_timed_words(stream)
         stream.char_text = ""
         stream.char_starts.clear()
         stream.char_ends.clear()
+        stream.resync_pending = True
         return
+
+    if stream.resync_pending:
+        boundary = next((i for i, char in enumerate(chars) if char.isspace()), None)
+        if boundary is None:
+            return  # still inside the word the gap broke
+        # drop the separator too: the last published word already carries one
+        chars, starts, ends = chars[boundary + 1 :], starts[boundary + 1 :], ends[boundary + 1 :]
+        stream.resync_pending = False
+        if not chars:
+            return
 
     offset = stream.time_offset
     for char, start, end in zip(chars, starts, ends, strict=False):
