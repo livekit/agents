@@ -44,9 +44,10 @@ async def test_name_is_spelled_on_subsequent_updates(first_name: str, last_name:
 
     assert first is not None and second is not None
     assert first != second
-    full_name = f"{first_name} {last_name}"
-    assert " ".join(full_name) not in first
-    assert " ".join(full_name) in second
+    spelled = " ".join(f"{first_name}{last_name}")
+    assert spelled not in first
+    assert spelled in second
+    assert "  " not in second
     assert third == second
     assert task._first_name == first_name
     assert task._last_name == last_name
@@ -99,12 +100,14 @@ async def test_address_is_spelled_on_subsequent_updates(
 
     assert first is not None and second is not None
     assert first != second
-    assert " ".join(street) not in first
-    assert " ".join(street) in second
+    spelled = " ".join(street.replace(" ", ""))
+    assert spelled not in first
+    assert spelled in second
+    assert "  " not in second
     assert third == second
     fields = [street, unit, locality, country] if unit else [street, locality, country]
     assert task._current_address == " ".join(fields)
-    assert str([" ".join(street), *fields[1:]]) in second
+    assert str([spelled, *fields[1:]]) in second
 
 
 @pytest.mark.asyncio

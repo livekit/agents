@@ -138,7 +138,7 @@ class GetAddressTask(AgentTask[GetAddressResult]):
 
         read_back = (
             f"Repeat the address field by field, spelling the street name letter by "
-            f"letter: {[' '.join(street_address), *address_fields[1:]]}"
+            f"letter: {[' '.join(street_address.replace(' ', '')), *address_fields[1:]]}"
             if self._spell_read_back
             else "Repeat the address back to the user."
         )

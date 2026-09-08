@@ -269,7 +269,7 @@ class GetNameTask(AgentTask[GetNameResult]):
         await self.update_tools(current_tools)
 
         read_back = (
-            f"Spell out the name letter by letter for verification: {' '.join(full_name)}"
+            f"Spell out the name letter by letter for verification: {' '.join(full_name.replace(' ', ''))}"
             if self._spell_read_back
             else "Repeat the name back to the user."
         )
