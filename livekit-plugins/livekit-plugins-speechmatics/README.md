@@ -30,12 +30,13 @@ The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is de
   calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
   `finalize()`; LiveKit does **not** call `finalize()` for you, and no VAD is auto-loaded. Without a
   `vad` (and without calling `finalize()` yourself) turns never close, so nothing is finalized.
-- `VAD` — Speechmatics runs its own VAD and closes turns itself (service-side endpointing). This is
-  the zero-configuration option: no `vad` is required.
+- `VAD` — Speechmatics runs its own VAD and closes turns itself (service-side endpointing). No `vad`
+  is required. Pair it with `turn_detection="stt"` on the `AgentSession`, otherwise the session's own
+  turn detector decides and Speechmatics' end-of-turn is ignored.
 
 ## Usage — service-side endpointing (`VAD`)
 
-Let Speechmatics detect turns. Nothing extra to wire up:
+Let Speechmatics detect turns and tell the session to act on them:
 
 ```python
 from livekit.agents import AgentSession
@@ -45,6 +46,7 @@ agent = AgentSession(
     stt=speechmatics.STT(
         turn_detection_mode=speechmatics.TurnDetectionMode.VAD,
     ),
+    turn_detection="stt",
     ...
 )
 ```
