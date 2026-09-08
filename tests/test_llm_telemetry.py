@@ -76,6 +76,14 @@ class _UsageLLMStream(llm.LLMStream):
         )
 
 
+class _CaptureToggleLLMStream(_UsageLLMStream):
+    capture_content_during_run: bool = False
+
+    async def _run(self) -> None:
+        gen_ai.set_capture_content(self.capture_content_during_run)
+        await super()._run()
+
+
 class _ResponseContentProbe(str):
     was_accumulated: bool = False
 
@@ -159,6 +167,45 @@ async def test_llm_span_reports_cached_input_tokens(
             "finish_reason": "stop",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("capture_at_start", "capture_during_run"),
+    [
+        (False, True),
+        (True, False),
+    ],
+)
+async def test_llm_stream_capture_requires_enablement_at_start_and_completion(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    capture_at_start: bool,
+    capture_during_run: bool,
+) -> None:
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hello")
+    gen_ai.set_capture_content(capture_at_start)
+    try:
+        monkeypatch.setattr(
+            _CaptureToggleLLMStream, "capture_content_during_run", capture_during_run
+        )
+        stream = _CaptureToggleLLMStream(
+            _UsageLLM(),
+            chat_ctx=chat_ctx,
+            tools=[],
+            conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        )
+        response = await stream.collect()
+    finally:
+        gen_ai.set_capture_content(True)
+
+    assert response.text == "hello"
+    spans = [span for span in span_exporter.get_finished_spans() if span.name == "llm_request"]
+    assert len(spans) == 1
+    assert (trace_types.ATTR_GEN_AI_INPUT_MESSAGES in spans[0].attributes) is capture_at_start
+    assert (trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES in spans[0].attributes) is (
+        capture_at_start and capture_during_run
+    )
 
 
 async def test_llm_stream_skips_content_builders_when_capture_is_disabled(

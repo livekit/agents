@@ -245,6 +245,8 @@ class LLMStream(ABC):
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._provider_request_ids: list[str] = []
+        self._llm_request_span: trace.Span | None = None
+        self._record_content = False
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="LLM._metrics_task"
         )
@@ -257,13 +259,15 @@ class LLMStream(ABC):
             with tracer.start_as_current_span(
                 self._llm_request_span_name, end_on_exit=False
             ) as span:
+                # Enabling capture later must not emit a partial response.
+                self._record_content = (
+                    span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+                )
                 self._record_genai_request(span)
                 await self._main_task()
 
         self._task = asyncio.create_task(_traceable_main_task(), name="LLM._main_task")
         self._task.add_done_callback(lambda _: self._event_ch.close())
-
-        self._llm_request_span: trace.Span | None = None
 
     @abstractmethod
     async def _run(self) -> None: ...
@@ -278,7 +282,7 @@ class LLMStream(ABC):
             stream=True,
             output_type=trace_types.GenAIOutputType.TEXT,
         )
-        if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+        if self._record_content:
             gen_ai_telemetry.set_content_attributes(
                 span,
                 system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
@@ -379,12 +383,7 @@ class LLMStream(ABC):
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 
             if ev.delta:
-                if (
-                    ev.delta.content
-                    and self._llm_request_span is not None
-                    and self._llm_request_span.is_recording()
-                    and gen_ai_telemetry.capture_content_enabled()
-                ):
+                if ev.delta.content and self._record_content:
                     response_content += ev.delta.content
                 if ev.delta.tool_calls:
                     tool_calls.extend(ev.delta.tool_calls)
@@ -436,7 +435,7 @@ class LLMStream(ABC):
                 finish_reasons=[finish_reason],
                 time_to_first_chunk=ttft if ttft >= 0 else None,
             )
-            if self._llm_request_span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+            if self._record_content and gen_ai_telemetry.capture_content_enabled():
                 gen_ai_telemetry.set_content_attributes(
                     self._llm_request_span,
                     output_messages=gen_ai_telemetry.to_output_messages(
