@@ -30,15 +30,26 @@ async def test_email_is_spelled_once_a_confirmation_is_refused() -> None:
 
 
 @pytest.mark.asyncio
-async def test_name_is_spelled_once_a_confirmation_is_refused() -> None:
+@pytest.mark.parametrize(
+    ("first_name", "last_name"),
+    [("Shayne", "Cole"), ("Anne-Marie", "O'Neill"), ("Ana", "García")],
+)
+async def test_name_is_spelled_on_subsequent_updates(first_name: str, last_name: str) -> None:
     task = beta.workflows.GetNameTask(first_name=True, last_name=True)
     ctx = _audio_ctx()
 
-    first = await task._update_name_impl(ctx, first_name="Shayne", last_name="Cole")
-    second = await task._update_name_impl(ctx, first_name="Shayne", last_name="Cole")
+    first = await task._update_name_impl(ctx, first_name=first_name, last_name=last_name)
+    second = await task._update_name_impl(ctx, first_name=first_name, last_name=last_name)
+    third = await task._update_name_impl(ctx, first_name=first_name, last_name=last_name)
 
     assert first is not None and second is not None
     assert first != second
+    full_name = f"{first_name} {last_name}"
+    assert " ".join(full_name) not in first
+    assert " ".join(full_name) in second
+    assert third == second
+    assert task._first_name == first_name
+    assert task._last_name == last_name
 
 
 @pytest.mark.asyncio
@@ -50,6 +61,8 @@ async def test_name_with_verify_spelling_is_spelled_from_the_start() -> None:
     second = await task._update_name_impl(ctx, first_name="Shayne")
 
     assert first == second
+    assert first is not None
+    assert "S h a y n e" in first
 
 
 @pytest.mark.asyncio
@@ -66,15 +79,32 @@ async def test_phone_is_read_digit_by_digit_once_a_confirmation_is_refused() -> 
 
 
 @pytest.mark.asyncio
-async def test_address_is_spelled_once_a_confirmation_is_refused() -> None:
+@pytest.mark.parametrize(
+    ("street", "unit", "locality", "country"),
+    [
+        ("1 Main St", "", "Springfield", "US"),
+        ("88 Harbor Lane", "Apartment 3", "Portland Oregon 97209", "United States"),
+        ("5 Rue de l’Ancienne Comédie", "App C4", "75006 Paris", "France"),
+    ],
+)
+async def test_address_is_spelled_on_subsequent_updates(
+    street: str, unit: str, locality: str, country: str
+) -> None:
     task = beta.workflows.GetAddressTask()
     ctx = _audio_ctx()
 
-    first = await task._update_address_impl("1 Main St", "", "Springfield", "US", ctx)
-    second = await task._update_address_impl("1 Main St", "", "Springfield", "US", ctx)
+    first = await task._update_address_impl(street, unit, locality, country, ctx)
+    second = await task._update_address_impl(street, unit, locality, country, ctx)
+    third = await task._update_address_impl(street, unit, locality, country, ctx)
 
     assert first is not None and second is not None
     assert first != second
+    assert " ".join(street) not in first
+    assert " ".join(street) in second
+    assert third == second
+    fields = [street, unit, locality, country] if unit else [street, locality, country]
+    assert task._current_address == " ".join(fields)
+    assert str([" ".join(street), *fields[1:]]) in second
 
 
 @pytest.mark.asyncio
