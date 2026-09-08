@@ -174,3 +174,20 @@ class TestFlushSentinelOnToolCall:
 
         sentinels = [i for i in items if isinstance(i, FlushSentinel)]
         assert len(sentinels) == 1
+
+    async def test_only_one_sentinel_across_multiple_tool_chunks(self) -> None:
+        """Multiple tool chunks after text should still flush only once.
+
+        Some models stream tool calls across more than one delta. The first
+        tool delta should close the TTS segment, and later tool deltas must not
+        enqueue extra flush sentinels.
+        """
+        chunks = [
+            _text_chunk("Sure, "),
+            _tool_chunk("first_tool"),
+            _tool_chunk("second_tool"),
+        ]
+        _, items = await _run(chunks)
+
+        sentinels = [i for i in items if isinstance(i, FlushSentinel)]
+        assert len(sentinels) == 1

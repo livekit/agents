@@ -54,6 +54,7 @@ class _LLMGenerationData:
     text_ch: aio.Chan[str | FlushSentinel]
     function_ch: aio.Chan[llm.FunctionCall]
     generated_text: str = ""
+    text_flushed: bool = False
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     generated_extra: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
@@ -292,7 +293,8 @@ async def _llm_inference_task(
                     # is starting. Without this, the TTS channel stays open until the
                     # entire LLM task finishes (including tool execution), delaying
                     # playback of any text the model already generated before the call.
-                    if data.generated_text:
+                    if data.generated_text and not data.text_flushed:
+                        data.text_flushed = True
                         text_ch.send_nowait(FlushSentinel())
 
                 if chunk.delta.extra:

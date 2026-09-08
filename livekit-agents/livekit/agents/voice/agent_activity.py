@@ -2289,6 +2289,32 @@ class AgentActivity(RecognitionHooks):
         else:
             self._user_silence_event.set()
 
+    def on_vad_reset(self) -> None:
+        """Close active user-speech bookkeeping without marking STT EOS.
+
+        This is used when the VAD is being swapped out or disabled while the
+        user is still speaking. The cleanup needs to reconcile the active turn
+        state, but it must not flip the STT EOS flag that gates interruption
+        handling later in the turn.
+        """
+        if self._audio_recognition:
+            self._audio_recognition._on_end_of_speech(
+                ended_at=time.time(),
+                user_speaking_span=self._session._user_speaking_span,
+                interruption=self._interruption_detected
+                if self._interruption_detection_enabled
+                else NOT_GIVEN,
+            )
+
+        self._session._update_user_state(
+            "listening",
+            last_speaking_time=time.time(),
+        )
+        self._user_silence_event.set()
+
+        if self._paused_speech:
+            self._start_false_interruption_timer(self._paused_speech.timeout)
+
     def on_backchannel_confirmed(self) -> None:
         # clear the buffered backchannel audio so it can't prefix the next committed turn
         if (
