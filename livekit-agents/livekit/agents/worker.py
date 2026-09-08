@@ -746,11 +746,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                # `livekit.agents.ipc._preload` is a side-effect module holding the
-                # framework's own warm-up (native libraries, model weights, SDK imports).
-                # Imported by the forkserver it runs once, and forked job processes
-                # inherit the result via COW; under `spawn` each job process imports it
-                # itself while warming up.
+                # the framework's warm-up runs once in the forkserver and is inherited via
+                # COW; under `spawn` each job process imports it itself (see ipc._preload)
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
                     "livekit.agents.ipc._preload",
                     # Must remain last; it freezes objects imported by earlier preloads.
@@ -1294,8 +1291,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
-        # stamp receipt here: the task below runs only when the loop gets to it, and on a
-        # busy worker that delay is part of the dispatch latency being measured
+        # receipt is now, not when the task gets to run: that delay is dispatch latency
         task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)

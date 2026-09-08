@@ -412,8 +412,7 @@ class RoomIO:
                 self._user_tr_output.flush()
 
     def _emit_session_event(self, name: str, attributes: dict[str, Any]) -> None:
-        """Timestamped marker on the agent_session span. Tolerates the lightweight session
-        stand-ins the tests drive RoomIO with, which have no telemetry surface."""
+        """Timestamped marker on the agent_session span (the tests' session stand-ins have none)."""
         add_event = getattr(self._agent_session, "_add_session_event", None)
         if add_event is not None:
             add_event(name, attributes)

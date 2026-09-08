@@ -5,7 +5,6 @@ import contextlib
 import inspect
 import logging
 import ssl
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -1154,6 +1153,44 @@ def test_span_gate_holds_spans_of_undecided_jobs() -> None:
     inner.export.assert_not_called()
 
 
+def test_gate_redacts_held_spans_when_the_job_registers_redacted() -> None:
+    """A span that ended before session.start() decided on redaction went through the PII
+    processor with redaction off. If the session then enables redaction, the held span is
+    stripped before it is released, whatever the processor left in it."""
+    from opentelemetry.sdk.trace import ReadableSpan
+    from opentelemetry.trace import SpanContext, Status, StatusCode
+
+    from livekit.agents.telemetry import trace_types
+    from livekit.agents.telemetry.traces import _GatedSpanExporter, _JobTelemetry
+
+    export_jobs: dict[str, _JobTelemetry] = {}
+    requeue = MagicMock()
+    gate = _GatedSpanExporter(MagicMock(), export_jobs, requeue=requeue)
+    gate.open_job("job-1")
+    held = ReadableSpan(
+        name="rpc_handler",
+        context=SpanContext(trace_id=1, span_id=2, is_remote=False),
+        attributes={
+            "job_id": "job-1",
+            "lk.pii.rpc.payload": "the caller's private payload",
+            "lk.rpc.method": "test_call",
+            trace_types.ATTR_EXCEPTION_MESSAGE: "failed on 'private text'",
+        },
+        status=Status(StatusCode.ERROR, "failed on 'private text'"),
+    )
+    gate.export([held])
+    requeue.assert_not_called()
+
+    export_jobs["job-1"] = _JobTelemetry(attributes={}, traces_enabled=True, logs_enabled=True)
+    gate.job_registered("job-1", traces_enabled=True, redacted=True)
+    (released,), _ = requeue.call_args
+    attrs = released.attributes or {}
+    assert "lk.pii.rpc.payload" not in attrs
+    assert attrs["lk.rpc.method"] == "test_call"
+    assert attrs[trace_types.ATTR_EXCEPTION_MESSAGE] != "failed on 'private text'"
+    assert released.status.description != "failed on 'private text'"
+
+
 def test_prepare_cloud_tracer_holds_early_spans_until_the_job_registers() -> None:
     """The pipeline is prepared when the job starts, so its first spans record; they are
     uploaded once init_recording registers the job, or dropped if the job never does."""
@@ -1370,11 +1407,12 @@ def test_metric_measurements_carry_job_identity() -> None:
     assert "room_id" not in attrs and "job_id" not in attrs
 
 
-def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
-    """If the integrator replaces a framework-created tracer provider
-    mid-process, process exit must shut down BOTH the old owned provider and the
-    batch processor attached to the integrator's provider, or its queued spans
-    are lost — and it must never shut down the integrator's provider itself."""
+def test_provider_swap_keeps_the_old_pipeline_and_shuts_both_down_at_exit() -> None:
+    """If the integrator replaces a framework-created tracer provider mid-process (a
+    ``set_tracer_provider`` in the entrypoint), the old batch processor must stay alive:
+    spans still open on the old provider, the job's root among them, end there. Both
+    pipelines share one gate and both are shut down at process exit; the integrator's
+    provider itself never is."""
     from opentelemetry.sdk.trace import TracerProvider as SdkTracerProvider
     from opentelemetry.trace import NoOpTracerProvider
 
@@ -1392,31 +1430,33 @@ def test_provider_swap_still_shuts_down_current_span_pipeline_at_exit() -> None:
         _setup_cloud_tracer_for_job(job_id="job-1")
         owned = traces_mod.tracer._tracer_provider
         assert isinstance(owned, SdkTracerProvider) and len(batch_instances) == 1
+        gate = traces_mod._cloud._span_gate
         _shutdown_telemetry("job-1")
 
         # the integrator replaces the provider mid-process
         integrator = MagicMock(spec=SdkTracerProvider)
         set_tracer_provider(integrator)
 
-        # job 2: the pipeline re-attaches to the integrator's provider and the
-        # old one is retired (shut down on a background thread)
+        # job 2: a second pipeline on the integrator's provider, the old one kept
         _setup_cloud_tracer_for_job(job_id="job-2")
         assert len(batch_instances) == 2
         old_batch, new_batch = batch_instances
         integrator.add_span_processor.assert_any_call(new_batch)
-        for _ in range(50):  # retire happens on a daemon thread
-            if old_batch.shutdown.called:
-                break
-            time.sleep(0.02)
-        old_batch.shutdown.assert_called_once()
+        old_batch.shutdown.assert_not_called()
+        assert traces_mod._cloud._span_gate is gate  # one gate, one exporter, shared
+        assert gate._requeue == new_batch.on_end  # held spans go to the live pipeline
+        # releasing a job flushes both pipelines
         _shutdown_telemetry("job-2")
+        old_batch.force_flush.assert_called()
+        new_batch.force_flush.assert_called()
 
-        # the exit targets cover the owned provider AND the current pipeline on
-        # the integrator's provider — never the integrator's provider itself
+        # exit shuts down the owned provider and both processors, never the integrator's
+        # provider itself
         with patch(f"{_TRACES_MOD}._run_bounded") as mock_run_bounded:
             traces_mod._cloud.shutdown_at_exit()
         target_fns = [fn for _, fn in mock_run_bounded.call_args.args[1]]
         assert owned.shutdown in target_fns
+        assert old_batch.shutdown in target_fns
         assert new_batch.shutdown in target_fns
         assert integrator.shutdown not in target_fns
 

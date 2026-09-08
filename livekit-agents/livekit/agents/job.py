@@ -285,9 +285,8 @@ class JobContext:
         logging.getLogger().addHandler(self._early_log_handler)
 
     def _prepare_telemetry(self) -> None:
-        """Have the cloud trace pipeline up before the job's first span (see
-        ``_CloudTelemetry.prepare``). Whether anything is uploaded is decided later, in
-        ``init_recording``; until then the job's spans are held."""
+        """Have the cloud trace pipeline up before the job's first span; whether anything is
+        uploaded is decided in ``init_recording``, and the job's spans are held until then."""
         if self._info.fake_job:
             return
         obs_url = _observability_url(self._info.url)
@@ -399,16 +398,13 @@ class JobContext:
 
         def _cleanup_blocking() -> None:
             self._tempdir.cleanup()
-            # telemetry registrations are per job: releasing this job's flushes its
-            # remaining telemetry and leaves any concurrent job's export untouched
+            # per job: flushes this job's telemetry, leaves a concurrent job's untouched
             if self._telemetry_state is not None:
                 _shutdown_telemetry(self.job.id)
             # a job that never registered still had spans held for it by the gate
             _discard_cloud_tracer(self.job.id)
 
-        # the telemetry release joins exporter flush threads doing network I/O, and the
-        # tempdir may hold large recordings: neither belongs on the event loop (the loop
-        # monitor rightfully reports the stall, and THREAD-executor jobs share the process)
+        # exporter flushes and the tempdir cleanup block; keep them off the event loop
         await asyncio.to_thread(_cleanup_blocking)
 
         for handler in self._handlers_with_filter:
@@ -639,8 +635,7 @@ class JobContext:
             async def wrapper(_: str) -> None:
                 await callback()  # type: ignore
 
-            # keep the user's identity: the job_shutdown trace labels each callback by name,
-            # and tells the user's callbacks from the framework's own by module
+            # the job_shutdown trace labels callbacks by name and tells framework ones by module
             wrapper.__name__ = getattr(callback, "__name__", wrapper.__name__)
             wrapper.__qualname__ = getattr(callback, "__qualname__", wrapper.__qualname__)
             wrapper.__module__ = getattr(callback, "__module__", wrapper.__module__)
@@ -663,8 +658,7 @@ class JobContext:
         if not self._room.isconnected():
             await self.connect()
 
-        # session_context.session_span: called before session.start() this still lands under
-        # agent_session once it exists, as the session's opening act
+        # nests under session_start when the session is starting, else the ambient context
         with session_context.session_span(
             "wait_for_participant",
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},

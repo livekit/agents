@@ -729,8 +729,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._loop_stall_count = 0
         self._loop_stall_total = 0.0
         self._loop_stall_max = 0.0
-        # set while start() runs so startup spans (start_agent_activity, room io, connect)
-        # nest under session_start without re-parenting the long-lived pipeline tasks
+        # parent for the startup spans while start() runs; passed explicitly, never current
         self._session_start_context: otel_context.Context | None = None
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
@@ -1053,8 +1052,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_options.text_output = False
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
-                # the start context is passed, not made current: RoomIO spawns the tasks that
-                # live for the whole session, and they must not inherit session_start
+                # passed, not made current: RoomIO's tasks live for the whole session
                 await self._room_io.start(trace_context=self._session_start_context)
 
                 if hosting:
@@ -1263,9 +1261,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             | None
         ) = None,
     ) -> None:
-        # make `activity.drain` and `on_exit` under the root span. aclose() may run in the
-        # caller's task (the entrypoint, a shutdown callback), so the context is restored on
-        # the way out: nothing the caller traces afterwards should nest under this session.
+        # drain and on_exit run under the root span; the caller's context is restored after,
+        # since aclose() may run in the caller's own task
         root_token: Token[otel_context.Context] | None = None
         if self._root_span_context:
             root_token = otel_context.attach(self._root_span_context)
@@ -2020,8 +2017,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if (span := self._session_span) is not None and span.is_recording():
             span.add_event("participant_linked", trace_utils.participant_attributes(participant))
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-                # the SIP call's own ids, so this session can be joined with the telephony
-                # trace; only the end user's number is personal data
+                # join keys with the telephony trace; only the end user's number is PII
                 span.set_attributes(
                     {
                         (

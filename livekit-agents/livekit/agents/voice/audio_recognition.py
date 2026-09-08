@@ -1979,8 +1979,7 @@ class AudioRecognition:
         if start_time is None:
             start_time = time.time()
         start_time_ns = int(start_time * 1_000_000_000)
-        # pinned to the session root: a turn can be created from any task (a late STT final
-        # during session_close, for one) and must never nest under whatever is current there
+        # pinned to the session root: a turn may be created from any task (a late STT final)
         self._user_turn_span = tracer.start_span(
             "user_turn", context=self._session._root_span_context, start_time=start_time_ns
         )

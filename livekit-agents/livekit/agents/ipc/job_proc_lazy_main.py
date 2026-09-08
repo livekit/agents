@@ -224,8 +224,7 @@ class _JobProc:
             user_arguments=self._user_arguments,
             http_proxy=init_req.http_proxy or None,
         )
-        # the framework's warm-up, once per process image: a no-op under a forkserver, which
-        # already imported it (see the module docstring)
+        # the framework's warm-up; a no-op under a forkserver, which imported it already
         from . import _preload  # noqa: F401
 
         self._initialize_process_fnc(self._job_proc)
@@ -328,16 +327,14 @@ class _JobProc:
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
         self._job_ctx._start_log_buffering()
-        # the trace pipeline must exist before the job's first span, or that span (the job's
-        # root) is a non-recording stub and everything under it starts its own trace
+        # before the first span: without a provider the job's root would not record
         self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
-        # the job's root span: from the availability request to the end of the shutdown
-        # sequence, so the whole job reads as one trace (the user entrypoint returning is an
-        # event on it, most entrypoints return right after session.start())
+        # the job's root span, from the availability request to the end of shutdown; the
+        # entrypoint returning is an event on it
         job_span = _start_job_span(self._job_ctx)
         self._entrypoint_span_context = trace.set_span_in_context(job_span)
 
@@ -345,8 +342,7 @@ class _JobProc:
             with tracer.use_span(
                 job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
             ):
-                # blocked-loop reports emitted from the heartbeat need this job's context (for
-                # attribution) and the job span (as the parent when no session is up)
+                # the loop monitor's heartbeat predates the job: give its reports this context
                 if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
                     monitor.set_report_context(contextvars.copy_context())
                 try:
@@ -400,11 +396,8 @@ class _JobProc:
 
         job_entry_task.add_done_callback(_on_entry_done)
 
-        shutdown_info = await self._shutdown_fut
-
         try:
-            # a child of job_entrypoint, like the session was: the job's trace tells the whole
-            # story from dispatch to teardown, and a viewer keyed to agent_session zooms out
+            shutdown_info = await self._shutdown_fut
             with tracer.start_as_current_span(
                 "job_shutdown",
                 context=self._entrypoint_span_context,
@@ -415,9 +408,8 @@ class _JobProc:
             ):
                 await self._shutdown_job(job_entry_task, shutdown_info)
         finally:
-            # whatever the shutdown raised (a session or room close failing), the job still
-            # ends: the root span goes out with the job's telemetry, the temp dir is removed
-            # and the per-job telemetry state is released (thread workers reuse the process)
+            # whatever happened above (a cancel while waiting, a close that raised), the job
+            # ends: root span, temp dir, per-job telemetry state
             job_span.end()
 
             if tasks := self._job_ctx._pending_tasks:
@@ -490,8 +482,7 @@ class _JobProc:
             callback: Callable[[str], Awaitable[None]],
         ) -> None:
             if _is_framework_callback(callback):
-                # the session's own close hook, already covered by session_close; a span here
-                # would read as a second user callback
+                # framework callbacks (the session's own close) get no span of their own
                 await callback(shutdown_info.reason)
                 return
             # a hung callback here is why jobs hit the supervisor's shutdown deadline
@@ -536,10 +527,8 @@ def _server_timestamp_seconds(value: int) -> float:
 
 
 def _start_job_span(job_ctx: JobContext) -> trace.Span:
-    """The job's root span, ``job_entrypoint``, back-dated to the availability request.
-
-    Never made current by the caller for longer than the user entrypoint runs; ended by
-    ``_run_job_task`` after the shutdown sequence, before the telemetry release."""
+    """The job's root span, ``job_entrypoint``, back-dated to the availability request; ended
+    by ``_run_job_task`` after the shutdown sequence."""
     job = job_ctx.job
     info = job_ctx._info
     entrypoint_started_at = time.time()
@@ -590,8 +579,7 @@ def _record_dispatch_timeline(
     _gap(trace_types.ATTR_JOB_ENTRYPOINT_LATENCY, info.launched_at, entrypoint_started_at)
     _gap(trace_types.ATTR_JOB_DISPATCH_LATENCY, info.received_at, entrypoint_started_at)
     if (server_started := info.job.state.started_at) > 0:
-        # the server's own record of the start: the first anchor for lining the agent trace
-        # up with server-side events later
+        # the server's own start time, for lining up with server-side traces
         started = _server_timestamp_seconds(server_started)
         span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 

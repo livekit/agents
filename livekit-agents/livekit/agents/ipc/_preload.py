@@ -1,9 +1,8 @@
 """Side-effect module: the framework's own one-time warm-up, run once per process image.
 
-Each step is lazy one-time work that would otherwise happen inside the first job, on the
-event loop, and show up as a 100-500 ms ``event_loop_blocked`` at session start that no user
-code caused. Everything here is fork-safe (imports, a ``dlopen``, model weights, a cached
-SSL context): no threads and no event loop are created.
+Each step is lazy one-time work that would otherwise run inside the first job, on the event
+loop, as a 100-500 ms stall at session start. Everything here is fork-safe: imports, a
+``dlopen``, model weights, a cached SSL context; no threads, no event loop.
 
 Where it runs decides how often it costs:
 

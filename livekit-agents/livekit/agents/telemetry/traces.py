@@ -451,19 +451,20 @@ class _GatedSpanExporter(SpanExporter):
         with self._lock:
             self._open_jobs.add(job_id)
 
-    def job_registered(self, job_id: str, *, traces_enabled: bool) -> None:
+    def job_registered(self, job_id: str, *, traces_enabled: bool, redacted: bool = False) -> None:
         """The job decided: upload what was held if it records traces, else drop it.
 
-        Called from ``init_recording`` on the event loop, so the held spans are put back
-        on the batch processor's queue rather than exported here: the OTLP exporter blocks
-        on the network (with retries) and a slow collector must not stall session start.
-        They come back through ``export`` on the export thread, where the job is now
-        registered and they pass through in their original order."""
+        Runs on the event loop (``init_recording``), so held spans go back on the batch
+        processor's queue instead of being exported here: the OTLP exporter blocks on the
+        network. ``redacted`` strips PII from them first: they ended before the job's
+        redaction was known, so the PII processor let it through."""
         with self._lock:
             self._open_jobs.discard(job_id)
             held = self._pending.pop(job_id, [])
         if not held or not traces_enabled:
             return
+        if redacted:
+            held = [pii.redact(s) for s in held]
         if self._requeue is not None:
             for s in held:
                 self._requeue(s)
@@ -809,6 +810,9 @@ class _CloudTelemetry:
         self._trace_provider_attached: trace_sdk.TracerProvider | None = None
         self._span_metadata_processor: _MetadataSpanProcessor | None = None
         self._span_batch_processor: BatchSpanProcessor | None = None
+        # every span processor attached so far: a provider replaced mid-process keeps its
+        # processor, since spans still open on it (the job's root) end there
+        self._span_batch_processors: list[BatchSpanProcessor] = []
         self._span_gate: _GatedSpanExporter | None = None
 
         # logs
@@ -836,13 +840,10 @@ class _CloudTelemetry:
     ) -> None:
         """Have the trace pipeline up before the job's first span.
 
-        Without a tracer provider every span is a non-recording stub: the job's
-        root (``job_entrypoint``) and everything before ``session.start()`` would
-        be lost, and the spans created after it would have no valid parent and
-        start their own traces (``agent_session`` used to show up as a root for
-        this reason). Called when the job starts, on the process's first job; it
-        creates the provider and the gated exporter but registers nothing: the
-        job's spans are held by the gate until ``configure`` decides."""
+        Without a tracer provider every span is a non-recording stub: the job's root and
+        everything before ``session.start()`` would be lost, and later spans would start
+        their own traces. Creates the provider and the gated exporter but registers nothing:
+        the job's spans are held until ``configure`` decides."""
         base_metadata: dict[str, AttributeValue] = {"room_id": room_id, "job_id": job_id}
         if agent_name:
             base_metadata[trace_types.ATTR_AGENT_NAME] = agent_name
@@ -950,9 +951,12 @@ class _CloudTelemetry:
             )
             self._export_jobs[job_id] = state
             if self._span_gate is not None:
-                # the spans that ended before this decision (job_entrypoint's children so
-                # far) go out now, or never
-                self._span_gate.job_registered(job_id, traces_enabled=enable_traces)
+                # release what the gate held for this job, or drop it
+                self._span_gate.job_registered(
+                    job_id,
+                    traces_enabled=enable_traces,
+                    redacted=bool((metadata or {}).get(ATTRIBUTE_REDACTION_ENABLED, False)),
+                )
 
         return state
 
@@ -985,32 +989,25 @@ class _CloudTelemetry:
             return
 
         if self._trace_provider_attached is not None:
-            # the tracer provider was replaced mid-process (set_tracer_provider
-            # called after a job already exported); re-attach to the new one and
-            # retire the old pipeline
-            logger.warning("tracer provider changed; re-attaching LiveKit Cloud span exporter")
+            # the provider was replaced mid-process (set_tracer_provider from an entrypoint):
+            # attach to the new one. The old processor stays: spans still open on the old
+            # provider, the job's root among them, end there and are exported through the
+            # same gate. It shuts down with the rest at process exit.
+            logger.info("tracer provider changed; attaching the LiveKit Cloud span exporter")
             if self._span_metadata_processor is not None:
                 self._span_metadata_processor.clear_metadata()
-            if self._span_batch_processor is not None:
-                # shut the old pipeline down in the background: shutdown drains
-                # its queue, exporting the prior jobs' remaining stamped spans,
-                # then goes quiet. shutdown() is idempotent, so shutting it down
-                # again at process exit is harmless.
-                threading.Thread(
-                    target=self._span_batch_processor.shutdown,
-                    name="livekit-telemetry-retire-BatchSpanProcessor",
-                    daemon=True,
-                ).start()
 
         assert self._session is not None
-        span_exporter = OTLPSpanExporter(
-            endpoint=f"{url}/observability/traces/otlp/v0",
-            compression=Compression.Gzip,
-            session=self._session,
-        )
+        if self._span_gate is None:
+            span_exporter = OTLPSpanExporter(
+                endpoint=f"{url}/observability/traces/otlp/v0",
+                compression=Compression.Gzip,
+                session=self._session,
+            )
+            self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
         self._span_metadata_processor = _MetadataSpanProcessor()
-        self._span_gate = _GatedSpanExporter(span_exporter, self._export_jobs)
         self._span_batch_processor = BatchSpanProcessor(self._span_gate)
+        self._span_batch_processors.append(self._span_batch_processor)
         self._span_gate._requeue = self._span_batch_processor.on_end
         self._exit_targets.append(("BatchSpanProcessor", self._span_batch_processor.shutdown))
         provider.add_span_processor(self._span_metadata_processor)
@@ -1110,8 +1107,8 @@ class _CloudTelemetry:
                 return  # never configured, or already released
 
             flush_targets: list[tuple[str, Callable[[], Any]]] = []
-            if self._span_batch_processor is not None:
-                flush_targets.append(("spans", self._span_batch_processor.force_flush))
+            for processor in self._span_batch_processors:
+                flush_targets.append(("spans", processor.force_flush))
             if self._log_batch_processor is not None:
                 flush_targets.append(("logs", self._log_batch_processor.force_flush))
             if self._owned_meter_provider is not None:
