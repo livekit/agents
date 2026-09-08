@@ -311,8 +311,8 @@ class Agent:
             self._expressive = expressive
 
     # -- Pipeline nodes --
-    # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
-    # constructor of the VoiceAgent
+    # They can all be overridden by subclasses. By default, they use the STT/LLM/TTS
+    # specified in the constructor of the VoiceAgent
 
     async def on_enter(self) -> None:
         """Called when the task is entered"""
