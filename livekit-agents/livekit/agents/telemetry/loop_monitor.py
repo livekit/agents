@@ -11,7 +11,7 @@ This module observes a single loop without patching asyncio:
   When the loop is blocked, the tick fires late by the length of the block (to within one
   interval);
 * a **watchdog thread** wakes on the same interval and compares now against the last tick. Once
-  the gap crosses the warn threshold it samples the loop thread's stack through
+  the gap reaches half the warn threshold it samples the loop thread's stack through
   ``sys._current_frames()`` (the same call ``faulthandler`` relies on), so the report can say
   *where* the loop was stuck, not just for how long;
 * when the late tick finally runs, the block has ended: the tick measures the lag and, if it
@@ -19,12 +19,11 @@ This module observes a single loop without patching asyncio:
   stack, the task that was running, GC time that fell inside the block, and the loop thread's
   CPU time. It also logs a warning and records a histogram measurement.
 
-Spans are children of the primary agent session's root span so they land on the session
-timeline next to the turn they delayed, and the session span carries a per-stall event plus a
-count / total / max summary. A stall before the session starts is held and emitted under the
-session once it exists (``telemetry.session_context``); in the worker process, where no session will
-ever exist, only the log and the metric are produced. Output is rate limited so a
-pathologically blocked loop cannot flood the exporter.
+Spans nest under the span the blocked task was in when sampled, else under the primary agent
+session's root span (``telemetry.session_context``), else under ``job_entrypoint``; the session
+span also carries a per-stall event plus a count / total / max summary. The worker process has
+no job to attach spans to and produces only the log and the metric. Output is rate limited so
+a pathologically blocked loop cannot flood the exporter.
 
 What a report means
 -------------------
@@ -37,8 +36,8 @@ exactly what delays audio frames and turn handling, whatever the cause:
   few ms): still a stall of that length; the sample lands in whichever callback was running,
   so read it as "the loop was busy here", not as the single culprit;
 * the process itself was not running (host CPU contention, container CPU quota, a suspended
-  laptop): ``lk.blocking.cpu_time`` near zero with a stack sitting in ordinary code, or no
-  stack at all, is the tell;
+  laptop): the watchdog thread woke late too and ``lk.blocking.cpu_time`` is near zero. Reported
+  at warning severity with no log, since there is nothing in the code to fix;
 * a garbage-collection pass on a large heap: reported separately as ``lk.blocking.gc_time``
   so it is not blamed on the surrounding code.
 
@@ -70,8 +69,7 @@ from . import otel_metrics, session_context, trace_types
 from .traces import tracer
 
 DEFAULT_WARN_THRESHOLD = 0.1
-"""Blocks at or above this many seconds are reported as warnings. 50 ms proved too sensitive
-in practice: ordinary work (a model load, an SDK import) tripped it constantly."""
+"""Blocks at or above this many seconds are reported as warnings."""
 DEFAULT_ERROR_THRESHOLD = 0.5
 """Blocks at or above this many seconds are reported as errors (span status ERROR)."""
 DEFAULT_TICK_INTERVAL = 0.01
@@ -83,7 +81,10 @@ ENV_ERROR_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"
 MAX_SPANS_PER_MINUTE = 30
 MAX_LOGS_PER_MINUTE = 5
 MAX_STACK_FRAMES = 20
-# a second stack sample once a block has lasted this many warn thresholds
+# the watchdog samples the loop thread's stack halfway to the warn threshold, so a block that
+# only just crosses it has a sample rather than ending before the watchdog looks, and again
+# once a block has lasted this many warn thresholds
+_FIRST_SAMPLE_FRACTION = 0.5
 _LATE_SAMPLE_FACTOR = 10
 
 SPAN_NAME = "event_loop_blocked"
@@ -129,8 +130,6 @@ def _env_seconds(name: str, default: float) -> float:
         )
         return default
     if not math.isfinite(value_ms) or value_ms < 0:
-        # NaN would slip past a plain "< 0" check and compare false against every lag, so
-        # every heartbeat would look like a stall
         logger.warning(
             "invalid %s=%r, must be finite and >= 0; using %.0fms", name, raw, default * 1000
         )
@@ -204,9 +203,7 @@ class EventLoopMonitor:
         self._error = error_threshold
         self._tick = tick_interval
         self._name = name
-        # the worker loop has no job or session to attach a span to; it logs and records the
-        # metric only
-        self._emit_spans = emit_spans
+        self._emit_spans = emit_spans  # False on the worker loop: no job to attach spans to
 
         # written by the loop thread, read by the watchdog
         self._last_tick_at: float = 0.0
@@ -220,11 +217,9 @@ class EventLoopMonitor:
         self._gc_started_at: float | None = None
         self._gc_time: float = 0.0
         self._last_thread_cpu: float = 0.0
-        # largest late wake-up the watchdog thread itself saw since the last heartbeat: when
-        # it stalled along with the loop, the whole process was not being scheduled
-        # the watchdog's worst late wake-up since the last tick, with the time it woke, and the
-        # time it last ran at all: together they say whether the watchdog was starved during a
-        # stall even when the loop thread gets the GIL back first (see _consume_watchdog_gap)
+        # the watchdog's worst late wake-up since the last tick, and when it last ran at all:
+        # a watchdog starved along with the loop means the process was not being scheduled
+        # (see _consume_watchdog_gap)
         self._watchdog_late: tuple[float, float] | None = None  # (woke_at, gap)
         self._watchdog_last_wake: float = time.monotonic()
 
@@ -250,13 +245,9 @@ class EventLoopMonitor:
         return self._error
 
     def set_report_context(self, ctx: contextvars.Context | None) -> None:
-        """Run report emission inside ``ctx``.
-
-        The heartbeat inherits the context of whoever started the monitor, which predates the
-        job. Handing it a copy of the job's context (taken inside the ``job_entrypoint`` span)
-        lets the emitted spans resolve the job for attribution and parent themselves to the
-        session's root span.
-        """
+        """Emit reports inside ``ctx``, a copy of the job's context taken inside ``job_entrypoint``:
+        the heartbeat itself inherits the context of whoever started the monitor, which predates
+        the job."""
         self._report_context = ctx
 
     def start(self) -> None:
@@ -312,12 +303,11 @@ class EventLoopMonitor:
         watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
 
-        if lag < self._warn:
-            return
-
         with self._lock:
             incident = self._incident
             self._incident = None
+        if lag < self._warn:
+            return
         samples = (
             incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
         )
@@ -332,29 +322,25 @@ class EventLoopMonitor:
         watchdog_gap: float,
         samples: list[_StackSample],
     ) -> BlockedReport:
-        # the watchdog is an independent thread. If it too woke late by most of the stall,
-        # either the process as a whole was descheduled (host contention, CPU quota, a
-        # suspended machine) or the loop thread held the GIL the whole time (a native call
-        # that never releases it). The loop thread's own CPU time tells them apart: a
-        # descheduled process burns none, a GIL-holding call burns all of it. Only the former
-        # is not the agent's fault, and it is never more than a warning.
+        # the watchdog is an independent thread: if it too woke late by most of the stall,
+        # either the process was not being scheduled (host contention, CPU quota, a suspended
+        # machine) or the loop thread held the GIL throughout (a native call that never
+        # releases it). CPU time tells them apart: a descheduled process burns none. Only
+        # descheduling is not the agent's fault, and it is never more than a warning.
         watchdog_starved = watchdog_gap >= lag * 0.5
-        # likewise when the watchdog never caught the loop thread running anything and the
-        # thread burned no CPU: nothing was blocking it, the host simply did not run it (an
-        # idle loop woken late by the scheduler or timer coalescing). A blocking wait in code
-        # releases the GIL and gets sampled; a GIL-holding call burns CPU.
-        unobserved = not any(s.frames for s in samples)
-        process_descheduled = (watchdog_starved or unobserved) and cpu_time < lag * 0.5
+        process_descheduled = watchdog_starved and cpu_time < lag * 0.5
         stacks = [
             f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
             + _format_frames(s.frames)
             for s in samples
             if s.frames
         ]
-        if not stacks and watchdog_starved and not process_descheduled:
+        if not stacks and not process_descheduled:
             stacks = [
                 "# no sample: the loop thread held the GIL for the whole stall, so the sampler "
                 "could not run (a native call that does not release the GIL)"
+                if watchdog_starved
+                else "# no sample: the block ended before the watchdog looked"
             ]
         return BlockedReport(
             duration=lag,
@@ -385,19 +371,17 @@ class EventLoopMonitor:
     def _report(self, report: BlockedReport) -> None:
         now = time.monotonic()
         emit_span = self._span_limiter.allow(now)
-        emit_log = self._log_limiter.allow(now)
+        # host descheduling is nothing the developer can fix: no log, and it must not use up
+        # the log quota either. The span and the metric keep the record.
+        emit_log = not report.process_descheduled and self._log_limiter.allow(now)
 
         def _emit() -> None:
-            # the histogram counts every stall: it is cheap, and a dashboard must not
-            # undercount exactly when stalls become frequent enough to hit the span and log
-            # rate limits. Recorded inside the job's context so the measurement carries the
-            # job attributes like every other span and log
+            # the metric and the session summary count every stall, including the ones the
+            # span and log limiters drop
             try:
                 otel_metrics.record_event_loop_blocked(report.duration, severity=report.severity)
             except Exception:
                 logger.exception("failed to record the blocked event loop metric")
-            # likewise the session's own summary (count, total, max, one event per stall):
-            # a burst that trips the span limiter must still be counted in full
             if (session := session_context.primary_session()) is not None and (
                 session_context.session_root_context() is not None
             ):
@@ -439,18 +423,13 @@ class EventLoopMonitor:
         if suppressed:
             attributes[trace_types.ATTR_BLOCKING_SUPPRESSED] = suppressed
 
-        # during a session the stall is a child of agent_session and summarised on it; the
-        # heartbeat's own context predates the session, so the root is resolved through the
-        # job. Before or after the session it lands in the reporting context, job_entrypoint
-        # in a job process (the worker process emits no spans at all: emit_spans=False).
         from ..job import get_job_context
 
         if get_job_context(required=False) is None:
-            # no job, no trace to belong to (a bare loop): a root span here would be a stray
-            # one-span trace, so the log carries it
-            return
+            return  # no job, no trace to belong to: a root span here would be a stray trace
+        # under the span the blocked task was in, else the session root, else the report
+        # context (job_entrypoint); the heartbeat's own context predates all of them
         if report.parent_span_context is not None:
-            # under the span the blocked task was in (an rpc_handler, a tool, the user hook)
             parent: otel_context.Context | None = trace.set_span_in_context(
                 trace.NonRecordingSpan(report.parent_span_context)
             )
@@ -481,11 +460,6 @@ class EventLoopMonitor:
         if report.stacks:
             extra["stack"] = report.stacks[-1]
         where = f" at {location}" if location else ""
-        if report.process_descheduled:
-            # nothing for the developer to fix: the host did not run the process. The span
-            # (warning severity) and the metric keep the record; a log line for every one of
-            # these was noise on a busy laptop, so there is none.
-            return
         logger.warning(
             "event loop blocked for %.0fms%s; synchronous work on the agent loop delays "
             "audio and turn handling, move it to a thread or an async client",
@@ -499,11 +473,10 @@ class EventLoopMonitor:
     def _consume_watchdog_gap(self, now: float, *, window_start: float) -> float:
         """How long the watchdog thread was kept from running during this tick's window.
 
-        Two sources, because the two threads race when a descheduled process is resumed:
-        the watchdog's own record of a late wake-up, if that wake-up fell inside the window
-        (an older record is stale, it belongs to a stall already reported), and, when the
-        watchdog has not run at all since before the window opened, the time since it last
-        did. Either way the record is cleared for the next window."""
+        Two sources, since the two threads race when a descheduled process resumes: the
+        watchdog's recorded late wake-up if it fell inside the window (an older one belongs to
+        a stall already reported), and the time since its last run if it has not run since
+        before the window opened."""
         late, self._watchdog_late = self._watchdog_late, None
         gap = 0.0
         if late is not None and late[0] >= window_start:
@@ -533,7 +506,7 @@ class EventLoopMonitor:
         # make the lag look smaller for one iteration
         seq = self._tick_seq
         lag = time.monotonic() - (self._last_tick_at + self._tick)
-        if lag < self._warn:
+        if lag < self._warn * _FIRST_SAMPLE_FRACTION:
             return
 
         with self._lock:
@@ -560,9 +533,7 @@ class EventLoopMonitor:
             task = asyncio.current_task(loop=self._loop)
             if task is not None:
                 task_name = task.get_name()
-                # the stall belongs under whatever the blocked task was doing (an rpc_handler,
-                # a function_tool, the user hook); Task.get_context() is 3.12+, older
-                # interpreters fall back to the session root
+                # Task.get_context() is 3.12+; older interpreters fall back to the session root
                 get_context = getattr(task, "get_context", None)
                 if get_context is not None:
                     span_context = _current_span_in(get_context())
@@ -571,9 +542,8 @@ class EventLoopMonitor:
         current_frames = sys._current_frames()
         frame = current_frames.get(self._loop_thread_ident) if self._loop_thread_ident else None
         if frame is None and task is not None:
-            # the recorded thread ident did not resolve (the loop is being run by another
-            # thread than the one that armed the heartbeat): find the thread whose stack
-            # contains the blocked task's coroutine frame, and remember it
+            # the loop moved to another thread since the heartbeat was armed: find the thread
+            # whose stack contains the blocked task's coroutine frame, and remember it
             coro_frame = getattr(task.get_coro(), "cr_frame", None)
             for ident, candidate in current_frames.items():
                 f: Any = candidate
@@ -626,25 +596,20 @@ def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
 
 
 def _format_frames(frames: list[traceback.FrameSummary]) -> str:
-    # drop the event loop machinery (run_forever, _run_once, Handle._run) since it is the same
-    # in every sample, but never the innermost frame: a C call scheduled directly as a callback
-    # has no frame of its own, and the dispatch frame is then the only pointer to it
+    # drop the event loop machinery (the same in every sample), but never the innermost frame:
+    # a C call scheduled directly as a callback has no frame of its own
     trimmed = [
         f
         for i, f in enumerate(frames)
         if i == len(frames) - 1 or not (f.filename or "").startswith(_ASYNCIO_DIR)
     ]
-    # the job runner (ipc/) and everything above it is the same in every sample: the process
-    # bootstrap, the client loop, the entrypoint wrapper. Cut through the innermost runner
-    # frame, keeping whatever the runner called; a stall entirely inside the runner keeps
-    # its innermost frames as before.
+    # cut through the innermost job-runner (ipc/) frame: everything above it is the same in
+    # every sample. A stall entirely inside the runner keeps its frames.
     runner = [i for i, f in enumerate(trimmed) if _IPC_DIR_FRAGMENT in (f.filename or "")]
     if runner and runner[-1] < len(trimmed) - 1:
         trimmed = trimmed[runner[-1] + 1 :]
-    # a lazy import stalls through a dozen importlib frames per module level; left as they
-    # are they fill the frame budget and push out the one frame that matters, the caller that
-    # triggered the import. Collapse each run of them into a single line, keeping the
-    # innermost frame real for the same reason as above.
+    # collapse runs of importlib frames (a dozen per module level of a lazy import) so they do
+    # not push the caller that triggered the import out of the frame budget
     entries: list[str] = []
     run = 0
     for i, f in enumerate(trimmed):

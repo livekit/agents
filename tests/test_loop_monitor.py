@@ -419,32 +419,40 @@ async def test_worker_mode_logs_and_records_the_metric_without_spans(
     assert any("event loop blocked for" in r.getMessage() for r in caplog.records)
 
 
-def test_host_descheduling_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """When the watchdog stalled along with the loop, the host did not run the process; that
-    is not a programming issue and must not show up in the logs at all (the span and the
-    metric keep the record)."""
+def test_host_descheduling_is_not_logged_and_does_not_use_the_log_quota(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stall the host caused is not the developer's to fix: no log line, and it must not
+    consume one of the per-minute log slots either, or a run of them would silence the
+    warnings for real blocks that follow."""
     loop = asyncio.new_event_loop()
     try:
         m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
-        report = BlockedReport(
-            duration=0.8,
-            started_at=time.time() - 0.8,
-            warn_threshold=WARN,
-            severity="error",
-            gc_time=0.0,
-            cpu_time=0.001,
-            watchdog_gap=0.75,
-            process_descheduled=True,
-            task_name=None,
-            stacks=[],
-            parent_span_context=None,
-        )
+
+        def _report(*, descheduled: bool) -> BlockedReport:
+            return BlockedReport(
+                duration=0.8,
+                started_at=time.time() - 0.8,
+                warn_threshold=WARN,
+                severity="warning" if descheduled else "error",
+                gc_time=0.0,
+                cpu_time=0.001 if descheduled else 0.8,
+                watchdog_gap=0.75 if descheduled else 0.0,
+                process_descheduled=descheduled,
+                task_name=None,
+                stacks=[],
+                parent_span_context=None,
+            )
+
         with caplog.at_level("DEBUG", logger="livekit.agents"):
-            m._emit_log(report)
+            for _ in range(loop_monitor.MAX_LOGS_PER_MINUTE + 2):
+                m._report(_report(descheduled=True))
+            assert not [r for r in caplog.records if "event loop" in r.getMessage()]
+            m._report(_report(descheduled=False))
     finally:
         loop.close()
 
-    assert not [r for r in caplog.records if "event loop" in r.getMessage()]
+    assert [r for r in caplog.records if "event loop blocked" in r.getMessage()]
 
 
 def test_host_descheduling_span_is_not_an_error() -> None:
@@ -749,24 +757,45 @@ def test_stack_format_cuts_through_the_job_runner() -> None:
     assert "job_proc_lazy_main" in loop_monitor._format_frames(inside)
 
 
-def test_unobserved_idle_stall_is_host_caused() -> None:
-    """The watchdog never caught the loop thread running anything and the thread burned no
-    CPU: nothing blocked it, the host woke it late. Not the agent's problem, so no warning."""
+def test_a_block_the_watchdog_missed_is_still_blocking_code() -> None:
+    """No stack sample and no CPU is not host descheduling by itself: a blocking wait that
+    released the GIL (a socket read, time.sleep) can finish before the watchdog looks. Only a
+    watchdog that was itself starved says the process was not running."""
     loop = asyncio.new_event_loop()
     try:
         m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
-        idle = m._build_report(0.074, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[])
-        assert idle.process_descheduled and idle.severity == "warning"
-        # a sampled blocking wait (time.sleep releases the GIL) is still blocking code
+        missed = m._build_report(0.11, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[])
+        assert not missed.process_descheduled
+        assert missed.stacks and "before the watchdog looked" in missed.stacks[0]
         sample = loop_monitor._StackSample(
             lag=0.06,
             task_name="t",
             frames=[__import__("traceback").FrameSummary("/app/a.py", 1, "f")],
         )
         waited = m._build_report(
-            0.074, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[sample]
+            0.11, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[sample]
         )
-        assert not waited.process_descheduled
+        assert not waited.process_descheduled and "/app/a.py" in waited.stacks[0]
+    finally:
+        loop.close()
+
+
+def test_watchdog_samples_halfway_to_the_threshold() -> None:
+    """The first sample is taken once the lag reaches half the warn threshold, so a block that
+    only just crosses the threshold has a stack instead of ending before the watchdog looks;
+    a lag under that leaves no incident."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        m._last_tick_at = time.monotonic() - TICK - WARN * 0.3
+        m._watchdog_check()
+        assert m._incident is None
+
+        m._last_tick_at = time.monotonic() - TICK - WARN * 0.6
+        m._watchdog_check()
+        assert m._incident is not None and len(m._incident.samples) == 1
+        m._watchdog_check()  # the same incident is not sampled twice before the late sample
+        assert len(m._incident.samples) == 1
     finally:
         loop.close()
 
