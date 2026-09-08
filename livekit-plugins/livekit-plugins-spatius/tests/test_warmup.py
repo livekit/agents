@@ -43,6 +43,7 @@ def test_prewarm_delegates_to_sdk_with_env_config() -> None:
     assert kwargs["console_endpoint_url"] == ""
     assert kwargs["ingress_endpoint_url"] == ""
     assert kwargs["prefetch_session_token"] is True
+    assert kwargs["timeout"] == 4.0
 
 
 def test_prewarm_forwards_region_and_endpoints() -> None:

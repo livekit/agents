@@ -100,6 +100,9 @@ def prewarm(proc: JobProcess, *, prefetch_session_token: bool = True) -> None:
                 console_endpoint_url=os.getenv(_ENV_CONSOLE_ENDPOINT, ""),
                 ingress_endpoint_url=os.getenv(_ENV_INGRESS_ENDPOINT, ""),
                 prefetch_session_token=prefetch_session_token,
+                # Bound region resolution and token prefetch below the worker's
+                # default 10-second process initialization timeout.
+                timeout=4.0,
             )
         )
     except Exception:
