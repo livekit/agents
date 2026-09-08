@@ -379,7 +379,12 @@ class LLMStream(ABC):
                 completion_start_time = datetime.now(timezone.utc).isoformat()
 
             if ev.delta:
-                if ev.delta.content:
+                if (
+                    ev.delta.content
+                    and self._llm_request_span is not None
+                    and self._llm_request_span.is_recording()
+                    and gen_ai_telemetry.capture_content_enabled()
+                ):
                     response_content += ev.delta.content
                 if ev.delta.tool_calls:
                     tool_calls.extend(ev.delta.tool_calls)

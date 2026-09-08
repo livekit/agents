@@ -52,11 +52,15 @@ class _UsageLLM(llm.LLM):
 
 
 class _UsageLLMStream(llm.LLMStream):
+    _response_content: str = "hello"
+
     async def _run(self) -> None:
         self._event_ch.send_nowait(
             llm.ChatChunk(
                 id="request-id",
-                delta=llm.ChoiceDelta(role="assistant", content="hello"),
+                delta=llm.ChoiceDelta.model_construct(
+                    role="assistant", content=self._response_content
+                ),
             )
         )
         self._event_ch.send_nowait(
@@ -70,6 +74,14 @@ class _UsageLLMStream(llm.LLMStream):
                 ),
             )
         )
+
+
+class _ResponseContentProbe(str):
+    was_accumulated: bool = False
+
+    def __radd__(self, other: object) -> str:
+        self.was_accumulated = True
+        return f"{other}{self}"
 
 
 def _custom_llm_node(
@@ -156,10 +168,14 @@ async def test_llm_stream_skips_content_builders_when_capture_is_disabled(
     _forbid_content_builders(monkeypatch)
     gen_ai.set_capture_content(False)
     try:
+        content = _ResponseContentProbe("hello")
+        monkeypatch.setattr(_UsageLLMStream, "_response_content", content)
         response = await _UsageLLM().chat(chat_ctx=llm.ChatContext.empty()).collect()
     finally:
         gen_ai.set_capture_content(True)
 
+    assert not content.was_accumulated
+    assert response.text == "hello"
     assert response.usage is not None
     assert response.usage.prompt_tokens == 100
     spans = [span for span in span_exporter.get_finished_spans() if span.name == "llm_request"]
@@ -176,8 +192,12 @@ async def test_llm_stream_skips_content_builders_for_nonrecording_span(
 ) -> None:
     _forbid_content_builders(monkeypatch)
 
+    content = _ResponseContentProbe("hello")
+    monkeypatch.setattr(_UsageLLMStream, "_response_content", content)
     response = await _UsageLLM().chat(chat_ctx=llm.ChatContext.empty()).collect()
 
+    assert not content.was_accumulated
+    assert response.text == "hello"
     assert response.usage is not None
     assert response.usage.prompt_tokens == 100
 
