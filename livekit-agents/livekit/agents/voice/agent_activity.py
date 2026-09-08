@@ -1564,6 +1564,7 @@ class AgentActivity(RecognitionHooks):
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
+        user_metrics = self._on_enter_user_metrics()
 
         if (
             self._rt_session is not None
@@ -1594,6 +1595,7 @@ class AgentActivity(RecognitionHooks):
                     audio=audio or None,
                     add_to_chat_ctx=add_to_chat_ctx,
                     model_settings=ModelSettings(),
+                    _previous_user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.tts_say",
@@ -1659,6 +1661,7 @@ class AgentActivity(RecognitionHooks):
             "speech_created",
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
+        user_metrics = self._on_enter_user_metrics()
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._create_speech_task(
@@ -1689,6 +1692,7 @@ class AgentActivity(RecognitionHooks):
                         if utils.is_given(tool_choice) or self._tool_choice is None
                         else self._tool_choice
                     ),
+                    _previous_user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.pipeline_reply",
@@ -2885,6 +2889,7 @@ class AgentActivity(RecognitionHooks):
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
+        _previous_user_metrics: llm.MetricsReport | None = None,
     ) -> None:
         with tracer.start_as_current_span(
             "agent_turn", context=self._session._root_span_context
@@ -2909,6 +2914,7 @@ class AgentActivity(RecognitionHooks):
                     audio=audio,
                     add_to_chat_ctx=add_to_chat_ctx,
                     model_settings=model_settings,
+                    _previous_user_metrics=_previous_user_metrics,
                 )
             finally:
                 otel_metrics.record_invoke_agent_duration(
@@ -2922,6 +2928,7 @@ class AgentActivity(RecognitionHooks):
         audio: AsyncIterable[rtc.AudioFrame] | None,
         add_to_chat_ctx: bool,
         model_settings: ModelSettings,
+        _previous_user_metrics: llm.MetricsReport | None = None,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
         current_span.set_attribute(trace_types.ATTR_SPEECH_ID, speech_handle.id)
@@ -3112,6 +3119,16 @@ class AgentActivity(RecognitionHooks):
                         started_speaking_at - started_forwarding_at
                     )
 
+                if _previous_user_metrics and "stopped_speaking_at" in _previous_user_metrics:
+                    e2e_latency = (
+                        started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
+                    )
+                    assistant_metrics["e2e_latency"] = e2e_latency
+                    current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+
+                if self._session._unanswered_user_metrics is _previous_user_metrics:
+                    self._session._unanswered_user_metrics = None
+
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -3148,6 +3165,17 @@ class AgentActivity(RecognitionHooks):
             if isinstance(tool, llm.RawFunctionTool | llm.FunctionTool)
             and tool.info.flags & ToolFlag.IGNORE_ON_ENTER
         ]
+
+    def _on_enter_user_metrics(self) -> llm.MetricsReport | None:
+        """The user turn still unanswered, when this speech comes from on_enter."""
+        on_enter_data = _OnEnterContextVar.get(None)
+        if (
+            on_enter_data is None
+            or on_enter_data.agent != self._agent
+            or on_enter_data.session != self._session
+        ):
+            return None
+        return self._session._unanswered_user_metrics
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -3395,6 +3423,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._chat_ctx.insert(new_message)
             self._session._conversation_item_added(new_message)
             user_metrics = new_message.metrics
+            self._session._unanswered_user_metrics = user_metrics
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3596,6 +3625,9 @@ class AgentActivity(RecognitionHooks):
                 assistant_metrics["e2e_latency"] = e2e_latency
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
 
+            if self._session._unanswered_user_metrics is user_metrics:
+                self._session._unanswered_user_metrics = None
+
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
 
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
@@ -3770,9 +3802,10 @@ class AgentActivity(RecognitionHooks):
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
-                        # in case the current reply only generated tools (no speech), re-use the current user_metrics for the next
-                        # tool response generation
-                        _previous_user_metrics=user_metrics if not forwarded_text else None,
+                        # the tool reply answers whatever user turn is still unanswered: this
+                        # one if the reply only generated tools, or the last turn of a
+                        # sub-conversation an inline AgentTask ran inside the tool
+                        _previous_user_metrics=self._session._unanswered_user_metrics,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.pipeline_reply",
