@@ -185,7 +185,8 @@ class _RimeV1Server:
                     if self.response_mode == "malformed_cancelled":
                         await self._send_missing_payload(ws, context_id)
                     else:
-                        await self._send(ws, {"contextId": context_id, "cancelled": {}})
+                        terminal = "done" if self.response_mode == "done_on_cancel" else "cancelled"
+                        await self._send(ws, {"contextId": context_id, terminal: {}})
                 elif "flush" in envelope:
                     self.unexpected_requests.append(envelope)
                     await self._send(
@@ -235,6 +236,8 @@ class _RimeV1Server:
             )
         elif self.response_mode == "wrong_context":
             await self._send(ws, {"contextId": "wrong", "done": {}})
+        elif self.response_mode == "early_done":
+            await self._send(ws, {"contextId": context_id, "done": {}})
         elif self.response_mode == "invalid_envelope":
             if ws.ws_protocol == "rime.v1.binary":
                 await ws.send_bytes(b"\xff")
@@ -793,9 +796,13 @@ async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> N
     assert "timeScaleFactor" not in second_server.requests[0]["start"]["audioParameters"]
 
 
-async def test_v1_clean_interruption_cancels_and_reuses_socket() -> None:
-    async with _RimeV1Server(response_mode="no_audio") as server:
-        tts = _v1_tts(server)
+@pytest.mark.parametrize("response_mode", ["no_audio", "done_on_cancel"])
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_clean_interruption_cancels_and_reuses_socket(
+    response_mode: str, websocket_protocol: str
+) -> None:
+    async with _RimeV1Server(response_mode=response_mode) as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("Please stop this synthesis now. Pending")
         await asyncio.wait_for(server.wait_for_text_messages(1), timeout=2)
@@ -962,6 +969,82 @@ async def test_v1_end_times_out_when_terminal_event_never_arrives() -> None:
         await tts.aclose()
 
     assert server.connections == 2
+
+
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_rejects_done_before_input_ends(websocket_protocol: str) -> None:
+    async with _RimeV1Server(response_mode="early_done") as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        try:
+            stream.push_text("First sentence. Pending")
+            with pytest.raises(APIConnectionError, match="done before input ended"):
+                await asyncio.wait_for(_collect(stream), timeout=2)
+            await asyncio.wait_for(server.connection_closed.wait(), timeout=2)
+            assert _payloads(server) == ["start", "text"]
+
+            server.response_mode = "normal"
+            second = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            try:
+                second.push_text("Next turn.")
+                second.end_input()
+                assert await asyncio.wait_for(_collect(second), timeout=2)
+            finally:
+                await second.aclose()
+            assert server.connections == 2
+        finally:
+            await stream.aclose()
+            await tts.aclose()
+
+
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+async def test_v1_accepts_done_before_end_write_returns(
+    websocket_protocol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.plugins.rime import _websocket_v1
+
+    done_received = asyncio.Event()
+    end_write_pending = False
+    original_send = _websocket_v1._send_envelope
+    codec_class = type(_websocket_v1._codec_for_protocol(websocket_protocol))
+    original_decode = codec_class.decode_response
+
+    async def send_envelope(
+        connection: _websocket_v1.Connection, context_id: str, payload: str, value: object
+    ) -> None:
+        nonlocal end_write_pending
+        if payload == "end":
+            end_write_pending = True
+        await original_send(connection, context_id, payload, value)
+        if payload == "end":
+            await done_received.wait()
+            end_write_pending = False
+
+    def decode_response(self: Any, message: aiohttp.WSMessage) -> proto.WebSocketResponse:
+        response = original_decode(self, message)
+        if response.WhichOneof("payload") == "done":
+            assert end_write_pending
+            done_received.set()
+        return response
+
+    monkeypatch.setattr(_websocket_v1, "_send_envelope", send_envelope)
+    monkeypatch.setattr(codec_class, "decode_response", decode_response)
+    async with _RimeV1Server() as server:
+        tts = _v1_tts(server, websocket_protocol=websocket_protocol)
+        try:
+            for _ in range(2):
+                done_received.clear()
+                stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+                try:
+                    stream.push_text("Hello.")
+                    stream.end_input()
+                    assert await asyncio.wait_for(_collect(stream), timeout=2)
+                    assert done_received.is_set()
+                finally:
+                    await stream.aclose()
+            assert server.connections == 1
+        finally:
+            await tts.aclose()
 
 
 async def test_v1_rejects_malformed_done_before_socket_reuse() -> None:

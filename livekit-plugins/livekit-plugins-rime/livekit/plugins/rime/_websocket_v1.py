@@ -408,6 +408,8 @@ async def run_context(
             await _write("text", event)
 
         if state.active:
+            # The server can acknowledge end before the write returns.
+            state.input_ending = True
             await _write("end", None)
             input_ended.set()
         else:
@@ -462,6 +464,8 @@ async def run_context(
             elif payload == "done":
                 if not state.server_started:
                     raise _ContaminatedConnection("Rime v1 sent done before started")
+                if not state.input_ending:
+                    raise _ContaminatedConnection("Rime v1 sent done before input ended")
                 state.terminal = True
                 terminal_received.set()
                 output_emitter.end_input()
@@ -536,6 +540,7 @@ async def run_context(
 @dataclass
 class _ContextState:
     active: bool = False
+    input_ending: bool = False
     server_started: bool = False
     emitter_initialized: bool = False
     terminal: bool = False
