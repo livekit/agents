@@ -653,6 +653,19 @@ class _StreamData:
     resync_pending: bool = False
 
 
+def _is_word_boundary(char: str) -> bool:
+    """Whether *char* starts a word rather than continuing the one before it.
+
+    Whitespace ends a word, and scripts written without spaces - CJK, Thai -
+    give every character a word of its own. Asking ``split_words`` keeps that
+    judgement identical to the one ``_to_timed_words`` makes, instead of
+    assuming every reply is space-delimited.
+    """
+    if char.isspace():
+        return True
+    return len(split_words("a" + char, ignore_punctuation=False, split_character=True)) > 1
+
+
 def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
     """Fold one frame's character timings into the stream's aligned transcript."""
     chars: list[str] | None = timestamps.get("characters")
@@ -666,7 +679,11 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
         # keeping either side alone would publish a fragment as a word of its
         # own. The word the gap swallowed is lost either way.
         logger.warning("Soniox TTS sent malformed timestamps, skipping the frame's characters")
-        _emit_timed_words(stream)
+        # The word held back is complete after all when nothing could have
+        # continued it - one CJK character is already a word - so publish it
+        # rather than lose it; otherwise it is the broken half and is dropped.
+        held = stream.char_text
+        _emit_timed_words(stream, flush=bool(held) and _is_word_boundary(held[-1]))
         stream.char_text = ""
         stream.char_starts.clear()
         stream.char_ends.clear()
@@ -674,11 +691,13 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
         return
 
     if stream.resync_pending:
-        boundary = next((i for i, char in enumerate(chars) if char.isspace()), None)
+        boundary = next((i for i, char in enumerate(chars) if _is_word_boundary(char)), None)
         if boundary is None:
             return  # still inside the word the gap broke
-        # drop the separator too: the last published word already carries one
-        chars, starts, ends = chars[boundary + 1 :], starts[boundary + 1 :], ends[boundary + 1 :]
+        # A separator is consumed, since the last published word already carries
+        # one; a character that is a word in itself is kept.
+        resume = boundary + 1 if chars[boundary].isspace() else boundary
+        chars, starts, ends = chars[resume:], starts[resume:], ends[resume:]
         stream.resync_pending = False
         if not chars:
             return

@@ -897,3 +897,60 @@ async def test_resync_waits_for_a_boundary_across_frames() -> None:
     assert data.resync_pending is False
     soniox_tts._emit_timed_words(data, flush=True)
     assert "".join(str(w) for w in emitter.timed_words) == "The quick high up"
+
+
+async def test_a_gap_costs_only_the_frame_in_a_spaceless_script() -> None:
+    """CJK and Thai recover immediately: every character is already a word.
+
+    Waiting for whitespace never resolves in these scripts, so the rest of the
+    reply's transcript and timeline would be discarded entirely.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("\u4eca\u5929\u5929", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": ["\u6c14"]})  # malformed
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("\u5f88\u597d", 0.04))
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    published = "".join(str(w) for w in emitter.timed_words)
+    assert data.resync_pending is False
+    # only the skipped frame's character is missing; the rest survives
+    assert published == "\u4eca\u5929\u5929\u5f88\u597d"
+
+
+def test_word_boundary_follows_the_tokenizer() -> None:
+    assert soniox_tts._is_word_boundary(" ") is True
+    assert soniox_tts._is_word_boundary("\u4eca") is True  # CJK: a word on its own
+    assert soniox_tts._is_word_boundary("\u0e2a") is True  # Thai
+    assert soniox_tts._is_word_boundary("p") is False
+    assert soniox_tts._is_word_boundary(",") is False  # punctuation stays in the word
+
+
+async def test_a_gap_ending_on_a_boundary_costs_no_extra_word() -> None:
+    """When the frame after a gap opens on a boundary, no whole word is dropped.
+
+    Only the separator is consumed. Where the gap ends mid-word instead, the
+    tail has to go: nothing in the stream says whether those characters finish
+    the broken word or start a new one.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    soniox_tts._accumulate_timestamps(data, {"characters": list("wn fox jumps")})  # malformed
+    # the next frame opens on a separator, so the gap ended at a word boundary
+    soniox_tts._accumulate_timestamps(data, _character_timestamps(" high up", 0.25))
+    soniox_tts._emit_timed_words(data, flush=True)
+
+    assert "".join(str(w) for w in emitter.timed_words) == "The quick high up"
