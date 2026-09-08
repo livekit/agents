@@ -656,6 +656,17 @@ def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> N
     starts: list[float] | None = timestamps.get("character_start_times_seconds")
     ends: list[float] | None = timestamps.get("character_end_times_seconds")
     if not (chars and starts and ends and len(chars) == len(starts) == len(ends)):
+        # These characters cannot be trusted, so they are skipped - but the
+        # buffer holds a word this frame was going to finish, and letting the
+        # next frame land on it would join the two sides of the gap into a word
+        # nobody spoke ("bro" + "ps" reads as "brops") and publish it with
+        # plausible timings. Publish what is already whole and drop the rest so
+        # the gap stays a boundary.
+        logger.warning("Soniox TTS sent malformed timestamps, skipping the frame's characters")
+        _emit_timed_words(stream)
+        stream.char_text = ""
+        stream.char_starts.clear()
+        stream.char_ends.clear()
         return
 
     offset = stream.time_offset

@@ -834,3 +834,38 @@ async def test_a_timestamp_only_partial_word_stays_replayable() -> None:
     finally:
         await stream.aclose()
         await tts.aclose()
+
+
+async def test_a_malformed_frame_does_not_splice_across_the_gap() -> None:
+    """Skipping a bad frame must not join the characters on either side of it.
+
+    The buffer holds the word that frame was going to finish. Letting the next
+    frame land on it turns "bro" + "ps" into "brops" - a word nobody spoke,
+    published with plausible timings.
+    """
+    emitter = _RecordingEmitter()
+    tts = soniox.TTS(api_key="fake-key")
+    data = soniox_tts._StreamData(
+        emitter=emitter,  # type: ignore[arg-type]
+        waiter=asyncio.get_event_loop().create_future(),
+        opts=tts._opts,
+    )
+
+    spoken = "The quick brown fox jumps high"
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("The quick bro", 0.0))
+    # "wn fox jum" arrives with timings that do not line up, so it is skipped
+    soniox_tts._accumulate_timestamps(
+        data,
+        {
+            "characters": list("wn fox jum"),
+            "character_start_times_seconds": [0.13, 0.14],
+            "character_end_times_seconds": [0.14, 0.15],
+        },
+    )
+    soniox_tts._accumulate_timestamps(data, _character_timestamps("ps high", 0.23))
+
+    published = "".join(str(w) for w in emitter.timed_words)
+    assert "brops" not in published
+    # every published word is one the agent actually said
+    for word in published.split():
+        assert word in spoken, f"invented {word!r}"
