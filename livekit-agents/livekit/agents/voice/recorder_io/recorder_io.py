@@ -35,6 +35,10 @@ INPUT_STALL_TIMEOUT = 1.0
 # beyond it keeps a drifting capture clock from sliding the channel
 RESYNC_TOLERANCE = 0.1
 
+# a resampler reports its input as arrived before it emits it, so the writer waits this long for
+# the samples it still holds rather than writing silence over their place
+MAX_RESAMPLER_LAG = 0.1
+
 
 @dataclass
 class _Captured:
@@ -46,6 +50,11 @@ class _Captured:
 @dataclass
 class _Flush:
     until: float
+
+
+@dataclass
+class _EndRun:
+    channel: int
 
 
 class _Track:
@@ -84,30 +93,43 @@ class _Track:
 
     def push(self, started_at: float, frame: rtc.AudioFrame) -> None:
         """Add audio that began at ``started_at``, extending the open run where it fits."""
-
-        def _place(frames: list[rtc.AudioFrame]) -> None:
-            if not frames:
-                return
-
-            assert self._run_start is not None
-            joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
-            samples = joined.astype(np.float32) / 32768.0
-            start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
-            self._placed.append((start, samples))
-            self._run_samples += len(samples)
-
         expected = (
             None
             if self._run_start is None
             else self._run_start + self._run_samples / self._sample_rate
         )
         if expected is None or abs(started_at - expected) > RESYNC_TOLERANCE:
-            if self._resampler is not None:
-                # whatever the resampler still holds is the tail of the run that just ended
-                _place(self._resampler.flush())
+            self.end_run()
             self._run_start, self._run_samples = started_at, 0
 
-        _place(self._resample(frame))
+        self._place(self._resample(frame))
+
+    def end_run(self) -> None:
+        """Place the resampler tail while its run can still be written."""
+        if self._resampler is not None:
+            self._place(self._resampler.flush())
+            self._resampler = None
+            self._source_rate = None
+        self._run_start = None
+        self._run_samples = 0
+
+    @property
+    def placed_through(self) -> int | None:
+        """How far the open run reaches, or None when the resampler holds nothing back."""
+        if self._resampler is None or self._run_start is None:
+            return None
+        return round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+
+    def _place(self, frames: list[rtc.AudioFrame]) -> None:
+        if not frames:
+            return
+
+        assert self._run_start is not None
+        joined = np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in frames])
+        samples = joined.astype(np.float32) / 32768.0
+        start = round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
+        self._placed.append((start, samples))
+        self._run_samples += len(samples)
 
     def take(self, start: int, end: int) -> np.ndarray:
         """The channel over ``[start, end)``, silent wherever nothing was placed."""
@@ -141,7 +163,7 @@ class RecorderIO:
         self._in_record: RecorderAudioInput | None = None
         self._out_record: RecorderAudioOutput | None = None
 
-        self._q: queue.Queue[_Captured | _Flush | None] = queue.Queue()
+        self._q: queue.Queue[_Captured | _Flush | _EndRun | None] = queue.Queue()
         self._session = agent_session
         self._sample_rate = sample_rate
         self._started = False
@@ -185,6 +207,8 @@ class RecorderIO:
                 await utils.aio.cancel_and_wait(self._write_atask)
                 self._write_atask = None
 
+            self._end_run(channel=0)
+            self._end_run(channel=1)
             self._q.put_nowait(_Flush(until=time.time()))
             self._q.put_nowait(None)
             await asyncio.shield(self._close_fut)
@@ -211,6 +235,9 @@ class RecorderIO:
             recording_io=self, audio_output=audio_output, on_played=on_played
         )
         return self._out_record
+
+    def _end_run(self, *, channel: int) -> None:
+        self._q.put_nowait(_EndRun(channel=channel))
 
     @property
     def recording(self) -> bool:
@@ -272,7 +299,21 @@ class RecorderIO:
                         tracks[item.channel].push(item.started_at, item.frame)
                         continue
 
+                    if isinstance(item, _EndRun):
+                        tracks[item.channel].end_run()
+                        continue
+
                     end = round((item.until - self._t0) * self._sample_rate)
+                    held = end - round(MAX_RESAMPLER_LAG * self._sample_rate)
+                    for track in tracks:
+                        if (through := track.placed_through) is None:
+                            continue
+                        if through >= held:
+                            end = min(end, through)
+                        else:
+                            # the source stopped delivering; place what it holds before
+                            # the cursor moves past the run it belongs to
+                            track.end_run()
                     if end <= cursor:
                         continue
 
@@ -397,6 +438,9 @@ class RecorderAudioOutput(io.AudioOutput):
                 offset=0.0,
                 duration=playback_position,
             )
+
+        if self.__recording_io.recording:
+            self.__recording_io._end_run(channel=1)
 
         self.__acc = []
         self.__pcm = None

@@ -317,4 +317,5 @@ class FallbackLLMStream(LLMStream):
         )
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[ChatChunk]) -> None:
-        return
+        async for _ in event_aiter:
+            pass

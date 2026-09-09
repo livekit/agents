@@ -45,7 +45,7 @@ from livekit.plugins import openai
 from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
 
 from ..log import logger
-from ..tools import XAITool
+from ..tools import XAITool, _raise_if_xai_tool_reserved_name_conflict
 from ..types import GrokRealtimeModels, GrokVoices
 
 XAI_BASE_URL = "wss://api.x.ai/v1/realtime"
@@ -231,6 +231,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         return super()._wrap_session_update(event_id=event_id, session=session)
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        _raise_if_xai_tool_reserved_name_conflict(tools)
         event = super()._create_tools_update_event(tools)
         xai_tools: list[dict[str, Any]] = []
         for tool in tools:

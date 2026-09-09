@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -102,3 +103,27 @@ async def test_stream_format_requested_per_model(model: str, expected: str) -> N
     await _synthesize(_tts(handler, model=model))
 
     assert requests[0]["stream_format"] == expected
+
+
+async def test_a_second_prewarm_does_not_replace_one_still_in_flight() -> None:
+    """aclose() cancels only the task it holds, so a replaced prewarm outlives the close."""
+    release = asyncio.Event()
+    in_flight = asyncio.Semaphore(0)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        in_flight.release()
+        await release.wait()
+        return httpx.Response(200, content=b"", headers={"content-type": "text/plain"})
+
+    tts = _tts(handler, model="gpt-4o-mini-tts")
+    tts.prewarm()
+    first = tts._prewarm_task
+    await in_flight.acquire()  # the first request is genuinely open
+    tts.prewarm()
+
+    await tts.aclose()
+    try:
+        assert first is not None and first.done(), "a prewarm task outlived aclose()"
+    finally:
+        release.set()
+        await asyncio.gather(first, return_exceptions=True)

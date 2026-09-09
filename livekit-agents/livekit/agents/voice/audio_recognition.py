@@ -245,7 +245,6 @@ class AudioRecognition:
         endpointing: BaseEndpointing,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
-        using_default_vad: bool,
         interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
         stt_model: str | None = None,
@@ -263,7 +262,6 @@ class AudioRecognition:
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
-        self._using_default_vad = using_default_vad
         self._stt_model = stt_model
         self._stt_provider = stt_provider
         self._stt_aligned_transcript = stt_aligned_transcript
@@ -507,36 +505,32 @@ class AudioRecognition:
         This can occur while the generation remains active, such as when playout is paused.
         """
         self._cancel_backchannel_boundary()
+        agent_was_speaking = self._agent_speaking
 
-        if self._agent_speaking:
+        if agent_was_speaking:
             self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
+        # Replayed STT events must observe the post-playout state.
+        self._agent_speaking = False
+
         if not self._adaptive_interruption_active:
             self._flush_held_transcripts()
             self._overlap_open = False
-            self._agent_speaking = False
             self._agent_speech_started_at = None
             return
 
-        if self._agent_speaking:
+        if agent_was_speaking:
             # close any unresolved overlap before resetting the detector
             self._on_end_of_overlap_speech(ended_at=ended_at, agent_ended=True)
 
         self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
 
-        if self._agent_speaking and self._transcript_gate_active:
-            logger.trace(
-                "flushing held transcripts",
-                extra={
-                    "vad_speech_started_at": self._active_vad_speech_started_at,
-                },
-            )
-            self._flush_held_transcripts(
-                resolved_at=ended_at,
-                vad_speech_started_at=self._active_vad_speech_started_at,
-            )
-
         self._overlap_open = False
-        self._agent_speaking = False
+
+        self._flush_held_transcripts(
+            resolved_at=ended_at,
+            vad_speech_started_at=self._active_vad_speech_started_at,
+        )
+
         self._agent_speech_started_at = None
 
     def _on_start_of_speech(
@@ -606,11 +600,10 @@ class AudioRecognition:
         user_speaking_span: trace.Span | None = None,
         interruption: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
-        should_ignore = is_given(interruption) and not interruption and self._agent_speaking
         if self._speaking:
             self._endpointing.on_end_of_speech(
                 ended_at=ended_at,
-                should_ignore=should_ignore,
+                interruption=interruption,
             )
 
         self._on_end_of_overlap_speech(ended_at=ended_at, user_speaking_span=user_speaking_span)
@@ -701,6 +694,18 @@ class AudioRecognition:
         vad_speech_started_at: float | None = None,
     ) -> None:
         """Stop holding transcripts and emit the retained events in provider order."""
+        gate_was_active = self._transcript_gate_active
+        if gate_was_active or self._transcript_buffer:
+            logger.trace(
+                "flushing held transcripts",
+                extra={
+                    "event_count": len(self._transcript_buffer),
+                    "gate_was_active": gate_was_active,
+                    "resolved_at": resolved_at,
+                    "vad_speech_started_at": vad_speech_started_at,
+                },
+            )
+
         self._transcript_gate_active = False
         if resolved_at is not None:
             self._trim_held_transcripts(
@@ -1171,6 +1176,16 @@ class AudioRecognition:
             if has_stt_end_time and self._input_started_at is not None
             else now
         )
+        # Prefer the provider's speaking time when there is no VAD anchor to beat:
+        # no VAD at all, or the VAD missed this segment. In STT turn detection the
+        # provider owns the turn boundary, so its timestamp wins there too
+        # one issue to note: without `end_time` the estimate collapses to `now`
+        # which would report a ~0 transcription_delay for STT mode.
+        use_stt_speaking_time = (
+            self._vad is None
+            or self._last_speaking_time is None
+            or (self._turn_detection_mode == "stt" and has_stt_end_time)
+        )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1185,8 +1200,7 @@ class AudioRecognition:
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             if self._session.amd is not None:
@@ -1208,8 +1222,7 @@ class AudioRecognition:
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
 
             # check user turn limit after accumulating transcript
@@ -1241,8 +1254,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             transcript = ev.alternatives[0].text
@@ -1265,8 +1277,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+            if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
@@ -1283,8 +1294,7 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if (self._vad is not None and not self._using_default_vad)
-                or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
@@ -1316,8 +1326,16 @@ class AudioRecognition:
 
             self._speaking = False
             self._user_turn_committed = True
-            if self._vad is None or self._using_default_vad or self._last_speaking_time is None:
-                # vad disabled or missed a speech, use stt timestamp
+
+            # always use STT speaking time since turn detection mode is set to STT. we would want
+            # alignment here since _last_speaking_time is used for turn detection timing
+            if ev.speech_end_time is not None:
+                # clamped like the other anchors: a provider clock running ahead would
+                # otherwise push the anchor into the future and extend `extra_sleep`,
+                # delaying the turn commit by the skew
+                self._last_speaking_time = min(ev.speech_end_time, now)
+            else:
+                # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()

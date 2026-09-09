@@ -36,6 +36,7 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "prompt_cached_tokens": metrics.prompt_cached_tokens,
                 "cache_creation_tokens": metrics.cache_creation_tokens,
                 "completion_tokens": metrics.completion_tokens,
+                "reasoning_tokens": metrics.reasoning_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
             },
         )

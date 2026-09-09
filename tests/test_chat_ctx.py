@@ -140,6 +140,33 @@ def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     assert chat_ctx.is_equivalent(ChatContext.from_dict(chat_ctx.to_dict()))
 
 
+def test_mistralai_format_injects_trailing_user_message_after_assistant():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hello")
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(format="mistralai")
+
+    assert messages[-1] == {
+        "type": "message.input",
+        "role": "user",
+        "content": "(empty)",
+    }
+
+
+def test_mistralai_format_can_skip_trailing_user_message_injection():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(format="mistralai", inject_dummy_user_message=False)
+
+    assert messages == [{"type": "message.output", "role": "assistant", "content": "Hi there"}]
+
+
 @skip_if_no_credentials()
 async def test_summarize():
     from livekit.agents import ChatContext
