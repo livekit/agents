@@ -489,6 +489,19 @@ class STT(stt.STT):
                 language=language, turn=turn, transcript=transcript, biasing=biasing
             )
 
+    async def aclose(self) -> None:
+        """
+        Close every stream created by :meth:`stream`.
+
+        The HTTP session is left open: it is either supplied by the caller or
+        owned by the shared HTTP context, so it is not ours to close.
+        """
+
+        streams = list(self._streams)
+        self._streams.clear()
+
+        await asyncio.gather(*(stream.aclose() for stream in streams), return_exceptions=True)
+
     def stream(
         self,
         *,

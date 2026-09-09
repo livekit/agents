@@ -1047,6 +1047,52 @@ async def test_requests_are_authenticated_and_attributed(
     assert server.handshake_headers[INTEGRATION_HEADER] == INTEGRATION
 
 
+async def test_closing_the_recognizer_closes_its_streams(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    ``STT.aclose`` is documented as closing every stream it created.
+
+    Inherited, it does nothing, so ``async with`` left live sockets behind for
+    the rest of the process.
+    """
+
+    server = await reson8_server()
+    instance = _stt(server.base_url, client_session)
+
+    async with instance:
+        first = instance.stream(conn_options=NO_RETRY)
+        second = instance.stream(conn_options=NO_RETRY)
+        await server.wait_for_connections(2)
+
+    for stream in (first, second):
+        # aclose closes the input channel first, so that is the guard it trips
+        with pytest.raises(RuntimeError, match="input ended|is closed"):
+            stream.push_frame(_frame())
+
+    # the session is the caller's or the shared context's, never ours to close
+    assert not client_session.closed
+
+
+async def test_closing_the_recognizer_survives_an_already_closed_stream(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """One stream failing to close must not abandon the rest."""
+
+    server = await reson8_server()
+    instance = _stt(server.base_url, client_session)
+
+    first = instance.stream(conn_options=NO_RETRY)
+    second = instance.stream(conn_options=NO_RETRY)
+    await server.wait_for_connections(2)
+    await first.aclose()
+
+    await instance.aclose()
+
+    with pytest.raises(RuntimeError, match="input ended|is closed"):
+        second.push_frame(_frame())
+
+
 async def test_a_turn_over_the_wire(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
