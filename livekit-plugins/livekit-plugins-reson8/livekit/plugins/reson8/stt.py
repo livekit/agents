@@ -462,12 +462,15 @@ class STT(stt.STT):
         Change settings at runtime.
 
         Reson8 takes its configuration from the query string, so a live stream
-        applies the new settings by reconnecting. That is deferred until
-        Reson8 has answered everything it was sent, since a redial abandons
-        audio along with the session it belongs to; an idle stream reconnects
-        straight away. Note that audio is in flight well before the server
-        announces a turn, so waiting only on an announced turn would still
-        lose the start of an utterance.
+        applies the new settings by reconnecting immediately.
+
+        Reson8 holds turn state server-side, so a redial mid-utterance
+        abandons the audio already sent with the session it belongs to: that
+        utterance is transcribed from wherever the new connection picks up.
+        Change options between turns, or accept losing the one in progress.
+        Waiting for a safe moment is not something the client can decide --
+        nothing in the protocol ties a ``turn_end`` to a position in the audio
+        that was sent, so there is no way to know what the server still owes.
 
         :class:`AudioOptions` is deliberately absent: the input resampler is
         built when a stream opens, so changing the rate mid-stream would
@@ -599,7 +602,6 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
-        self._pending_reconnect = False
 
         self._turn_settled = asyncio.Event()
         self._turn_settled.set()
@@ -629,10 +631,7 @@ class SpeechStream(stt.RecognizeStream):
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
 
-        if self._safe_to_reconnect():
-            self._reconnect_event.set()
-        else:
-            self._pending_reconnect = True
+        self._reconnect_event.set()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if frame.num_channels != self._opts.audio.num_channels:
@@ -643,11 +642,6 @@ class SpeechStream(stt.RecognizeStream):
             )
 
         super().push_frame(frame)
-
-    def _safe_to_reconnect(self) -> bool:
-        """Whether a redial would abandon audio Reson8 has not answered."""
-
-        return self._turn_settled.is_set() and not self._speaking
 
     async def _await_final_turn(self) -> None:
         """
@@ -797,7 +791,6 @@ class SpeechStream(stt.RecognizeStream):
 
             self._end_speaking()
             self._candidate = None
-            self._pending_reconnect = False
             self._turn_settled.set()
 
             try:
@@ -810,32 +803,19 @@ class SpeechStream(stt.RecognizeStream):
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    while True:
-                        done, _ = await asyncio.wait(
-                            (tasks_group, wait_reconnect),
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        for task in done:
-                            if task is not wait_reconnect:
-                                task.result()
+                    done, _ = await asyncio.wait(
+                        (tasks_group, wait_reconnect),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in done:
+                        if task is not wait_reconnect:
+                            task.result()
 
-                        if wait_reconnect not in done:
-                            finished = True
-                            break
-
-                        self._reconnect_event.clear()
-
-                        if not self._safe_to_reconnect():
-                            self._pending_reconnect = True
-                            wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
-                            continue
-
-                        logger.debug("Reconnecting to Reson8 to apply updated options")
-                        finished = False
+                    if wait_reconnect not in done:
                         break
 
-                    if finished:
-                        break
+                    self._reconnect_event.clear()
+                    logger.debug("Reconnecting to Reson8 to apply updated options")
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
                     tasks_group.cancel()
@@ -902,10 +882,6 @@ class SpeechStream(stt.RecognizeStream):
                 self._speech_duration = 0.0
 
             self._turn_settled.set()
-
-            if self._pending_reconnect:
-                self._pending_reconnect = False
-                self._reconnect_event.set()
 
         else:
             logger.debug("ignoring unhandled Reson8 message", extra={"lk.pii.type": msg_type})

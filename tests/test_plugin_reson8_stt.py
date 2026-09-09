@@ -1363,140 +1363,6 @@ async def test_usage_is_not_reported_without_audio(
         await stream.aclose()
 
 
-async def test_update_options_waits_for_the_turn_to_end(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """
-    New options must not redial in the middle of an utterance.
-
-    Reson8 holds the turn server-side, so a redial mid-turn abandons the audio
-    already sent and starts the replacement connection from whatever is spoken
-    next -- splitting one utterance across two sessions and transcribing
-    neither in full. The update waits for the turn to close instead.
-    """
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-    log = EventLog(stream)
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    await server.send({"type": "turn_start"})
-    await server.send({"type": "turn_end_candidate", "text": "stale text"})
-    opening = await log.wait_for(2)
-    assert opening[1].type == SpeechEventType.PREFLIGHT_TRANSCRIPT
-
-    try:
-        stream.update_options(transcript=TranscriptOptions(words=True))
-
-        # the turn is still open, so the connection is left alone
-        await asyncio.sleep(0.3)
-        assert server.connections == 1, "redialled in the middle of a turn"
-
-        # closing the turn releases the held update
-        await server.send({"type": "turn_end"})
-        events = await log.wait_for(4)
-        assert [e.type for e in events] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-        assert events[2].alternatives[0].text == "stale text"
-
-        await server.wait_for_connections(2)
-        assert server.query["include_words"] == "true"
-
-        # and the replacement session starts with no turn state carried over:
-        # a leftover candidate would be promoted by an unrelated turn_end, and
-        # a leftover speaking flag would swallow the next START_OF_SPEECH
-        await server.send({"type": "turn_end"})
-        await log.assert_quiet()
-
-        await server.send({"type": "turn_start"})
-        await server.send({"type": "turn_end_candidate", "text": "fresh text"})
-        await server.send({"type": "turn_end"})
-
-        events = await log.wait_for(8)
-        assert [e.type for e in events[4:]] == [
-            SpeechEventType.START_OF_SPEECH,
-            SpeechEventType.PREFLIGHT_TRANSCRIPT,
-            SpeechEventType.FINAL_TRANSCRIPT,
-            SpeechEventType.END_OF_SPEECH,
-        ]
-        assert events[6].alternatives[0].text == "fresh text"
-    finally:
-        await log.aclose()
-        await stream.aclose()
-
-
-async def test_update_options_waits_for_audio_the_server_has_not_answered(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """
-    Audio is in flight before Reson8 announces the turn it belongs to.
-
-    Waiting only on an announced turn would still redial out from under the
-    start of an utterance, abandoning it with the session that carried it.
-    """
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    stream.push_frame(_frame())
-    stream.flush()
-    await server.wait_for_text()
-    assert server.audio, "audio reached the first connection"
-
-    try:
-        # nothing has been announced, so _speaking is still false here
-        stream.update_options(language="de")
-        await asyncio.sleep(0.3)
-        assert server.connections == 1, "redialled while audio was unanswered"
-
-        # the transcript for that audio releases the update
-        await server.send({"type": "turn_end"})
-        await server.wait_for_connections(2)
-        assert server.query["language"] == "de"
-    finally:
-        await stream.aclose()
-
-
-async def test_a_reconnect_rechecks_before_it_redials(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
-) -> None:
-    """
-    Safety is decided again at the moment the redial happens.
-
-    ``update_options`` can arm the reconnect while the stream is idle and a
-    frame can go out before the run loop wakes on it. Acting on the decision
-    made earlier would abandon that audio, so the loop re-checks.
-
-    The window is scheduling-dependent, so the race state is built directly:
-    clearing the settled flag is what sending a frame does.
-    """
-
-    server = await reson8_server()
-    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
-
-    await asyncio.wait_for(server.connected.wait(), timeout=5)
-    try:
-        # idle, so this arms the reconnect straight away
-        stream.update_options(language="de")
-        # ...and a frame reaches the wire before the loop gets to run
-        stream._turn_settled.clear()
-
-        await asyncio.sleep(0.3)
-        assert server.connections == 1, "redialled on a decision that had gone stale"
-
-        # the transcript for that audio releases the held update
-        await server.send({"type": "turn_end"})
-        await server.wait_for_connections(2)
-        assert server.query["language"] == "de"
-    finally:
-        await stream.aclose()
-
-
 async def test_a_reconnect_does_not_rewind_transcript_timing(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
@@ -1546,9 +1412,10 @@ async def test_a_reconnect_does_not_rewind_transcript_timing(
         await stream.aclose()
 
 
-async def test_update_options_reconnects_at_once_when_no_turn_is_open(
+async def test_update_options_reconnects_immediately(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
+    """Options live in the query string, so applying them means a new socket."""
     server = await reson8_server()
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
 
@@ -1558,6 +1425,58 @@ async def test_update_options_reconnects_at_once_when_no_turn_is_open(
         await server.wait_for_connections(2)
         assert server.query["language"] == "de"
     finally:
+        await stream.aclose()
+
+
+async def test_update_options_mid_turn_abandons_that_turn(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    The documented cost of redialling: the turn in progress is lost.
+
+    Reson8 holds turn state server-side and nothing in the protocol ties a
+    turn_end to a position in the audio sent, so the client cannot know when a
+    redial is safe. The replacement session starts clean instead: a leftover
+    candidate would be promoted by an unrelated turn_end, and a leftover
+    speaking flag would swallow the next START_OF_SPEECH.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    await server.send({"type": "turn_start"})
+    await server.send({"type": "turn_end_candidate", "text": "stale text"})
+    opening = await log.wait_for(2)
+    assert opening[1].type == SpeechEventType.PREFLIGHT_TRANSCRIPT
+
+    try:
+        stream.update_options(transcript=TranscriptOptions(words=True))
+        await server.wait_for_connections(2)
+
+        # the interrupted turn is closed out rather than left open
+        events = await log.wait_for(3)
+        assert events[2].type == SpeechEventType.END_OF_SPEECH
+
+        # and nothing from it survives into the new session
+        await server.send({"type": "turn_end"})
+        await log.assert_quiet()
+
+        await server.send({"type": "turn_start"})
+        await server.send({"type": "turn_end_candidate", "text": "fresh text"})
+        await server.send({"type": "turn_end"})
+
+        events = await log.wait_for(7)
+        assert [e.type for e in events[3:]] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[5].alternatives[0].text == "fresh text"
+    finally:
+        await log.aclose()
         await stream.aclose()
 
 

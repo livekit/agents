@@ -166,10 +166,11 @@ and [patterns](https://docs.reson8.dev/speech-to-text/features/patterns/).
 
 `STT.update_options(...)` takes the same sections and changes them at runtime.
 Reson8 reads its configuration from the query string, so a live stream applies
-new settings by reconnecting — deferred until the current turn ends, because a
-redial mid-utterance would split it across two sessions and transcribe neither
-in full. An idle stream reconnects straight away. `AudioOptions` is fixed for
-the life of a stream, since the input resampler is built when the stream opens.
+new settings by reconnecting immediately — which abandons the audio already
+sent for the turn in progress, since Reson8 holds turn state server-side. Change
+options between turns, or accept losing the one in progress. `AudioOptions` is
+fixed for the life of a stream, since the input resampler is built when the
+stream opens.
 
 ### Self-hosted deployments
 
