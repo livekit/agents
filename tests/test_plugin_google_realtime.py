@@ -776,3 +776,63 @@ async def test_handle_does_not_claim_a_queued_but_unsent_update(
         assert _texts(opened[1].sent) == [["queued behind the handle"]]
     finally:
         await session.aclose()
+
+
+async def test_failed_send_with_a_queued_update_replays_each_item_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error restart drops the queue; the resume diff must be the only thing that re-sends."""
+    from google.genai.live import AsyncLive
+
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    first = known.copy()
+    first.add_message(role="user", content="first update")
+
+    class _FailingSession(_FakeLiveSession):
+        """Blocks the first send until released, then fails it."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.blocked = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
+            self.blocked.set()
+            await self.release.wait()
+            raise RuntimeError("socket gone")
+
+    sockets: list[_FakeLiveSession] = [_FailingSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    session._resumption_chat_ctx = known
+    session._chat_ctx = known
+    await session.update_chat_ctx(first)
+    try:
+        failing = sockets[0]
+        assert isinstance(failing, _FailingSession)
+        await asyncio.wait_for(failing.blocked.wait(), timeout=2)
+        # a second update queues behind the blocked send
+        second = first.copy()
+        second.add_message(role="user", content="second update")
+        await session.update_chat_ctx(second)
+        failing.release.set()
+
+        while len(opened) < 2:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[0].sent == []
+        assert _texts(opened[1].sent) == [["first update", "second update"]]
+        assert session._unsent_item_ids == set()
+    finally:
+        await session.aclose()
