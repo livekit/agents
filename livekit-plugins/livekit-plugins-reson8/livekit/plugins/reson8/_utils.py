@@ -79,6 +79,10 @@ FILLER_MODES: tuple[str, ...] = get_args(FillerMode)
 
 _COMMA_OUTSIDE_BRACES = re.compile(r",(?![^{}]*})")
 
+# problem+json codes are lower_snake identifiers; anything else is treated as
+# free text, so nothing arbitrary can ride into an exception message on it
+_IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
 
 def normalize_languages(value: str | Sequence[str] | None) -> str | None:
     """
@@ -221,24 +225,19 @@ def status_error(
     """
     Map a Reson8 rejection onto an actionable error.
 
-    The server's free text is logged under an ``lk.pii.*`` key instead of being
-    put on the exception. The framework interpolates the exception into its
-    retry log message, where redaction cannot reach it, and a rejection can
-    quote request input -- a biasing phrase is customer vocabulary. Only the
-    status, the machine-readable code and our own hint are safe there.
-
     ``APIStatusError`` marks non-transient 4xx as non-retryable, so an
     exhausted credit balance or a bad key fails fast instead of backing off.
     """
 
-    if detail:
+    if code or detail:
         logger.warning(
             "Reson8 rejected the request",
-            extra={"status": status_code, "code": code, "lk.pii.detail": detail},
+            extra={"status": status_code, "lk.pii.code": code, "lk.pii.detail": detail},
         )
 
     hint = _STATUS_HINTS.get(status_code)
-    message = ": ".join(p for p in (code, hint) if p)
+    safe_code = code if code and _IDENTIFIER.fullmatch(code) else None
+    message = ": ".join(p for p in (safe_code, hint) if p)
     return create_api_error_from_http(message, status=status_code)
 
 

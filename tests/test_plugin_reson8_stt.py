@@ -986,7 +986,52 @@ def test_the_server_free_text_stays_off_the_exception(
     # ...but it is still reachable, under a redactable key
     record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
     assert getattr(record, "lk.pii.detail") == f"bad phrase: {phrase}"
-    assert record.code == "invalid_query_parameter"
+    assert getattr(record, "lk.pii.code") == "invalid_query_parameter"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "invalid_query_parameter",
+        "session_rejected",
+        "a",
+        "code_9",
+    ],
+)
+def test_an_identifier_shaped_code_reaches_the_exception(code: str) -> None:
+    assert code in status_error(400, code=code).message
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "phrase rejected: Jan Willem de Vries",
+        "Jan Willem de Vries",
+        "UPPER_SNAKE",
+        "has-a-hyphen",
+        "trailing space ",
+        "x" * 65,
+    ],
+)
+def test_a_code_that_is_not_an_identifier_is_treated_as_free_text(
+    code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        err = status_error(400, code=code)
+
+    assert code not in str(err)
+    assert code not in caplog.text
+
+    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert getattr(record, "lk.pii.code") == code
+
+
+def test_a_code_is_recorded_even_with_no_detail(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        status_error(402, code="session_rejected")
+
+    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert getattr(record, "lk.pii.code") == "session_rejected"
 
 
 @pytest.mark.parametrize(
