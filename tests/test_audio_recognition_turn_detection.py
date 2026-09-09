@@ -106,6 +106,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
     ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._user_turn_resumes = 0
     ar._eou_detection_span = None
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False

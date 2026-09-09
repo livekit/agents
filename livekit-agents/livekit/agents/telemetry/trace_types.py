@@ -79,6 +79,12 @@ ATTR_EOU_OUTCOME = "lk.eou.outcome"
 ATTR_EOU_WAIT_DURATION = "lk.eou.wait_duration"
 """Seconds from the end of the user's speech to the turn decision."""
 ATTR_EOU_REARM_COUNT = "lk.eou.rearm_count"
+ATTR_EOU_NOT_COMMITTED_COUNT = "lk.eou.not_committed_count"
+"""Turn decisions the wait rejected (the detector said the user was not done) before it ended."""
+ATTR_EOU_RESUME_COUNT = "lk.eou.resume_count"
+"""On user_turn: endpointing waits the user cut short by speaking again."""
+ATTR_ON_USER_TURN_COMPLETED_DELAY = "lk.on_user_turn_completed_delay"
+"""Seconds the on_user_turn_completed hook took; on the reply's agent_turn with the other stages."""
 """Times the endpointing wait restarted on a later trigger (late transcript, VAD)."""
 
 # speech scheduling

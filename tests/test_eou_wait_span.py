@@ -109,6 +109,8 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._eou_wait_started_at_ns = None
     ar._eou_wait_rearms = 0
     ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._user_turn_resumes = 0
     ar._eou_detection_span = None
     ar._closing = asyncio.Event()
 
@@ -182,6 +184,9 @@ async def test_wait_span_covers_last_speech_to_commit(span_exporter: InMemorySpa
     assert wait.parent.span_id == user_turn.context.span_id
 
     assert wait.start_time == int(last_speaking * 1_000_000_000)
+    # no VAD opened this turn: created here, it starts at the last speaking time too, so the
+    # back-dated wait never starts before its parent
+    assert user_turn.start_time <= wait.start_time
     attrs = wait.attributes or {}
     assert attrs[trace_types.ATTR_EOU_OUTCOME] == "committed"
     assert attrs[trace_types.ATTR_EOU_SOURCE] == "vad"
@@ -243,6 +248,9 @@ async def test_resumed_speech_ends_wait_at_speech_start(
     assert _spans(span_exporter, "user_turn") == []
     assert ar._user_turn_span is not None and ar._user_turn_span.is_recording()
     ar._end_user_turn_span()
+    # the turn counts the waits the user cut short
+    [user_turn] = _spans(span_exporter, "user_turn")
+    assert (user_turn.attributes or {})[trace_types.ATTR_EOU_RESUME_COUNT] == 1
 
 
 async def test_teardown_drops_an_open_wait(span_exporter: InMemorySpanExporter) -> None:
@@ -273,8 +281,10 @@ async def test_not_committed_turn_keeps_waiting(span_exporter: InMemorySpanExpor
     assert ar._eou_wait_span is not None and ar._eou_wait_span.is_recording()
     ar._end_user_turn_span()
     [wait] = _spans(span_exporter, "eou_wait")
-    assert len(_events(wait, "not_committed")) == 1
-    assert (wait.attributes or {})[trace_types.ATTR_EOU_OUTCOME] == "dropped"
+    attrs = wait.attributes or {}
+    assert attrs[trace_types.ATTR_EOU_NOT_COMMITTED_COUNT] == 1
+    assert attrs[trace_types.ATTR_EOU_OUTCOME] == "dropped"
+    assert wait.events == ()
 
 
 async def test_detection_nests_under_wait(span_exporter: InMemorySpanExporter) -> None:
@@ -391,6 +401,22 @@ async def test_full_session_turn_handoff_spans(span_exporter: InMemorySpanExport
     for turn in turns:
         queue_wait = (turn.attributes or {})[trace_types.ATTR_SPEECH_QUEUE_WAIT]
         assert isinstance(queue_wait, float) and 0.0 <= queue_wait < 5.0
+
+    # the reply that answered the turn carries the user-side stages next to lk.e2e_latency,
+    # so the per-turn breakdown reads off one span
+    [reply] = [
+        s
+        for s in _spans(span_exporter, "agent_turn")
+        if trace_types.ATTR_E2E_LATENCY in (s.attributes or {})
+    ]
+    attrs = reply.attributes or {}
+    for key in (
+        trace_types.ATTR_END_OF_TURN_DELAY,
+        trace_types.ATTR_TRANSCRIPTION_DELAY,
+        trace_types.ATTR_ON_USER_TURN_COMPLETED_DELAY,
+    ):
+        assert isinstance(attrs[key], float), key
+    assert attrs[trace_types.ATTR_ON_USER_TURN_COMPLETED_DELAY] >= 0.05  # the hook sleeps
 
 
 class _RaisingHookAgent(Agent):

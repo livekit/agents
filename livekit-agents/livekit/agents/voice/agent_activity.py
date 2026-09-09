@@ -224,6 +224,20 @@ def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
         info.user_turn_span_adopted = False
 
 
+def _record_user_turn_stages(span: trace.Span, user_metrics: llm.MetricsReport) -> None:
+    """The stages between the user stopping and the reply starting, next to lk.e2e_latency on
+    the reply's agent_turn: a per-turn breakdown readable off one span."""
+    attrs: dict[str, float] = {}
+    if (v := user_metrics.get("end_of_turn_delay")) is not None:
+        attrs[trace_types.ATTR_END_OF_TURN_DELAY] = v
+    if (v := user_metrics.get("transcription_delay")) is not None:
+        attrs[trace_types.ATTR_TRANSCRIPTION_DELAY] = v
+    if (v := user_metrics.get("on_user_turn_completed_delay")) is not None:
+        attrs[trace_types.ATTR_ON_USER_TURN_COMPLETED_DELAY] = v
+    if attrs:
+        span.set_attributes(attrs)
+
+
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
     """Stamp how long the speech sat in the queue on its agent_turn span.
 
@@ -3205,6 +3219,7 @@ class AgentActivity(RecognitionHooks):
                 e2e_latency = started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                _record_user_turn_stages(current_span, _previous_user_metrics)
 
         if forwarded_text and add_to_chat_ctx:
             msg = self._agent._chat_ctx.add_message(
@@ -3705,6 +3720,7 @@ class AgentActivity(RecognitionHooks):
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                _record_user_turn_stages(current_span, user_metrics)
 
             if self._session._unanswered_user_metrics is user_metrics:
                 self._session._unanswered_user_metrics = None

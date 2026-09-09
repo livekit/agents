@@ -339,6 +339,9 @@ class AudioRecognition:
         self._eou_wait_span: trace.Span | None = None
         self._eou_wait_started_at_ns: int | None = None
         self._eou_wait_rearms: int = 0
+        self._eou_wait_not_committed: int = 0
+        # eou_wait spans this user turn went through that ended with the user resuming
+        self._user_turn_resumes: int = 0
         # latest timestamp recorded inside the wait; the span must not end before it
         self._eou_wait_floor_ns: int | None = None
         self._eou_detection_span: trace.Span | None = None
@@ -1526,7 +1529,12 @@ class AudioRecognition:
             speech_start_time: float | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
-            user_turn_span = self._ensure_user_turn_span()
+            # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
+            # anchor known, so the eou_wait child back-dated to last_speaking_time fits inside
+            anchors = [t for t in (speech_start_time, last_speaking_time) if t is not None]
+            user_turn_span = self._ensure_user_turn_span(
+                start_time=min(anchors) if anchors else None
+            )
             eou_wait_span = self._ensure_eou_wait_span(
                 user_turn_span,
                 trigger=trigger,
@@ -1766,6 +1774,7 @@ class AudioRecognition:
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
                 self._end_eou_wait_span("committed")
+                self._stamp_user_turn_resumes(user_turn_span)
                 if not end_of_turn.user_turn_span_adopted:
                     user_turn_span.end()
                 self._user_turn_span = None
@@ -1790,7 +1799,7 @@ class AudioRecognition:
                     self._turn_detector_flushed = True
 
             elif eou_wait_span.is_recording():
-                eou_wait_span.add_event("not_committed")
+                self._eou_wait_not_committed += 1
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
@@ -1994,9 +2003,15 @@ class AudioRecognition:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
         self._end_eou_wait_span("dropped")
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
+            self._stamp_user_turn_resumes(self._user_turn_span)
             self._user_turn_span.end()
         self._user_turn_span = None
         self._user_turn_start = None
+
+    def _stamp_user_turn_resumes(self, user_turn_span: trace.Span) -> None:
+        resumes, self._user_turn_resumes = self._user_turn_resumes, 0
+        if resumes and user_turn_span.is_recording():
+            user_turn_span.set_attribute(trace_types.ATTR_EOU_RESUME_COUNT, resumes)
 
     def _ensure_eou_wait_span(
         self,
@@ -2043,6 +2058,7 @@ class AudioRecognition:
         self._eou_wait_span = span
         self._eou_wait_started_at_ns = started_at_ns
         self._eou_wait_rearms = 0
+        self._eou_wait_not_committed = 0
         self._eou_wait_floor_ns = None
         return span
 
@@ -2063,6 +2079,7 @@ class AudioRecognition:
         span, self._eou_wait_span = self._eou_wait_span, None
         started_at_ns, self._eou_wait_started_at_ns = self._eou_wait_started_at_ns, None
         rearms, self._eou_wait_rearms = self._eou_wait_rearms, 0
+        not_committed, self._eou_wait_not_committed = self._eou_wait_not_committed, 0
         if span is None or not span.is_recording():
             return
 
@@ -2098,6 +2115,9 @@ class AudioRecognition:
                     else 0.0
                 ),
                 trace_types.ATTR_EOU_REARM_COUNT: rearms,
+                trace_types.ATTR_EOU_NOT_COMMITTED_COUNT: not_committed,
             }
         )
         span.end(end_time=ended_at_ns)
+        if outcome == "user_resumed":
+            self._user_turn_resumes += 1
