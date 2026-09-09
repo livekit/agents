@@ -42,9 +42,7 @@ from ._utils import (
     ENCODINGS,
     ERROR_MESSAGE_HEADER,
     FILLER_MODES,
-    MAX_CHANNELS,
     MAX_PHRASES,
-    MIN_CHANNELS,
     PRERECORDED_PATH,
     TURNS_PATH,
     Encoding,
@@ -52,6 +50,7 @@ from ._utils import (
     auth_headers,
     build_speech_data,
     build_url,
+    check_channels,
     check_comma_joined,
     check_probability,
     integration_headers,
@@ -132,15 +131,19 @@ class AudioOptions:
     """
     How to describe the audio sent to Reson8.
 
-    These label the stream rather than convert it: LiveKit supplies 16-bit PCM
-    frames, so ``encoding`` should stay at its default unless you know the
-    frames you push are something else. See
+    These label the stream rather than convert it, so they have to match the
+    frames actually sent. Streaming input is resampled to ``sample_rate``, but
+    nothing remixes channels or transcodes samples: a pushed frame whose
+    channel count disagrees with ``num_channels`` is rejected instead of being
+    relabelled. See
     https://docs.reson8.dev/speech-to-text/features/audio-formats/.
 
     Args:
         sample_rate: Rate in Hz. Streaming input is resampled to this.
-        encoding: Encoding of the audio sent to Reson8.
-        num_channels: Channel count, 1 to 10.
+        encoding: Encoding of the audio sent to Reson8. ``rtc.AudioFrame``
+            carries signed 16-bit PCM, which this plugin forwards unchanged,
+            so ``"pcm_s16le"`` is the only value there is.
+        num_channels: Channel count of the frames you push, 1 to 10.
     """
 
     sample_rate: int = 16000
@@ -154,11 +157,7 @@ class AudioOptions:
                 f"Reson8 accepts: {', '.join(sorted(ENCODINGS))}."
             )
 
-        if not MIN_CHANNELS <= self.num_channels <= MAX_CHANNELS:
-            raise ValueError(
-                f"num_channels must be between {MIN_CHANNELS} and {MAX_CHANNELS}, "
-                f"got {self.num_channels}"
-            )
+        check_channels(self.num_channels)
 
         if self.sample_rate <= 0:
             raise ValueError(f"sample_rate must be positive, got {self.sample_rate}")
@@ -585,6 +584,16 @@ class SpeechStream(stt.RecognizeStream):
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
         self._reconnect_event.set()
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        if frame.num_channels != self._opts.audio.num_channels:
+            raise ValueError(
+                f"expected {self._opts.audio.num_channels}-channel frames, got "
+                f"{frame.num_channels}; set AudioOptions(num_channels="
+                f"{frame.num_channels}) or push audio in the configured shape"
+            )
+
+        super().push_frame(frame)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

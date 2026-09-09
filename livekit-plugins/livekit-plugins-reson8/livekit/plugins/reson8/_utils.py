@@ -51,12 +51,14 @@ See https://docs.reson8.dev/speech-to-text/features/languages/.
 SUPPORTED_LANGUAGES: tuple[str, ...] = get_args(SupportedLanguage)
 """``SupportedLanguage`` as a runtime tuple, for validation and error messages."""
 
-Encoding = Literal["pcm_s16le", "mulaw", "alaw"]
-"""Raw encodings this plugin can describe.
+Encoding = Literal["pcm_s16le"]
+"""
+The only encoding this plugin can send.
 
-Reson8 also accepts container formats and an ``auto`` mode that detects the
-format from the container header, but this plugin always sends raw frames with
-no header, so neither can apply. See
+``rtc.AudioFrame`` carries signed 16-bit PCM and this plugin forwards those
+bytes as they are, so every other encoding Reson8 accepts -- the companded
+ones, the container formats, and the ``auto`` mode that sniffs a container
+header -- would mislabel what is on the wire. See
 https://docs.reson8.dev/speech-to-text/features/audio-formats/.
 """
 
@@ -148,6 +150,13 @@ def check_comma_joined(
             raise ValueError(
                 f"{name} is comma-separated on the wire, so no entry may contain a comma: {value!r}"
             )
+
+
+def check_channels(num_channels: int) -> None:
+    if not MIN_CHANNELS <= num_channels <= MAX_CHANNELS:
+        raise ValueError(
+            f"num_channels must be between {MIN_CHANNELS} and {MAX_CHANNELS}, got {num_channels}"
+        )
 
 
 def check_probability(name: str, value: float | None) -> None:
