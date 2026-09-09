@@ -469,6 +469,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
+        # chat ctx received while no session is active, synced once the next session is up
+        self._pending_chat_ctx: llm.ChatContext | None = None
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -655,12 +657,13 @@ class RealtimeSession(llm.RealtimeSession):
         )
         async with self._session_lock:
             if not self._active_session:
-                if self._session_resumption_handle is not None:
-                    # The handle points at the server transcript before this local update.
-                    self._session_resumption_handle = None
-                self._chat_ctx = chat_ctx
+                self._pending_chat_ctx = chat_ctx
                 return
 
+        self._sync_chat_ctx(chat_ctx)
+
+    def _sync_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
+        """Queue the items the server has not seen and adopt `chat_ctx` as the known state."""
         diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
 
         if diff_ops.to_remove:
@@ -723,7 +726,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+        return (self._pending_chat_ctx or self._chat_ctx).copy()
 
     @property
     def tools(self) -> llm.ToolContext:
@@ -923,34 +926,44 @@ class RealtimeSession(llm.RealtimeSession):
                     async with self._session_lock:
                         self._active_session = session
 
-                        # Check for system/developer messages in initial chat context
-                        system_msg_count = sum(
-                            1
-                            for msg in self._chat_ctx.messages()
-                            if msg.role in ("system", "developer")
-                        )
-                        if system_msg_count > 0:
-                            logger.warning(
-                                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
-                                f"'developer' roles in chat history. Dropping {system_msg_count} system "
-                                f"message(s) from initial chat context during session initialization. "
-                                f"Gemini Realtime only supports 'user' and 'model' roles. Use "
-                                f"update_instructions() to set system-level context instead."
-                            )
+                        pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
+                        if self._session_resumption_handle is not None:
+                            # the server restored the conversation up to the handle, so
+                            # replaying the history would duplicate it; only what arrived
+                            # while disconnected is new to it
+                            if pending_ctx is not None:
+                                self._sync_chat_ctx(pending_ctx)
+                        else:
+                            if pending_ctx is not None:
+                                self._chat_ctx = pending_ctx
 
-                        turns_dict, _ = self._chat_ctx.copy(
-                            exclude_function_call=True,
-                            exclude_handoff=True,
-                            exclude_instructions=True,
-                            exclude_empty_message=True,
-                            exclude_config_update=True,
-                        ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                        if turns and self._should_seed_initial_chat_context():
-                            await session.send_client_content(
-                                turns=turns,  # type: ignore
-                                turn_complete=False,
+                            system_msg_count = sum(
+                                1
+                                for msg in self._chat_ctx.messages()
+                                if msg.role in ("system", "developer")
                             )
+                            if system_msg_count > 0:
+                                logger.warning(
+                                    f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                                    f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                                    f"message(s) from initial chat context during session initialization. "
+                                    f"Gemini Realtime only supports 'user' and 'model' roles. Use "
+                                    f"update_instructions() to set system-level context instead."
+                                )
+
+                            turns_dict, _ = self._chat_ctx.copy(
+                                exclude_function_call=True,
+                                exclude_handoff=True,
+                                exclude_instructions=True,
+                                exclude_empty_message=True,
+                                exclude_config_update=True,
+                            ).to_provider_format(format="google", inject_dummy_user_message=False)
+                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                            if turns:
+                                await session.send_client_content(
+                                    turns=turns,  # type: ignore
+                                    turn_complete=False,
+                                )
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1157,8 +1170,6 @@ class RealtimeSession(llm.RealtimeSession):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
-                        elif not response.session_resumption_update.resumable:
-                            self._session_resumption_handle = None
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)
@@ -1182,9 +1193,6 @@ class RealtimeSession(llm.RealtimeSession):
                 self._mark_restart_needed(on_error=True)
         finally:
             self._mark_current_generation_done()
-
-    def _should_seed_initial_chat_context(self) -> bool:
-        return self._session_resumption_handle is None
 
     def _build_connect_config(self) -> types.LiveConnectConfig:
         temp = self._opts.temperature if is_given(self._opts.temperature) else None
