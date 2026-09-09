@@ -32,7 +32,7 @@ from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_vad import FakeVAD
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
 # scaled-down shipped defaults, keeping max_delay - vad_min_silence > timeout
 VAD_MIN_SILENCE = 0.05
