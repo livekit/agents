@@ -77,7 +77,9 @@ DEFAULT_TICK_INTERVAL = 0.02
 is measured to within one tick, and detection near the threshold needs several ticks per
 threshold (see ``_tick_interval_for``)."""
 _TICKS_PER_WARN_THRESHOLD = 5
-_MIN_TICK_INTERVAL = 0.005
+# the monitor never ticks faster than this: two wake-ups per tick (heartbeat and watchdog) in
+# every job process add up. A warn threshold below it is raised to it.
+_MIN_TICK_INTERVAL = 0.02
 _MAX_TICK_INTERVAL = 0.05
 
 ENV_WARN_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS"
@@ -731,6 +733,15 @@ def start_monitoring(
         thresholds = LoopMonitorThresholds.from_env()
     if thresholds is None:
         return None
+    if thresholds.warn < _MIN_TICK_INTERVAL:
+        logger.warning(
+            "loop monitor warn threshold %.0fms raised to %.0fms, the smallest it measures",
+            thresholds.warn * 1000,
+            _MIN_TICK_INTERVAL * 1000,
+        )
+        thresholds = LoopMonitorThresholds(
+            warn=_MIN_TICK_INTERVAL, error=max(thresholds.error, _MIN_TICK_INTERVAL)
+        )
 
     with _registry_lock:
         if loop in _monitors:

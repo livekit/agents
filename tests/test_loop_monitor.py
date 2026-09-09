@@ -862,7 +862,7 @@ def test_tick_interval_is_a_fifth_of_the_warn_threshold() -> None:
     assert loop_monitor._tick_interval_for(0.1) == pytest.approx(0.02)
     assert loop_monitor._tick_interval_for(0.25) == pytest.approx(0.05)
     assert loop_monitor._tick_interval_for(1.0) == pytest.approx(0.05)  # capped
-    assert loop_monitor._tick_interval_for(0.01) == pytest.approx(0.005)  # floored
+    assert loop_monitor._tick_interval_for(0.05) == pytest.approx(0.02)  # floored
 
     loop = asyncio.new_event_loop()
     try:
@@ -870,6 +870,27 @@ def test_tick_interval_is_a_fifth_of_the_warn_threshold() -> None:
             loop, thresholds=LoopMonitorThresholds(warn=0.1, error=0.5), emit_spans=False
         )
         assert m is not None and m._tick == pytest.approx(0.02)
+    finally:
+        loop_monitor.stop_monitoring(loop)
+        loop.close()
+
+
+def test_a_warn_threshold_below_the_tick_floor_is_raised_to_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The monitor never ticks faster than 20 ms, so it cannot measure a smaller threshold;
+    rather than fail to start (the tick would exceed the threshold), the threshold is raised
+    and said so."""
+    loop = asyncio.new_event_loop()
+    try:
+        with caplog.at_level("WARNING", logger="livekit.agents"):
+            m = loop_monitor.start_monitoring(
+                loop, thresholds=LoopMonitorThresholds(warn=0.005, error=0.01), emit_spans=False
+            )
+        assert m is not None
+        assert m.warn_threshold == pytest.approx(0.02) and m.error_threshold == pytest.approx(0.02)
+        assert m._tick == pytest.approx(0.02)
+        assert any("raised to 20ms" in r.getMessage() for r in caplog.records)
     finally:
         loop_monitor.stop_monitoring(loop)
         loop.close()
