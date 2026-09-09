@@ -340,7 +340,7 @@ class _FakeEndCallSession:
     """Minimal session surface for EndCallTool._delayed_session_shutdown."""
 
     def __init__(self) -> None:
-        self.shutdown_count = 0
+        self.shutdown_calls: list[bool] = []
         self._handlers: dict[str, list[Any]] = {}
 
     def once(self, event: str, callback: Any = None) -> Any:
@@ -364,8 +364,8 @@ class _FakeEndCallSession:
         for callback in list(self._handlers.get(event, [])):
             callback(ev)
 
-    def shutdown(self) -> None:
-        self.shutdown_count += 1
+    def shutdown(self, *, drain: bool = True) -> None:
+        self.shutdown_calls.append(drain)
 
 
 @pytest.mark.asyncio
@@ -399,8 +399,8 @@ async def test_delayed_session_shutdown_times_out_when_speech_handle_hangs() -> 
     # Without a timeout on `await speech_handle`, this never returns — even under
     # virtual time, because no timer is scheduled for a bare Future.
     await asyncio.wait_for(task, timeout=end_call_mod.TOOL_REPLY_TIMEOUT + 1.0)
-    assert session.shutdown_count == 1
-    assert not hanging.done()
+    assert session.shutdown_calls == [False]
+    assert hanging.interrupted
 
 
 @pytest.mark.asyncio
@@ -419,7 +419,7 @@ async def test_delayed_session_shutdown_times_out_when_speech_created_never_fire
         tool._delayed_session_shutdown(ctx),
         timeout=end_call_mod.TOOL_REPLY_TIMEOUT + 1.0,
     )
-    assert session.shutdown_count == 1
+    assert session.shutdown_calls == [False]
 
 
 @pytest.mark.asyncio
@@ -448,11 +448,11 @@ async def test_delayed_session_shutdown_waits_for_completed_speech_handle() -> N
         ),
     )
     await asyncio.sleep(0)
-    assert session.shutdown_count == 0
+    assert session.shutdown_calls == []
 
     handle._mark_done()
     await asyncio.wait_for(task, timeout=1.0)
-    assert session.shutdown_count == 1
+    assert session.shutdown_calls == [True]
 
 
 class TestToolExecution:
