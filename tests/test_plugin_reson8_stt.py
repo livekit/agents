@@ -1202,6 +1202,39 @@ async def test_update_options_waits_for_the_turn_to_end(
         await stream.aclose()
 
 
+async def test_update_options_waits_for_audio_the_server_has_not_answered(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Audio is in flight before Reson8 announces the turn it belongs to.
+
+    Waiting only on an announced turn would still redial out from under the
+    start of an utterance, abandoning it with the session that carried it.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.push_frame(_frame())
+    stream.flush()
+    await server.wait_for_text()
+    assert server.audio, "audio reached the first connection"
+
+    try:
+        # nothing has been announced, so _speaking is still false here
+        stream.update_options(language="de")
+        await asyncio.sleep(0.3)
+        assert server.connections == 1, "redialled while audio was unanswered"
+
+        # the transcript for that audio releases the update
+        await server.send({"type": "turn_end"})
+        await server.wait_for_connections(2)
+        assert server.query["language"] == "de"
+    finally:
+        await stream.aclose()
+
+
 async def test_update_options_reconnects_at_once_when_no_turn_is_open(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:

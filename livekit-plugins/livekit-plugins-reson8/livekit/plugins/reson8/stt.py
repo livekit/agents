@@ -461,10 +461,12 @@ class STT(stt.STT):
         Change settings at runtime.
 
         Reson8 takes its configuration from the query string, so a live stream
-        applies the new settings by reconnecting. That is deferred until the
-        current turn ends, since a redial mid-utterance would split it across
-        two sessions and transcribe neither in full; an idle stream reconnects
-        straight away.
+        applies the new settings by reconnecting. That is deferred until
+        Reson8 has answered everything it was sent, since a redial abandons
+        audio along with the session it belongs to; an idle stream reconnects
+        straight away. Note that audio is in flight well before the server
+        announces a turn, so waiting only on an announced turn would still
+        lose the start of an utterance.
 
         :class:`AudioOptions` is deliberately absent: the input resampler is
         built when a stream opens, so changing the rate mid-stream would
@@ -609,7 +611,7 @@ class SpeechStream(stt.RecognizeStream):
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
 
-        if self._speaking:
+        if self._speaking or not self._turn_settled.is_set():
             self._pending_reconnect = True
         else:
             self._reconnect_event.set()
