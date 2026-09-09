@@ -835,7 +835,7 @@ class SpeechStream(stt.RecognizeStream):
         msg_type = msg.get("type")
         logger.debug(
             "received turn event",
-            extra={"type": msg_type, "lk.pii.text": msg.get("text")},
+            extra={"lk.pii.type": msg_type, "lk.pii.text": msg.get("text")},
         )
 
         if msg_type == "turn_start":
@@ -897,7 +897,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._reconnect_event.set()
 
         else:
-            logger.debug("ignoring unhandled Reson8 message type: %r", msg_type)
+            logger.debug("ignoring unhandled Reson8 message", extra={"lk.pii.type": msg_type})
 
     def _start_speaking(self) -> None:
         if self._speaking:

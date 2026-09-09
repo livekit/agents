@@ -838,6 +838,34 @@ def test_build_speech_data_applies_the_offset_to_the_turn() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_provider_event_content_stays_out_of_log_bodies(
+    make_stream: MakeStream, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    A message body cannot be redacted, so provider fields must not land there.
+
+    Nothing constrains what a server puts in ``type``, so it is treated the
+    same as the transcript: static message, value under an ``lk.pii.*`` key.
+    """
+
+    smuggled = "turn_end; patient Jan Willem de Vries"
+    stream = make_stream()
+
+    with caplog.at_level("DEBUG", logger="livekit.plugins.reson8"):
+        stream._process_message({"type": smuggled, "text": "secret words"})
+
+    assert smuggled not in caplog.text
+    assert "secret words" not in caplog.text
+
+    for record in caplog.records:
+        for key, value in record.__dict__.items():
+            if value in (smuggled, "secret words"):
+                assert key.startswith("lk.pii."), f"{key} is not a redactable key"
+
+    tagged = [r for r in caplog.records if getattr(r, "lk.pii.type", None) == smuggled]
+    assert tagged, "the event type was never recorded at all"
+
+
 def test_start_of_speech_is_emitted_once(make_stream: MakeStream) -> None:
     stream = make_stream()
 
