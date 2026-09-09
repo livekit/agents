@@ -168,6 +168,8 @@ XAIModels = Literal[
     "xai/grok-4.20-0309-non-reasoning",
     "xai/grok-4.20-0309-reasoning",
     "xai/grok-4.20-multi-agent-0309",
+    "xai/grok-4.3",
+    "xai/grok-4.5",
 ]
 
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
@@ -433,7 +435,7 @@ class LLMStream(llm.LLMStream):
                     extra={
                         "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
-                        "chat_ctx": chat_ctx,
+                        "lk.pii.chat_ctx": chat_ctx,
                     },
                 )
             if not self._tools:
@@ -472,12 +474,17 @@ class LLMStream(llm.LLMStream):
                     if chunk.usage is not None:
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
+                        completion_details = chunk.usage.completion_tokens_details
+                        reasoning_tokens = (
+                            completion_details.reasoning_tokens if completion_details else 0
+                        )
                         usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
                                 completion_tokens=chunk.usage.completion_tokens or 0,
                                 prompt_tokens=chunk.usage.prompt_tokens or 0,
                                 prompt_cached_tokens=cached_tokens or 0,
+                                reasoning_tokens=reasoning_tokens or 0,
                                 total_tokens=chunk.usage.total_tokens or 0,
                                 service_tier=getattr(chunk, "service_tier", None),
                             ),

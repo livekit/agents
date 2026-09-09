@@ -490,7 +490,9 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.warning("failed to parse Smallest AI STT message: %s", msg.data)
+                    logger.warning(
+                        "failed to parse Smallest AI STT message", extra={"lk.pii.data": msg.data}
+                    )
                     continue
 
                 self._process_stream_event(data)
@@ -571,10 +573,21 @@ class SpeechStream(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            self._report_connection_acquired(time.perf_counter() - t0, False)
-            logger.debug("established Smallest AI STT WebSocket connection")
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to Smallest AI STT") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to Smallest AI STT") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to Smallest AI STT ({type(e).__name__})"
+            ) from None
+
+        self._report_connection_acquired(time.perf_counter() - t0, False)
+        logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:

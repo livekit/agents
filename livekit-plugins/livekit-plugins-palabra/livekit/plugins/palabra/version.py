@@ -12,24 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-from .avatar import AvatarSession, HedraException
-from .version import __version__
-
-__all__ = [
-    "HedraException",
-    "AvatarSession",
-    "__version__",
-]
-
-from livekit.agents import Plugin
-
-from .log import logger
-
-
-class HedraPlugin(Plugin):
-    def __init__(self) -> None:
-        super().__init__(__name__, __version__, __package__, logger)
-
-
-Plugin.register_plugin(HedraPlugin())
+__version__ = "1.8.0"

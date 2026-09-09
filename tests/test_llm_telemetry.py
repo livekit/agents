@@ -95,4 +95,6 @@ async def test_llm_span_reports_cached_input_tokens(
     assert len(spans) == 1
     assert spans[0].attributes["gen_ai.usage.input_tokens"] == 100
     assert spans[0].attributes["gen_ai.usage.cache_read.input_tokens"] == 80
-    assert "gen_ai.usage.input_cached_tokens" not in spans[0].attributes
+    # both spellings: the registry one for the convention, and the unofficial one Langfuse
+    # and Datadog key on. The realtime path emits both, so the two paths now agree.
+    assert spans[0].attributes["gen_ai.usage.input_cached_tokens"] == 80

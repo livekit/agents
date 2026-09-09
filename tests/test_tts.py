@@ -230,14 +230,7 @@ SYNTHESIZE_TTS = [
             "tts": rime.TTS(),
             "proxy-upstream": "users.rime.ai:443",
         },
-        id="rime",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": rime.TTS(model="coda"),
-            "proxy-upstream": "users.rime.ai:443",
-        },
-        id="rime-coda",
+        id="rime-default-coda",
     ),
     pytest.param(
         lambda: {
@@ -541,7 +534,7 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/arcana")),
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/coda", voice="astra")),
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-rime",

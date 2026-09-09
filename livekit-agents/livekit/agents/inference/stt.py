@@ -63,13 +63,14 @@ AssemblyAIModels = Literal[
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
 ]
-ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
 XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
     "speechmatics/enhanced",
     "speechmatics/standard",
+    "speechmatics/linden-1",
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
+GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -139,32 +140,22 @@ class AssemblyaiOptions(TypedDict, total=False):
     mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
 
 
-class ElevenlabsOptions(TypedDict, total=False):
-    commit_strategy: Literal["manual", "vad"]
-    include_timestamps: bool
-    vad_silence_threshold_secs: float
-    vad_threshold: float
-    min_speech_duration_ms: int
-    min_silence_duration_ms: int
-    language_code: str
-
-
 class SpeechmaticsOptions(TypedDict, total=False):
     domain: str  # e.g. "finance"
     output_locale: str  # BCP-47 locale for output formatting
-    max_delay: float  # 0.7-4.0 seconds, default 1.0
-    max_delay_mode: str  # "flexible" | "fixed"
+    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: str  # "flexible" | "fixed"; RT only
     diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
     speaker_sensitivity: float  # 0.0-1.0
     max_speakers: int
     prefer_current_speaker: bool
     enable_partials: bool  # default True (overridden by gateway)
-    enable_entities: bool
+    enable_entities: bool  # RT only
     punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]
-    end_of_utterance_silence_trigger: float  # seconds of silence before final
-    audio_filtering_config: dict[str, Any]
-    transcript_filtering_config: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]  # RT only
+    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    audio_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
@@ -184,6 +175,14 @@ class InworldOptions(TypedDict, total=False):
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
     prompts: list[str]
     vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class GoogleOptions(TypedDict, total=False):
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -229,6 +228,9 @@ def _keyterms_extra_for_model(
 
     extra_kwargs = extra_kwargs or {}
     session_keyterms = session_keyterms or []
+
+    if model == "speechmatics/linden-1":
+        return None
 
     if model.startswith("speechmatics/"):
         # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
@@ -282,7 +284,6 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-streaming-multilingual",
         "assemblyai/u3-rt-pro",
         "assemblyai/universal-3-5-pro",
-        "elevenlabs/scribe_v2_realtime",
         "xai/stt-1",
         "speechmatics/enhanced",
         "speechmatics/standard",
@@ -339,16 +340,19 @@ def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics = (
-        is_given(model) and isinstance(model, str) and model.startswith("speechmatics/")
+    is_speechmatics_rt = (
+        is_given(model)
+        and isinstance(model, str)
+        and model.startswith("speechmatics/")
+        and model != "speechmatics/linden-1"
     )
-    if vad_instance is not None and not is_speechmatics:
+    if vad_instance is not None and not is_speechmatics_rt:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics and vad_instance is None:
+    if is_speechmatics_rt and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -375,10 +379,10 @@ STTModels = (
     | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
-    | ElevenlabsModels
     | XaiModels
     | SpeechmaticsModels
     | InworldModels
+    | GoogleModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -474,23 +478,6 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
-        model: ElevenlabsModels,
-        *,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-    ) -> None: ...
-
-    @overload
-    def __init__(
-        self,
         model: XaiModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -543,6 +530,23 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
+        model: GoogleModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
         model: str,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
@@ -574,10 +578,10 @@ class STT(stt.STT):
             | DeepgramOptions
             | DeepgramFluxOptions
             | AssemblyaiOptions
-            | ElevenlabsOptions
             | XaiOptions
             | SpeechmaticsOptions
             | InworldOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -600,7 +604,8 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to Speechmatics models.
+                gateway on end of speech. Only applicable to the Speechmatics RT models
+                (enhanced/standard); linden-1 detects turns server-side.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -852,6 +857,7 @@ class SpeechStream(stt.SpeechStream):
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._vad: vad.VAD | None = vad_instance
+        self._session_update_tasks: set[asyncio.Task[None]] = set()
 
     def update_options(
         self,
@@ -887,7 +893,11 @@ class SpeechStream(stt.SpeechStream):
                 "type": "session.update",
                 "settings": settings,
             }
-            asyncio.ensure_future(self._send_session_update(update_msg))
+            # Hold the task: the loop only weakly references it, and a collected one
+            # means self._opts moved on while the server was never told.
+            task = asyncio.create_task(self._send_session_update(update_msg))
+            self._session_update_tasks.add(task)
+            task.add_done_callback(self._session_update_tasks.discard)
 
     def _on_end_of_speech(self) -> None:
         if self._pending_extra is not None:
@@ -1024,6 +1034,9 @@ class SpeechStream(stt.SpeechStream):
                 await utils.aio.gracefully_cancel(*tasks)
         finally:
             self._ws = None
+            if self._session_update_tasks:
+                await utils.aio.gracefully_cancel(*self._session_update_tasks)
+                self._session_update_tasks.clear()
             if ws is not None:
                 await ws.close()
             if vad_stream is not None:

@@ -183,8 +183,8 @@ class InterruptionOptions(TypedDict, total=False):
     speech classified as a backchannel by the adaptive detector is suppressed
     (events flagged as interruptions still pass through). Use a tuple to apply
     different values for start and end separately. ``None`` disables. Defaults
-    to ``(1.0, 1.0)``. End value accounts for STT transcript timestamp
-    inaccuracy."""
+    to ``(1.0, 1.0)``. The end value preserves transcripts received near the
+    end of agent speech."""
 
 
 _INTERRUPTION_DEFAULTS: InterruptionOptions = {

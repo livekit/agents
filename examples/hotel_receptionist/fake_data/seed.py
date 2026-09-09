@@ -33,11 +33,11 @@ ROOMS = [
     ("RM_203", "king", 24000, 2, 1, 0, "city"),
     ("RM_204", "queen_2beds", 22000, 4, 0, 0, "city"),
     ("RM_205", "queen_2beds", 22000, 4, 0, 1, "garden"),
-    ("RM_206", "double_queen", 26000, 4, 0, 0, "ocean"),
+    ("RM_206", "queen_2beds", 26000, 4, 0, 0, "ocean"),
     ("RM_301", "king", 28000, 2, 0, 0, "ocean"),
     ("RM_302", "king", 28000, 2, 0, 0, "ocean"),
     ("RM_303", "queen_2beds", 24000, 4, 0, 0, "city"),
-    ("RM_304", "double_queen", 28000, 4, 0, 1, "ocean"),
+    ("RM_304", "queen_2beds", 28000, 4, 0, 1, "ocean"),
     ("RM_401", "suite", 48000, 4, 0, 1, "ocean"),
     ("RM_402", "suite", 52000, 4, 0, 0, "ocean"),
     ("RM_PH", "penthouse", 120000, 6, 0, 1, "ocean"),
@@ -86,9 +86,11 @@ BOOKINGS = [
     # a lower rate than Kenji Tanaka's king, so the walk resolver correctly
     # never offers it to him and his walk scenario stays intact.
     # --- Double-booked next weekend, but the house can absorb it -----------
-    # Tom Whelan's double queen (206) collides with Grace Lin's stay, and the
-    # other double queen (304) is blocked by Noah Petrov - so the only room
-    # that fits his family of four is the suite: the free-upgrade scenario.
+    # Tom Whelan's ocean queen (206) collides with Grace Lin's stay, and the
+    # other ocean queen (304) is blocked by Noah Petrov. The resolver only
+    # considers rooms at or above the rate already paid, so the city/garden
+    # queens stay out of reach despite fitting four and being free, and the
+    # cheapest room left to it is the suite: the free-upgrade scenario.
     ("Tom", "Whelan", "tom.whelan@gmail.com", "+1 415 555 0457", "TW55", "206", 4, 3, 4, [], "5126", "confirmed"),
     ("Grace", "Lin", "grace.lin@gmail.com", "+1 415 555 0463", "GL09", "206", 3, 3, 3, [], "8854", "confirmed"),
     ("Noah", "Petrov", "noah.petrov@gmail.com", "+1 415 555 0478", "NP66", "304", 3, 4, 4, [], "1937", "confirmed"),

@@ -201,7 +201,6 @@ examples:
           - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
           - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
           - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
-          - { value: elevenlabs/scribe_v2_realtime, label: ElevenLabs Scribe v2 Realtime }
           - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
           - { value: speechmatics/standard, label: Speechmatics Standard }
           - { value: xai/stt-1, label: xAI Speech-to-Text }
@@ -242,6 +241,8 @@ examples:
           - { value: xai/grok-4.20-0309-non-reasoning, label: Grok 4.20 }
           - { value: xai/grok-4.20-0309-reasoning, label: Grok 4.20 Reasoning }
           - { value: xai/grok-4.20-multi-agent-0309, label: Grok 4.20 Multi-Agent }
+          - { value: xai/grok-4.3, label: Grok 4.3 }
+          - { value: xai/grok-4.5, label: Grok 4.5 }
           - { value: deepseek-ai/deepseek-v3, label: DeepSeek-V3 }
           - { value: deepseek-ai/deepseek-v3.1, label: DeepSeek-V3.1 }
           - { value: deepseek-ai/deepseek-v3.2, label: DeepSeek-V3.2 }
@@ -258,18 +259,12 @@ examples:
           - { value: cartesia/sonic-turbo, label: Cartesia Sonic Turbo }
           - { value: deepgram/aura, label: Deepgram Aura }
           - { value: deepgram/aura-2, label: Deepgram Aura-2 }
-          - { value: elevenlabs/eleven_flash_v2, label: ElevenLabs Flash v2 }
-          - { value: elevenlabs/eleven_flash_v2_5, label: ElevenLabs Flash v2.5 }
-          - { value: elevenlabs/eleven_multilingual_v2, label: ElevenLabs Multilingual v2 }
-          - { value: elevenlabs/eleven_turbo_v2, label: ElevenLabs Turbo v2 }
-          - { value: elevenlabs/eleven_turbo_v2_5, label: ElevenLabs Turbo v2.5 }
-          - { value: elevenlabs/eleven_v3, label: ElevenLabs v3 }
           - { value: inworld/inworld-tts-1, label: Inworld TTS 1 }
           - { value: inworld/inworld-tts-1-max, label: Inworld TTS 1 Max }
           - { value: inworld/inworld-tts-1.5-mini, label: Inworld TTS 1.5 Mini }
           - { value: inworld/inworld-tts-1.5-max, label: Inworld TTS 1.5 Max }
           - { value: inworld/inworld-tts-2, label: Inworld TTS 2 }
-          - { value: rime/arcana, label: Rime Arcana }
+          - { value: rime/coda, label: Rime Coda }
           - { value: rime/mist, label: Rime Mist }
           - { value: rime/mistv2, label: Rime Mist v2 }
           - { value: rime/mistv3, label: Rime Mist v3 }

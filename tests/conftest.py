@@ -2,6 +2,7 @@ import asyncio
 import dataclasses
 import logging
 import re
+import sys
 from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
@@ -22,6 +23,9 @@ from .virtual_time import (  # noqa: F401  (re-exported so pytest discovers the 
 )
 
 TEST_CONNECT_OPTIONS = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
+
+# highest fd soft limit the room tests survive on macOS
+_MAX_OPEN_FILES = 8192
 
 # Category names are the pytest markers declared in pyproject.toml — the single
 # source of truth. They're read from the file rather than via config.getini()
@@ -128,10 +132,23 @@ def _uncategorized_modules(config: pytest.Config) -> list[Path]:
     return offenders
 
 
+def _clamp_open_file_limit() -> None:
+    """Cap the fd soft limit on macOS, where a large one deadlocks concurrent `Room.connect`."""
+    if sys.platform != "darwin":
+        return
+
+    import resource  # unix-only
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft > _MAX_OPEN_FILES:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (_MAX_OPEN_FILES, hard))
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Handle `--list-categories` before any collection/import happens."""
     _module_facts.cache_clear()
     _register_virtual_time_marker(config)
+    _clamp_open_file_limit()
 
     if not config.getoption("--list-categories"):
         return

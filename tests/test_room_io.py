@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import utils
+from livekit.agents import NOT_GIVEN, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -20,7 +20,12 @@ from livekit.agents.voice.room_io._output import (
     _ParticipantTranscriptionOutput,
 )
 from livekit.agents.voice.room_io.room_io import RoomIO
-from livekit.agents.voice.room_io.types import NoiseCancellationParams
+from livekit.agents.voice.room_io.types import (
+    AudioInputOptions,
+    NoiseCancellationParams,
+    RoomOptions,
+)
+from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -59,12 +64,28 @@ class _FakeRoom:
 
 
 class _MockAudioStream:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.ended = asyncio.Event()
+
     def __aiter__(self):
         return self
 
     async def __anext__(self):
+        self.started.set()
+        await self.ended.wait()
         raise StopAsyncIteration
 
+    async def aclose(self) -> None:
+        self.end()
+
+    def end(self) -> None:
+        if self.ended.is_set():
+            return
+        self.ended.set()
+
+
+class _NonClosingMockAudioStream(_MockAudioStream):
     async def aclose(self) -> None:
         pass
 
@@ -131,11 +152,16 @@ def _make_track_available_args(
     identity: str = "test-user", sid: str = "TR_123"
 ) -> tuple[MagicMock, MagicMock, MagicMock]:
     track = MagicMock()
+    track.sid = sid
     publication = MagicMock()
     publication.source = rtc.TrackSource.SOURCE_MICROPHONE
     publication.sid = sid
+    publication.track = track
+    publication.subscribed = True
+    publication.audio_features = []
     participant = MagicMock()
     participant.identity = identity
+    participant.track_publications = {sid: publication}
     return track, publication, participant
 
 
@@ -157,17 +183,48 @@ def _make_audio_input_stream(
 
 
 @pytest.mark.asyncio
-async def test_participant_input_stream_aclose_unregisters_track_unpublished() -> None:
+async def test_participant_input_stream_aclose_unregisters_track_events() -> None:
     room = _FakeRoom()
     stream = _NoopAudioInputStream(room)
 
     assert room.listener_count("track_subscribed") == 1
+    assert room.listener_count("track_unsubscribed") == 1
     assert room.listener_count("track_unpublished") == 1
 
     await stream.aclose()
 
     assert room.listener_count("track_subscribed") == 0
+    assert room.listener_count("track_unsubscribed") == 0
     assert room.listener_count("track_unpublished") == 0
+
+
+@pytest.mark.asyncio
+async def test_audio_input_aclose_cancels_superseded_forward_task() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+    old_stream = _NonClosingMockAudioStream()
+    new_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[old_stream, new_stream],
+    ):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(old_stream.started.wait(), timeout=1)
+        old_forward_task = audio_input._forward_atask
+        assert old_forward_task is not None
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await audio_input.aclose()
+
+    old_forward_task_done = old_forward_task.done()
+    if not old_forward_task_done:
+        await utils.aio.cancel_and_wait(old_forward_task)
+    assert old_forward_task_done
 
 
 @pytest.mark.asyncio
@@ -257,7 +314,339 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room_io._agent_tr_output.aclose.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ("noise_cancellation", "auto_gain_control", "expected_auto_gain_control"),
+    [
+        (None, NOT_GIVEN, True),
+        (rtc.NoiseCancellationOptions(module_id="bvc", options={}), NOT_GIVEN, False),
+        (lambda _params: None, NOT_GIVEN, True),
+        (lambda _params: None, False, False),
+        (rtc.NoiseCancellationOptions(module_id="bvc", options={}), True, True),
+        (None, False, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_roomio_resolves_auto_gain_control(
+    noise_cancellation,
+    auto_gain_control,
+    expected_auto_gain_control: bool,
+) -> None:
+    room = _FakeRoom()
+    agent_session = SimpleNamespace(
+        on=MagicMock(),
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(
+        agent_session,
+        room,
+        options=RoomOptions(
+            audio_input=AudioInputOptions(
+                noise_cancellation=noise_cancellation,
+                auto_gain_control=auto_gain_control,
+                pre_connect_audio=False,
+            ),
+            video_input=False,
+            audio_output=False,
+            text_output=False,
+        ),
+    )
+    audio_input = SimpleNamespace(aclose=AsyncMock())
+
+    with patch(
+        "livekit.agents.voice.room_io.room_io._ParticipantAudioInputStream",
+        return_value=audio_input,
+    ) as create_audio_input:
+        await room_io.start()
+
+    assert create_audio_input.call_args.kwargs["auto_gain_control"] is expected_auto_gain_control
+    await room_io.aclose()
+
+
 # -- frame processor lifecycle tests ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_audio_input_replaces_concrete_track_for_same_publication() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+    old_stream = _MockAudioStream()
+    new_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track", side_effect=[old_stream, new_stream]
+    ) as create_stream:
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(old_stream.started.wait(), timeout=1)
+
+        publication.track = None
+        publication.subscribed = False
+        audio_input._on_track_unsubscribed(old_track, publication, participant)
+        await asyncio.wait_for(old_stream.ended.wait(), timeout=1)
+
+        publication.track = new_track
+        publication.subscribed = True
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(new_stream.started.wait(), timeout=1)
+
+    assert create_stream.call_count == 2
+    assert audio_input._stream is new_stream
+    assert audio_input._track is new_track
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_ignores_duplicate_event_for_active_track() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+
+        assert not audio_input._on_track_available(track, publication, participant)
+
+    create_stream.assert_called_once()
+    assert audio_input._stream is rtc_stream
+    assert audio_input._track is track
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stale_track_unsubscribe_does_not_close_replacement() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+    old_stream = _MockAudioStream()
+    new_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=[old_stream, new_stream]):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(old_stream.started.wait(), timeout=1)
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(new_stream.started.wait(), timeout=1)
+
+        audio_input._on_track_unsubscribed(old_track, publication, participant)
+        await asyncio.sleep(0)
+
+    assert audio_input._stream is new_stream
+    assert audio_input._track is new_track
+    assert not new_stream.ended.is_set()
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_audio_input_closes_active_track_on_unsubscribe() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream) as create_stream:
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+
+        publication.subscribed = False
+        publication.track = None
+        audio_input._on_track_unsubscribed(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.ended.wait(), timeout=1)
+
+    create_stream.assert_called_once()
+    assert audio_input._stream is None
+    assert audio_input._track is None
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_runs_once_across_concrete_track_replacement() -> None:
+    room = _FakeRoom()
+    pre_connect_audio_handler = SimpleNamespace(wait_for_data=AsyncMock(return_value=[]))
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=pre_connect_audio_handler,
+    )
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    new_track = MagicMock()
+    new_track.sid = publication.sid
+    initial_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[initial_stream, replacement_stream],
+    ):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(initial_stream.started.wait(), timeout=1)
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+    pre_connect_audio_handler.wait_for_data.assert_awaited_once_with(publication.sid)
+
+    await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_retries_after_track_switch_cancels_fetch() -> None:
+    room = _FakeRoom()
+    first_fetch_started = asyncio.Event()
+    fetch_count = 0
+
+    async def wait_for_data(_track_id: str) -> list[rtc.AudioFrame]:
+        nonlocal fetch_count
+        fetch_count += 1
+        if fetch_count == 1:
+            first_fetch_started.set()
+            await asyncio.Event().wait()
+        return []
+
+    pre_connect_audio_handler = SimpleNamespace(wait_for_data=AsyncMock(side_effect=wait_for_data))
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=pre_connect_audio_handler,
+    )
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    new_track = MagicMock()
+    new_track.sid = publication.sid
+    initial_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[initial_stream, replacement_stream],
+    ):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(first_fetch_started.wait(), timeout=1)
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+    await audio_input.aclose()
+    assert pre_connect_audio_handler.wait_for_data.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_pre_connect_audio_does_not_retry_after_timeout() -> None:
+    room = _FakeRoom()
+    pre_connect_audio_handler = SimpleNamespace(
+        wait_for_data=AsyncMock(side_effect=asyncio.TimeoutError)
+    )
+    audio_input = _ParticipantAudioInputStream(
+        room,
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=None,
+        auto_gain_control=False,
+        pre_connect_audio_handler=pre_connect_audio_handler,
+    )
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    new_track = MagicMock()
+    new_track.sid = publication.sid
+    initial_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[initial_stream, replacement_stream],
+    ):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(initial_stream.started.wait(), timeout=1)
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+
+    await audio_input.aclose()
+    assert pre_connect_audio_handler.wait_for_data.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_audio_input_does_not_flush_silence_when_detached() -> None:
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+
+    with patch("livekit.rtc.AudioStream.from_track", return_value=rtc_stream):
+        assert audio_input._on_track_available(track, publication, participant)
+        await asyncio.wait_for(rtc_stream.started.wait(), timeout=1)
+        audio_input.on_detached()
+        rtc_stream.end()
+        assert audio_input._forward_atask is not None
+        await audio_input._forward_atask
+
+    queued_frames = audio_input._data_ch.qsize()
+    await audio_input.aclose()
+    assert queued_frames == 0
+
+
+@pytest.mark.asyncio
+async def test_selector_processor_lifecycle_across_concrete_track_replacement() -> None:
+    room = _FakeRoom()
+    processors: list[_MockFrameProcessor] = []
+
+    def selector(_params: NoiseCancellationParams) -> _MockFrameProcessor:
+        processor = _MockFrameProcessor()
+        processors.append(processor)
+        return processor
+
+    audio_input = _make_audio_input_stream(room, noise_cancellation=selector)
+    audio_input.set_participant("test-user")
+    old_track, publication, participant = _make_track_available_args()
+    new_track = MagicMock()
+    initial_stream = _MockAudioStream()
+    replacement_stream = _MockAudioStream()
+
+    with patch(
+        "livekit.rtc.AudioStream.from_track",
+        side_effect=[initial_stream, replacement_stream],
+    ):
+        assert audio_input._on_track_available(old_track, publication, participant)
+        await asyncio.wait_for(initial_stream.started.wait(), timeout=1)
+
+        publication.track = new_track
+        assert audio_input._on_track_available(new_track, publication, participant)
+        await asyncio.wait_for(replacement_stream.started.wait(), timeout=1)
+        assert processors[0].close_calls == 1
+
+    assert len(processors) == 2
+    assert [processor.close_calls for processor in processors] == [1, 0]
+
+    await audio_input.aclose()
+    assert [processor.close_calls for processor in processors] == [1, 1]
 
 
 @pytest.mark.asyncio
@@ -343,6 +732,7 @@ async def test_selector_processor_track_disappears() -> None:
     assert stream._processor is processor
 
     # track unpublished with no replacement
+    participant.track_publications.clear()
     stream._on_track_unavailable(publication, participant)
 
     assert processor.close_calls == 1

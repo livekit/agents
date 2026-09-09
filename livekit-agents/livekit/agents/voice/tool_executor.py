@@ -424,8 +424,7 @@ class _ToolExecutor:
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
-        session.emit(
-            "tool_execution_updated",
+        session._tool_execution_updated(
             ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
         )
 
@@ -460,8 +459,7 @@ class _ToolExecutor:
                 status, message = "done", str(output)
 
             entry_id = call_id + "_final" if run_ctx._updates else call_id
-            session.emit(
-                "tool_execution_updated",
+            session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(
                     update=ToolCallEnded(
                         id=entry_id, call_id=call_id, message=message, status=status
@@ -601,8 +599,7 @@ class _ToolExecutor:
             tool_choice="none",
             chat_ctx=chat_ctx,
         )
-        session.emit(
-            "tool_execution_updated",
+        session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
                     update_ids=call_ids, status="scheduled", speech_id=speech.id
@@ -639,8 +636,7 @@ class _ToolExecutor:
                 )
                 # TODO(long): reschedule interrupted replies?
 
-            session.emit(
-                "tool_execution_updated",
+            session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(
                     update=ToolReplyUpdated(
                         update_ids=call_ids, status=reply_status, speech_id=speech.id

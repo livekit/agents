@@ -385,7 +385,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif mtype == "Metadata":
                         pass
                     else:
-                        logger.warning("Unknown Deepgram message type: %s", resp)
+                        logger.warning("Unknown Deepgram message type", extra={"lk.pii.data": resp})
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._acquire_time = self._tts._pool.last_acquire_time

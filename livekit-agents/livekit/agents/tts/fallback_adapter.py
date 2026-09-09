@@ -179,7 +179,8 @@ class FallbackChunkedStream(ChunkedStream):
         self._fallback_adapter = tts
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        pass  # do nothing
+        async for _ in event_aiter:
+            pass
 
     async def _try_synthesize(
         self, *, tts: TTS, recovering: bool = False
@@ -312,7 +313,8 @@ class FallbackSynthesizeStream(SynthesizeStream):
         self._pushed_tokens: list[str] = []
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
-        pass  # do nothing
+        async for _ in event_aiter:
+            pass
 
     async def _try_synthesize(
         self,

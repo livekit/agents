@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any
 
+from ..log import _add_global_log_fields
 from ..plugin import Plugin
 
 # noisy loggers are set to warn by default
@@ -229,6 +230,7 @@ def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = 
         json_formatter = JsonFormatter()
         handler.setFormatter(json_formatter)
 
+    _add_global_log_fields(handler)
     root.addHandler(handler)
     root.setLevel(log_level)
 
