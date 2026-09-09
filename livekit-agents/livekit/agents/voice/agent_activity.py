@@ -2350,13 +2350,23 @@ class AgentActivity(RecognitionHooks):
         ):
             self._interrupt_by_audio_activity()
 
-            if (
-                speaking is False
-                and self._paused_speech
-                and (timeout := self._session.options.interruption["false_interruption_timeout"])
-                is not None
-            ):
-                # schedule a resume timer if interrupted after end_of_speech
+        # PREFLIGHT_TRANSCRIPT is also routed here. Late interim/preflight after
+        # VAD end-of-speech must clear the false-interruption timer so the agent
+        # does not resume while STT is still producing the user's utterance
+        # (e.g. Deepgram Flux). Re-arm only when speaking has already ended.
+        if (
+            ev.alternatives[0].text
+            and self._paused_speech
+            and self._turn_detection
+            not in (
+                "manual",
+                "realtime_llm",
+            )
+            and (timeout := self._session.options.interruption["false_interruption_timeout"])
+            is not None
+        ):
+            self._cancel_false_interruption_timer()
+            if speaking is False:
                 self._start_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:

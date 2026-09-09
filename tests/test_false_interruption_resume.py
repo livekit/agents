@@ -14,8 +14,9 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, AgentSession, LanguageCode, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -385,3 +386,114 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+def _stt_style_session() -> AgentSession:
+    """Realtime LLM with user_transcription off so STT interim hooks run (VAD present)."""
+    return AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(turn_detection=False, user_transcription=False)
+        ),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+
+def _interim_event(text: str = "hello there") -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode("en"))],
+    )
+
+
+def _preflight_event(text: str = "hello there") -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode("en"))],
+    )
+
+
+async def test_interim_transcript_clears_false_interruption_timer_while_speaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With VAD, a mid-utterance pause arms the resume timer on end_of_speech. A later
+    # interim transcript must clear it so the agent does not resume over real STT.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    assert activity._false_interruption_timer is not None
+
+    activity.on_interim_transcript(_interim_event(), speaking=True)
+    assert activity._false_interruption_timer is None
+    assert activity._false_interruption_pending is False
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert events == []
+    assert activity._paused_speech is not None
+
+
+async def test_interim_transcript_rearms_timer_after_end_of_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    activity.on_end_of_speech(None)
+    t0 = time.time()
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(), speaking=False)
+    assert activity._false_interruption_timer is not None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    # Timer was re-armed from the interim, so resume is delayed past the first timeout.
+    assert events[0][1] - t0 > FALSE_INTERRUPTION_TIMEOUT * 0.9
+
+
+async def test_preflight_transcript_clears_false_interruption_timer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[str] = []
+    session.on("agent_false_interruption", lambda _: events.append("resume"))
+
+    activity.on_end_of_speech(None)
+    # AudioRecognition routes PREFLIGHT through on_interim_transcript
+    activity.on_interim_transcript(_preflight_event(), speaking=True)
+    assert activity._false_interruption_timer is None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert events == []
