@@ -121,6 +121,10 @@ class SpeechHandle:
         interruption requests until re-enabled. If the handle is already
         interrupted, clearing interruptions is not allowed.
 
+        While one or more ``hold_interruptions()`` holders are active, assignments
+        update the value restored after the final release; the effective
+        interruption state stays False until then.
+
         Args:
             value (bool): True to allow interruptions, False to disallow.
 
@@ -131,6 +135,11 @@ class SpeechHandle:
             raise RuntimeError(
                 "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"
             )
+
+        if self._interruption_holds > 0:
+            # Keep the hold effective; remember what to restore on final release.
+            self._interruption_holds_restore = value
+            return
 
         self._allow_interruptions = value
 
@@ -162,7 +171,9 @@ class SpeechHandle:
         """Temporarily disallow interruptions on this speech (counted, restoring).
 
         Nested or overlapping holders compose: the first holder remembers the previous
-        ``allow_interruptions`` value and the last release restores it.
+        ``allow_interruptions`` value and the last release restores it. Assignments to
+        ``allow_interruptions`` during a hold update that restored value; the effective
+        state stays False until the final release.
         ``interrupt(force=True)`` still cuts through a hold.
 
         Yields:

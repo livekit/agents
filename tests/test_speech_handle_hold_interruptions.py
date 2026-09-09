@@ -51,3 +51,50 @@ def test_force_interrupt_bypasses_hold() -> None:
     with handle.hold_interruptions():
         handle.interrupt(force=True)
         assert handle.interrupted
+
+
+def test_allow_interruptions_true_during_hold_restores_after_release() -> None:
+    handle = SpeechHandle.create(allow_interruptions=False)
+
+    with handle.hold_interruptions():
+        assert handle.allow_interruptions is False
+        handle.allow_interruptions = True
+        # assignment is deferred; hold stays effective
+        assert handle.allow_interruptions is False
+        with pytest.raises(RuntimeError, match="does not allow interruptions"):
+            handle.interrupt()
+
+    assert handle.allow_interruptions is True
+    handle.interrupt()
+    assert handle.interrupted
+
+
+def test_allow_interruptions_false_during_nested_holds_restores_after_final() -> None:
+    handle = SpeechHandle.create(allow_interruptions=True)
+
+    with handle.hold_interruptions():
+        assert handle.allow_interruptions is False
+        handle.allow_interruptions = True
+        assert handle.allow_interruptions is False
+        with handle.hold_interruptions():
+            handle.allow_interruptions = False
+            assert handle.allow_interruptions is False
+        # outer still holds; still not interruptible
+        assert handle.allow_interruptions is False
+        with pytest.raises(RuntimeError, match="does not allow interruptions"):
+            handle.interrupt()
+
+    assert handle.allow_interruptions is False
+    with pytest.raises(RuntimeError, match="does not allow interruptions"):
+        handle.interrupt()
+
+
+def test_force_interrupt_still_works_after_deferred_true_assignment() -> None:
+    handle = SpeechHandle.create(allow_interruptions=True)
+
+    with handle.hold_interruptions():
+        handle.allow_interruptions = True
+        assert handle.allow_interruptions is False
+        handle.interrupt(force=True)
+        assert handle.interrupted
+
