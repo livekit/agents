@@ -11,10 +11,12 @@ import pytest
 
 import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
+from livekit.agents.inference import FallbackActivatedEvent
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import (
     TTS,
     FallbackModel,
+    _build_session_create_payload,
     _normalize_fallback,
     _parse_model_string,
 )
@@ -218,3 +220,147 @@ async def test_dial_carries_model_and_session_id(monkeypatch: pytest.MonkeyPatch
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+@pytest.mark.parametrize("fallback", [None, []])
+def test_session_create_omits_empty_fallback(fallback: list[str] | None) -> None:
+    kwargs = {} if fallback is None else {"fallback": fallback}
+
+    payload = _build_session_create_payload(_make_tts(**kwargs)._opts)
+
+    assert payload == {
+        "type": "session.create",
+        "sample_rate": "24000",
+        "encoding": "pcm_s16le",
+        "extra": {},
+        "model": "cartesia/sonic-3",
+        "connection": {"timeout": 10.0, "retries": 3},
+    }
+
+
+@pytest.mark.parametrize("fallback", [None, []])
+def test_session_create_can_disable_system_fallback_without_models(
+    fallback: list[str] | None,
+) -> None:
+    kwargs: dict[str, Any] = {"disable_system_default_fallback": True}
+    if fallback is not None:
+        kwargs["fallback"] = fallback
+
+    payload = _build_session_create_payload(_make_tts(**kwargs)._opts)
+
+    assert payload["fallback"] == {
+        "models": [],
+        "disable_system_default_fallback": True,
+    }
+
+
+@pytest.mark.parametrize("disable_system_default_fallback", [False, True])
+def test_session_create_maps_fallback_models_exactly(
+    disable_system_default_fallback: bool,
+) -> None:
+    tts = _make_tts(
+        fallback=[
+            "deepgram/aura-2:asteria",
+            FallbackModel(
+                model="rime/mistv3",
+                voice="speaker-1",
+                extra_kwargs={"speed_alpha": 0.9},
+            ),
+        ],
+        disable_system_default_fallback=disable_system_default_fallback,
+    )
+
+    payload = _build_session_create_payload(tts._opts)
+
+    assert payload["fallback"] == {
+        "models": [
+            {"model": "deepgram/aura-2", "voice": "asteria", "extra": {}},
+            {
+                "model": "rime/mistv3",
+                "voice": "speaker-1",
+                "extra": {"speed_alpha": 0.9},
+            },
+        ],
+        **({"disable_system_default_fallback": True} if disable_system_default_fallback else {}),
+    }
+
+
+def _fallback_notice(**overrides: Any) -> dict[str, Any]:
+    return {
+        "type": "fallback_activated",
+        "session_id": "s",
+        "fallback_type": "fallback",
+        "provider": "deepgram",
+        "model": "deepgram/aura-2",
+        "voice": "asteria",
+        "cause": "provider_error",
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fallback_type", "cause", "expected_fallback_type", "expected_cause"),
+    [
+        ("fallback", "quota_exceeded", "fallback", "quota_exceeded"),
+        ("future_type", "future_cause", "unknown", "unknown"),
+    ],
+)
+async def test_emits_fallback_activated_event(
+    fallback_type: str,
+    cause: str,
+    expected_fallback_type: str,
+    expected_cause: str,
+) -> None:
+    tts = _make_tts()
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("fallback_activated", fallback_events.append)
+
+    notice = _fallback_notice(fallback_type=fallback_type, cause=cause)
+    audio_events = await _synthesize(tts, [notice, _AUDIO, {"type": "done"}], "hello")
+
+    assert fallback_events == [
+        FallbackActivatedEvent(
+            session_id="s",
+            fallback_type=expected_fallback_type,
+            provider="deepgram",
+            model="deepgram/aura-2",
+            voice="asteria",
+            cause=expected_cause,
+        )
+    ]
+    assert audio_events
+
+
+@pytest.mark.parametrize(
+    ("missing_field", "overrides"),
+    [
+        ("provider", {}),
+        ("fallback_type", {}),
+        (None, {"fallback_type": 1}),
+        ("cause", {}),
+        (None, {"cause": []}),
+    ],
+)
+async def test_malformed_fallback_notice_does_not_interrupt_audio(
+    missing_field: str | None,
+    overrides: dict[str, Any],
+) -> None:
+    notice = _fallback_notice(**overrides)
+    if missing_field is not None:
+        notice.pop(missing_field)
+    tts = _make_tts()
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("fallback_activated", fallback_events.append)
+
+    audio_events = await _synthesize(tts, [notice, _AUDIO, {"type": "done"}], "hello")
+
+    assert fallback_events == []
+    assert audio_events
+
+
+async def test_unknown_gateway_message_remains_harmless() -> None:
+    future = {"type": "future_message", "session_id": "s", "data": "ignored"}
+
+    audio_events = await _synthesize(_make_tts(), [future, _AUDIO, {"type": "done"}], "hello")
+
+    assert audio_events
