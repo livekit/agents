@@ -104,6 +104,7 @@ from .turn import (
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
+    from .amd import AMD
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -1495,8 +1496,8 @@ class AgentActivity(RecognitionHooks):
         should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
         # When discarding, substitute silence on the paths that would otherwise
-        # see contaminated/echoed audio (STT, realtime model) so the downstream
-        # stream stays continuous. VAD, AMD and the interruption detector keep
+        # see contaminated/echoed audio (session/AMD STT, realtime model) so the downstream
+        # stream stays continuous. VAD and the interruption detector keep
         # receiving the real frame so they can still react to the user.
         stt_frame: rtc.AudioFrame | None = None
         if should_discard:
@@ -1619,6 +1620,8 @@ class AgentActivity(RecognitionHooks):
                     tool_choice = "none"
 
         all_tools = self.tools.copy()
+        if self._session.amd is not None:
+            all_tools = self._session.amd._reply_tools(all_tools)
 
         # resolve tool names to Tool objects if tools param is given
         resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
@@ -2499,14 +2502,16 @@ class AgentActivity(RecognitionHooks):
 
         old_task = self._user_turn_completed_atask
         self._user_turn_completed_atask = self._create_speech_task(
-            self._user_turn_completed_task(old_task, info),
+            self._user_turn_completed_task(old_task, info, amd),
             name="AgentActivity._user_turn_completed_task",
         )
+        if amd is not None:
+            self._user_turn_completed_atask.add_done_callback(lambda _: amd._rearm_idle())
         return True
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
+        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo, amd: AMD | None = None
     ) -> None:
         if old_task is not None:
             # We never cancel user code as this is very confusing.
@@ -2601,6 +2606,13 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
+        if amd is not None and not await amd._prepare_reply(info, temp_mutable_chat_ctx):
+            self._cancel_preemptive_generation()
+            if info.new_transcript:
+                self._agent._chat_ctx.insert(user_message)
+                self._session._conversation_item_added(user_message)
+            return
+
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
@@ -2666,6 +2678,9 @@ class AgentActivity(RecognitionHooks):
             # lose data like the beginning of a user speech).
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt()
+
+        if amd is not None:
+            amd._on_reply_created(speech_handle, info.amd_turn_id)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):

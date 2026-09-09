@@ -75,6 +75,7 @@ class _EndOfTurnInfo:
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
+    amd_turn_id: int | None = None
 
 
 def _compute_end_of_turn_metrics(
@@ -727,9 +728,12 @@ class AudioRecognition:
 
         When ``stt_frame`` is provided, it is sent to the STT pipeline in place of
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
-        speech). VAD, AMD and the interruption channel always receive ``frame``.
+        speech). VAD and the interruption channel always receive ``frame``.
+        The optional AMD STT receives the same input as session STT.
         """
         self._sample_rate = frame.sample_rate
+        if self._session.amd is not None and self._session.amd._discard_pre_answer_audio:
+            return
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
@@ -740,7 +744,7 @@ class AudioRecognition:
             self._vad_ch.send_nowait(frame)
 
         if self._session.amd is not None:
-            self._session.amd.push_audio(frame)
+            self._session.amd.push_audio(stt_frame if stt_frame is not None else frame)
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)

@@ -24,10 +24,13 @@ async def send_dtmf_events(
     except RuntimeError:
         room = get_job_context().room
 
+    amd = ctx.session.amd
     for event in events:
         try:
             code = dtmf_event_to_code(event)
             await room.local_participant.publish_dtmf(code=code, digit=event.value)
+            if amd is not None and ctx.session.amd is amd:
+                amd.notify_dtmf_sent(event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
         except Exception as e:
             return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"

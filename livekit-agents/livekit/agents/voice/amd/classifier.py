@@ -28,6 +28,7 @@ MAX_EXTENSION_SECS = 10.0
 class AMDCategory(str, Enum):
     HUMAN = "human"
     MACHINE_IVR = "machine-ivr"
+    MACHINE_SCREENING = "machine-screening"
     MACHINE_VM = "machine-vm"
     MACHINE_UNAVAILABLE = "machine-unavailable"
     UNCERTAIN = "uncertain"
@@ -40,6 +41,17 @@ class AMDPredictionEvent(BaseModel):
     reason: str
     transcript: str
     delay: float
+    turn_id: int = 0
+    prev_turn_category: AMDCategory | None = None
+    prev_stage_category: AMDCategory | None = None
+    state_changed: bool = False
+    inference_duration: float | None = None
+    should_wait: bool = False
+    voicemail_message_played: bool = False
+
+    @property
+    def detection_delay(self) -> float:
+        return self.delay
 
     @property
     def is_human(self) -> bool:
@@ -48,6 +60,7 @@ class AMDPredictionEvent(BaseModel):
     @property
     def is_machine(self) -> bool:
         return self.category in (
+            AMDCategory.MACHINE_SCREENING,
             AMDCategory.MACHINE_IVR,
             AMDCategory.MACHINE_VM,
             AMDCategory.MACHINE_UNAVAILABLE,
