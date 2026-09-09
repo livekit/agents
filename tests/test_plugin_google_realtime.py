@@ -836,3 +836,60 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         assert session._unsent_item_ids == set()
     finally:
         await session.aclose()
+
+
+async def test_audio_trailing_a_tool_call_does_not_start_a_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool call ends the turn, but the server keeps streaming audio that belongs to it.
+
+    Opening a generation for those frames interrupts the one still playing, so the reply
+    is committed truncated and the turn's usage lands on an empty generation (issue #7195).
+    """
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+
+        session._start_new_generation()
+        session._handle_server_content(_audio_content())
+        session._handle_tool_calls(_tool_call())
+        assert len(generations) == 1
+
+        # the trailing frame, and the events that close the turn behind it
+        trailing = _audio_content()
+        assert session._is_new_generation(types.LiveServerMessage(server_content=trailing)) is False
+        session._handle_server_content(trailing)
+        session._handle_server_content(types.LiveServerContent(generation_complete=True))
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert len(generations) == 1, "the finished turn's audio must not open a new one"
+        assert await _drain_generation(generations[0]) == ("", 1, ["lookup"])
+
+
+async def test_the_next_real_turn_still_opens_a_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The suppression lasts only until the turn actually ends."""
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        assert session._turn_ended_by_tool_call
+
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+        assert not session._turn_ended_by_tool_call
+        assert session._is_new_generation(types.LiveServerMessage(server_content=_audio_content()))
+
+
+async def test_generate_reply_after_a_tool_call_is_not_suppressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply asked for right after a tool call is a new turn, whatever ended the last one."""
+    async with _make_connected_session(monkeypatch) as session:
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        assert session._turn_ended_by_tool_call
+
+        fut = session.generate_reply()
+        assert not session._turn_ended_by_tool_call
+        assert session._is_new_generation(types.LiveServerMessage(server_content=_audio_content()))
+        fut.cancel()
