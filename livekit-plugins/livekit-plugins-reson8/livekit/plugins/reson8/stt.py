@@ -640,12 +640,19 @@ class SpeechStream(stt.RecognizeStream):
 
         ``aclose`` cancels the run task instead of closing the input channel
         cleanly, so it never reaches this and stays immediate.
+
+        Running out of time is a lost turn, not a clean finish, so it raises.
+        The audio is already consumed from the input channel, which is why the
+        error is not retryable: another attempt has nothing left to send.
         """
 
         try:
             await asyncio.wait_for(self._turn_settled.wait(), self._conn_options.timeout)
         except asyncio.TimeoutError:
-            logger.warning("Reson8 did not finalise the last turn before input closed")
+            raise APITimeoutError(
+                "Reson8 did not finalise the last turn before input closed",
+                retryable=False,
+            ) from None
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

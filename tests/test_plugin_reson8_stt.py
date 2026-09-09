@@ -1125,6 +1125,34 @@ async def test_a_close_before_the_final_turn_is_an_error(
     await stream.aclose()
 
 
+async def test_a_finalisation_timeout_is_an_error(
+    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Running out of time is a lost turn, not a clean finish.
+
+    The server here accepts the flush and simply never answers, which is the
+    case a bounded wait exists for. Returning quietly would hand the caller an
+    empty result indistinguishable from silence.
+    """
+
+    base_url = await finalizing_server(answer_flush=False)
+    stream = _stt(base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+    )
+
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    with pytest.raises(APITimeoutError, match="finalise the last turn") as excinfo:
+        async with asyncio.timeout(10):
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.retryable is False
+    await stream.aclose()
+
+
 async def test_a_close_after_the_final_turn_is_clean(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
