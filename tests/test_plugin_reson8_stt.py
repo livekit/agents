@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
 
@@ -30,6 +30,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     stt,
+    utils,
 )
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import reson8
@@ -113,6 +114,7 @@ def make_stream() -> MakeStream:
         stream._speaking = False
         stream._candidate = None
         stream._pending_reconnect = False
+        stream._turn_settled = asyncio.Event()
         stream._start_time_offset = 0.0
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
@@ -226,6 +228,61 @@ async def reson8_server() -> AsyncIterator[StartServer]:
 
         rec.base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
         return rec
+
+    yield _start
+
+    for runner in runners:
+        await runner.cleanup()
+
+
+@pytest.fixture
+async def finalizing_server() -> AsyncIterator[Callable[[], Awaitable[str]]]:
+    """
+    A Reson8 stand-in that answers only after it sees ``flush_request``.
+
+    That is what asking Reson8 to finalise looks like from the server side: the
+    turn events arrive in response to the flush, not before it.
+    """
+
+    runners: list[web.AppRunner] = []
+
+    async def _start() -> str:
+        saw_flush = asyncio.Event()
+
+        async def turns(request: web.Request) -> web.StreamResponse:
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+
+            async def answer() -> None:
+                await saw_flush.wait()
+                await asyncio.sleep(0.05)  # finalising is not instant
+                for message in (
+                    {"type": "turn_start"},
+                    {"type": "turn_end_candidate", "text": "hello world"},
+                    {"type": "turn_end"},
+                ):
+                    await ws.send_str(json.dumps(message))
+
+            task = asyncio.create_task(answer())
+            try:
+                async for msg in ws:
+                    if msg.type is aiohttp.WSMsgType.TEXT and "flush_request" in msg.data:
+                        saw_flush.set()
+            finally:
+                await utils.aio.cancel_and_wait(task)
+
+            return ws
+
+        app = web.Application()
+        app.router.add_get(TURNS_PATH, turns)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+
+        runners.append(runner)
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+
+        return f"http://127.0.0.1:{runner.addresses[0][1]}"
 
     yield _start
 
@@ -949,6 +1006,83 @@ async def test_a_turn_over_the_wire(
     assert json.loads(server.text[0]) == {"type": "flush_request"}
     assert server.audio, "no audio frame reached the server"
     assert server.query["language"] == "en"
+
+
+async def test_end_input_waits_for_the_final_transcript(
+    finalizing_server: Callable[[], Awaitable[str]], client_session: aiohttp.ClientSession
+) -> None:
+    """
+    ``end_input`` queues a flush; the transcript answers it.
+
+    Closing the socket as soon as the input channel ends discards the turn_end
+    the flush asked for, and the caller sees the stream finish empty.
+    """
+
+    base_url = await finalizing_server()
+    stream = _stt(base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    events: list[stt.SpeechEvent] = []
+    try:
+        async with asyncio.timeout(10):
+            async for event in stream:
+                events.append(event)
+    finally:
+        await stream.aclose()
+
+    types = [e.type for e in events]
+    assert SpeechEventType.FINAL_TRANSCRIPT in types, f"stream ended with {types}"
+    final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
+    assert final.alternatives[0].text == "hello world"
+
+
+async def test_end_input_does_not_wait_when_nothing_was_sent(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    A stream that carried no audio has nothing to wait for.
+
+    The drain is bounded by the connect timeout, so gating it on outstanding
+    audio is what keeps an empty teardown from stalling for that long.
+    """
+
+    server = await reson8_server()
+    # a long drain deadline, so a wrong gate shows up as a hang not a pass
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=30)
+    )
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.end_input()
+
+    async with asyncio.timeout(5):
+        async for _ in stream:
+            pass
+
+    await stream.aclose()
+
+
+async def test_aclose_stays_immediate_with_a_turn_outstanding(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """``aclose`` cancels the run task, so it must not sit in the drain."""
+
+    server = await reson8_server()
+    # a long drain deadline, so a wrong gate shows up as a hang not a pass
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=0, timeout=30)
+    )
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.push_frame(_frame())
+    stream.flush()
+    await server.wait_for_text()
+
+    # audio is outstanding and the server will never answer it
+    async with asyncio.timeout(5):
+        await stream.aclose()
 
 
 async def test_usage_is_not_reported_without_audio(

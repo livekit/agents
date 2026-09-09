@@ -566,6 +566,7 @@ class SpeechStream(stt.RecognizeStream):
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.audio.sample_rate)
+
         self._opts = opts
         self._api_key = api_key
         self._base_url = base_url
@@ -573,6 +574,10 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
         self._pending_reconnect = False
+
+        self._turn_settled = asyncio.Event()
+        self._turn_settled.set()
+
         self._speaking = False
         # the most recent turn-end candidate, promoted to a final transcript
         # once the server confirms the turn ended
@@ -613,6 +618,25 @@ class SpeechStream(stt.RecognizeStream):
 
         super().push_frame(frame)
 
+    async def _await_final_turn(self) -> None:
+        """
+        Wait for Reson8 to answer the flush that ``end_input`` queued.
+
+        ``end_input`` queues a flush sentinel and then closes the input
+        channel, so the last thing the send task does is ask Reson8 to finalise
+        the audio it holds. Hanging up on the socket at that point would throw
+        away the turn_end that answers it, and the caller would see the stream
+        finish with no transcript at all.
+
+        ``aclose`` cancels the run task instead of closing the input channel
+        cleanly, so it never reaches this and stays immediate.
+        """
+
+        try:
+            await asyncio.wait_for(self._turn_settled.wait(), self._conn_options.timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Reson8 did not finalise the last turn before input closed")
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -645,10 +669,11 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _run(self) -> None:
         closing_ws = False
+        input_ended = False
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, input_ended
 
             try:
                 async for data in self._input_ch:
@@ -660,6 +685,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     for frame in frames:
                         self._speech_duration += frame.duration
+                        self._turn_settled.clear()
                         await ws.send_bytes(frame.data.tobytes())
 
                     if flushing:
@@ -669,6 +695,9 @@ class SpeechStream(stt.RecognizeStream):
                     return
 
                 raise
+
+            input_ended = True
+            await self._await_final_turn()
 
             closing_ws = True
             await ws.close()
@@ -682,7 +711,8 @@ class SpeechStream(stt.RecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._ensure_session().closed:
+                    if closing_ws or input_ended or self._ensure_session().closed:
+                        self._turn_settled.set()
                         return
 
                     raise APIConnectionError(
@@ -708,6 +738,7 @@ class SpeechStream(stt.RecognizeStream):
             self._speaking = False
             self._candidate = None
             self._pending_reconnect = False
+            self._turn_settled.set()
 
             try:
                 ws = await self._connect_ws()
@@ -798,6 +829,8 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
                 self._speech_duration = 0.0
+
+            self._turn_settled.set()
 
             if self._pending_reconnect:
                 self._pending_reconnect = False
