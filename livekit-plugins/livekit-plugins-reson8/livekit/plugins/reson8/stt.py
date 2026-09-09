@@ -795,7 +795,7 @@ class SpeechStream(stt.RecognizeStream):
             self.start_time = now
             connection_started = now
 
-            self._speaking = False
+            self._end_speaking()
             self._candidate = None
             self._pending_reconnect = False
             self._turn_settled.set()
@@ -887,9 +887,7 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
 
-            if self._speaking:
-                self._speaking = False
-                self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
+            self._end_speaking()
 
             if self._speech_duration > 0:
                 self._event_ch.send_nowait(
@@ -918,3 +916,10 @@ class SpeechStream(stt.RecognizeStream):
 
         self._speaking = True
         self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
+    def _end_speaking(self) -> None:
+        if not self._speaking:
+            return
+
+        self._speaking = False
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))

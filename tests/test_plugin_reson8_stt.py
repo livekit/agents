@@ -1597,6 +1597,51 @@ async def test_a_reconnect_keeps_audio_that_has_not_been_sent_yet(
     )
 
 
+async def test_a_dropped_socket_closes_out_the_open_turn(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    A turn interrupted by a retry must not leave speech open.
+
+    ``turn_detection="stt"`` commits the user turn on END_OF_SPEECH, so a
+    START_OF_SPEECH with no partner leaves the session believing the user is
+    still talking. ``_speaking`` outlives ``_run``, so the framework's retry
+    lands in the same place an internal redial does.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
+    )
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        stream.push_frame(_frame())
+        await server.send({"type": "turn_start"})
+        opening = await log.wait_for(1)
+        assert opening[0].type == SpeechEventType.START_OF_SPEECH
+
+        # the socket dies mid-turn; the framework retries _run
+        assert server._ws is not None
+        await server._ws.close()
+        await server.wait_for_connections(2)
+
+        events = await log.wait_for(2)
+        assert [e.type for e in events[:2]] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+
+        # and the replacement session can open a fresh turn
+        await server.send({"type": "turn_start"})
+        events = await log.wait_for(3)
+        assert events[2].type == SpeechEventType.START_OF_SPEECH
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_a_rejected_upgrade_surfaces_the_status_and_the_reason(
     reson8_server: StartServer,
     client_session: aiohttp.ClientSession,
