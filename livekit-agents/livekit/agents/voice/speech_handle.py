@@ -157,6 +157,23 @@ class SpeechHandle:
             with contextlib.suppress(RuntimeError):
                 self.allow_interruptions = self._interruption_holds_restore
 
+    @contextlib.contextmanager
+    def hold_interruptions(self) -> Generator[SpeechHandle, None, None]:
+        """Temporarily disallow interruptions on this speech (counted, restoring).
+
+        Nested or overlapping holders compose: the first holder remembers the previous
+        ``allow_interruptions`` value and the last release restores it.
+        ``interrupt(force=True)`` still cuts through a hold.
+
+        Yields:
+            SpeechHandle: this handle.
+        """
+        self._hold_interruptions()
+        try:
+            yield self
+        finally:
+            self._release_interruptions()
+
     @property
     def chat_items(self) -> list[llm.ChatItem]:
         return self._chat_items

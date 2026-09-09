@@ -2057,11 +2057,11 @@ class AgentActivity(RecognitionHooks):
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
-            # only out of sync when the server cancelled its own response, with client-side turn
-            # taking an uninterruptible speech is expected
+            # held / allow_interruptions=False speech is expected under server turn detection;
+            # force=True still cuts through. Avoid exception-level noise on that path.
             if self._rt_turn_detection_enabled:
-                logger.exception(
-                    "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
+                logger.debug(
+                    "RealtimeAPI input_speech_started while current speech is not interruptable"
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
