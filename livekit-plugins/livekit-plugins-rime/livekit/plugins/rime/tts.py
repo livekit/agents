@@ -639,6 +639,8 @@ class ChunkedStream(tts.ChunkedStream):
     def __init__(self, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         self._sample_rate = tts.sample_rate
         self._opts = copy.deepcopy(tts._opts)
+        self._base_url = tts._base_url
+        self._total_timeout = tts._total_timeout
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
 
@@ -658,7 +660,7 @@ class ChunkedStream(tts.ChunkedStream):
 
         try:
             async with self._tts._ensure_session().post(
-                self._tts._base_url,
+                self._base_url,
                 headers={
                     "accept": format,
                     "Authorization": f"Bearer {self._tts._api_key}",
@@ -666,7 +668,7 @@ class ChunkedStream(tts.ChunkedStream):
                 },
                 json=payload,
                 timeout=aiohttp.ClientTimeout(
-                    total=self._tts._total_timeout, sock_connect=self._conn_options.timeout
+                    total=self._total_timeout, sock_connect=self._conn_options.timeout
                 ),
             ) as resp:
                 resp.raise_for_status()

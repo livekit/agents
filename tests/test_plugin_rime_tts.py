@@ -10,7 +10,7 @@ import json
 import logging
 import traceback
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -278,6 +278,68 @@ async def test_chunked_stream_keeps_sample_rate_after_parent_update() -> None:
     assert payload["modelId"] == "coda"
     assert payload["samplingRate"] == 24000
     assert events[0].frame.sample_rate == 24000
+
+
+@pytest.mark.parametrize(
+    ("update_endpoint", "update_model"),
+    [(True, False), (False, True), (True, True)],
+    ids=["endpoint", "model", "endpoint-and-model"],
+)
+async def test_chunked_stream_keeps_endpoint_and_timeout_after_parent_update(
+    update_endpoint: bool, update_model: bool
+) -> None:
+    requests: list[tuple[str, str]] = []
+
+    async def synthesize(request: web.Request) -> web.Response:
+        payload = await request.json()
+        requests.append((request.path, payload["modelId"]))
+        return web.Response(body=b"\x01\x00" * 2400, content_type="audio/pcm")
+
+    app = web.Application()
+    app.router.add_post("/{endpoint}", synthesize)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    base_url = f"http://127.0.0.1:{runner.addresses[0][1]}"
+    updated_endpoint = "/new" if update_endpoint else "/old"
+    updated_model = "mistv3" if update_model else "coda"
+    updated_timeout = 30 if update_model else 240
+    conn_options = APIConnectOptions(max_retry=0, timeout=2)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tts = TTS(
+                api_key="test-key",
+                model="coda",
+                base_url=f"{base_url}/old",
+                http_session=session,
+            )
+            try:
+                with patch.object(session, "post", wraps=session.post) as post:
+                    old_stream = tts.synthesize("hello", conn_options=conn_options)
+                    # Update before the scheduled request can read the parent's settings.
+                    updates: dict[str, Any] = {}
+                    if update_endpoint:
+                        updates["base_url"] = f"{base_url}{updated_endpoint}"
+                    if update_model:
+                        updates["model"] = updated_model
+                    async with old_stream:
+                        tts.update_options(**updates)
+                        assert [event async for event in old_stream]
+                    async with tts.synthesize("hello", conn_options=conn_options) as new_stream:
+                        assert [event async for event in new_stream]
+
+                assert requests == [("/old", "coda"), (updated_endpoint, updated_model)]
+                assert [call.kwargs["timeout"].total for call in post.call_args_list] == [
+                    240,
+                    updated_timeout,
+                ]
+                assert all(call.kwargs["timeout"].sock_connect == 2 for call in post.call_args_list)
+            finally:
+                await tts.aclose()
+    finally:
+        await runner.cleanup()
 
 
 async def test_chunked_stream_copies_sample_rate_options() -> None:
