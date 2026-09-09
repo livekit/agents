@@ -405,11 +405,6 @@ def test_every_advertised_language_is_accepted() -> None:
 @pytest.mark.parametrize(
     ("build", "message"),
     [
-        pytest.param(
-            lambda: AudioOptions(encoding="flac"),  # type: ignore[arg-type]
-            r"(?i)unsupported encoding",
-            id="encoding",
-        ),
         pytest.param(lambda: AudioOptions(num_channels=0), "between 1 and 10", id="no-channels"),
         pytest.param(lambda: AudioOptions(num_channels=11), "between 1 and 10", id="too-many"),
         pytest.param(lambda: AudioOptions(sample_rate=0), "must be positive", id="zero-rate"),
@@ -426,9 +421,20 @@ def test_the_documented_channel_bounds_are_accepted(num_channels: int) -> None:
     assert AudioOptions(num_channels=num_channels).num_channels == num_channels
 
 
-@pytest.mark.parametrize("encoding", ["pcm_s16le", "mulaw", "alaw"])
-def test_every_offered_encoding_is_accepted(encoding: str) -> None:
-    assert AudioOptions(encoding=encoding).encoding == encoding  # type: ignore[arg-type]
+def test_pcm_is_the_only_encoding() -> None:
+    """
+    rtc frames are signed 16-bit PCM and we forward them unchanged.
+
+    Accepting mulaw/alaw would only let a caller mislabel what is on the wire:
+    the batch path overrides the encoding anyway, and the streaming path would
+    tell Reson8 to decode PCM bytes as companded ones.
+    """
+
+    assert AudioOptions().encoding == "pcm_s16le"
+
+    for encoding in ("mulaw", "alaw", "auto", "flac"):
+        with pytest.raises(ValueError, match=r"(?i)unsupported encoding"):
+            AudioOptions(encoding=encoding)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1])
@@ -591,10 +597,10 @@ def test_the_turn_thresholds_are_streaming_only() -> None:
 
 
 def test_the_audio_shape_is_described_in_reson8s_own_words() -> None:
-    opts = STTOptions(audio=AudioOptions(sample_rate=8000, encoding="mulaw", num_channels=2))
+    opts = STTOptions(audio=AudioOptions(sample_rate=8000, num_channels=2))
     params = opts.query_params(streaming=True)
 
-    assert params["encoding"] == "mulaw"
+    assert params["encoding"] == "pcm_s16le"
     assert params["sample_rate"] == "8000"
     # Reson8 spells it "channels"; num_channels is the framework's word
     assert params["channels"] == "2"
@@ -1093,6 +1099,49 @@ async def test_a_batch_timeout_is_a_timeout_error(
 
     with pytest.raises(APITimeoutError):
         await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
+
+
+async def test_streaming_rejects_a_frame_of_the_wrong_shape(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    The channel count is in the query string before any frame arrives.
+
+    The base class resamples to the declared rate but never remixes, so a frame
+    with a different channel count would be re-chunked under the wrong layout
+    and silently mislabelled.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, audio=AudioOptions(num_channels=1)).stream(
+        conn_options=NO_RETRY
+    )
+
+    with pytest.raises(ValueError, match="expected 1-channel frames, got 2"):
+        stream.push_frame(_frame(num_channels=2))
+
+    await stream.aclose()
+    assert not server.audio, "nothing should have reached the server"
+
+
+async def test_streaming_accepts_the_configured_shape(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, audio=AudioOptions(num_channels=2)).stream(
+        conn_options=NO_RETRY
+    )
+
+    stream.push_frame(_frame(num_channels=2))
+    stream.flush()
+
+    try:
+        await server.wait_for_text()
+    finally:
+        await stream.aclose()
+
+    assert server.audio, "no audio frame reached the server"
+    assert server.query["channels"] == "2"
 
 
 async def test_batch_describes_the_buffer_it_actually_posts(

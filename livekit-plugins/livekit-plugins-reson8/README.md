@@ -117,15 +117,16 @@ The main lever on end-of-turn latency. `None` leaves the server's default.
 
 ### `AudioOptions`
 
-Describes the audio sent to Reson8; it does not convert it. LiveKit supplies
-16-bit PCM, so `encoding` should stay at its default unless the frames you push
-really are something else.
+Describes the audio sent to Reson8; it does not convert it. Streaming input is
+resampled to `sample_rate`, but nothing remixes channels or transcodes samples,
+so a pushed frame whose channel count disagrees with `num_channels` raises
+rather than being relabelled.
 
 | Field | Default | |
 |---|---|---|
 | `sample_rate` | `16000` | streaming input is resampled to this |
-| `encoding` | `"pcm_s16le"` | one of `pcm_s16le`, `mulaw`, `alaw` |
-| `num_channels` | `1` | 1 to 10 |
+| `encoding` | `"pcm_s16le"` | the only value; `rtc.AudioFrame` is signed 16-bit PCM and is forwarded unchanged |
+| `num_channels` | `1` | channel count of the frames you push, 1 to 10 |
 
 ### `TranscriptOptions`
 
