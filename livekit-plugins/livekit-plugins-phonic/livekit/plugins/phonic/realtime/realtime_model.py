@@ -157,6 +157,7 @@ class _RealtimeOptions:
     pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]]
     template_variables: NotGivenOr[dict[str, str]]
     enable_redaction: NotGivenOr[bool]
+    enable_watermarking: NotGivenOr[bool]
     mcp_servers: NotGivenOr[list[str]]
     observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
@@ -230,6 +231,7 @@ class RealtimeModel(llm.RealtimeModel):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -284,6 +286,8 @@ class RealtimeModel(llm.RealtimeModel):
             template_variables: Variables substituted into the system prompt and welcome message.
             enable_redaction: When True, PII/PHI is redacted from transcripts and bleeped from audio
                 after the conversation ends.
+            enable_watermarking: When True, embeds an inaudible provenance watermark in the agent's
+                generated audio. Adds a very small amount of latency.
             mcp_servers: Names of pre-configured MCP servers to make available to the assistant.
                 Names must be unique.
             observability_integrations: Names of observability integrations to forward traces to
@@ -367,6 +371,7 @@ class RealtimeModel(llm.RealtimeModel):
             pronunciation_dictionary=pronunciation_dictionary,
             template_variables=template_variables,
             enable_redaction=enable_redaction,
+            enable_watermarking=enable_watermarking,
             mcp_servers=mcp_servers,
             observability_integrations=observability_integrations,
             configuration_endpoint=configuration_endpoint,
@@ -430,6 +435,7 @@ class RealtimeModel(llm.RealtimeModel):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -474,6 +480,7 @@ class RealtimeModel(llm.RealtimeModel):
                 pronunciation_dictionary=pronunciation_dictionary,
                 template_variables=template_variables,
                 enable_redaction=enable_redaction,
+                enable_watermarking=enable_watermarking,
                 mcp_servers=mcp_servers,
                 observability_integrations=observability_integrations,
                 configuration_endpoint=configuration_endpoint,
@@ -839,6 +846,7 @@ class RealtimeSession(llm.RealtimeSession):
             "pronunciation_dictionary": self._opts.pronunciation_dictionary,
             "template_variables": self._opts.template_variables,
             "enable_redaction": self._opts.enable_redaction,
+            "enable_watermarking": self._opts.enable_watermarking,
             "mcp_servers": self._opts.mcp_servers,
             "observability_integrations": self._opts.observability_integrations,
             "configuration_endpoint": self._opts.configuration_endpoint,
@@ -879,6 +887,7 @@ class RealtimeSession(llm.RealtimeSession):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -919,6 +928,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ("pronunciation_dictionary", pronunciation_dictionary),
                 ("template_variables", template_variables),
                 ("enable_redaction", enable_redaction),
+                ("enable_watermarking", enable_watermarking),
                 ("mcp_servers", mcp_servers),
                 ("observability_integrations", observability_integrations),
                 ("configuration_endpoint", configuration_endpoint),

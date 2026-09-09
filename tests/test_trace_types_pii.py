@@ -163,6 +163,19 @@ SAFE_KEYS = frozenset(
         "gen_ai.client.token.usage",
         "gen_ai.execute_tool.duration",
         "gen_ai.invoke_agent.duration",
+        # event loop blocking (timings, task name, source-location stack; no values)
+        "lk.blocking.duration",
+        "lk.blocking.threshold",
+        "lk.blocking.severity",
+        "lk.blocking.task",
+        "lk.blocking.stack",
+        "lk.blocking.import",
+        "lk.blocking.gc_time",
+        "lk.blocking.cpu_time",
+        "lk.blocking.suppressed",
+        "lk.blocking.count",
+        "lk.blocking.total_duration",
+        "lk.blocking.max_duration",
     }
 )
 
