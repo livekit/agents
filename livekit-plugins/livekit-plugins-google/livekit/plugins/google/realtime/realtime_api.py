@@ -549,6 +549,9 @@ class RealtimeSession(llm.RealtimeSession):
         # to it. those frames must not open a generation for a turn that is already over.
         # cleared when the turn really ends, or when the call is answered on the wire.
         self._turn_ended_by_tool_call = False
+        # bumped by every tool call, so a response that took a while to send can tell
+        # whether the turn it answers is still the one being suppressed
+        self._tool_call_epoch = 0
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
@@ -1112,11 +1115,15 @@ class RealtimeSession(llm.RealtimeSession):
                         turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
+                    epoch = self._tool_call_epoch
                     await session.send_tool_response(function_responses=msg.function_responses)
                     # the turn a tool call ended is over once that call is answered. this
                     # is the backstop for a model that ends such a turn without a
                     # turn_complete, which would otherwise suppress model_turn for good.
-                    self._turn_ended_by_tool_call = False
+                    # a tool call that landed while this was in flight ended a later turn,
+                    # which this response does not answer.
+                    if epoch == self._tool_call_epoch:
+                        self._turn_ended_by_tool_call = False
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
@@ -1570,6 +1577,7 @@ class RealtimeSession(llm.RealtimeSession):
                 )
             )
         self._turn_ended_by_tool_call = True
+        self._tool_call_epoch += 1
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(

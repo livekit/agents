@@ -935,3 +935,45 @@ async def test_a_reply_requested_after_a_tool_call_ignores_the_finished_turns_au
         assert not generations, "no generation is opened for the finished turn"
         assert not fut.done(), "the pending reply stays bound to the turn actually requested"
         fut.cancel()
+
+
+async def test_a_tool_call_arriving_mid_send_keeps_the_suppression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The send and receive tasks run concurrently, so a newer call can land mid-send.
+
+    Answering the older call says nothing about the turn the newer one ended.
+    """
+
+    class _Socket:
+        def __init__(self) -> None:
+            self.gate = asyncio.Event()
+
+        async def send_tool_response(self, **kwargs: object) -> None:
+            await self.gate.wait()
+
+    async with _make_connected_session(monkeypatch) as session:
+        socket = _Socket()
+        session._active_session = socket  # type: ignore[assignment]
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        session._send_client_event(
+            types.LiveClientToolResponse(function_responses=[types.FunctionResponse(id="fc_1")])
+        )
+        session._msg_ch.close()
+
+        send = asyncio.create_task(session._send_task(socket))  # type: ignore[arg-type]
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+        # a second call lands while the first response is still on its way out
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call("fc_2"))
+
+        socket.gate.set()
+        await send
+
+        assert session._turn_ended_by_tool_call, "the newer call's turn is still suppressed"
+        assert not session._is_new_generation(
+            types.LiveServerMessage(server_content=_audio_content())
+        )
