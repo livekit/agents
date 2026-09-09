@@ -72,8 +72,13 @@ DEFAULT_WARN_THRESHOLD = 0.1
 """Blocks at or above this many seconds are reported as warnings."""
 DEFAULT_ERROR_THRESHOLD = 0.5
 """Blocks at or above this many seconds are reported as errors (span status ERROR)."""
-DEFAULT_TICK_INTERVAL = 0.01
-"""Heartbeat period. Also the measurement resolution."""
+DEFAULT_TICK_INTERVAL = 0.02
+"""Heartbeat period at the default warn threshold. Also the measurement resolution: a block
+is measured to within one tick, and detection near the threshold needs several ticks per
+threshold (see ``_tick_interval_for``)."""
+_TICKS_PER_WARN_THRESHOLD = 5
+_MIN_TICK_INTERVAL = 0.005
+_MAX_TICK_INTERVAL = 0.05
 
 ENV_WARN_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_WARN_MS"
 ENV_ERROR_THRESHOLD_MS = "LIVEKIT_AGENTS_LOOP_BLOCK_ERROR_MS"
@@ -164,6 +169,9 @@ class _StackSample:
     frames: list[traceback.FrameSummary]
     # the span that was current in the blocked task (Python 3.12+ exposes a task's context)
     span_context: trace.SpanContext | None = None
+    # the module a lazy import was loading when sampled; the import machinery's frames say
+    # nothing useful by themselves
+    importing: str | None = None
 
 
 @dataclass
@@ -332,7 +340,7 @@ class EventLoopMonitor:
         process_descheduled = watchdog_starved and cpu_time < lag * 0.5
         stacks = [
             f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
-            + _format_frames(s.frames)
+            + _format_frames(s.frames, importing=s.importing)
             for s in samples
             if s.frames
         ]
@@ -354,6 +362,7 @@ class EventLoopMonitor:
             watchdog_gap=watchdog_gap,
             process_descheduled=process_descheduled,
             task_name=next((s.task_name for s in samples if s.task_name), None),
+            importing=next((s.importing for s in samples if s.importing), None),
             stacks=stacks,
             parent_span_context=next(
                 (s.span_context for s in samples if s.span_context is not None), None
@@ -421,6 +430,8 @@ class EventLoopMonitor:
             attributes[trace_types.ATTR_BLOCKING_TASK] = report.task_name
         if report.stacks:
             attributes[trace_types.ATTR_BLOCKING_STACK] = "\n---\n".join(report.stacks)
+        if report.importing:
+            attributes[trace_types.ATTR_BLOCKING_IMPORT] = report.importing
         if suppressed:
             attributes[trace_types.ATTR_BLOCKING_SUPPRESSED] = suppressed
 
@@ -460,7 +471,20 @@ class EventLoopMonitor:
             extra["task"] = report.task_name
         if report.stacks:
             extra["stack"] = report.stacks[-1]
+        if report.importing:
+            extra["import"] = report.importing
         where = f" at {location}" if location else ""
+        if report.importing:
+            # a lazy import on the loop: name the module, so it can be preloaded
+            logger.warning(
+                "event loop blocked for %.0fms importing %s%s; import it at process "
+                "warm-up (prewarm) instead of on first use",
+                report.duration * 1000,
+                report.importing,
+                where,
+                extra=extra,
+            )
+            return
         logger.warning(
             "event loop blocked for %.0fms%s; synchronous work on the agent loop delays "
             "audio and turn handling, move it to a thread or an async client",
@@ -554,14 +578,22 @@ class EventLoopMonitor:
                     frame = candidate
                     self._loop_thread_ident = ident
                     break
+        importing: str | None = None
         if frame is not None:
+            importing = _module_being_imported(frame)
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
             # thread is what it is taking it from. Lines load lazily when a report is formatted.
             frames = list(
                 traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
             )
             frames.reverse()  # outermost first, like extract_stack
-        return _StackSample(lag=lag, task_name=task_name, frames=frames, span_context=span_context)
+        return _StackSample(
+            lag=lag,
+            task_name=task_name,
+            frames=frames,
+            span_context=span_context,
+            importing=importing,
+        )
 
 
 @dataclass
@@ -576,6 +608,8 @@ class BlockedReport:
     process_descheduled: bool
     task_name: str | None
     stacks: list[str]
+    importing: str | None = None
+    """The module a lazy import was loading when the loop thread was sampled."""
     parent_span_context: trace.SpanContext | None = None
     """The span current in the blocked task when sampled; the stall span nests under it."""
 
@@ -601,7 +635,23 @@ def _is_import_machinery(frame: traceback.FrameSummary) -> bool:
     return (frame.filename or "").startswith("<frozen importlib")
 
 
-def _format_frames(frames: list[traceback.FrameSummary]) -> str:
+def _module_being_imported(frame: Any) -> str | None:
+    """The innermost module the import system is loading in this frame stack, if any.
+
+    ``importlib._bootstrap._find_and_load(name, import_)`` is on the stack for every module
+    being imported; nested imports stack these, innermost last."""
+    f = frame
+    while f is not None:
+        if f.f_code.co_name == "_find_and_load" and f.f_code.co_filename.startswith(
+            "<frozen importlib"
+        ):
+            name = f.f_locals.get("name")
+            return name if isinstance(name, str) else None
+        f = f.f_back
+    return None
+
+
+def _format_frames(frames: list[traceback.FrameSummary], *, importing: str | None = None) -> str:
     # drop the event loop machinery (the same in every sample), but never the innermost frame:
     # a C call scheduled directly as a callback has no frame of its own
     trimmed = [
@@ -623,16 +673,28 @@ def _format_frames(frames: list[traceback.FrameSummary]) -> str:
             run += 1
             continue
         if run:
-            entries.append(f"  [import system: {run} frames]\n")
+            entries.append(_import_run_line(run, importing))
             run = 0
         entries.append("".join(traceback.format_list([f])))
     if run:
-        entries.append(f"  [import system: {run} frames]\n")
+        entries.append(_import_run_line(run, importing))
     return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()
 
 
+def _import_run_line(run: int, importing: str | None) -> str:
+    what = f", importing {importing}" if importing else ""
+    return f"  [import system: {run} frames{what}]\n"
+
+
 def _innermost_location(stack: str) -> str | None:
-    lines = [ln for ln in stack.splitlines() if ln.lstrip().startswith("File ")]
+    """The innermost frame of the sample that is the agent's or a library's own code: the
+    import machinery's frames are skipped, since the caller that triggered the import is
+    the actionable location."""
+    lines = [
+        ln
+        for ln in stack.splitlines()
+        if ln.lstrip().startswith("File ") and "<frozen importlib" not in ln
+    ]
     if not lines:
         return None
     return lines[-1].strip().removeprefix("File ")
@@ -642,6 +704,15 @@ def _innermost_location(stack: str) -> str | None:
 
 _monitors: dict[asyncio.AbstractEventLoop, EventLoopMonitor] = {}
 _registry_lock = threading.Lock()
+
+
+def _tick_interval_for(warn_threshold: float) -> float:
+    """A fifth of the warn threshold, within bounds. A block is measured to within one tick,
+    so fewer ticks per threshold means blocks just over it go unreported; more ticks cost
+    wake-ups (two per tick, heartbeat and watchdog) for no gain."""
+    return min(
+        max(warn_threshold / _TICKS_PER_WARN_THRESHOLD, _MIN_TICK_INTERVAL), _MAX_TICK_INTERVAL
+    )
 
 
 def start_monitoring(
@@ -668,7 +739,7 @@ def start_monitoring(
             loop,
             warn_threshold=thresholds.warn,
             error_threshold=thresholds.error,
-            tick_interval=min(DEFAULT_TICK_INTERVAL, thresholds.warn),
+            tick_interval=_tick_interval_for(thresholds.warn),
             name=name,
             emit_spans=emit_spans,
         )

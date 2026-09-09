@@ -823,3 +823,53 @@ async def test_sampler_finds_the_loop_thread_by_the_blocked_task(
     assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
     assert attrs[trace_types.ATTR_BLOCKING_TASK] == "blocked_task"
     assert monitor._loop_thread_ident == __import__("threading").get_ident()
+
+
+def test_import_block_names_the_module_and_the_caller(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lazy import blocking the loop is reported by the module being imported and by the
+    frame that triggered it; the import machinery's own frames say nothing actionable."""
+    import importlib
+    import traceback
+
+    (tmp_path / "slowmod.py").write_text(  # type: ignore[operator]
+        "import sys, threading\n"
+        "from livekit.agents.telemetry import loop_monitor\n"
+        "frame = sys._current_frames()[threading.get_ident()]\n"
+        "importing = loop_monitor._module_being_imported(frame)\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module("slowmod")
+    assert mod.importing == "slowmod"
+
+    frames = [
+        traceback.FrameSummary("/app/agent.py", 10, "on_enter"),
+        traceback.FrameSummary("<frozen importlib._bootstrap>", 1, "_find_and_load"),
+        traceback.FrameSummary("<frozen importlib._bootstrap>", 2, "_load_unlocked"),
+        traceback.FrameSummary("<frozen importlib._bootstrap_external>", 3, "get_code"),
+    ]
+    text = loop_monitor._format_frames(frames, importing="slowmod")
+    assert "importing slowmod" in text
+    assert "on_enter" in text
+    # the log names the caller, not the import machinery
+    assert "agent.py" in (loop_monitor._innermost_location(text) or "")
+
+
+def test_tick_interval_is_a_fifth_of_the_warn_threshold() -> None:
+    """Blocks are measured to within one tick, so detection just over the threshold needs
+    several ticks per threshold; more than that only costs wake-ups."""
+    assert loop_monitor._tick_interval_for(0.1) == pytest.approx(0.02)
+    assert loop_monitor._tick_interval_for(0.25) == pytest.approx(0.05)
+    assert loop_monitor._tick_interval_for(1.0) == pytest.approx(0.05)  # capped
+    assert loop_monitor._tick_interval_for(0.01) == pytest.approx(0.005)  # floored
+
+    loop = asyncio.new_event_loop()
+    try:
+        m = loop_monitor.start_monitoring(
+            loop, thresholds=LoopMonitorThresholds(warn=0.1, error=0.5), emit_spans=False
+        )
+        assert m is not None and m._tick == pytest.approx(0.02)
+    finally:
+        loop_monitor.stop_monitoring(loop)
+        loop.close()
