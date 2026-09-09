@@ -719,9 +719,18 @@ class SpeechStream(stt.RecognizeStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or input_ended or self._ensure_session().closed:
-                        self._turn_settled.set()
+                    if closing_ws or self._ensure_session().closed:
                         return
+
+                    if input_ended:
+                        if self._turn_settled.is_set():
+                            return
+
+                        self._turn_settled.set()
+                        raise APIConnectionError(
+                            "Reson8 closed before finalising the last turn",
+                            retryable=False,
+                        )
 
                     raise APIConnectionError(
                         f"Reson8 connection closed unexpectedly (code={ws.close_code})"

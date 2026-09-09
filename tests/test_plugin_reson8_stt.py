@@ -236,7 +236,7 @@ async def reson8_server() -> AsyncIterator[StartServer]:
 
 
 @pytest.fixture
-async def finalizing_server() -> AsyncIterator[Callable[[], Awaitable[str]]]:
+async def finalizing_server() -> AsyncIterator[Callable[..., Awaitable[str]]]:
     """
     A Reson8 stand-in that answers only after it sees ``flush_request``.
 
@@ -246,7 +246,7 @@ async def finalizing_server() -> AsyncIterator[Callable[[], Awaitable[str]]]:
 
     runners: list[web.AppRunner] = []
 
-    async def _start() -> str:
+    async def _start(*, answer_flush: bool = True, hang_up: bool = False) -> str:
         saw_flush = asyncio.Event()
 
         async def turns(request: web.Request) -> web.StreamResponse:
@@ -256,12 +256,16 @@ async def finalizing_server() -> AsyncIterator[Callable[[], Awaitable[str]]]:
             async def answer() -> None:
                 await saw_flush.wait()
                 await asyncio.sleep(0.05)  # finalising is not instant
-                for message in (
-                    {"type": "turn_start"},
-                    {"type": "turn_end_candidate", "text": "hello world"},
-                    {"type": "turn_end"},
-                ):
-                    await ws.send_str(json.dumps(message))
+                if answer_flush:
+                    for message in (
+                        {"type": "turn_start"},
+                        {"type": "turn_end_candidate", "text": "hello world"},
+                        {"type": "turn_end"},
+                    ):
+                        await ws.send_str(json.dumps(message))
+
+                if hang_up:
+                    await ws.close()
 
             task = asyncio.create_task(answer())
             try:
@@ -1038,7 +1042,7 @@ async def test_a_turn_over_the_wire(
 
 
 async def test_end_input_waits_for_the_final_transcript(
-    finalizing_server: Callable[[], Awaitable[str]], client_session: aiohttp.ClientSession
+    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
     """
     ``end_input`` queues a flush; the transcript answers it.
@@ -1065,6 +1069,54 @@ async def test_end_input_waits_for_the_final_transcript(
     assert SpeechEventType.FINAL_TRANSCRIPT in types, f"stream ended with {types}"
     final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
     assert final.alternatives[0].text == "hello world"
+
+
+async def test_a_close_before_the_final_turn_is_an_error(
+    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Losing the last turn must not look like a clean finish.
+
+    The audio was consumed from the input channel, so no retry can produce the
+    transcript; reporting success would hand the caller an empty result with
+    no way to tell it apart from silence.
+    """
+
+    base_url = await finalizing_server(answer_flush=False, hang_up=True)
+    stream = _stt(base_url, client_session).stream(conn_options=NO_RETRY)
+
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    with pytest.raises(APIConnectionError, match="before finalising") as excinfo:
+        async with asyncio.timeout(10):
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.retryable is False
+    await stream.aclose()
+
+
+async def test_a_close_after_the_final_turn_is_clean(
+    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
+) -> None:
+    """Hanging up once the turn is answered is how a server says it is done."""
+
+    base_url = await finalizing_server(answer_flush=True, hang_up=True)
+    stream = _stt(base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    events: list[stt.SpeechEvent] = []
+    async with asyncio.timeout(10):
+        async for event in stream:
+            events.append(event)
+
+    await stream.aclose()
+
+    types = [e.type for e in events]
+    assert SpeechEventType.FINAL_TRANSCRIPT in types, f"stream ended with {types}"
 
 
 async def test_end_input_does_not_wait_when_nothing_was_sent(
