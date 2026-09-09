@@ -414,6 +414,35 @@ def test_capabilities_track_the_transcript_options() -> None:
     assert aligned.capabilities.aligned_transcript == "word"
 
 
+@pytest.mark.parametrize(
+    ("words", "expected"),
+    [(True, "word"), (False, False)],
+)
+def test_update_options_moves_the_aligned_transcript_capability(
+    words: bool, expected: str | bool
+) -> None:
+    """
+    The capability has to follow the option it is derived from.
+
+    Consumers decide whether to ask for word alignment from it, so leaving it
+    at the constructor value makes them act on configuration that is gone.
+    """
+
+    instance = reson8.STT(api_key="k", transcript=TranscriptOptions(words=not words))
+    assert instance.capabilities.aligned_transcript == (False if words else "word")
+
+    instance.update_options(transcript=TranscriptOptions(words=words))
+    assert instance.capabilities.aligned_transcript == expected
+
+
+def test_an_unrelated_update_leaves_the_capability_alone() -> None:
+    instance = reson8.STT(api_key="k", transcript=TranscriptOptions(words=True))
+
+    instance.update_options(language="de")
+
+    assert instance.capabilities.aligned_transcript == "word"
+
+
 def test_model_and_provider() -> None:
     assert reson8.STT(api_key="k").provider == "Reson8"
     assert reson8.STT(api_key="k").model == "default"

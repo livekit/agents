@@ -469,11 +469,17 @@ class STT(stt.STT):
         :class:`AudioOptions` is deliberately absent: the input resampler is
         built when a stream opens, so changing the rate mid-stream would
         describe the audio to Reson8 as something it is not.
+
+        Turning word timings on or off also moves
+        ``capabilities.aligned_transcript``. A running ``AgentSession`` reads
+        that when the STT is attached or swapped, so it keeps the value it saw
+        until then.
         """
 
         self._opts = self._opts.merged(
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
+        self._capabilities.aligned_transcript = "word" if self._opts.transcript.words else False
 
         for stream in self._streams:
             stream.update_options(
