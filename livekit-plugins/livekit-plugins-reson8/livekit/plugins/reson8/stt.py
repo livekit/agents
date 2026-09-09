@@ -56,7 +56,7 @@ from ._utils import (
     check_probability,
     integration_headers,
     normalize_languages,
-    problem_message,
+    problem_parts,
     resolve_base_url,
     status_error,
 )
@@ -543,7 +543,8 @@ class STT(stt.STT):
             ) as resp:
                 text = await resp.text()
                 if resp.status != 200:
-                    raise status_error(resp.status, detail=problem_message(text))
+                    code, detail = problem_parts(text)
+                    raise status_error(resp.status, code=code, detail=detail)
         except asyncio.TimeoutError:
             raise APITimeoutError("Reson8 did not respond in time") from None
         except aiohttp.ClientError as e:

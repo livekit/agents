@@ -44,7 +44,7 @@ from livekit.plugins.reson8._utils import (
     build_speech_data,
     build_url,
     normalize_languages,
-    problem_message,
+    problem_parts,
     status_error,
 )
 from livekit.plugins.reson8.stt import (
@@ -916,21 +916,49 @@ def test_the_last_candidate_still_becomes_the_final(make_stream: MakeStream) -> 
 @pytest.mark.parametrize(
     ("body", "expected"),
     [
-        ('{"code": "session_rejected"}', "session_rejected"),
-        ('{"detail": "Credit limit exceeded"}', "Credit limit exceeded"),
+        ('{"code": "session_rejected"}', ("session_rejected", None)),
+        ('{"detail": "Credit limit exceeded"}', (None, "Credit limit exceeded")),
         (
-            '{"code": "invalid_query_parameter", "detail": "channels must be between 1 and 10"}',
-            "invalid_query_parameter: channels must be between 1 and 10",
+            '{"code": "invalid_query_parameter", "detail": "channels must be 1 to 10"}',
+            ("invalid_query_parameter", "channels must be 1 to 10"),
         ),
-        ("", None),
-        ("not json", None),
-        ("[]", None),
-        ("{}", None),
-        ('{"code": 402, "detail": null}', None),
+        ("", (None, None)),
+        ("not json", (None, None)),
+        ("[]", (None, None)),
+        ("{}", (None, None)),
+        ('{"code": 402, "detail": null}', (None, None)),
     ],
 )
-def test_problem_message(body: str, expected: str | None) -> None:
-    assert problem_message(body) == expected
+def test_problem_parts(body: str, expected: tuple[str | None, str | None]) -> None:
+    assert problem_parts(body) == expected
+
+
+def test_the_server_free_text_stays_off_the_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    The framework logs the exception inside its retry message.
+
+    ``stt.py`` does ``f"failed to recognize speech: {e}, ..."``, and
+    ``APIStatusError.__str__`` renders both ``message`` and ``body`` -- so
+    anything on the exception lands in a log message body, where redaction
+    cannot reach it. A rejection can quote request input, and a biasing phrase
+    is customer vocabulary.
+    """
+
+    phrase = "Jan Willem de Vries"
+
+    with caplog.at_level("WARNING"):
+        err = status_error(400, code="invalid_query_parameter", detail=f"bad phrase: {phrase}")
+
+    assert phrase not in str(err)
+    assert phrase not in err.message
+    assert phrase not in str(err.body)
+
+    # ...but it is still reachable, under a redactable key
+    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert getattr(record, "lk.pii.detail") == f"bad phrase: {phrase}"
+    assert record.code == "invalid_query_parameter"
 
 
 @pytest.mark.parametrize(
@@ -953,9 +981,9 @@ def test_status_error_adds_an_actionable_hint() -> None:
     assert "https://docs.reson8.dev/limits/" in status_error(429).message
 
 
-def test_status_error_keeps_the_server_reason_without_repeating_it() -> None:
-    message = status_error(402, detail="Credit limit exceeded").message
-    assert message.count("Credit limit exceeded") == 1
+def test_status_error_keeps_the_code_and_the_hint_without_repeating_them() -> None:
+    message = status_error(402, code="session_rejected").message
+    assert message.count("session_rejected") == 1
     assert "https://docs.reson8.dev/limits/" in message
 
 
@@ -1388,7 +1416,9 @@ async def test_a_reconnect_keeps_audio_that_has_not_been_sent_yet(
 
 
 async def test_a_rejected_upgrade_surfaces_the_status_and_the_reason(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """
     Reson8 rejects the upgrade with a status and an X-Error-Message header.
@@ -1400,12 +1430,19 @@ async def test_a_rejected_upgrade_surfaces_the_status_and_the_reason(
     server = await reson8_server(ws_status=402, ws_error_message="organization out of credits")
     stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
 
-    with pytest.raises(APIStatusError) as excinfo:
+    with caplog.at_level("WARNING"), pytest.raises(APIStatusError) as excinfo:
         await stream._run()
 
     assert excinfo.value.status_code == 402
     assert excinfo.value.retryable is False
-    assert "organization out of credits" in excinfo.value.message
+    # the status and our hint carry the actionable part
+    assert "https://docs.reson8.dev/limits/" in excinfo.value.message
+    # the header text is free-form, so it goes to a redactable key instead of
+    # the exception or the log message body
+    assert "organization out of credits" not in str(excinfo.value)
+    assert "organization out of credits" not in caplog.text
+    record = next(r for r in caplog.records if r.message == "Reson8 rejected the request")
+    assert getattr(record, "lk.pii.detail") == "organization out of credits"
     await stream.aclose()
 
 
@@ -1436,7 +1473,11 @@ async def test_an_unreachable_host_is_a_connection_error(
     ("status", "body", "expected"),
     [
         (402, '{"code": "session_rejected"}', "session_rejected"),
-        (400, '{"code": "invalid_query_parameter", "detail": "Invalid encoding: mp3"}', "mp3"),
+        (
+            400,
+            '{"code": "invalid_query_parameter", "detail": "Invalid encoding: mp3"}',
+            "invalid_query_parameter",
+        ),
         (413, "", "413"),
     ],
 )
