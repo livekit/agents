@@ -14,7 +14,7 @@ from livekit.agents.tts.tts import SynthesizedAudio, SynthesizeStream
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TTS_STARTED_TIME
 from livekit.agents.utils.aio.channel import ChanEmpty
 
-from .fake_tts import FakeSynthesizeStream, FakeTTS
+from .fake_tts import FakeChunkedStream, FakeSynthesizeStream, FakeTTS
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
 
@@ -73,6 +73,32 @@ def _metrics_listener_count(tts_impl: TTS) -> int:
 def _set_non_streaming(tts_impl: FakeTTS) -> FakeTTS:
     tts_impl._capabilities.streaming = False
     return tts_impl
+
+
+class _NotifyingTTS(FakeTTS):
+    """Emits a fallback notice per request, as an inference TTS does on gateway fallback."""
+
+    def synthesize(
+        self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> FakeChunkedStream:
+        self.emit("fallback_activated", text)
+        return super().synthesize(text, conn_options=conn_options)
+
+
+async def test_forwards_fallback_activated_only_for_served_requests() -> None:
+    source = _NotifyingTTS(fake_audio_duration=1.0)
+    fallback_adapter = FallbackAdapter([source])
+    events: list[object] = []
+    fallback_adapter.on("fallback_activated", events.append)
+
+    async with fallback_adapter.synthesize("served") as stream:
+        assert [frame async for frame in stream]
+    # a recovery probe runs with no user attempt in flight
+    source.emit("fallback_activated", "probe")
+    await fallback_adapter.aclose()
+    source.emit("fallback_activated", "after-close")
+
+    assert events == ["served"]
 
 
 async def test_stream_closes_temporary_adapter_after_each_request() -> None:

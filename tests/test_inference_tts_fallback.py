@@ -3,6 +3,7 @@ import pytest
 from livekit.agents.inference.tts import (
     TTS,
     FallbackModel,
+    _build_session_create_payload,
     _normalize_fallback,
     _parse_model_string,
 )
@@ -169,3 +170,66 @@ class TestNormalizeFallback:
         fallback = FallbackModel(model="cartesia/sonic", voice="")
         result = _normalize_fallback(fallback)
         assert result == [{"model": "cartesia/sonic", "voice": ""}]
+
+
+@pytest.mark.parametrize("fallback", [None, []])
+def test_session_create_omits_empty_fallback(fallback) -> None:
+    kwargs = {} if fallback is None else {"fallback": fallback}
+
+    payload = _build_session_create_payload(_make_tts(**kwargs)._opts)
+
+    assert payload == {
+        "type": "session.create",
+        "sample_rate": "24000",
+        "encoding": "pcm_s16le",
+        "extra": {},
+        "model": "cartesia/sonic",
+        "connection": {"timeout": 10.0, "retries": 3},
+    }
+
+
+@pytest.mark.parametrize("fallback", [None, []])
+def test_session_create_can_disable_system_fallback_without_models(fallback) -> None:
+    kwargs = (
+        {"disable_system_default_fallback": True}
+        if fallback is None
+        else {"fallback": fallback, "disable_system_default_fallback": True}
+    )
+
+    payload = _build_session_create_payload(_make_tts(**kwargs)._opts)
+
+    assert payload["fallback"] == {
+        "models": [],
+        "disable_system_default_fallback": True,
+    }
+
+
+@pytest.mark.parametrize("disable_system_default_fallback", [False, True])
+def test_session_create_maps_fallback_models_exactly(
+    disable_system_default_fallback: bool,
+) -> None:
+    tts = _make_tts(
+        fallback=[
+            "deepgram/aura-2:asteria",
+            FallbackModel(
+                model="rime/mistv3",
+                voice="speaker-1",
+                extra_kwargs={"speed_alpha": 0.9},
+            ),
+        ],
+        disable_system_default_fallback=disable_system_default_fallback,
+    )
+
+    payload = _build_session_create_payload(tts._opts)
+
+    assert payload["fallback"] == {
+        "models": [
+            {"model": "deepgram/aura-2", "voice": "asteria", "extra": {}},
+            {
+                "model": "rime/mistv3",
+                "voice": "speaker-1",
+                "extra": {"speed_alpha": 0.9},
+            },
+        ],
+        **({"disable_system_default_fallback": True} if disable_system_default_fallback else {}),
+    }
