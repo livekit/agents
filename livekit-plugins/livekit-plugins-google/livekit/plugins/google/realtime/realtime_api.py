@@ -62,6 +62,10 @@ class _ChatCtxToolResponse(types.LiveClientToolResponse):
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
 
+# how long a requested generation waits for its `generation_created` event before the caller's
+# future fails; see `RealtimeSession.generation_created_timeout`
+DEFAULT_GENERATION_CREATED_TIMEOUT = 5.0
+
 # Known VertexAI models for the Live API
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
@@ -528,6 +532,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._session_should_close = asyncio.Event()
         self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
+        self._generation_created_timeout: float = DEFAULT_GENERATION_CREATED_TIMEOUT
         # number of tool calls rejected in the current tool_choice="none" turn; non-zero also
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
@@ -782,6 +787,32 @@ class RealtimeSession(llm.RealtimeSession):
     def session_resumption_handle(self) -> str | None:
         return self._session_resumption_handle
 
+    @property
+    def generation_created_timeout(self) -> float:
+        """How long a requested generation waits, in seconds, for its `generation_created`.
+
+        The wait is armed by `generate_reply`. When it elapses the future given to the caller
+        fails with a `RealtimeError` and the turn is given up on, even if the server answers a
+        moment later.
+
+        The default, `DEFAULT_GENERATION_CREATED_TIMEOUT`, is cut for a conversational turn,
+        where a longer wait would leave the user in silence. A caller that runs a turn known to
+        be slower than that -- a hidden, tool-only turn at the end of a call, for instance,
+        whose function call is delivered in one message and can take longer to arrive -- raises
+        this for that turn and restores the previous value once it is over, rather than making
+        every other turn wait that long.
+
+        It is read when a wait is armed, so it applies to the generations requested after it is
+        set, never to one already in flight.
+        """
+        return self._generation_created_timeout
+
+    @generation_created_timeout.setter
+    def generation_created_timeout(self, value: float) -> None:
+        if value <= 0:
+            raise ValueError(f"generation_created_timeout must be greater than 0, got {value}")
+        self._generation_created_timeout = value
+
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         for f in self._resample_audio(frame):
             for nf in self._bstream.write(f.data.tobytes()):
@@ -863,7 +894,9 @@ class RealtimeSession(llm.RealtimeSession):
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
 
-        timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        timeout_handle = asyncio.get_event_loop().call_later(
+            self._generation_created_timeout, _on_timeout
+        )
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
             timeout_handle.cancel()

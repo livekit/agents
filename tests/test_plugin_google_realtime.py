@@ -12,7 +12,11 @@ from google.genai import types
 
 from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.api_proto import ClientEvents
-from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.realtime.realtime_api import (
+    DEFAULT_GENERATION_CREATED_TIMEOUT,
+    RealtimeModel,
+    RealtimeSession,
+)
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
@@ -836,3 +840,53 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         assert session._unsent_item_ids == set()
     finally:
         await session.aclose()
+
+
+def _record_armed_delays(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record every delay armed on the running loop, without changing what it does."""
+    loop = asyncio.get_event_loop()
+    real_call_later = loop.call_later
+    delays: list[float] = []
+
+    def _spy(delay: float, callback: Any, *args: Any, **kwargs: Any) -> asyncio.TimerHandle:
+        delays.append(delay)
+        return real_call_later(delay, callback, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "call_later", _spy)
+    return delays
+
+
+async def test_generation_created_wait_defaults_to_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        assert session.generation_created_timeout == DEFAULT_GENERATION_CREATED_TIMEOUT
+
+        delays = _record_armed_delays(monkeypatch)
+        session.generate_reply(instructions="Say hello")
+
+        assert delays == [5.0]
+
+
+async def test_generation_created_wait_is_read_when_the_wait_is_armed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session.generation_created_timeout = 15.0
+
+        delays = _record_armed_delays(monkeypatch)
+        session.generate_reply(instructions="Say hello")
+
+        assert delays == [15.0]
+
+
+@pytest.mark.parametrize("rejected", [0, 0.0, -1.0, -0.001])
+async def test_generation_created_wait_rejects_a_value_that_is_not_positive(
+    monkeypatch: pytest.MonkeyPatch, rejected: float
+) -> None:
+    """A wait of zero or less would fail every turn before the server could answer any."""
+    async with _make_session(monkeypatch) as session:
+        with pytest.raises(ValueError, match="greater than 0"):
+            session.generation_created_timeout = rejected
+
+        assert session.generation_created_timeout == DEFAULT_GENERATION_CREATED_TIMEOUT
