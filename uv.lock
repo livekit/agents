@@ -2263,7 +2263,7 @@ requires-dist = [
     { name = "prometheus-client", specifier = ">=0.22" },
     { name = "protobuf", specifier = ">=3" },
     { name = "psutil", specifier = ">=7.0" },
-    { name = "pydantic", specifier = ">=2.0,<3" },
+    { name = "pydantic", specifier = ">=2.5,<3" },
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sounddevice", specifier = ">=0.5" },
