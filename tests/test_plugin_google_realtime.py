@@ -880,16 +880,58 @@ async def test_the_next_real_turn_still_opens_a_generation(
         assert session._is_new_generation(types.LiveServerMessage(server_content=_audio_content()))
 
 
-async def test_generate_reply_after_a_tool_call_is_not_suppressed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A reply asked for right after a tool call is a new turn, whatever ended the last one."""
+async def test_answering_the_call_ends_the_suppression(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Answering the call is the other boundary, for a turn that never gets a turn_complete.
+
+    It is cleared when the response reaches the socket, not when it is queued, so audio
+    still in flight from the finished turn cannot be taken for the reply to that answer.
+    """
+
+    class _Socket:
+        async def send_tool_response(self, **kwargs: object) -> None: ...
+
     async with _make_connected_session(monkeypatch) as session:
+        socket = _Socket()
+        session._active_session = socket  # type: ignore[assignment]
         session._start_new_generation()
         session._handle_tool_calls(_tool_call())
-        assert session._turn_ended_by_tool_call
 
-        fut = session.generate_reply()
+        session._send_client_event(
+            types.LiveClientToolResponse(function_responses=[types.FunctionResponse(id="fc_1")])
+        )
+        assert session._turn_ended_by_tool_call, "queueing the answer is not sending it"
+
+        session._msg_ch.close()
+        await session._send_task(socket)  # type: ignore[arg-type]
         assert not session._turn_ended_by_tool_call
         assert session._is_new_generation(types.LiveServerMessage(server_content=_audio_content()))
+
+
+async def test_a_reply_requested_after_a_tool_call_ignores_the_finished_turns_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pending reply must not be resolved by audio left over from the tool call's turn.
+
+    `_start_new_generation` hands the pending `generate_reply` future whatever generation
+    it opens, so suppression has to outlive the call to `generate_reply` -- the request has
+    not even reached the socket yet.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        generations.clear()
+
+        fut = session.generate_reply()
+        assert session._turn_ended_by_tool_call, "the request is only queued, not sent"
+
+        # audio still arriving from the turn the tool call ended
+        session._handle_server_content(_audio_content())
+        assert not session._is_new_generation(
+            types.LiveServerMessage(server_content=_audio_content())
+        )
+        assert not generations, "no generation is opened for the finished turn"
+        assert not fut.done(), "the pending reply stays bound to the turn actually requested"
         fut.cancel()

@@ -547,6 +547,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         # a tool call ends the turn, but the server can keep streaming audio that belongs
         # to it. those frames must not open a generation for a turn that is already over.
+        # cleared when the turn really ends, or when the call is answered on the wire.
         self._turn_ended_by_tool_call = False
 
         self._in_user_activity = False
@@ -819,8 +820,6 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> asyncio.Future[llm.GenerationCreatedEvent]:
         if is_given(tools):
             logger.warning("per-response tools is not supported by Google Realtime API, ignoring")
-        # the reply we are about to ask for is a new turn, whatever ended the last one
-        self._turn_ended_by_tool_call = False
         if not self._realtime_model.capabilities.mutable_chat_context:
             logger.warning(
                 f"generate_reply is not compatible with '{self._opts.model}' and will be ignored."
@@ -1114,6 +1113,10 @@ class RealtimeSession(llm.RealtimeSession):
                     )
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
+                    # the turn a tool call ended is over once that call is answered. this
+                    # is the backstop for a model that ends such a turn without a
+                    # turn_complete, which would otherwise suppress model_turn for good.
+                    self._turn_ended_by_tool_call = False
                 elif isinstance(msg, types.LiveClientRealtimeInput):
                     if msg.audio:
                         await session.send_realtime_input(audio=msg.audio)
