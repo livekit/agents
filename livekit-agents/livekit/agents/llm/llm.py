@@ -435,7 +435,7 @@ class LLMStream(ABC):
                 finish_reasons=[finish_reason],
                 time_to_first_chunk=ttft if ttft >= 0 else None,
             )
-            if self._record_content and gen_ai_telemetry.capture_content_enabled():
+            if self._record_content:
                 gen_ai_telemetry.set_content_attributes(
                     self._llm_request_span,
                     output_messages=gen_ai_telemetry.to_output_messages(
