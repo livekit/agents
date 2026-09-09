@@ -73,6 +73,7 @@ class AvatarSession(BaseAvatarSession[Any]):
             height: Optional output height. Must be provided with `width`.
             max_duration_seconds: Optional maximum Avatar session duration.
             avatar_participant_identity: LiveKit identity used by the Avatar.
+                Must differ from the local agent participant identity.
             avatar_participant_name: LiveKit display name used by the Avatar.
             idempotency_key: Optional stable key for provider-session creation.
                 Must be a UUID when provided. Inside an Agent job, the default
@@ -160,6 +161,10 @@ class AvatarSession(BaseAvatarSession[Any]):
             )
 
         publisher_identity = _local_participant_identity(room)
+        if self._avatar_identity == publisher_identity:
+            raise BosonAvatarException(
+                "avatar_participant_identity must differ from the local agent participant identity"
+            )
         livekit_token = self._mint_avatar_token(
             room=room,
             publisher_identity=publisher_identity,
@@ -280,6 +285,11 @@ class AvatarSession(BaseAvatarSession[Any]):
             await asyncio.shield(owned_task)
             if not is_startup_cleanup:
                 return
+            # Awaiting an already-completed task does not yield to its queued
+            # done callback. Clear it here too so close cannot spin on it.
+            async with self._lifecycle_lock:
+                if self._startup_cleanup_task is owned_task:
+                    self._startup_cleanup_task = None
             # Startup cleanup can retain a session ID when provider DELETE
             # exhausts its retries. Re-evaluate once so this close call can retry.
 

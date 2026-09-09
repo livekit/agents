@@ -211,6 +211,60 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "called twice"):
             await avatar.start(agent_session, _Room())  # type: ignore[arg-type]
 
+    async def test_start_rejects_avatar_identity_matching_the_agent(self) -> None:
+        for avatar_identity, local_identity, job_identity in (
+            ("voice-1", "voice-1", None),
+            (None, "boson-avatar-agent", None),
+            ("job-voice", "voice-1", "job-voice"),
+        ):
+            with self.subTest(avatar_identity=avatar_identity, job_identity=job_identity):
+                room = _Room()
+                room.local_participant = SimpleNamespace(identity=local_identity)
+                agent_session = _AgentSession()
+                api_client = SimpleNamespace(start_session=AsyncMock(), end_session=AsyncMock())
+                job_context = (
+                    SimpleNamespace(local_participant_identity=job_identity)
+                    if job_identity is not None
+                    else None
+                )
+                with (
+                    patch(
+                        "livekit.plugins.boson_avatar.avatar.BosonAvatarAPI",
+                        return_value=api_client,
+                    ),
+                    patch(
+                        "livekit.plugins.boson_avatar.avatar.get_job_context",
+                        return_value=job_context,
+                    ),
+                    patch.object(BaseAvatarSession, "start", new=AsyncMock()) as base_start,
+                    patch.object(
+                        AvatarSession,
+                        "_mint_avatar_token",
+                        side_effect=AssertionError(
+                            "attempted to mint a token for the agent identity"
+                        ),
+                    ) as mint_token,
+                ):
+                    kwargs = (
+                        {"avatar_participant_identity": avatar_identity}
+                        if avatar_identity is not None
+                        else {}
+                    )
+                    avatar = AvatarSession(avatar_id="asset-1", api_key="boson-key", **kwargs)
+                    with self.assertRaisesRegex(BosonAvatarException, "must differ"):
+                        await avatar.start(
+                            agent_session,
+                            room,  # type: ignore[arg-type]
+                            livekit_url="wss://tenant.livekit.cloud",
+                            livekit_api_key="livekit-key",
+                            livekit_api_secret="livekit-secret-with-enough-entropy",
+                        )
+                mint_token.assert_not_called()
+                base_start.assert_not_awaited()
+                api_client.start_session.assert_not_awaited()
+                self.assertIsNone(agent_session.output.replaced)
+                self.assertIsNone(avatar.session_id)
+
     async def test_explicit_idempotency_key_overrides_livekit_job_default(self) -> None:
         api_client = SimpleNamespace(
             start_session=AsyncMock(
@@ -453,6 +507,64 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
         api_client.end_session.assert_awaited_once_with("provider-session-1")
         base_close.assert_awaited_once()
         self.assertIsNone(avatar.session_id)
+
+    async def test_close_handles_completed_startup_cleanup_before_its_callback(self) -> None:
+        real_shield = asyncio.shield
+        for retry_delete in (False, True):
+            with self.subTest(retry_delete=retry_delete):
+                api_client = SimpleNamespace(
+                    end_session=AsyncMock(
+                        side_effect=[RuntimeError("delete failed"), None]
+                        if retry_delete
+                        else [None]
+                    ),
+                )
+                shield_calls = 0
+
+                def bounded_shield(task: asyncio.Task[None]) -> asyncio.Future[None]:
+                    # An event-loop timeout cannot interrupt a synchronous busy loop.
+                    # Fail instead of hanging the test runner if close stops yielding.
+                    nonlocal shield_calls
+                    shield_calls += 1
+                    if shield_calls > 8:
+                        self.fail(
+                            "close repeatedly awaited completed cleanup without making progress"
+                        )
+                    return real_shield(task)
+
+                with (
+                    patch(
+                        "livekit.plugins.boson_avatar.avatar.BosonAvatarAPI",
+                        return_value=api_client,
+                    ),
+                    patch.object(BaseAvatarSession, "aclose", new=AsyncMock()) as base_close,
+                    patch("livekit.plugins.boson_avatar.avatar.logger"),
+                ):
+                    avatar = AvatarSession(avatar_id="asset-1", api_key="boson-key")
+                    cleanup_task = asyncio.create_task(
+                        avatar._cleanup_failed_start(
+                            create_task=None,
+                            session_info=AvatarSessionInfo("provider-session-1", "avatar-1"),
+                        )
+                    )
+                    avatar._startup_cleanup_task = cleanup_task
+                    cleanup_task.add_done_callback(avatar._consume_startup_cleanup_result)
+                    await asyncio.sleep(0)
+                    self.assertTrue(cleanup_task.done())
+                    self.assertIs(avatar._startup_cleanup_task, cleanup_task)
+
+                    with patch(
+                        "livekit.plugins.boson_avatar.avatar.asyncio.shield",
+                        side_effect=bounded_shield,
+                    ):
+                        await avatar.aclose()
+                    await avatar.aclose()
+
+                self.assertIsNone(avatar.session_id)
+                self.assertIsNone(avatar._startup_cleanup_task)
+                self.assertEqual(api_client.end_session.await_count, 2 if retry_delete else 1)
+                api_client.end_session.assert_awaited_with("provider-session-1")
+                base_close.assert_awaited_once()
 
     async def test_start_cancellation_waits_for_create_and_compensates_session(self) -> None:
         create_entered = asyncio.Event()
