@@ -469,8 +469,6 @@ class RealtimeSession(llm.RealtimeSession):
         self._opts = realtime_model._opts
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
-        # chat ctx received while no session is active, synced once the next session is up
-        self._pending_chat_ctx: llm.ChatContext | None = None
         self._msg_ch = utils.aio.Chan[ClientEvents]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -525,6 +523,10 @@ class RealtimeSession(llm.RealtimeSession):
             if is_given(self._opts.session_resumption)
             else None
         )
+        # chat ctx the handle stands for; None until the first handle arrives
+        self._resumption_chat_ctx: llm.ChatContext | None = None
+        # chat ctx received while no session is active, synced on the next connect
+        self._pending_chat_ctx: llm.ChatContext | None = None
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
@@ -662,9 +664,13 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._sync_chat_ctx(chat_ctx)
 
-    def _sync_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        """Queue the items the server has not seen and adopt `chat_ctx` as the known state."""
-        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+    def _sync_chat_ctx(
+        self, chat_ctx: llm.ChatContext, *, known: llm.ChatContext | None = None
+    ) -> None:
+        """Queue the items missing from `known` and adopt `chat_ctx` as the known state."""
+        diff_ops = llm.utils.compute_chat_ctx_diff(
+            known if known is not None else self._chat_ctx, chat_ctx
+        )
 
         if diff_ops.to_remove:
             logger.warning("Gemini Live does not support removing messages")
@@ -928,11 +934,12 @@ class RealtimeSession(llm.RealtimeSession):
 
                         pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
                         if self._session_resumption_handle is not None:
-                            # the server restored the conversation up to the handle, so
-                            # replaying the history would duplicate it; only what arrived
-                            # while disconnected is new to it
-                            if pending_ctx is not None:
-                                self._sync_chat_ctx(pending_ctx)
+                            # the handle restores the conversation; send only what came after it
+                            target = pending_ctx if pending_ctx is not None else self._chat_ctx
+                            if self._resumption_chat_ctx is None:
+                                self._chat_ctx = target
+                            else:
+                                self._sync_chat_ctx(target, known=self._resumption_chat_ctx)
                         else:
                             if pending_ctx is not None:
                                 self._chat_ctx = pending_ctx
@@ -1170,6 +1177,7 @@ class RealtimeSession(llm.RealtimeSession):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
+                            self._resumption_chat_ctx = self._chat_ctx.copy()
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)

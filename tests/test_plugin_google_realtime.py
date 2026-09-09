@@ -560,12 +560,16 @@ async def _connected_session(
     *,
     handle: str | None,
     known: llm.ChatContext | None = None,
-    pending: llm.ChatContext,
+    sent_after_handle: llm.ChatContext | None = None,
+    pending: llm.ChatContext | None = None,
+    caller_handle: bool = False,
 ) -> AsyncIterator[tuple[RealtimeSession, _FakeLiveSession]]:
     """Connect once onto a fake socket.
 
-    `known` is what the previous socket had already synced, `pending` the update that
-    arrives before the connect loop runs.
+    `known` is the state the handle stands for, `sent_after_handle` what the previous
+    socket synced after the handle arrived, `pending` the update that arrives before the
+    connect loop runs. `caller_handle` passes the handle through `RealtimeModel` instead,
+    so its baseline is unknown.
     """
     from google.genai.live import AsyncLive
 
@@ -577,11 +581,18 @@ async def _connected_session(
 
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     monkeypatch.setattr(AsyncLive, "connect", _connect)
-    session = RealtimeModel().session()
-    session._session_resumption_handle = handle
+    if caller_handle:
+        session = RealtimeModel(
+            session_resumption=types.SessionResumptionConfig(handle=handle)
+        ).session()
+    else:
+        session = RealtimeModel().session()
+        session._session_resumption_handle = handle
     if known is not None:
-        session._chat_ctx = known
-    await session.update_chat_ctx(pending)
+        session._resumption_chat_ctx = known
+        session._chat_ctx = sent_after_handle if sent_after_handle is not None else known
+    if pending is not None:
+        await session.update_chat_ctx(pending)
     try:
         while session._active_session is None:
             await asyncio.sleep(0.01)
@@ -663,3 +674,37 @@ async def test_resumed_session_delivers_the_tool_result_from_the_restart(
         assert [kind for kind, _ in fake.sent] == ["tool_response"]
         responses = fake.sent[0][1]
         assert [r.id for r in responses] == ["call-1"]  # type: ignore[attr-defined]
+
+
+async def test_resumed_session_resends_what_the_handle_missed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A message synced after the last handle is not in the server snapshot; resend it."""
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    later = known.copy()
+    later.add_message(role="user", content="sent before the socket dropped")
+
+    async with _connected_session(
+        monkeypatch, handle="resume-1", known=known, sent_after_handle=later
+    ) as (session, fake):
+        assert _texts(fake.sent) == [["sent before the socket dropped"]]
+        assert session._pending_chat_ctx is None
+
+
+async def test_caller_provided_handle_adopts_the_history_without_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a handle from the constructor the baseline is unknown; the history is the server's."""
+    history = llm.ChatContext.empty()
+    history.add_message(role="user", content="from the previous process")
+    history.add_message(role="assistant", content="noted")
+
+    async with _connected_session(
+        monkeypatch, handle="resume-1", pending=history, caller_handle=True
+    ) as (session, fake):
+        assert fake.sent == []
+        assert [m.text_content for m in session.chat_ctx.messages()] == [
+            "from the previous process",
+            "noted",
+        ]
