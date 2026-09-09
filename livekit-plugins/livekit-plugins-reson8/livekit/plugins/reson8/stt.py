@@ -553,6 +553,9 @@ class STT(stt.STT):
         try:
             body = json.loads(text)
         except ValueError:
+            body = None
+
+        if not isinstance(body, dict):
             raise APIConnectionError("Reson8 returned a malformed response body") from None
 
         return stt.SpeechEvent(
@@ -756,6 +759,9 @@ class SpeechStream(stt.RecognizeStream):
                 try:
                     parsed = json.loads(msg.data)
                 except (ValueError, TypeError):
+                    parsed = None
+
+                if not isinstance(parsed, dict):
                     logger.warning(
                         "Ignoring unparseable Reson8 message",
                         extra={"lk.pii.message": msg.data},

@@ -1560,6 +1560,58 @@ async def test_a_rejected_batch_request_reports_why(
     assert expected in excinfo.value.message
 
 
+@pytest.mark.parametrize("body", ["[]", "null", "5", '"text"', "not json", ""])
+async def test_an_unusable_batch_body_is_a_connection_error(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession, body: str
+) -> None:
+    """
+    A valid JSON scalar or array is as unusable as invalid JSON.
+
+    Both used to reach mapping-only code, so the AttributeError escaped as a
+    bare exception rather than an APIError -- which the framework does not
+    retry.
+    """
+
+    server = await reson8_server(post_body=body)
+
+    with pytest.raises(APIConnectionError, match="malformed response body") as excinfo:
+        await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
+
+    assert excinfo.value.retryable is True
+
+
+@pytest.mark.parametrize("frame", ["[]", "null", "5", '"text"', "not json"])
+async def test_an_unusable_turn_frame_is_skipped(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession, frame: str
+) -> None:
+    """One unusable frame must not take the stream down with it."""
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        assert server._ws is not None
+        await server._ws.send_str(frame)
+
+        await server.send({"type": "turn_start"})
+        await server.send({"type": "turn_end_candidate", "text": "still here"})
+        await server.send({"type": "turn_end"})
+
+        events = await log.wait_for(4)
+        assert [e.type for e in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[2].alternatives[0].text == "still here"
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_a_batch_timeout_is_a_timeout_error(
     reson8_server: StartServer,
     client_session: aiohttp.ClientSession,
