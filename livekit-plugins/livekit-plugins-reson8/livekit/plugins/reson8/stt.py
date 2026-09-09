@@ -458,7 +458,13 @@ class STT(stt.STT):
         biasing: NotGivenOr[BiasingOptions] = NOT_GIVEN,
     ) -> None:
         """
-        Change settings at runtime. Live streams reconnect to apply them.
+        Change settings at runtime.
+
+        Reson8 takes its configuration from the query string, so a live stream
+        applies the new settings by reconnecting. That is deferred until the
+        current turn ends, since a redial mid-utterance would split it across
+        two sessions and transcribe neither in full; an idle stream reconnects
+        straight away.
 
         :class:`AudioOptions` is deliberately absent: the input resampler is
         built when a stream opens, so changing the rate mid-stream would
@@ -566,11 +572,19 @@ class SpeechStream(stt.RecognizeStream):
         self._session = http_session
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
+        self._pending_reconnect = False
         self._speaking = False
         # the most recent turn-end candidate, promoted to a final transcript
         # once the server confirms the turn ended
         self._candidate: SpeechData | None = None
         self._speech_duration = 0.0
+        # outlives a reconnect on purpose: a fresh one would strand the bytes
+        # already taken off _input_ch but not yet big enough to send
+        self._audio_bstream = utils.audio.AudioByteStream(
+            sample_rate=opts.audio.sample_rate,
+            num_channels=opts.audio.num_channels,
+            samples_per_channel=opts.audio.sample_rate * _SEND_CHUNK_MS // 1000,
+        )
 
     def update_options(
         self,
@@ -583,7 +597,11 @@ class SpeechStream(stt.RecognizeStream):
         self._opts = self._opts.merged(
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
-        self._reconnect_event.set()
+
+        if self._speaking:
+            self._pending_reconnect = True
+        else:
+            self._reconnect_event.set()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if frame.num_channels != self._opts.audio.num_channels:
@@ -632,20 +650,13 @@ class SpeechStream(stt.RecognizeStream):
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
 
-            samples_per_channel = self._opts.audio.sample_rate * _SEND_CHUNK_MS // 1000
-            audio_bstream = utils.audio.AudioByteStream(
-                sample_rate=self._opts.audio.sample_rate,
-                num_channels=self._opts.audio.num_channels,
-                samples_per_channel=samples_per_channel,
-            )
-
             try:
                 async for data in self._input_ch:
                     flushing = isinstance(data, self._FlushSentinel)
                     if isinstance(data, rtc.AudioFrame):
-                        frames = audio_bstream.write(data.data.tobytes())
+                        frames = self._audio_bstream.write(data.data.tobytes())
                     else:
-                        frames = audio_bstream.flush()
+                        frames = self._audio_bstream.flush()
 
                     for frame in frames:
                         self._speech_duration += frame.duration
@@ -696,6 +707,7 @@ class SpeechStream(stt.RecognizeStream):
             ws: aiohttp.ClientWebSocketResponse | None = None
             self._speaking = False
             self._candidate = None
+            self._pending_reconnect = False
 
             try:
                 ws = await self._connect_ws()
@@ -786,6 +798,10 @@ class SpeechStream(stt.RecognizeStream):
                     )
                 )
                 self._speech_duration = 0.0
+
+            if self._pending_reconnect:
+                self._pending_reconnect = False
+                self._reconnect_event.set()
 
         else:
             logger.debug("ignoring unhandled Reson8 message type: %r", msg_type)

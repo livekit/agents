@@ -112,6 +112,7 @@ def make_stream() -> MakeStream:
         stream._request_id = "req-test"
         stream._speaking = False
         stream._candidate = None
+        stream._pending_reconnect = False
         stream._start_time_offset = 0.0
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
@@ -972,14 +973,16 @@ async def test_usage_is_not_reported_without_audio(
         await stream.aclose()
 
 
-async def test_a_reconnect_discards_in_flight_turn_state(
+async def test_update_options_waits_for_the_turn_to_end(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     """
-    ``update_options`` redials, and the new session starts with no turn open.
+    New options must not redial in the middle of an utterance.
 
-    A leftover candidate would be promoted by an unrelated turn_end, and a
-    leftover speaking flag would swallow the next START_OF_SPEECH.
+    Reson8 holds the turn server-side, so a redial mid-turn abandons the audio
+    already sent and starts the replacement connection from whatever is spoken
+    next -- splitting one utterance across two sessions and transcribing
+    neither in full. The update waits for the turn to close instead.
     """
 
     server = await reson8_server()
@@ -992,10 +995,30 @@ async def test_a_reconnect_discards_in_flight_turn_state(
     opening = await log.wait_for(2)
     assert opening[1].type == SpeechEventType.PREFLIGHT_TRANSCRIPT
 
-    stream.update_options(transcript=TranscriptOptions(words=True))
-    await server.wait_for_connections(2)
-
     try:
+        stream.update_options(transcript=TranscriptOptions(words=True))
+
+        # the turn is still open, so the connection is left alone
+        await asyncio.sleep(0.3)
+        assert server.connections == 1, "redialled in the middle of a turn"
+
+        # closing the turn releases the held update
+        await server.send({"type": "turn_end"})
+        events = await log.wait_for(4)
+        assert [e.type for e in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[2].alternatives[0].text == "stale text"
+
+        await server.wait_for_connections(2)
+        assert server.query["include_words"] == "true"
+
+        # and the replacement session starts with no turn state carried over:
+        # a leftover candidate would be promoted by an unrelated turn_end, and
+        # a leftover speaking flag would swallow the next START_OF_SPEECH
         await server.send({"type": "turn_end"})
         await log.assert_quiet()
 
@@ -1003,17 +1026,68 @@ async def test_a_reconnect_discards_in_flight_turn_state(
         await server.send({"type": "turn_end_candidate", "text": "fresh text"})
         await server.send({"type": "turn_end"})
 
-        events = await log.wait_for(6)
-        assert [e.type for e in events[2:]] == [
+        events = await log.wait_for(8)
+        assert [e.type for e in events[4:]] == [
             SpeechEventType.START_OF_SPEECH,
             SpeechEventType.PREFLIGHT_TRANSCRIPT,
             SpeechEventType.FINAL_TRANSCRIPT,
             SpeechEventType.END_OF_SPEECH,
         ]
-        assert events[4].alternatives[0].text == "fresh text"
+        assert events[6].alternatives[0].text == "fresh text"
     finally:
         await log.aclose()
         await stream.aclose()
+
+
+async def test_update_options_reconnects_at_once_when_no_turn_is_open(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        stream.update_options(language="de")
+        await server.wait_for_connections(2)
+        assert server.query["language"] == "de"
+    finally:
+        await stream.aclose()
+
+
+async def test_a_reconnect_keeps_audio_that_has_not_been_sent_yet(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Audio is chunked to 100ms before it goes out.
+
+    A shorter frame sits in the chunker until enough arrives, and those bytes
+    have already been taken off the input channel -- so a chunker rebuilt for
+    the replacement connection would drop them silently.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        # half a chunk: consumed from the input channel, not yet on the wire
+        stream.push_frame(_frame(samples=800))
+        await asyncio.sleep(0.1)
+        assert not server.audio, "a partial chunk should not have been sent"
+
+        stream.update_options(language="de")
+        await server.wait_for_connections(2)
+
+        # the other half completes the chunk on the new connection
+        stream.push_frame(_frame(samples=800))
+        stream.flush()
+        await server.wait_for_text()
+    finally:
+        await stream.aclose()
+
+    assert sum(len(chunk) for chunk in server.audio) == 800 * 2 * 2, (
+        "the buffered half-chunk was dropped by the reconnect"
+    )
 
 
 async def test_a_rejected_upgrade_surfaces_the_status_and_the_reason(
