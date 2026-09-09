@@ -153,10 +153,13 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         super().__init__(tts=tts_instance, conn_options=conn_options)
-        self._metrics_model = options.model
         self._pool = pool
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
+
+    @property
+    def _metrics_model(self) -> str:
+        return self._options.model
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()

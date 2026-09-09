@@ -22,7 +22,7 @@ class _MutableModelTTS(FakeTTS):
 
 
 @pytest.mark.parametrize("new_stream_first", [False, True], ids=["old-first", "new-first"])
-async def test_stream_metrics_keep_model_after_parent_update(new_stream_first: bool) -> None:
+async def test_stream_metrics_use_current_model_by_default(new_stream_first: bool) -> None:
     tts = _MutableModelTTS()
     metrics: list[TTSMetrics] = []
     tts.on("metrics_collected", metrics.append)
@@ -34,17 +34,19 @@ async def test_stream_metrics_keep_model_after_parent_update(new_stream_first: b
 
             async with tts.stream() as new_stream:
                 new_stream.push_text("hello")
-                streams = [(old_stream, "model-a"), (new_stream, "model-b")]
+                # Providers can select the model after stream creation. Keep the default
+                # metrics behavior dynamic; providers with fixed options can override it.
+                streams = [old_stream, new_stream]
                 if new_stream_first:
                     streams.reverse()
 
-                for count, (stream, expected_model) in enumerate(streams, start=1):
+                for count, stream in enumerate(streams, start=1):
                     stream.end_input()
                     audio = [event async for event in stream]
 
                     assert audio
                     assert len(metrics) == count
                     assert metrics[-1].request_id == audio[0].request_id
-                    assert metrics[-1].metadata.model_name == expected_model
+                    assert metrics[-1].metadata.model_name == "model-b"
     finally:
         await tts.aclose()

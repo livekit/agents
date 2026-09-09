@@ -180,6 +180,10 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         self._sentence_tokenizer = sentence_tokenizer
         self._end_input_sentinel: object | None = None
 
+    @property
+    def _metrics_model(self) -> str:
+        return self._options.model
+
     def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream._FlushSentinel:
         sentinel = self._FlushSentinel()
         self._input_ch.send_nowait(sentinel)
