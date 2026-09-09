@@ -19,7 +19,7 @@ import copy
 import os
 import weakref
 from dataclasses import dataclass
-from typing import Literal, overload
+from typing import overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -176,7 +176,7 @@ def _resolve_websocket_model(
     return endpoint_model
 
 
-class TTS(tts.TTS[Literal["rime_tts_event"]]):
+class TTS(tts.TTS):
     @overload
     def __init__(
         self,
