@@ -1343,6 +1343,41 @@ async def test_update_options_waits_for_audio_the_server_has_not_answered(
         await stream.aclose()
 
 
+async def test_a_reconnect_rechecks_before_it_redials(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Safety is decided again at the moment the redial happens.
+
+    ``update_options`` can arm the reconnect while the stream is idle and a
+    frame can go out before the run loop wakes on it. Acting on the decision
+    made earlier would abandon that audio, so the loop re-checks.
+
+    The window is scheduling-dependent, so the race state is built directly:
+    clearing the settled flag is what sending a frame does.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        # idle, so this arms the reconnect straight away
+        stream.update_options(language="de")
+        # ...and a frame reaches the wire before the loop gets to run
+        stream._turn_settled.clear()
+
+        await asyncio.sleep(0.3)
+        assert server.connections == 1, "redialled on a decision that had gone stale"
+
+        # the transcript for that audio releases the held update
+        await server.send({"type": "turn_end"})
+        await server.wait_for_connections(2)
+        assert server.query["language"] == "de"
+    finally:
+        await stream.aclose()
+
+
 async def test_a_reconnect_does_not_rewind_transcript_timing(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:

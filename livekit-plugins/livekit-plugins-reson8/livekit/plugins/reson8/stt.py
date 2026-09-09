@@ -613,10 +613,10 @@ class SpeechStream(stt.RecognizeStream):
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
 
-        if self._speaking or not self._turn_settled.is_set():
-            self._pending_reconnect = True
-        else:
+        if self._safe_to_reconnect():
             self._reconnect_event.set()
+        else:
+            self._pending_reconnect = True
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         if frame.num_channels != self._opts.audio.num_channels:
@@ -627,6 +627,11 @@ class SpeechStream(stt.RecognizeStream):
             )
 
         super().push_frame(frame)
+
+    def _safe_to_reconnect(self) -> bool:
+        """Whether a redial would abandon audio Reson8 has not answered."""
+
+        return self._turn_settled.is_set() and not self._speaking
 
     async def _await_final_turn(self) -> None:
         """
@@ -786,19 +791,32 @@ class SpeechStream(stt.RecognizeStream):
                 wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
 
                 try:
-                    done, _ = await asyncio.wait(
-                        (tasks_group, wait_reconnect),
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in done:
-                        if task is not wait_reconnect:
-                            task.result()
+                    while True:
+                        done, _ = await asyncio.wait(
+                            (tasks_group, wait_reconnect),
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for task in done:
+                            if task is not wait_reconnect:
+                                task.result()
 
-                    if wait_reconnect not in done:
+                        if wait_reconnect not in done:
+                            finished = True
+                            break
+
+                        self._reconnect_event.clear()
+
+                        if not self._safe_to_reconnect():
+                            self._pending_reconnect = True
+                            wait_reconnect = asyncio.create_task(self._reconnect_event.wait())
+                            continue
+
+                        logger.debug("Reconnecting to Reson8 to apply updated options")
+                        finished = False
                         break
 
-                    self._reconnect_event.clear()
-                    logger.debug("Reconnecting to Reson8 to apply updated options")
+                    if finished:
+                        break
                 finally:
                     await utils.aio.gracefully_cancel(*tasks, wait_reconnect)
                     tasks_group.cancel()
