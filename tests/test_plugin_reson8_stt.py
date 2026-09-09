@@ -1287,6 +1287,55 @@ async def test_update_options_waits_for_audio_the_server_has_not_answered(
         await stream.aclose()
 
 
+async def test_a_reconnect_does_not_rewind_transcript_timing(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    """
+    Reson8 restarts start_ms at zero on a new socket.
+
+    The offset the framework keeps for that is advanced per ``_run`` call, but
+    this plugin reconnects inside one, so it has to carry the timeline itself.
+    Otherwise the second turn's timestamps land back on top of the first's.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    await server.send({"type": "turn_start"})
+    await server.send(
+        {"type": "turn_end_candidate", "text": "first", "start_ms": 0, "duration_ms": 100}
+    )
+    await server.send({"type": "turn_end"})
+    first = (await log.wait_for(4))[2]
+
+    try:
+        gap = 0.3
+        await asyncio.sleep(gap)
+        stream.update_options(language="de")
+        await server.wait_for_connections(2)
+
+        await server.send({"type": "turn_start"})
+        await server.send(
+            {"type": "turn_end_candidate", "text": "second", "start_ms": 0, "duration_ms": 100}
+        )
+        await server.send({"type": "turn_end"})
+        second = (await log.wait_for(8))[6]
+
+        assert first.alternatives[0].text == "first"
+        assert second.alternatives[0].text == "second"
+        assert second.alternatives[0].start_time >= gap * 0.8, (
+            "the second session's timeline restarted at zero"
+        )
+        assert second.alternatives[0].start_time >= first.alternatives[0].end_time, (
+            "the second turn overlaps audio the first turn already covered"
+        )
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_update_options_reconnects_at_once_when_no_turn_is_open(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:

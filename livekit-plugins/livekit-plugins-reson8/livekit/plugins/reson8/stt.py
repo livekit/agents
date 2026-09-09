@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 import weakref
 from collections.abc import Awaitable, Sequence
@@ -750,8 +751,18 @@ class SpeechStream(stt.RecognizeStream):
 
                 self._process_message(parsed)
 
+        connection_started: float | None = None
+
         while True:
             ws: aiohttp.ClientWebSocketResponse | None = None
+            now = time.time()
+
+            if connection_started is not None:
+                self.start_time_offset += now - connection_started
+
+            self.start_time = now
+            connection_started = now
+
             self._speaking = False
             self._candidate = None
             self._pending_reconnect = False
