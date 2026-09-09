@@ -10,6 +10,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from pydantic import Field
+
 import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
@@ -43,6 +45,19 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 )
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
+
+class _ChatCtxContent(types.LiveClientContent):
+    """Client content built from chat ctx items; the ids let the send task mark them sent."""
+
+    item_ids: set[str] = Field(default_factory=set, exclude=True)
+
+
+class _ChatCtxToolResponse(types.LiveClientToolResponse):
+    """Tool responses built from chat ctx items; the ids let the send task mark them sent."""
+
+    item_ids: set[str] = Field(default_factory=set, exclude=True)
+
 
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
@@ -527,6 +542,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._resumption_chat_ctx: llm.ChatContext | None = None
         # chat ctx received while no session is active, synced on the next connect
         self._pending_chat_ctx: llm.ChatContext | None = None
+        # ids of chat ctx items queued but not yet sent, so a handle does not claim them
+        self._unsent_item_ids: set[str] = set()
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
@@ -706,17 +723,30 @@ class RealtimeSession(llm.RealtimeSession):
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
             )
+            turns: list[types.Content] = []
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
                     format="google", inject_dummy_user_message=False
                 )
                 turns = [types.Content.model_validate(turn) for turn in turns_dict]
                 if turns:
+                    item_ids = {
+                        item.id for item in append_ctx.items if item.type != "function_call_output"
+                    }
+                    self._unsent_item_ids |= item_ids
                     self._send_client_event(
-                        types.LiveClientContent(turns=turns, turn_complete=False)
+                        _ChatCtxContent(turns=turns, turn_complete=False, item_ids=item_ids)
                     )
             if tool_results:
-                self._send_client_event(tool_results)
+                item_ids = {
+                    item.id for item in append_ctx.items if item.type == "function_call_output"
+                }
+                self._unsent_item_ids |= item_ids
+                self._send_client_event(
+                    _ChatCtxToolResponse(
+                        function_responses=tool_results.function_responses, item_ids=item_ids
+                    )
+                )
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -971,6 +1001,7 @@ class RealtimeSession(llm.RealtimeSession):
                                     turns=turns,  # type: ignore
                                     turn_complete=False,
                                 )
+                            self._unsent_item_ids.clear()
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1091,6 +1122,8 @@ class RealtimeSession(llm.RealtimeSession):
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
+                if isinstance(msg, _ChatCtxContent | _ChatCtxToolResponse):
+                    self._unsent_item_ids -= msg.item_ids
                 if lk_google_debug and isinstance(
                     msg,
                     (
@@ -1177,7 +1210,13 @@ class RealtimeSession(llm.RealtimeSession):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
                             )
-                            self._resumption_chat_ctx = self._chat_ctx.copy()
+                            self._resumption_chat_ctx = llm.ChatContext(
+                                [
+                                    item
+                                    for item in self._chat_ctx.items
+                                    if item.id not in self._unsent_item_ids
+                                ]
+                            )
 
                     if response.server_content:
                         self._handle_server_content(response.server_content)

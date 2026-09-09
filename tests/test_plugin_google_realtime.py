@@ -708,3 +708,71 @@ async def test_caller_provided_handle_adopts_the_history_without_replay(
             "from the previous process",
             "noted",
         ]
+
+
+@llm.function_tool
+async def _restart_tool() -> str:
+    """Any new tool makes update_tools restart the socket."""
+    return ""
+
+
+async def test_handle_does_not_claim_a_queued_but_unsent_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handle that lands while a diff is still queued must not cover it; a restart re-sends it."""
+    from google.genai.live import AsyncLive
+
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    updated = known.copy()
+    updated.add_message(role="user", content="queued behind the handle")
+
+    class _GatedSession(_FakeLiveSession):
+        """First socket: the connect-time handle arrives while the send is still blocked."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = asyncio.Event()
+
+        async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
+            await self.gate.wait()
+            await super().send_client_content(turns=turns, turn_complete=turn_complete)
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            yield types.LiveServerMessage(
+                session_resumption_update=types.LiveServerSessionResumptionUpdate(
+                    new_handle="resume-2", resumable=True
+                )
+            )
+            await self._closed.wait()
+
+    sockets: list[_FakeLiveSession] = [_GatedSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    session._resumption_chat_ctx = known
+    session._chat_ctx = known
+    await session.update_chat_ctx(updated)
+    try:
+        while session._session_resumption_handle != "resume-2":
+            await asyncio.sleep(0.01)
+        # the diff is queued but its send is blocked, so the new handle must not cover it
+        assert [m.text_content for m in session._resumption_chat_ctx.messages()] == ["hello"]
+
+        # restart before the send completes: the channel drain drops the queued diff
+        await session.update_tools([_restart_tool])
+        while len(opened) < 2:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert _texts(opened[1].sent) == [["queued behind the handle"]]
+    finally:
+        await session.aclose()
