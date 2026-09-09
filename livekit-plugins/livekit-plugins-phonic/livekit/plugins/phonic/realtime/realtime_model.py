@@ -72,6 +72,7 @@ class PhonicToolConfig(TypedDict, total=False):
     require_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
+    allow_tool_chaining: bool
     # Built-in tools only (set on the matching ``phonic_tools`` entry):
     respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
     speech_before_tool_call: (
@@ -659,13 +660,13 @@ class RealtimeSession(llm.RealtimeSession):
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
-                    # fixed, not configurable: the plugin does not support tool chaining or tool
-                    # calls during agent speech within the Realtime generations framework
+                    # fixed, not configurable: the plugin does not support tool calls during
+                    # agent speech
                     "wait_for_speech_before_tool_call": True,
-                    "allow_tool_chaining": False,
                     "require_speech_before_tool_call": cfg.get(
                         "require_speech_before_tool_call", False
                     ),
+                    "allow_tool_chaining": cfg.get("allow_tool_chaining", False),
                     "forbid_speech_after_tool_call": cfg.get(
                         "forbid_speech_after_tool_call", False
                     ),
@@ -1447,8 +1448,8 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
-        # At most 1 tool call is supported per turn due to `allow_tool_chaining: False`,
-        # allowing us to close the generation.
+        # Close the generation after the tool call. With allow_tool_chaining enabled, any
+        # chained follow-up call arrives as a new generation.
         self._close_current_generation(interrupted=False)
 
     def _handle_tool_call_interrupted(self, message: ToolCallInterruptedPayload) -> None:
