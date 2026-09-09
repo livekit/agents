@@ -905,14 +905,18 @@ class AgentActivity(RecognitionHooks):
                 @utils.log_exceptions(logger=logger)
                 async def _traceable_on_enter() -> None:
                     data = _OnEnterData(session=self._session, agent=self._agent)
+                    # the turn this agent was entered on; a turn the user commits while on_enter
+                    # runs is not its to decline
+                    entered_on = self._session._unanswered_user_metrics
                     try:
                         tk = _OnEnterContextVar.set(data)
                         await self._agent.on_enter()
                     finally:
                         _OnEnterContextVar.reset(tk)
-                        # an on_enter that returns without speaking has declined to answer the
-                        # user turn; speeches it created already took their copy
-                        self._session._unanswered_user_metrics = None
+                        # an on_enter that returns without speaking has declined the turn;
+                        # speeches it created already took their copy
+                        if self._session._unanswered_user_metrics is entered_on:
+                            self._session._unanswered_user_metrics = None
 
                 self._on_enter_task = task = self._create_speech_task(
                     _traceable_on_enter(), name="AgentTask_on_enter"

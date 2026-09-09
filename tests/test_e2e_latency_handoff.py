@@ -525,3 +525,39 @@ async def test_reply_after_awaited_task_in_on_enter_answers_the_last_turn() -> N
     _assert_answers(question, go)
     assert thanks.text_content == "thanks Bob"
     _assert_answers(thanks, bob)
+
+
+async def test_turn_committed_during_on_enter_survives_its_end() -> None:
+    """The user speaks while on_enter still runs; that turn's tool-only handoff keeps its latency."""
+
+    class Slow(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="slow")
+
+        async def on_enter(self) -> None:
+            await asyncio.sleep(3.0)
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return Greeter()
+
+    class Router(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="router")
+
+        @function_tool
+        async def handoff(self, ctx: RunContext) -> Agent:
+            return Slow()
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "go")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_user_speech(3.5, 4.0, "support please")
+    actions.add_llm("", tool_calls=[HANDOFF_CALL])
+    actions.add_llm("hello from the greeter", input="greet")
+    actions.add_tts(1.0)
+
+    messages = await _messages(actions, Router(), drain_delay=4.0)
+    _go, support = _by_role(messages, "user")
+    (greeting,) = _by_role(messages, "assistant")
+    _assert_answers(greeting, support)
