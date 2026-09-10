@@ -98,7 +98,10 @@ class TavusAPI:
             or NOT_GIVEN
         )
 
-        if not pal_id:
+        # extra_payload overrides the payload wholesale, so a pal named there counts
+        # as user-supplied when deciding whether to fill in the stock face.
+        extra = dict(extra_payload) if utils.is_given(extra_payload) else {}
+        if not pal_id and not extra.get("pal_id"):
             # no pal supplied — use the default stock pal and, unless overridden, its stock face
             pal_id = DEFAULT_PAL_ID
             face_id = face_id or DEFAULT_FACE_ID
@@ -108,8 +111,7 @@ class TavusAPI:
         # a user-supplied pal carries its own default face, so only send face_id when we have one
         if face_id:
             payload["face_id"] = face_id
-        if utils.is_given(extra_payload):
-            payload.update(extra_payload)
+        payload.update(extra)
 
         if "conversation_name" not in payload:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")
