@@ -36,11 +36,14 @@ session = AgentSession(
 `recognition_model="eot_nabrah"` emits the end-of-turn signal the plugin uses to
 close a turn. `end_of_turn_confirm_delay_seconds` is how long it waits after that
 signal before committing. Speaking again inside the window keeps the turn open.
-`max_silence_before_finalize_seconds` (default `1.5`) is the fallback when no
-signal arrives.
+`max_transcript_inactivity_seconds` optionally commits after that many seconds
+without new transcript text. It is disabled by default because it measures
+recognizer inactivity, not acoustic silence, and a provider delay could otherwise
+split continuous speech.
 
-The default model (`recognition_model=""`) is more accurate but emits no
-end-of-turn signal, leaving silence as the only turn detector.
+Nabrah's unnamed model (`recognition_model=""`) is more accurate but emits no
+end-of-turn signal. When using it, configure another turn detector or explicitly
+set `max_transcript_inactivity_seconds` as a fallback heuristic.
 
 ### Word boosting
 
@@ -141,7 +144,7 @@ async def entrypoint(ctx: JobContext) -> None:
             recognition_model="eot_nabrah",
             language="ar-SA",
             end_of_turn_confirm_delay_seconds=0.4,
-            max_silence_before_finalize_seconds=1.5,
+            max_transcript_inactivity_seconds=1.5,
             priority_words=boosting["words"],
             priority_words_strength=boosting["boost_threshold"],
         ),
@@ -167,7 +170,7 @@ if __name__ == "__main__":
 | --- | --- | --- |
 | `recognition_model` | `"eot_nabrah"` | `"eot_nabrah"` emits the end-of-turn signal used for turn detection. `""` selects the default model, which is more accurate but emits no signal. |
 | `end_of_turn_confirm_delay_seconds` | `0.4` | Hold after an end-of-turn signal before committing the turn. `None` commits immediately. |
-| `max_silence_before_finalize_seconds` | `1.5` | Fallback when no end-of-turn signal arrives. `None` disables it. |
+| `max_transcript_inactivity_seconds` | `None` | Optional fallback that finalizes after no new transcript text. This does not measure acoustic silence. |
 | `priority_words` | `[]` | Terms to bias recognition toward. |
 | `priority_words_strength` | `0.5` | How strongly to bias. |
 | `api_key` | `NABRAH_API_KEY` | API key, if not set in the environment. |

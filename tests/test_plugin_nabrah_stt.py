@@ -48,6 +48,13 @@ def test_closed_utterance_with_repeated_prefix_starts_a_new_utterance(
     assert stream._current_text() == "مرحبا مرحبا بكم"
 
 
+def test_open_utterance_correction_replaces_previous_hypothesis(stream: SpeechStream) -> None:
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
+    stream._process_message({"type": "transcript", "text": "مرحبا بكن", "is_final": False})
+
+    assert stream._current_text() == "مرحبا بكن"
+
+
 def test_flushed_prefix_preserves_provider_punctuation(stream: SpeechStream) -> None:
     stream._stt._end_of_turn_confirm_delay_seconds = None
 

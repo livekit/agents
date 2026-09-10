@@ -149,7 +149,7 @@ class STT(stt.STT):
         disable_number_normalization: bool = False,
         priority_words: list[str] | None = None,
         priority_words_strength: float = 0.5,
-        max_silence_before_finalize_seconds: float | None = 1.5,
+        max_transcript_inactivity_seconds: float | None = None,
         end_of_turn_confirm_delay_seconds: float | None = 0.4,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -183,7 +183,7 @@ class STT(stt.STT):
         self._disable_number_normalization = disable_number_normalization
         self._priority_words = priority_words or []
         self._priority_words_strength = priority_words_strength
-        self._max_silence_before_finalize_seconds = max_silence_before_finalize_seconds
+        self._max_transcript_inactivity_seconds = max_transcript_inactivity_seconds
         self._end_of_turn_confirm_delay_seconds = end_of_turn_confirm_delay_seconds
         self._session = http_session
         self._label = "nabrah.STT (nabrah-stt-v1)"
@@ -230,6 +230,7 @@ class SpeechStream(stt.SpeechStream):
     _utt_clean: str = ""
     _utt_closed: bool = False
     _utt_flushed_clean: str = ""
+    _utt_flushed_chars: int = 0
     _input_done: bool = False
     _turn_words: tuple[TimedString, ...] = ()
     _utt_words: tuple[TimedString, ...] = ()
@@ -256,6 +257,7 @@ class SpeechStream(stt.SpeechStream):
         self._utt_raw = ""
         self._utt_closed = False
         self._utt_flushed_clean = ""
+        self._utt_flushed_chars = 0
         self._turn_words = ()
         self._utt_words = ()
         self._utt_flushed_words = 0
@@ -365,7 +367,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.close()
 
     async def _eot_watchdog(self) -> None:
-        timeout = self._stt._max_silence_before_finalize_seconds
+        inactivity_timeout = self._stt._max_transcript_inactivity_seconds
         confirm_delay = self._stt._end_of_turn_confirm_delay_seconds
         while True:
             await asyncio.sleep(_WATCHDOG_POLL_SECONDS)
@@ -378,9 +380,9 @@ class SpeechStream(stt.SpeechStream):
                 self._flush_eos()
                 continue
             if (
-                timeout is not None
+                inactivity_timeout is not None
                 and self._current_text()
-                and now - self._last_progress_at >= timeout
+                and now - self._last_progress_at >= inactivity_timeout
             ):
                 self._flush_eos()
 
@@ -498,6 +500,7 @@ class SpeechStream(stt.SpeechStream):
             )
 
         self._utt_flushed_clean = _append_text(self._utt_flushed_clean, self._utt_clean)
+        self._utt_flushed_chars = len(self._utt_flushed_clean)
         # index into the backend's raw `words` list, so count raw entries consumed,
         # not the filtered survivors, or blank entries shift the cursor backwards
         # and already-emitted words get replayed.
@@ -570,19 +573,12 @@ class SpeechStream(stt.SpeechStream):
 
         clean_now, _ = _strip_and_detect_eot(text)
         clean_now = _normalize_whitespace(clean_now)
-        clean_prev, _ = _strip_and_detect_eot(self._utt_raw)
-        clean_prev = _normalize_whitespace(clean_prev)
-        if clean_prev:
-            continues = not self._utt_closed and (
-                clean_now.startswith(clean_prev) or clean_prev.startswith(clean_now)
-            )
-        else:
-            continues = True
-        if not continues:
+        if self._utt_closed:
             self._turn_text = _append_text(self._turn_text, self._utt_clean)
             self._utt_clean = ""
             self._utt_raw = ""
             self._utt_flushed_clean = ""
+            self._utt_flushed_chars = 0
             self._turn_words = self._turn_words + self._utt_words
             self._utt_words = ()
             self._utt_flushed_words = 0
@@ -600,11 +596,7 @@ class SpeechStream(stt.SpeechStream):
 
         new_text = text[len(self._utt_raw) :] if text.startswith(self._utt_raw) else text
         _, is_eot = _strip_and_detect_eot(new_text)
-        self._utt_clean = (
-            clean_now[len(self._utt_flushed_clean) :]
-            if self._utt_flushed_clean and clean_now.startswith(self._utt_flushed_clean)
-            else clean_now
-        )
+        self._utt_clean = clean_now[self._utt_flushed_chars :]
         self._utt_raw = text
         if utt_final:
             self._utt_closed = True
