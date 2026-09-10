@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -722,6 +723,10 @@ class TestVadReplacementCleanup:
         ar._hooks = MagicMock()
         ar._user_silence_ev = asyncio.Event()
         ar._user_silence_ev.clear()
+        ar._active_vad_speech_started_at = 1.0
+        ar._transcript_buffer = deque()
+        ar._transcript_gate_active = False
+        ar._process_stt_event = MagicMock()
         ar._vad_speech_started = True
         ar._ensure_user_turn_span = MagicMock(return_value=contextlib.nullcontext())
         monkeypatch.setattr(
@@ -730,6 +735,7 @@ class TestVadReplacementCleanup:
 
         ar._update_vad(None)
 
-        ar._hooks.on_end_of_speech.assert_called_once_with(None)
+        ar._hooks.on_vad_reset.assert_called_once_with()
         assert ar._speaking is False
         assert ar._vad_speech_started is False
+        assert ar._active_vad_speech_started_at is None
