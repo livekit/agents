@@ -176,3 +176,10 @@ stream opens.
 
 `base_url` (or `RESON8_BASE_URL`) points the plugin at a Reson8 deployment other
 than `https://api.reson8.dev`.
+
+## Documentation
+
+- [Reson8 API reference](https://docs.reson8.dev/api/speech-to-text/turns/)
+- [Turns and turn detection](https://docs.reson8.dev/speech-to-text/turns/)
+- [LiveKit Agents docs](https://docs.livekit.io/agents/)
+- [Reson8 STT plugin guide](https://docs.livekit.io/agents/integrations/stt/reson8/)
