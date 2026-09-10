@@ -329,6 +329,11 @@ class RoomIO:
         if self._user_tr_output:
             self._user_tr_output.set_participant(participant_identity)
 
+        logger.info(
+            "RoomIO linked to participant",
+            extra={"participant": participant_identity, "room": self._room.name},
+        )
+
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
