@@ -196,12 +196,24 @@ class TTS(tts.TTS):
             voice_id (str, optional): The voice ID for the desired voice.
             speed (float, optional): The audio playback speed.
         """
+        connection_params_changed = False
         if is_given(lang_code):
             self._opts.lang_code = LanguageCode(lang_code)
+            connection_params_changed = True
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+            connection_params_changed = True
         if is_given(speed):
             self._opts.speed = speed
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # lang_code, voice_id and speed are all baked into the URL _connect_ws
+            # builds, so a pooled connection keeps synthesising with the previous
+            # settings. mark_refreshed_on_get=True restarts max_session_duration on
+            # every acquire, so under steady use that connection can outlive the
+            # change indefinitely.
+            self._pool.invalidate()
 
     def synthesize(
         self,

@@ -10,6 +10,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from pydantic import Field
+
 import google.auth.credentials
 from google.auth._default_async import default_async
 from google.genai import Client as GenAIClient, types
@@ -43,6 +45,19 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
 )
 
 lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+
+
+class _ChatCtxContent(types.LiveClientContent):
+    """Client content built from chat ctx items; the ids let the send task mark them sent."""
+
+    item_ids: set[str] = Field(default_factory=set, exclude=True)
+
+
+class _ChatCtxToolResponse(types.LiveClientToolResponse):
+    """Tool responses built from chat ctx items; the ids let the send task mark them sent."""
+
+    item_ids: set[str] = Field(default_factory=set, exclude=True)
+
 
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
@@ -523,6 +538,12 @@ class RealtimeSession(llm.RealtimeSession):
             if is_given(self._opts.session_resumption)
             else None
         )
+        # chat ctx the handle stands for; None until the first handle arrives
+        self._resumption_chat_ctx: llm.ChatContext | None = None
+        # chat ctx received while no session is active, synced on the next connect
+        self._pending_chat_ctx: llm.ChatContext | None = None
+        # ids of chat ctx items queued but not yet sent, so a handle does not claim them
+        self._unsent_item_ids: set[str] = set()
 
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
@@ -655,10 +676,18 @@ class RealtimeSession(llm.RealtimeSession):
         )
         async with self._session_lock:
             if not self._active_session:
-                self._chat_ctx = chat_ctx
+                self._pending_chat_ctx = chat_ctx
                 return
 
-        diff_ops = llm.utils.compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+        self._sync_chat_ctx(chat_ctx)
+
+    def _sync_chat_ctx(
+        self, chat_ctx: llm.ChatContext, *, known: llm.ChatContext | None = None
+    ) -> None:
+        """Queue the items missing from `known` and adopt `chat_ctx` as the known state."""
+        diff_ops = llm.utils.compute_chat_ctx_diff(
+            known if known is not None else self._chat_ctx, chat_ctx
+        )
 
         if diff_ops.to_remove:
             logger.warning("Gemini Live does not support removing messages")
@@ -694,17 +723,30 @@ class RealtimeSession(llm.RealtimeSession):
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
             )
+            turns: list[types.Content] = []
             if self._realtime_model.capabilities.mutable_chat_context:
                 turns_dict, _ = append_ctx.copy(exclude_function_call=True).to_provider_format(
                     format="google", inject_dummy_user_message=False
                 )
                 turns = [types.Content.model_validate(turn) for turn in turns_dict]
                 if turns:
+                    item_ids = {
+                        item.id for item in append_ctx.items if item.type != "function_call_output"
+                    }
+                    self._unsent_item_ids |= item_ids
                     self._send_client_event(
-                        types.LiveClientContent(turns=turns, turn_complete=False)
+                        _ChatCtxContent(turns=turns, turn_complete=False, item_ids=item_ids)
                     )
             if tool_results:
-                self._send_client_event(tool_results)
+                item_ids = {
+                    item.id for item in append_ctx.items if item.type == "function_call_output"
+                }
+                self._unsent_item_ids |= item_ids
+                self._send_client_event(
+                    _ChatCtxToolResponse(
+                        function_responses=tool_results.function_responses, item_ids=item_ids
+                    )
+                )
 
         # since we don't have a view of the history on the server side, we'll assume
         # the current state is accurate. this isn't perfect because removals aren't done.
@@ -720,7 +762,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx.copy()
+        return (self._pending_chat_ctx or self._chat_ctx).copy()
 
     @property
     def tools(self) -> llm.ToolContext:
@@ -920,34 +962,46 @@ class RealtimeSession(llm.RealtimeSession):
                     async with self._session_lock:
                         self._active_session = session
 
-                        # Check for system/developer messages in initial chat context
-                        system_msg_count = sum(
-                            1
-                            for msg in self._chat_ctx.messages()
-                            if msg.role in ("system", "developer")
-                        )
-                        if system_msg_count > 0:
-                            logger.warning(
-                                f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
-                                f"'developer' roles in chat history. Dropping {system_msg_count} system "
-                                f"message(s) from initial chat context during session initialization. "
-                                f"Gemini Realtime only supports 'user' and 'model' roles. Use "
-                                f"update_instructions() to set system-level context instead."
-                            )
+                        pending_ctx, self._pending_chat_ctx = self._pending_chat_ctx, None
+                        if self._session_resumption_handle is not None:
+                            # the handle restores the conversation; send only what came after it
+                            target = pending_ctx if pending_ctx is not None else self._chat_ctx
+                            if self._resumption_chat_ctx is None:
+                                self._chat_ctx = target
+                            else:
+                                self._sync_chat_ctx(target, known=self._resumption_chat_ctx)
+                        else:
+                            if pending_ctx is not None:
+                                self._chat_ctx = pending_ctx
 
-                        turns_dict, _ = self._chat_ctx.copy(
-                            exclude_function_call=True,
-                            exclude_handoff=True,
-                            exclude_instructions=True,
-                            exclude_empty_message=True,
-                            exclude_config_update=True,
-                        ).to_provider_format(format="google", inject_dummy_user_message=False)
-                        turns = [types.Content.model_validate(turn) for turn in turns_dict]
-                        if turns:
-                            await session.send_client_content(
-                                turns=turns,  # type: ignore
-                                turn_complete=False,
+                            system_msg_count = sum(
+                                1
+                                for msg in self._chat_ctx.messages()
+                                if msg.role in ("system", "developer")
                             )
+                            if system_msg_count > 0:
+                                logger.warning(
+                                    f"Gemini Realtime model '{self._opts.model}' does not support 'system' or "
+                                    f"'developer' roles in chat history. Dropping {system_msg_count} system "
+                                    f"message(s) from initial chat context during session initialization. "
+                                    f"Gemini Realtime only supports 'user' and 'model' roles. Use "
+                                    f"update_instructions() to set system-level context instead."
+                                )
+
+                            turns_dict, _ = self._chat_ctx.copy(
+                                exclude_function_call=True,
+                                exclude_handoff=True,
+                                exclude_instructions=True,
+                                exclude_empty_message=True,
+                                exclude_config_update=True,
+                            ).to_provider_format(format="google", inject_dummy_user_message=False)
+                            turns = [types.Content.model_validate(turn) for turn in turns_dict]
+                            if turns:
+                                await session.send_client_content(
+                                    turns=turns,  # type: ignore
+                                    turn_complete=False,
+                                )
+                            self._unsent_item_ids.clear()
 
                     # queue up existing chat context
                     send_task = asyncio.create_task(
@@ -1068,6 +1122,8 @@ class RealtimeSession(llm.RealtimeSession):
                 else:
                     logger.warning(f"Warning: Received unhandled message type: {type(msg)}")
 
+                if isinstance(msg, _ChatCtxContent | _ChatCtxToolResponse):
+                    self._unsent_item_ids -= msg.item_ids
                 if lk_google_debug and isinstance(
                     msg,
                     (
@@ -1153,6 +1209,13 @@ class RealtimeSession(llm.RealtimeSession):
                         ):
                             self._session_resumption_handle = (
                                 response.session_resumption_update.new_handle
+                            )
+                            self._resumption_chat_ctx = llm.ChatContext(
+                                [
+                                    item
+                                    for item in self._chat_ctx.items
+                                    if item.id not in self._unsent_item_ids
+                                ]
                             )
 
                     if response.server_content:

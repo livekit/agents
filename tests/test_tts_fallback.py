@@ -66,6 +66,73 @@ class _NamedTTS(FakeTTS):
         return self._provider_name
 
 
+def _metrics_listener_count(tts_impl: TTS) -> int:
+    return len(tts_impl._events.get("metrics_collected", set()))
+
+
+def _set_non_streaming(tts_impl: FakeTTS) -> FakeTTS:
+    tts_impl._capabilities.streaming = False
+    return tts_impl
+
+
+async def test_stream_closes_temporary_adapter_after_each_request() -> None:
+    non_streaming_tts = _set_non_streaming(FakeTTS(fake_audio_duration=1.0))
+    fallback_adapter = FallbackAdapterTester([non_streaming_tts, FakeTTS(fake_audio_duration=1.0)])
+    baseline = _metrics_listener_count(non_streaming_tts)
+
+    try:
+        for _ in range(3):
+            async with fallback_adapter.stream() as stream:
+                stream.push_text("hello test")
+                stream.end_input()
+                assert [frame async for frame in stream]
+
+            assert _metrics_listener_count(non_streaming_tts) == baseline
+    finally:
+        await fallback_adapter.aclose()
+
+
+async def test_stream_closes_temporary_adapter_after_failure_and_recovery() -> None:
+    non_streaming_tts = _set_non_streaming(
+        FakeTTS(fake_exception=APIConnectionError("primary failed"))
+    )
+    fallback_adapter = FallbackAdapterTester(
+        [non_streaming_tts, FakeTTS(fake_audio_duration=1.0)],
+        max_retry_per_tts=0,
+    )
+    baseline = _metrics_listener_count(non_streaming_tts)
+
+    try:
+        async with fallback_adapter.stream() as stream:
+            stream.push_text("hello test")
+            stream.end_input()
+            assert [frame async for frame in stream]
+
+        recovery_task = fallback_adapter._status[0].recovering_stream_task
+        assert recovery_task is not None
+        await recovery_task
+        assert _metrics_listener_count(non_streaming_tts) == baseline
+    finally:
+        await fallback_adapter.aclose()
+
+
+async def test_stream_closes_temporary_adapter_after_cancellation() -> None:
+    non_streaming_tts = _set_non_streaming(FakeTTS(fake_audio_duration=1.0))
+    fallback_adapter = FallbackAdapterTester([non_streaming_tts, FakeTTS(fake_audio_duration=1.0)])
+    baseline = _metrics_listener_count(non_streaming_tts)
+    stream = fallback_adapter.stream()
+
+    try:
+        stream.push_text("hello test")
+        stream.flush()
+        await asyncio.wait_for(non_streaming_tts.synthesize_ch.recv(), timeout=1.0)
+        await stream.aclose()
+        assert _metrics_listener_count(non_streaming_tts) == baseline
+    finally:
+        await stream.aclose()
+        await fallback_adapter.aclose()
+
+
 async def test_reports_active_instance_model_and_provider() -> None:
     fake1 = _NamedTTS(
         model="primary-model",

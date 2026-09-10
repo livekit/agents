@@ -491,6 +491,7 @@ class Agent:
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
+            temporary_adapter: stt.StreamAdapter | None = None
 
             if not activity.stt.capabilities.streaming:
                 if not activity.vad:
@@ -499,36 +500,41 @@ class Agent:
                         "Or manually wrap your STT in a stt.StreamAdapter"
                     )
 
-                wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                temporary_adapter = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                wrapped_stt = temporary_adapter
 
-            conn_options = activity.session.conn_options.stt_conn_options
-            async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                _audio_input_started_at: float = (
-                    activity._audio_recognition._input_started_at
-                    if activity._audio_recognition is not None
-                    and activity._audio_recognition._input_started_at is not None
-                    else (
-                        activity.session._recorder_io.recording_started_at
-                        if activity.session._recorder_io
-                        and activity.session._recorder_io.recording_started_at
-                        else activity.session._started_at
-                        if activity.session._started_at
-                        else time.time()
+            try:
+                conn_options = activity.session.conn_options.stt_conn_options
+                async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                    _audio_input_started_at: float = (
+                        activity._audio_recognition._input_started_at
+                        if activity._audio_recognition is not None
+                        and activity._audio_recognition._input_started_at is not None
+                        else (
+                            activity.session._recorder_io.recording_started_at
+                            if activity.session._recorder_io
+                            and activity.session._recorder_io.recording_started_at
+                            else activity.session._started_at
+                            if activity.session._started_at
+                            else time.time()
+                        )
                     )
-                )
-                stream.start_time_offset = time.time() - _audio_input_started_at
+                    stream.start_time_offset = time.time() - _audio_input_started_at
 
-                @utils.log_exceptions(logger=logger)
-                async def _forward_input() -> None:
-                    async for frame in audio:
-                        stream.push_frame(frame)
+                    @utils.log_exceptions(logger=logger)
+                    async def _forward_input() -> None:
+                        async for frame in audio:
+                            stream.push_frame(frame)
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for event in stream:
-                        yield event
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for event in stream:
+                            yield event
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def llm_node(
@@ -570,9 +576,10 @@ class Agent:
 
             expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
+            temporary_adapter: tts.StreamAdapter | None = None
 
             if not activity.tts.capabilities.streaming:
-                wrapped_tts = tts.StreamAdapter(
+                temporary_adapter = tts.StreamAdapter(
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
@@ -580,29 +587,34 @@ class Agent:
                         xml_aware=expressive_active,
                     ),
                 )
+                wrapped_tts = temporary_adapter
 
-            # Mark whether expressive is active for this synthesis, synchronously
-            # just before stream() snapshots it. Doing it here (the single synthesis
-            # choke point for both generate_reply and say()) scopes it to this turn
-            # rather than leaving stale state on the instance. The provider's chunk
-            # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(expressive_active)
+            try:
+                # Mark whether expressive is active for this synthesis, synchronously
+                # just before stream() snapshots it. Doing it here (the single synthesis
+                # choke point for both generate_reply and say()) scopes it to this turn
+                # rather than leaving stale state on the instance. The provider's chunk
+                # defaults then drive the TTS's input tokenizer.
+                activity.tts._set_expressive(expressive_active)
 
-            conn_options = activity.session.conn_options.tts_conn_options
-            async with wrapped_tts.stream(conn_options=conn_options) as stream:
+                conn_options = activity.session.conn_options.tts_conn_options
+                async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                async def _forward_input() -> None:
-                    async for chunk in text:
-                        stream.push_text(chunk)
+                    async def _forward_input() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
 
-                    stream.end_input()
+                        stream.end_input()
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for ev in stream:
-                        yield ev.frame
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for ev in stream:
+                            yield ev.frame
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def transcription_node(
