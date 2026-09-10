@@ -1,7 +1,5 @@
-"""
-Tests for ``RealtimeCapabilities.server_barge_in``: a full-duplex model keeps streaming through
-user speech and yields on its own, so its speech-started event must not interrupt playback. Only
-the framework's own VAD / interruption detection may cut the agent off.
+"""Tests for ``RealtimeCapabilities.paced_audio_output``: audio arrives at playback pace, so the
+model's own stop ends playout and the framework clears nothing on its speech-started event.
 """
 
 from __future__ import annotations
@@ -77,8 +75,8 @@ async def _start_speech(
     return audio_ch, text_ch
 
 
-async def test_speech_started_does_not_interrupt_with_server_barge_in() -> None:
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=True))
+async def test_speech_started_leaves_paced_playout_alone() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(paced_audio_output=True))
     audio_out = _TracingAudioOutput()
 
     async with AgentSession(llm=model, aec_warmup_duration=None) as session:
@@ -102,10 +100,10 @@ async def test_speech_started_does_not_interrupt_with_server_barge_in() -> None:
         text_ch.close()
 
 
-async def test_speech_started_interrupts_without_server_barge_in() -> None:
+async def test_speech_started_clears_buffered_playout() -> None:
     # regression guard for server-side VAD models that cancel their own response: the client
     # must still drop the playout to stay in sync
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=False))
+    model = FakeRealtimeModel(capabilities=fake_capabilities(paced_audio_output=False))
     audio_out = _TracingAudioOutput()
 
     async with AgentSession(llm=model, aec_warmup_duration=None) as session:
@@ -126,35 +124,12 @@ async def test_speech_started_interrupts_without_server_barge_in() -> None:
         text_ch.close()
 
 
-async def test_client_side_interruption_still_available_with_server_barge_in() -> None:
-    # the model cannot be told to stop, so an app that wires its own VAD must still be able to
-    # cut the agent off locally
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=True))
-    audio_out = _TracingAudioOutput()
-
-    async with AgentSession(llm=model, vad=FakeVAD(), aec_warmup_duration=None) as session:
-        session.output.audio = audio_out
-        await session.start(Agent(instructions="be concise"))
-        audio_ch, text_ch = await _start_speech(session, model)
-        speech = session.current_speech
-        assert speech is not None
-        assert session._activity is not None
-
-        session._activity._interrupt_by_audio_activity()
-        for _ in range(20):
-            await asyncio.sleep(0)
-
-        assert speech.interrupted is True
-        assert audio_out.clears > 0
-
-        audio_ch.close()
-        text_ch.close()
-
-
-async def test_audio_activity_interruption_stays_off_without_server_barge_in() -> None:
-    # for these models the server's speech-started event interrupts, so the VAD path must keep
-    # deferring to it
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=False))
+@pytest.mark.parametrize("paced", [False, True])
+async def test_audio_activity_interruption_stays_off_under_server_turn_detection(
+    paced: bool,
+) -> None:
+    # the model detects the user itself, so the VAD path defers to it either way
+    model = FakeRealtimeModel(capabilities=fake_capabilities(paced_audio_output=paced))
     audio_out = _TracingAudioOutput()
 
     async with AgentSession(llm=model, vad=FakeVAD(), aec_warmup_duration=None) as session:
@@ -176,20 +151,12 @@ async def test_audio_activity_interruption_stays_off_without_server_barge_in() -
         text_ch.close()
 
 
-async def test_allow_interruptions_false_is_allowed_with_server_barge_in() -> None:
-    # nothing interrupts from the speech-started event, so there is no conflict to reject
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=True))
-    async with AgentSession(
-        llm=model,
-        turn_handling=TurnHandlingOptions(interruption={"enabled": False}),
-        aec_warmup_duration=None,
-    ) as session:
-        await session.start(Agent(instructions="be concise"))
-        assert session._activity is not None
-
-
-async def test_allow_interruptions_false_still_rejected_for_server_turn_detection() -> None:
-    model = FakeRealtimeModel(capabilities=fake_capabilities(server_barge_in=False))
+@pytest.mark.parametrize("paced", [False, True])
+async def test_allow_interruptions_false_is_rejected_under_server_turn_detection(
+    paced: bool,
+) -> None:
+    # the model decides when to yield either way, so the setting cannot be honored
+    model = FakeRealtimeModel(capabilities=fake_capabilities(paced_audio_output=paced))
     async with AgentSession(
         llm=model,
         turn_handling=TurnHandlingOptions(interruption={"enabled": False}),

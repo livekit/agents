@@ -44,8 +44,6 @@ class DuplexCapabilities:
     """Whether the model transcribes the user's speech"""
     auto_tool_reply_generation: bool
     """Whether the model automatically continues speaking after receiving tool results"""
-    manual_response_creation: bool = False
-    """Whether the client can ask the model to speak, rather than only waiting for it to"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False
@@ -69,10 +67,9 @@ TEvent = TypeVar("TEvent")
 
 
 class DuplexModel(ABC):
-    """A speech model that listens and speaks at the same time.
+    """A speech model that listens and speaks at the same time, handling interruptions itself.
 
-    Its audio streams continuously whether or not it is speaking, and barge-in is its own. Run one
-    inside an ``AgentSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
+    Run one inside an ``AgentSession`` with :class:`~livekit.agents.llm.DuplexRealtimeAdapter`.
     """
 
     def __init__(self, *, capabilities: DuplexCapabilities) -> None:

@@ -61,9 +61,8 @@ class AudioGate(Protocol):
 class AdaptiveNoiseGate:
     """Opens on output that stands out from the model's own noise floor.
 
-    Thresholds are ratios against the quietest frame of the recent past, which speech cannot drag
-    upward, and every duration is measured in audio rather than wall clock, so one set of defaults
-    ports across providers, frame sizes and network conditions.
+    Thresholds are ratios against the quietest recent frame and durations count audio rather than
+    wall clock, so one set of defaults ports across providers, frame sizes and networks.
     """
 
     def __init__(
@@ -112,8 +111,8 @@ class AdaptiveNoiseGate:
 class _Burst:
     """One stretch of audible model output, presented to the framework as a generation.
 
-    It forwards the audio as it arrives and attaches the transcript fragments whose sound has been
-    reached, placing each on the forwarded audio for the synchronizer.
+    It forwards the audio as it arrives and attaches each transcript fragment once its sound is
+    reached, placed on the forwarded audio for the synchronizer.
     """
 
     id: str
@@ -163,8 +162,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
     """Runs a :class:`DuplexModel` inside an ``AgentSession``.
 
     Segments the model's continuous output into generations and presents them as an ordinary
-    ``RealtimeSession``, so the voice pipeline needs no duplex-specific path. Output the model
-    never transcribes still plays, it simply produces no chat item.
+    ``RealtimeSession``; output the model never transcribes still plays, it just has no chat item.
     """
 
     def __init__(
@@ -182,13 +180,12 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
                 audio_output=True,
                 manual_function_calls=False,
-                server_barge_in=True,
+                paced_audio_output=True,
                 mutable_chat_context=caps.mutable_chat_context,
                 mutable_instructions=caps.mutable_instructions,
                 mutable_tools=caps.mutable_tools,
                 per_response_tool_choice=False,
                 supports_say=False,
-                manual_response_creation=caps.manual_response_creation,
             )
         )
         self._duplex_model = duplex_model
@@ -269,9 +266,8 @@ class _DuplexRealtimeSession(RealtimeSession):
                 burst.audio_ch.send_nowait(f.frame)
             self._audio_ms += round(f.frame.duration * 1000)
 
-            # the first fragment anchors the span clock to the audio clock at the onset; every
-            # later one is due when the audio reaches its span, and one the burst ends before
-            # reaching describes the next burst
+            # the first fragment anchors the span clock to the audio clock; a later one is due when
+            # the audio reaches its span, and one this burst never reaches waits for the next
             while self._fragments:
                 fragment = self._fragments[0]
                 if fragment.start_ms is not None:

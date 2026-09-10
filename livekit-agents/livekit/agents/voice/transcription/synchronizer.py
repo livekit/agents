@@ -251,9 +251,7 @@ class _SegmentSynchronizerImpl:
         self._text_data.pushed_text += text
 
         if end_time is not None:
-            # an annotated span is a closed unit, so release the tokenizer's trailing word instead
-            # of holding it for a delimiter that a realtime model only sends with its next turn. a
-            # span ending mid-word costs one extra delta, never a different transcript.
+            # a closed span releases the trailing word instead of waiting for the next delimiter
             self._text_data.word_stream.flush()
 
     def end_text_input(self) -> None:

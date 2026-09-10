@@ -49,6 +49,7 @@ class _FakeDuplexModel(llm.DuplexModel):
             )
         )
         self.session_obj: _FakeDuplexSession | None = None
+        self.askable = False
 
     @property
     def model(self) -> str:
@@ -111,7 +112,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
-        if not self.capabilities.manual_response_creation:
+        if not self._duplex_model.askable:
             super()._generate_reply(instructions=instructions, tool_choice=tool_choice, tools=tools)
         self.replies_requested.append(instructions)
 
@@ -660,7 +661,6 @@ async def test_a_session_is_configured_once_the_adapter_hands_over_the_configura
 async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex) -> None:
     """Whether the client may prompt a duplex model is the model's call, not the adapter's."""
     _fake, session, _generations = duplex
-    assert not session.realtime_model.capabilities.manual_response_creation
     with pytest.raises(llm.RealtimeError):
         await session.generate_reply()
 
@@ -668,7 +668,7 @@ async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex
 def _askable() -> tuple[_FakeDuplexSession, _DuplexRealtimeSession]:
     """A session whose model can be asked to speak."""
     model = _FakeDuplexModel()
-    model._capabilities.manual_response_creation = True
+    model.askable = True
     session = llm.DuplexRealtimeAdapter(model).session()
     assert isinstance(session, _DuplexRealtimeSession)
     fake = model.session_obj
@@ -678,7 +678,6 @@ def _askable() -> tuple[_FakeDuplexSession, _DuplexRealtimeSession]:
 
 async def test_generate_reply_reaches_a_model_that_supports_it() -> None:
     fake, session = _askable()
-    assert session.realtime_model.capabilities.manual_response_creation
     session.generate_reply(instructions="say hi")
     assert fake.replies_requested == ["say hi"]
     await session.aclose()
