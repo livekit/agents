@@ -579,7 +579,7 @@ class STT(stt.STT):
 
         try:
             alternative = build_speech_data(body, language=lang)
-        except (AttributeError, TypeError, ValueError):
+        except (AttributeError, OverflowError, TypeError, ValueError):
             raise APIConnectionError("Reson8 returned a malformed response body") from None
 
         return stt.SpeechEvent(
@@ -886,7 +886,7 @@ class SpeechStream(stt.RecognizeStream):
                     language=self._opts.language,
                     start_time_offset=self.start_time_offset,
                 )
-            except (AttributeError, TypeError, ValueError) as e:
+            except (AttributeError, OverflowError, TypeError, ValueError) as e:
                 logger.warning(
                     "Ignoring malformed Reson8 turn payload",
                     extra={"error": type(e).__name__, "lk.pii.message": msg},

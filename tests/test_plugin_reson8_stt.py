@@ -1176,6 +1176,11 @@ async def test_closing_the_recognizer_survives_an_already_closed_stream(
             {"words": [{"text": "hi", "start_ms": "x", "duration_ms": 1}]},
             id="word-start-a-string",
         ),
+        pytest.param({"start_ms": int("9" * 4000)}, id="turn-start-overflows"),
+        pytest.param(
+            {"words": [{"text": "hi", "start_ms": int("9" * 4000)}]},
+            id="word-start-overflows",
+        ),
     ],
 )
 async def test_a_malformed_turn_payload_is_skipped(
@@ -1870,6 +1875,11 @@ async def test_an_unusable_batch_body_is_a_connection_error(
         pytest.param(
             '{"text": "hi", "words": [{"text": "hi", "confidence": "high"}]}',
             id="confidence-a-string",
+        ),
+        pytest.param('{"text": "hi", "start_ms": ' + "9" * 4000 + "}", id="turn-start-overflows"),
+        pytest.param(
+            '{"text": "hi", "words": [{"text": "hi", "start_ms": ' + "9" * 4000 + "}]}",
+            id="word-start-overflows",
         ),
     ],
 )
