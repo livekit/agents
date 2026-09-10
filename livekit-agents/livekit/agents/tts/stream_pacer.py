@@ -148,7 +148,7 @@ class StreamPacerWrapper(SentenceStream):
                     self._event_ch.send_nowait(TokenData(token=text))
                     logger.debug(
                         "sent text to tts",
-                        extra={"text": text, "remaining_audio": remaining_audio},
+                        extra={"lk.pii.text": text, "remaining_audio": remaining_audio},
                     )
                     generation_started = False
                     generation_stopped = False

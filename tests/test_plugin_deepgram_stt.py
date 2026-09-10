@@ -32,6 +32,9 @@ def _make_flux_stream(*, ws=None, **opts_kwargs):
         eager_eot_threshold=opts_kwargs.get("eager_eot_threshold", NOT_GIVEN),
         eot_timeout_ms=opts_kwargs.get("eot_timeout_ms", NOT_GIVEN),
         language_hint=opts_kwargs.get("language_hint", []),
+        numerals=opts_kwargs.get("numerals", False),
+        profanity_filter=opts_kwargs.get("profanity_filter", False),
+        redact=opts_kwargs.get("redact", NOT_GIVEN),
     )
     opts.keyterm = opts_kwargs.get("keyterm", [])
     stream = SimpleNamespace(
@@ -103,6 +106,38 @@ async def test_flux_reconnect_fields_skip_inband_configure():
     assert stream._reconnect_event.is_set()
     assert stream._reconfigure_atask is None
     assert ws.sent == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("numerals", True), ("profanity_filter", True), ("redact", "numbers")],
+)
+async def test_flux_connection_time_fields_trigger_reconnect_not_configure(field, value):
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    ws = _FakeWS()
+    stream = _make_flux_stream(ws=ws)
+    SpeechStreamv2.update_options(stream, **{field: value})
+
+    # Flux can't toggle these via Configure, only at connection time
+    assert getattr(stream._opts, field) == value
+    assert stream._reconnect_event.is_set()
+    assert stream._reconfigure_atask is None
+    assert ws.sent == []
+
+
+async def test_flux_connection_config_includes_formatting_fields():
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2
+
+    config = SpeechStreamv2._live_config(
+        _make_flux_stream(numerals=True, profanity_filter=True, redact="aggressive_numbers")
+    )
+    assert config["numerals"] is True
+    assert config["profanity_filter"] is True
+    assert config["redact"] == "aggressive_numbers"
+
+    default_config = SpeechStreamv2._live_config(_make_flux_stream())
+    assert not {"numerals", "profanity_filter", "redact"} & default_config.keys()
 
 
 async def test_flux_configure_sends_only_changed_fields():

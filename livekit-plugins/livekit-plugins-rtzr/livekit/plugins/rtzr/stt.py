@@ -422,7 +422,7 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     data = json.loads(msg.data)
                 except json.JSONDecodeError:
-                    logger.warning("Non-JSON text from RTZR STT: %s", msg.data)
+                    logger.warning("Non-JSON text from RTZR STT", extra={"lk.pii.data": msg.data})
                     continue
 
                 self._check_error_response(data)

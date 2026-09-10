@@ -254,8 +254,11 @@ async def _job_entrypoint_raises_after_shutdown(job_ctx: JobContext) -> None:
         await asyncio.sleep(0)
         fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
-    asyncio.create_task(_trigger())
-    await fut
+    trigger_task = asyncio.create_task(_trigger())
+    try:
+        await fut
+    finally:
+        trigger_task.cancel()
 
 
 async def _poll_until(
@@ -654,3 +657,16 @@ def test_log_queue_drains_before_stop():
         f"Expected {NUM_LOGS} records, got {len(received)}. "
         f"Lost {NUM_LOGS - len(received)} tail log records."
     )
+
+
+def test_inference_executor_is_alive_after_proc_closed() -> None:
+    from livekit.agents.ipc.inference_proc_executor import InferenceProcExecutor
+
+    # after the supervise task exits it closes the process object; is_alive must
+    # report dead instead of raising (the health check endpoint relies on this)
+    executor = InferenceProcExecutor.__new__(InferenceProcExecutor)
+    proc = mp.get_context("spawn").Process(target=None)
+    proc.close()
+    executor._proc = proc
+
+    assert executor.is_alive() is False

@@ -56,7 +56,11 @@ class SessionOptions:
             validated by Anam; an unsupported pair is rejected with an HTTP 400
             rather than silently downgraded.
         video_height: Output video frame height in pixels. See ``video_width``.
+        show_ai_avatar_disclosure: Anam's default is not to render an AI avatar
+            disclosure watermark. Set to ``True`` to have Anam disclose that the
+            video contains an AI avatar via a watermark.
     """
 
     video_width: int | None = None
     video_height: int | None = None
+    show_ai_avatar_disclosure: bool | None = None

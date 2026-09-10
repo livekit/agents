@@ -568,3 +568,91 @@ async def test_final_transcript_no_translation_code_switched_populates_source_ru
     assert sd.target_texts is None
     assert sd.source_texts is not None
     assert "".join(sd.source_texts) == sd.text
+
+
+# --- RECOGNITION_USAGE reporting cadence -----------------------------------
+
+
+async def test_recognition_usage_reported_for_silent_frames():
+    """Frames that carry no tokens still report the audio Soniox processed.
+
+    The regression case: a silent speaker produces no endpoint token, and a
+    cancelled stream never reads the `finished` frame, so gating on those two
+    reported nothing at all.
+    """
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [{"tokens": [], "total_audio_proc_ms": 3000}],
+        expect_events=1,
+    )
+
+    assert [e.type for e in events] == [SpeechEventType.RECOGNITION_USAGE]
+    assert events[0].recognition_usage is not None
+    assert events[0].recognition_usage.audio_duration == pytest.approx(3.0)
+
+
+async def test_recognition_usage_reported_without_endpoint_token():
+    """Interim-only frames report usage too, ordered after the transcript events."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [{"tokens": [_nonfinal_token("hola", "es")], "total_audio_proc_ms": 2500}],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.START_OF_SPEECH,
+        SpeechEventType.INTERIM_TRANSCRIPT,
+        SpeechEventType.RECOGNITION_USAGE,
+    ]
+    assert events[-1].recognition_usage is not None
+    assert events[-1].recognition_usage.audio_duration == pytest.approx(2.5)
+
+
+async def test_recognition_usage_reports_delta_and_skips_unchanged_totals():
+    """Usage is the delta against what was already reported, so the running
+    total stays monotonic and an unchanged total emits nothing."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {"tokens": [], "total_audio_proc_ms": 3000},
+            # Same total: already accounted for, so no event.
+            {"tokens": [], "total_audio_proc_ms": 3000},
+            {"tokens": [], "total_audio_proc_ms": 5000},
+        ],
+        expect_events=2,
+    )
+
+    assert [e.type for e in events] == [SpeechEventType.RECOGNITION_USAGE] * 2
+    durations = [e.recognition_usage.audio_duration for e in events if e.recognition_usage]
+    assert durations == pytest.approx([3.0, 2.0])
+    assert sum(durations) == pytest.approx(5.0)
+
+
+async def test_recognition_usage_still_reported_on_endpoint_frame():
+    """The endpoint path keeps reporting usage, after the transcript events."""
+    stream = _make_stream(translation=None)
+
+    events = await _drive_recv(
+        stream,
+        [
+            {
+                "tokens": [_final_token("Hello world.", "en"), END_TOKEN_FINAL],
+                "total_audio_proc_ms": 1500,
+            }
+        ],
+        expect_events=3,
+    )
+
+    assert [e.type for e in events] == [
+        SpeechEventType.FINAL_TRANSCRIPT,
+        SpeechEventType.END_OF_SPEECH,
+        SpeechEventType.RECOGNITION_USAGE,
+    ]
+    assert events[-1].recognition_usage is not None
+    assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)

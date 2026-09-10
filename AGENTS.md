@@ -9,6 +9,11 @@ This project uses **uv** as the package manager. All commands run from the repos
 make install          # Install all dependencies with dev extras (uv sync --all-extras --dev)
 ```
 
+### Versioning
+
+- Use a `patch` version bump by default.
+- Do not use a `minor` or `major` version bump unless a human explicitly confirms the bump level.
+
 ### Code Quality
 ```bash
 make format           # Format code with ruff
@@ -44,7 +49,7 @@ it.
 | `pytest.mark.docs` | `--docs` | tests for the docs-build tooling under `.github/` |
 
 ```bash
-uv run pytest --unit                    # the CI unit gate (no cloud accounts)
+uv run pytest --unit --audio_eot        # the CI unit gate (no cloud accounts)
 uv run pytest --plugin openai           # only the openai provider tests
 uv run pytest --list-categories         # list every module grouped by category, then exit
 ```

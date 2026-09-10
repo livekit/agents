@@ -100,3 +100,42 @@ async def test_markup_fragments_add_no_pacing_delay() -> None:
         )
     finally:
         await impl.aclose()
+
+
+# a turn that produces audio but no visible syllables at all: after markup stripping
+# the pushed text hyphenates to nothing (with retain_format even a trailing space
+# would count as a token), so the re-estimated speed used to become 0
+MARKUP_ONLY_TURN = '<expr type="sound" label="laugh"/>'
+
+
+async def test_markup_only_turn_keeps_nonzero_speed() -> None:
+    opts = _TextSyncOptions(
+        speed=1.0,
+        hyphenate_word=tokenize.basic.hyphenate_word,
+        word_tokenizer=tokenize.basic.WordTokenizer(
+            retain_format=True, ignore_punctuation=False, split_character=True
+        ),
+        speaking_rate_detector=SpeakingRateDetector(),
+    )
+    collector = _CollectorTextOutput()
+    impl = _SegmentSynchronizerImpl(opts, next_in_chain=collector)
+    try:
+        for frame in _silent_frames(1.0):
+            impl.push_audio(frame)
+        impl.end_audio_input()
+        impl.push_text(MARKUP_ONLY_TURN)
+        impl.end_text_input()
+
+        impl.on_playback_started(time.time())
+
+        # with a zero speed estimate the pacing division raised ZeroDivisionError here
+        await impl._main_atask
+        await impl._capture_atask
+
+        assert impl._speed > 0
+        # no visible syllables to estimate from, so the speaking-unit speed stays unset
+        # rather than being overwritten with a meaningless 0
+        assert impl._speed_on_speaking_unit is None
+        assert "".join(collector.words) == MARKUP_ONLY_TURN
+    finally:
+        await impl.aclose()

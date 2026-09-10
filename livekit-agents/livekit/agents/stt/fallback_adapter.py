@@ -20,6 +20,7 @@ from ..vad import VAD
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 # don't retry when using the fallback adapter
@@ -60,6 +61,7 @@ class FallbackAdapter(
         if len(stt) < 1:
             raise ValueError("At least one STT instance must be provided.")
 
+        owned_stream_adapters: list[STT] = []
         non_streaming_stt = [t for t in stt if not t.capabilities.streaming]
         if non_streaming_stt:
             if vad is None:
@@ -71,9 +73,13 @@ class FallbackAdapter(
                 )
             from ..stt import StreamAdapter
 
-            stt = [
-                StreamAdapter(stt=t, vad=vad) if not t.capabilities.streaming else t for t in stt
-            ]
+            adapted_stt: list[STT] = []
+            for stt_instance in stt:
+                if not stt_instance.capabilities.streaming:
+                    stt_instance = StreamAdapter(stt=stt_instance, vad=vad)
+                    owned_stream_adapters.append(stt_instance)
+                adapted_stt.append(stt_instance)
+            stt = adapted_stt
 
         # Use the primary STT's aligned_transcript if all providers support it, since
         # the SDK only checks truthiness, not the specific granularity.
@@ -93,6 +99,7 @@ class FallbackAdapter(
         )
 
         self._stt_instances = stt
+        self._owned_stream_adapters = owned_stream_adapters
         self._attempt_timeout = attempt_timeout
         self._max_retry_per_stt = max_retry_per_stt
         self._retry_interval = retry_interval
@@ -106,6 +113,9 @@ class FallbackAdapter(
             for _ in self._stt_instances
         ]
 
+        # the instance that most recently served a request; used to label metrics & traces
+        self._active_instance: STT = self._stt_instances[0]
+
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
@@ -117,6 +127,11 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
+        return self._active_instance.metrics_metadata
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
@@ -242,13 +257,15 @@ class FallbackAdapter(
             stt_status = self._status[i]
             if stt_status.available or all_failed:
                 try:
-                    return await self._try_recognize(
+                    event = await self._try_recognize(
                         stt=stt,
                         buffer=buffer,
                         language=language,
                         conn_options=conn_options,
                         recovering=False,
                     )
+                    self._active_instance = stt
+                    return event
                 except Exception:  # exceptions already logged inside _try_recognize
                     if stt_status.available:
                         stt_status.available = False
@@ -299,6 +316,9 @@ class FallbackAdapter(
 
         for stt in self._stt_instances:
             stt.off("metrics_collected", self._on_metrics_collected)
+
+        for stream_adapter in self._owned_stream_adapters:
+            await stream_adapter.aclose()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
@@ -375,8 +395,12 @@ class FallbackRecognizeStream(RecognizeStream):
                         forward_input_task = asyncio.create_task(_forward_input_task())
 
                     try:
+                        should_set_active = True
                         async with main_stream:
                             async for ev in main_stream:
+                                if should_set_active:
+                                    should_set_active = False
+                                    self._fallback_adapter._active_instance = stt
                                 self._event_ch.send_nowait(ev)
 
                     except asyncio.TimeoutError:

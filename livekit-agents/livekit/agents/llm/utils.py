@@ -10,10 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
 )
@@ -21,7 +19,7 @@ from typing import (
 import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
-from pydantic.fields import Field, FieldInfo
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
@@ -513,46 +511,15 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info: FieldInfo | None = None
-        field_attrs: dict[str, Any] = {}
+        field_info = FieldInfo.from_annotation(type_hint)
 
-        # Annotated[str, Field(description="...")]
-        if get_origin(type_hint) is Annotated:
-            annotated_args = get_args(type_hint)
-            type_hint = annotated_args[0]
-            annotated_field = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
-            )
-            if annotated_field and hasattr(annotated_field, "asdict"):
-                # `asdict` is available after pydantic 2.12
-                field_dict = annotated_field.asdict()
-                field_attrs = field_dict["attributes"]
-                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
-                # in `metadata`, not `attributes`. Re-attach them to the annotation
-                # so `Field(...)` constraints on a tool argument are preserved.
-                if field_dict["metadata"]:
-                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
-            elif annotated_field:
-                field_attrs["default"] = annotated_field.default
-                field_attrs["description"] = annotated_field.description
-                field_info = annotated_field
+        if default_value is not ... and field_info.default is PydanticUndefined:
+            field_info.default = default_value
 
-        if (
-            default_value is not ...
-            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
-        ):
-            field_attrs["default"] = default_value
+        if field_info.description is None:
+            field_info.description = param_docs.get(param_name)
 
-        if field_attrs.get("description") is None:
-            field_attrs["description"] = param_docs.get(param_name, None)
-
-        if not field_info:
-            field_info = Field(**field_attrs)
-        else:
-            for k, v in field_attrs.items():
-                setattr(field_info, k, v)
-
-        fields[param_name] = (type_hint, field_info)
+        fields[param_name] = (field_info.annotation, field_info)
 
     return create_model(model_name, **fields)
 
@@ -618,9 +585,9 @@ def parse_function_arguments(json_arguments: str) -> dict[str, Any]:
         logger.warning(
             "repaired malformed function-call JSON arguments",
             extra={
-                "raw_arguments": json_arguments[:500],
-                "repaired": cleaned,
-                "error": str(strict_err),
+                "lk.pii.raw_arguments": json_arguments[:500],
+                "lk.pii.repaired": cleaned,
+                "lk.pii.error": str(strict_err),
             },
         )
         args_dict = cleaned
@@ -673,7 +640,7 @@ def prepare_function_arguments(
         except ValueError as e:
             logger.error(
                 f"error parsing arguments for `{fnc.info.name}`",
-                extra={"function": fnc.info.name, "arguments": json_arguments},
+                extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
             )
             raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
 
@@ -692,15 +659,44 @@ def prepare_function_arguments(
     except (pydantic.ValidationError, ValueError, TypeError) as e:
         logger.error(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise ToolError(f"Error parsing arguments for `{fnc.info.name}`: {e}") from e
     except Exception:
         logger.exception(
             f"error parsing arguments for `{fnc.info.name}`",
-            extra={"function": fnc.info.name, "arguments": json_arguments},
+            extra={"function": fnc.info.name, "lk.pii.arguments": json_arguments},
         )
         raise
+
+
+def validated_arguments(
+    fnc: FunctionTool | RawFunctionTool, args_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """A tool call's arguments after schema validation, keyed by parameter name.
+
+    Every declared parameter is present — an omitted one carries its default — and
+    values are coerced to their annotated types, so ``{"order_id": "5"}`` and
+    ``{"order_id": "5", "locale": None}`` produce the same mapping, as do ``1`` and
+    ``1.0`` for a ``float`` parameter. That makes this the form to compare two calls
+    on (see ``DuplicateScope``), not the raw arguments the LLM emitted.
+
+    Raises the same validation errors as calling the tool would. Raw function tools
+    have no per-parameter schema, so their arguments are returned exactly as sent.
+    """
+    if isinstance(fnc, RawFunctionTool):
+        return args_dict
+
+    model_type = function_arguments_to_pydantic_model(fnc)
+
+    # Strict LLM schemas represent defaulted fields as nullable (see
+    # _ensure_strict_json_schema): null means "use the default". Resolve
+    # the sentinel, including in nested models, before validation.
+    schema = model_type.model_json_schema()
+    args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
+
+    model = model_type.model_validate(args_dict)  # can raise ValidationError
+    return _shallow_model_dump(model)
 
 
 def _prepare_function_arguments(
@@ -713,16 +709,7 @@ def _prepare_function_arguments(
     type_hints = get_type_hints(fnc, include_extras=True)
 
     if isinstance(fnc, FunctionTool):
-        model_type = function_arguments_to_pydantic_model(fnc)
-
-        # Strict LLM schemas represent defaulted fields as nullable (see
-        # _ensure_strict_json_schema): null means "use the default". Resolve
-        # the sentinel, including in nested models, before validation.
-        schema = model_type.model_json_schema()
-        args_dict = _inject_schema_defaults(args_dict, schema=schema, root=schema)
-
-        model = model_type.model_validate(args_dict)  # can raise ValidationError
-        raw_fields = _shallow_model_dump(model)
+        raw_fields = validated_arguments(fnc, args_dict)
     elif isinstance(fnc, RawFunctionTool):
         # e.g async def open_gate(self, raw_arguments: dict[str, object]):
         # raw_arguments is required when using raw function tools
@@ -877,7 +864,7 @@ def _is_valid_function_output(value: Any) -> bool:
 @dataclass
 class FunctionCallResult:
     fnc_call: FunctionCall
-    fnc_call_out: FunctionCallOutput | None
+    fnc_call_out: FunctionCallOutput
     raw_output: Any
     raw_exception: BaseException | None
     fnc_call_updates: list[tuple[FunctionCall, FunctionCallOutput]] = field(default_factory=list)
@@ -913,9 +900,16 @@ def make_function_call_output(
         )
 
     if isinstance(exception, StopResponse):
+        # StopResponse asks for silence, not for the call to go unanswered
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="",
+                is_error=False,
+                reply_required=False,
+            ),
             raw_output=output,
             raw_exception=exception,
         )
@@ -936,11 +930,16 @@ def make_function_call_output(
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
-            extra={"call_id": fnc_call.call_id, "output": output},
+            extra={"call_id": fnc_call.call_id, "lk.pii.output": output},
         )
         return FunctionCallResult(
             fnc_call=fnc_call,
-            fnc_call_out=None,
+            fnc_call_out=FunctionCallOutput(
+                name=fnc_call.name,
+                call_id=fnc_call.call_id,
+                output="the tool returned an invalid output",
+                is_error=True,
+            ),
             raw_output=output,
             raw_exception=None,
         )
@@ -950,7 +949,7 @@ def make_function_call_output(
         fnc_call_out=FunctionCallOutput(
             name=fnc_call.name,
             call_id=fnc_call.call_id,
-            output=str(output or ""),
+            output="" if output is None else str(output),
             is_error=False,
         ),
         raw_output=output,
@@ -1012,7 +1011,7 @@ async def execute_function_call(
         if not isinstance(e, ToolError):
             logger.exception(
                 f"exception executing AI function `{tool_call.name}`",
-                extra={"call_id": tool_call.call_id, "arguments": tool_call.arguments},
+                extra={"call_id": tool_call.call_id, "lk.pii.arguments": tool_call.arguments},
             )
         out = make_function_call_output(fnc_call=fnc_call, output=None, exception=e)
 

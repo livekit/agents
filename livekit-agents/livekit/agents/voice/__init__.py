@@ -2,6 +2,7 @@ from . import io, run_result
 from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
+    ExpressiveOptions,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
@@ -48,6 +49,7 @@ from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
     "AgentSession",
+    "ExpressiveOptions",
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",

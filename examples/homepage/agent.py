@@ -1,5 +1,4 @@
 import logging
-from collections.abc import AsyncIterable
 from dataclasses import dataclass
 
 from behaviors.frontend_attributes import publish_frontend_attributes
@@ -9,13 +8,11 @@ from filters.pronunciation import pronounce_livekit
 from knowledge_base import KnowledgeBase
 from prompts import prompt
 
-from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
-    ModelSettings,
     TurnHandlingOptions,
     cli,
     inference,
@@ -34,8 +31,9 @@ class AgentConfig:
     llm_model: str = "google/gemma-4-31b-it"
     stt_model: str = "deepgram/nova-3"
     stt_language: str = "multi"
-    tts_model: str = "inworld/inworld-tts-2"
-    tts_voice: str = "Nate"
+    tts_model: str = "fishaudio/s2.1-pro"
+    tts_voice: str = "51b44863613e405a896f7f4294c6e6d0"
+    tts_voice_label: str = "Marley"
 
 
 CONFIG = AgentConfig()
@@ -56,12 +54,6 @@ class Assistant(Agent):
             instructions=INSTRUCTIONS,
             tools=[knowledge_base.lookup_tool()],
         )
-
-    async def tts_node(
-        self, text: AsyncIterable[str], model_settings: ModelSettings
-    ) -> AsyncIterable[rtc.AudioFrame]:
-        async for frame in Agent.default.tts_node(self, pronounce_livekit(text), model_settings):
-            yield frame
 
     async def on_enter(self):
         await self.session.generate_reply(
@@ -86,10 +78,12 @@ async def homepage_agent(ctx: JobContext):
             turn_detection=inference.TurnDetector(),
         ),
         preemptive_generation=True,
+        expressive=True,
+        tts_text_transforms=["filter_markdown", "filter_emoji", pronounce_livekit],
     )
 
     check_in_when_user_away(session)
-    publish_frontend_attributes(tts_voice=CONFIG.tts_voice)
+    publish_frontend_attributes(tts_voice=CONFIG.tts_voice_label)
 
     await session.start(
         agent=Assistant(),

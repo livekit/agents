@@ -1,6 +1,16 @@
-from . import http_server, metrics, otel_metrics, trace_types, utils
+from . import (
+    gen_ai,
+    http_server,
+    loop_monitor,
+    metrics,
+    otel_metrics,
+    pii,
+    session_context,
+    trace_types,
+    utils,
+)
 from .traces import (
-    _chat_ctx_to_otel_events,
+    DescribesOptions,
     _setup_cloud_tracer,
     _upload_session_report,
     set_tracer_provider,
@@ -8,16 +18,20 @@ from .traces import (
 )
 
 __all__ = [
+    "DescribesOptions",
     "tracer",
+    "gen_ai",
+    "pii",
     "metrics",
     "otel_metrics",
     "trace_types",
     "http_server",
+    "loop_monitor",
+    "session_context",
     "set_tracer_provider",
     "utils",
     "_setup_cloud_tracer",
     "_upload_session_report",
-    "_chat_ctx_to_otel_events",
 ]
 
 # Cleanup docs of unexported modules

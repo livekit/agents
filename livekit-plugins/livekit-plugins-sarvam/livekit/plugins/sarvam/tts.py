@@ -1299,7 +1299,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not msg_type:
                 logger.warning(
                     "Received message without type field",
-                    extra={**self._build_log_context(), "data": resp},
+                    extra={**self._build_log_context(), "lk.pii.data": resp},
                 )
                 return True
 
@@ -1319,7 +1319,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         except json.JSONDecodeError as e:
             logger.warning(
                 f"Invalid JSON in WebSocket message: {e}",
-                extra={**self._build_log_context(), "raw_data": msg_data[:200]},
+                extra={**self._build_log_context(), "lk.pii.raw_data": msg_data[:200]},
             )
             return True  # Continue processing
         except (APIStatusError, APIConnectionError):
@@ -1369,7 +1369,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_message": error_msg,
-                "raw_message": resp,
+                "lk.pii.raw_message": resp,
             },
         )
 

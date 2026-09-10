@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import aiohttp
 
@@ -41,9 +42,17 @@ class TurnDetector(_BaseStreamingTurnDetector):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
+        local_fallback: bool = True,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        """
+        Args:
+            local_fallback: Whether a ``v1`` detector may degrade to the local
+                ``v1-mini`` model when the gateway fails. False keeps it cloud-only,
+                so the mini weights (~108MB, resident for the process' life) are never
+                loaded and turns commit on the endpointing delay instead.
+        """
         auto = not is_given(version)
         resolved_version: TurnDetectorVersions = (
             version
@@ -107,13 +116,37 @@ class TurnDetector(_BaseStreamingTurnDetector):
 
         self._model: TurnDetectorModels = resolved_model
         self._cloud_opts = cloud_opts
+        self._local_fallback = local_fallback
         self._http_session = http_session
+
+        if not local_fallback and resolved_model == "turn-detector-v1-mini":
+            logger.warning(
+                "local_fallback=False has no effect on the %s model, which runs locally by design",
+                resolved_model,
+            )
 
         self._warn_threshold_override()
 
     @property
     def model(self) -> TurnDetectorModels:
         return self._model
+
+    def describe_options(self) -> dict[str, Any]:
+        """What the session report shows for this detector (``telemetry.DescribesOptions``):
+        the model and where it runs, plus the threshold overrides when the user set any.
+        Server-calibrated defaults are not repeated here; credentials and endpoints never."""
+        options: dict[str, Any] = {
+            "model": self.model,
+            "provider": self.provider,
+            "sample_rate": self._opts.sample_rate,
+            "local_fallback": self._local_fallback,
+        }
+        thresholds = self._opts.thresholds
+        if is_given(thresholds.overrides):
+            options["threshold_overrides"] = thresholds.overrides
+        if is_given(thresholds.backchannel_overrides):
+            options["backchannel_threshold_overrides"] = thresholds.backchannel_overrides
+        return options
 
     def _warn_threshold_override(self) -> None:
         thresholds = self._opts.thresholds
@@ -172,4 +205,5 @@ class TurnDetector(_BaseStreamingTurnDetector):
             opts=self._opts,
             transport=transport,
             model=self._model,
+            local_fallback=self._local_fallback,
         )

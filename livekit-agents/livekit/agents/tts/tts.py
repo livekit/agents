@@ -29,6 +29,7 @@ from ..types import (
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
 
@@ -203,6 +204,11 @@ class TTS(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this TTS instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
 
     @property
     def capabilities(self) -> TTSCapabilities:

@@ -60,6 +60,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -76,7 +77,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their email address. If the user already stated one earlier "
+                "in this conversation, record it with update_email_address instead of asking again."
+            )
+        )
 
     def _build_update_email_tool(self) -> llm.FunctionTool:
         # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
@@ -113,9 +119,15 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Repeat the email character by character: {separated_email}"
+            if self._spell_read_back
+            else "Repeat the email back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
@@ -162,16 +174,12 @@ EMAIL_REGEX = (
 PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
 
 AUDIO_SPECIFIC = """\
-Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:
-- 'john dot doe at gmail dot com'
-- 'susan underscore smith at yahoo dot co dot uk'
-- 'dave dash b at protonmail dot com'
-- 'jane at example' (partial—prompt for the domain)
-- 'theo t h e o at livekit dot io' (name followed by spelling)
+Handle input as noisy voice transcription. Users say emails aloud.
 Normalize common spoken patterns silently:
 - Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
 - Convert 'at' to `@`.
 - Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- If only the part before the '@' is given, prompt for the domain.
 - Filter out filler words or hesitations.
 - Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
 Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""

@@ -35,6 +35,8 @@ class SpeechHandle:
     ) -> None:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
+        self._interruption_holds = 0
+        self._interruption_holds_restore = allow_interruptions
         self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
@@ -132,6 +134,29 @@ class SpeechHandle:
 
         self._allow_interruptions = value
 
+    def _hold_interruptions(self) -> None:
+        """Disallow interruptions until every hold taken here is released.
+
+        Counted rather than set, because the holders of one speech are not serialised
+        against each other: the inline tasks awaited from a turn's parallel tool calls run
+        one at a time, and a hold released between them would let the user turns of one
+        task's sub-conversation interrupt the speech the rest are still anchored to. An
+        interrupted handle can no longer disallow interruptions, so those tasks could then
+        never run. The first holder owns the value the last one restores.
+        """
+        if self._interruption_holds == 0:
+            self._interruption_holds_restore = self._allow_interruptions
+            self.allow_interruptions = False
+
+        self._interruption_holds += 1
+
+    def _release_interruptions(self) -> None:
+        self._interruption_holds -= 1
+        if self._interruption_holds == 0:
+            # a forced interrupt lands regardless of the hold, and leaves nothing to restore
+            with contextlib.suppress(RuntimeError):
+                self.allow_interruptions = self._interruption_holds_restore
+
     @property
     def chat_items(self) -> list[llm.ChatItem]:
         return self._chat_items
@@ -161,11 +186,16 @@ class SpeechHandle:
         """Interrupt the current speech generation.
 
         Raises:
-            RuntimeError: If this speech handle does not allow interruptions.
+            RuntimeError: If this speech handle is still running and does not allow
+                interruptions.
 
         Returns:
             SpeechHandle: The same speech handle that was interrupted.
         """
+        if self.interrupted or self.done():
+            # already cancelled or finished: nothing to interrupt, and protection is moot
+            return self
+
         if not force and not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 

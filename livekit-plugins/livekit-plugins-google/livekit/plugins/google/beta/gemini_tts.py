@@ -15,6 +15,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from ..log import logger
+
 GEMINI_TTS_MODELS = Literal[
     "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.1-flash-tts-preview"
 ]
@@ -179,6 +181,13 @@ class TTS(tts.TTS):
         """
         if is_given(voice_name):
             self._opts.voice_name = voice_name
+
+    async def aclose(self) -> None:
+        """Close the TTS and release its GenAI HTTP clients."""
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
 
 
 class ChunkedStream(tts.ChunkedStream):

@@ -1,5 +1,8 @@
 """Test that LLM errors propagate through session.run() → RunResult,
-including the full e2e path through SessionHost → RemoteSession."""
+including the full e2e path through SessionHost → RemoteSession.
+
+Also pins the other side of that contract: a turn the agent stays silent on
+is reported as a silent turn, not as an error."""
 
 from __future__ import annotations
 
@@ -129,6 +132,40 @@ async def test_run_input_error_e2e_through_remote_session():
 
     with pytest.raises(RuntimeError, match="failed"):
         await client.run("order a big mac", timeout=10.0)
+
+    await client.aclose()
+    await host.aclose()
+    await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_run_silent_turn_is_not_an_error():
+    """A turn that produces no items is a silent agent, not a failed one.
+
+    An LLM can return a completion with no text and no tool calls — a
+    close-the-call tool whose output tells the model it has already said
+    goodbye is the usual way to get there. Every item-add site in
+    ``agent_activity`` is guarded on non-empty text, so such a turn reaches
+    ``RunResult`` with zero events. That must come back as an empty item list
+    rather than an error, so the caller can decide what the silence means.
+    """
+    host_transport, client_transport = PairedTransport.create_pair()
+
+    session = AgentSession()
+    # FakeLLM yields an empty completion for any input outside its response map
+    agent = Agent(instructions="test agent", llm=FakeLLM())
+
+    host = SessionHost(host_transport)
+    host.register_session(session)
+
+    await session.start(agent=agent)
+    await host.start()
+
+    client = RemoteSession(client_transport)
+    await client.start()
+
+    resp = await client.run("okay, thank you", timeout=10.0)
+    assert list(resp.items) == []
 
     await client.aclose()
     await host.aclose()

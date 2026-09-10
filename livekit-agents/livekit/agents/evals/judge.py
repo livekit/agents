@@ -13,6 +13,24 @@ Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
 
 
+def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
+    """Extra ``chat()`` kwargs for a judgment call.
+
+    Judging is batch load: an eval suite fans out many judgments at once, they run
+    after the conversation they grade, and nobody is waiting on the verdict. So they
+    are pinned to the low inference class and must not compete with live traffic for
+    gateway capacity, even when the judge LLM was configured with another class.
+
+    Empty for a plugin LLM, which has no LiveKit Inference class to set.
+    """
+    from ..inference import LLM as InferenceLLM
+
+    if isinstance(llm, InferenceLLM):
+        return {"inference_class": "low"}
+
+    return {}
+
+
 @dataclass
 class JudgmentResult:
     verdict: Verdict
@@ -131,6 +149,7 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
         tool_choice="required",
         conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
+        **_judge_chat_kwargs(llm),
     ).collect()
 
     if not response.tool_calls:

@@ -30,7 +30,13 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_SESSION_ID,
+    create_access_token,
+    create_inference_request_id,
+    get_default_inference_url,
+    get_inference_headers,
+)
 
 CartesiaModels = Literal[
     "cartesia",
@@ -47,18 +53,8 @@ DeepgramModels = Literal[
     "deepgram/aura",
     "deepgram/aura-2",
 ]
-ElevenlabsModels = Literal[
-    "elevenlabs",
-    "elevenlabs/eleven_flash_v2",
-    "elevenlabs/eleven_flash_v2_5",
-    "elevenlabs/eleven_turbo_v2",
-    "elevenlabs/eleven_turbo_v2_5",
-    "elevenlabs/eleven_multilingual_v2",
-    "elevenlabs/eleven_v3",
-]
 RimeModels = Literal[
     "rime",
-    "rime/arcana",
     "rime/coda",
     "rime/mistv2",
     "rime/mistv3",
@@ -82,13 +78,7 @@ FishAudioModels = Literal[
 ]
 
 TTSModels = (
-    CartesiaModels
-    | DeepgramModels
-    | ElevenlabsModels
-    | RimeModels
-    | InworldModels
-    | XaiModels
-    | FishAudioModels
+    CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
 )
 
 
@@ -116,7 +106,7 @@ class FallbackModel(TypedDict):
     """
 
     model: str
-    """Model name (e.g. "cartesia/sonic", "elevenlabs/eleven_flash_v2", "rime/arcana")."""
+    """Model name (e.g. "cartesia/sonic", "inworld/inworld-tts-1", "rime/coda")."""
 
     voice: str
     """Voice to use for the model."""
@@ -132,8 +122,6 @@ def _has_aligned_transcript(model: str, extra_kwargs: dict[str, Any]) -> bool:
     provider = model.split("/")[0]
     if provider == "cartesia":
         return bool(extra_kwargs.get("add_timestamps"))
-    if provider == "elevenlabs":
-        return bool(extra_kwargs.get("sync_alignment"))
     if provider == "inworld":
         return extra_kwargs.get("timestamp_type") in ("WORD", "CHARACTER")
     return False
@@ -169,25 +157,8 @@ class DeepgramOptions(TypedDict, total=False):
     mip_opt_out: bool  # default: False
 
 
-class ElevenlabsOptions(TypedDict, total=False):
-    inactivity_timeout: int  # default: 60, range 5-180
-    apply_text_normalization: Literal["auto", "off", "on"]  # default: "auto"
-    auto_mode: bool
-    enable_logging: bool
-    enable_ssml_parsing: bool
-    sync_alignment: bool
-    language_code: str
-    stability: float  # range 0-1
-    similarity_boost: float  # range 0-1
-    style: float  # range 0-1
-    speed: float  # range 0.25-4
-    use_speaker_boost: bool
-    chunk_length_schedule: list[float]
-    preferred_alignment: str
-
-
 class RimeOptions(TypedDict, total=False):
-    """Mistv2-specific parameters. Arcana has no extra WS JSON query params.
+    """Rime-specific WebSocket JSON query parameters.
     See: https://docs.rime.ai/api-reference/endpoint/websockets-json
     """
 
@@ -251,6 +222,12 @@ class _TTSOptions:
     conn_options: NotGivenOr[APIConnectOptions]
 
 
+@dataclass(eq=False)
+class _TTSConnection:
+    ws: aiohttp.ClientWebSocketResponse
+    session_id: str | None
+
+
 class TTS(tts.TTS):
     @overload
     def __init__(
@@ -285,25 +262,6 @@ class TTS(tts.TTS):
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_kwargs: NotGivenOr[DeepgramOptions] = NOT_GIVEN,
-        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
-        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
-    ) -> None:
-        pass
-
-    @overload
-    def __init__(
-        self,
-        model: ElevenlabsModels,
-        *,
-        voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
-        encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
-        sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        base_url: NotGivenOr[str] = NOT_GIVEN,
-        api_key: NotGivenOr[str] = NOT_GIVEN,
-        api_secret: NotGivenOr[str] = NOT_GIVEN,
-        http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None:
@@ -420,7 +378,6 @@ class TTS(tts.TTS):
             dict[str, Any]
             | CartesiaOptions
             | DeepgramOptions
-            | ElevenlabsOptions
             | RimeOptions
             | InworldOptions
             | XaiOptions
@@ -505,7 +462,7 @@ class TTS(tts.TTS):
             conn_options=conn_options if is_given(conn_options) else DEFAULT_API_CONNECT_OPTIONS,
         )
         self._session = http_session
-        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+        self._pool = utils.ConnectionPool[_TTSConnection](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
             max_session_duration=300,
@@ -551,7 +508,7 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "livekit"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(self, timeout: float) -> _TTSConnection:
         session = self._ensure_session()
         base_url = self._opts.base_url
         if base_url.startswith(("http://", "https://")):
@@ -561,6 +518,7 @@ class TTS(tts.TTS):
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
+        session_id = headers.get(HEADER_SESSION_ID)
         ws = None
         try:
             ws = await asyncio.wait_for(
@@ -613,10 +571,10 @@ class TTS(tts.TTS):
                 "failed to send session.create message to LiveKit Inference TTS"
             ) from e
 
-        return ws
+        return _TTSConnection(ws=ws, session_id=session_id)
 
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
+    async def _close_ws(self, connection: _TTSConnection) -> None:
+        await connection.ws.close()
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -693,14 +651,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._held_tokens: list[TimedString] = []
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        request_id = utils.shortuuid()
-        output_emitter.initialize(
-            request_id=request_id,
-            sample_rate=self._opts.sample_rate,
-            num_channels=1,
-            stream=True,
-            mime_type="audio/pcm",
-        )
+        request_id = ""
 
         # chunking defaults (cap + expressive batch size) live in _provider_format
         from ..tts._provider_format import sentence_tokenizer
@@ -783,7 +734,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aligned: list[TimedString] = []
                     if words := data.get("words"):
                         aligned = [
-                            TimedString(w["word"], start_time=w["start"], end_time=w["end"])
+                            TimedString(
+                                f"{w['word']} " if provider == "cartesia" else w["word"],
+                                start_time=w["start"],
+                                end_time=w["end"],
+                            )
                             for w in words
                         ]
                     elif chars := data.get("chars"):
@@ -810,9 +765,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                     raise APIError(f"LiveKit Inference TTS returned error: {msg.data}")
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as connection:
                 self._acquire_time = self._tts._pool.last_acquire_time
                 self._connection_reused = self._tts._pool.last_connection_reused
+                request_id = create_inference_request_id(connection.session_id, "tts")
+                output_emitter.initialize(
+                    request_id=request_id,
+                    sample_rate=self._opts.sample_rate,
+                    num_channels=1,
+                    stream=True,
+                    mime_type="audio/pcm",
+                )
+                ws = connection.ws
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws)),

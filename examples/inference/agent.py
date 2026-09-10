@@ -76,7 +76,6 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=inference.LLM(model=DEFAULT_LLM),
         tts=inference.TTS(
             model=DEFAULT_TTS,
-            voice="Sarah",
             extra_kwargs={"delivery_mode": "CREATIVE"},
         ),
         # Flip user_state to "away" after 10s of mutual silence so we can

@@ -57,6 +57,7 @@ from .realtime_fallback_adapter import (
     RealtimeModelFallbackAdapter,
 )
 from .tool_context import (
+    DuplicateScope,
     FunctionTool,
     ProviderTool,
     RawFunctionTool,
@@ -112,6 +113,7 @@ __all__ = [
     "ToolContext",
     "ToolError",
     "ToolFlag",
+    "DuplicateScope",
     "StopResponse",
     "utils",
     "remote_chat_context",

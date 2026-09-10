@@ -44,10 +44,9 @@ from livekit.agents.voice.io import TimedString
 
 from .langs import TTSLangs
 from .log import logger
-from .models import ArcanaVoices, DefaultCodaVoice, DefaultMistVoice, TTSModels
+from .models import DefaultCodaVoice, DefaultMistVoice, TTSModels
 
-# arcana can take as long as 80% of the total duration of the audio it's synthesizing.
-ARCANA_MODEL_TIMEOUT = 60 * 4
+CODA_MODEL_TIMEOUT = 60 * 4
 MIST_MODEL_TIMEOUT = 30
 RIME_BASE_URL = "https://users.rime.ai/v1/rime-tts"
 RIME_WS_BASE_URL = "wss://users-ws.rime.ai"
@@ -58,25 +57,15 @@ NUM_CHANNELS = 1
 class _TTSOptions:
     model: TTSModels | str
     speaker: str
-    arcana_options: _ArcanaOptions | None = None
     coda_options: _CodaOptions | None = None
     mist_options: _MistOptions | None = None
 
 
 @dataclass
-class _ArcanaOptions:
+class _CodaOptions:
     repetition_penalty: NotGivenOr[float] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     top_p: NotGivenOr[float] = NOT_GIVEN
-    max_tokens: NotGivenOr[int] = NOT_GIVEN
-    lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
-    sample_rate: NotGivenOr[int] = NOT_GIVEN
-    speed_alpha: NotGivenOr[float] = NOT_GIVEN
-    time_scale_factor: NotGivenOr[float] = NOT_GIVEN
-
-
-@dataclass
-class _CodaOptions:
     max_tokens: NotGivenOr[int] = NOT_GIVEN
     lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN
     sample_rate: NotGivenOr[int] = NOT_GIVEN
@@ -99,35 +88,30 @@ def _is_mist_model(model: TTSModels | str) -> bool:
     return "mist" in model
 
 
+def _warn_if_arcana(model: NotGivenOr[TTSModels | str]) -> None:
+    if is_given(model) and model == "arcana":
+        logger.warning('Rime Arcana is no longer supported. Use model="coda" instead.')
+
+
 def _timeout_for_model(model: TTSModels | str) -> int:
-    if model == "arcana" or model == "coda":
-        return ARCANA_MODEL_TIMEOUT
+    if model == "coda":
+        return CODA_MODEL_TIMEOUT
     return MIST_MODEL_TIMEOUT
 
 
 def _model_params(opts: _TTSOptions) -> dict[str, object]:
     """Per-model option fields shared between the HTTP body and the WS query string."""
     params: dict[str, object] = {}
-    if opts.model == "arcana" and opts.arcana_options is not None:
-        ao = opts.arcana_options
-        if is_given(ao.lang):
-            params["lang"] = ao.lang
-        if is_given(ao.repetition_penalty):
-            params["repetition_penalty"] = ao.repetition_penalty
-        if is_given(ao.temperature):
-            params["temperature"] = ao.temperature
-        if is_given(ao.top_p):
-            params["top_p"] = ao.top_p
-        if is_given(ao.max_tokens):
-            params["max_tokens"] = ao.max_tokens
-        if is_given(ao.speed_alpha):
-            params["speedAlpha"] = ao.speed_alpha
-        if is_given(ao.time_scale_factor):
-            params["timeScaleFactor"] = ao.time_scale_factor
-    elif opts.model == "coda" and opts.coda_options is not None:
+    if opts.model == "coda" and opts.coda_options is not None:
         co = opts.coda_options
         if is_given(co.lang):
             params["lang"] = co.lang
+        if is_given(co.repetition_penalty):
+            params["repetition_penalty"] = co.repetition_penalty
+        if is_given(co.temperature):
+            params["temperature"] = co.temperature
+        if is_given(co.top_p):
+            params["top_p"] = co.top_p
         if is_given(co.max_tokens):
             params["max_tokens"] = co.max_tokens
         if is_given(co.speed_alpha):
@@ -155,7 +139,7 @@ def _check_time_scale_factor_supported(
 ) -> None:
     if is_given(time_scale_factor) and model == "mistv2":
         raise ValueError(
-            "time_scale_factor is not supported by the mistv2 model; use arcana, mistv3, or coda."
+            "time_scale_factor is not supported by the mistv2 model; use mistv3 or coda."
         )
 
 
@@ -164,15 +148,15 @@ class TTS(tts.TTS):
         self,
         *,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        model: TTSModels | str = "arcana",
-        speaker: NotGivenOr[ArcanaVoices | str] = NOT_GIVEN,
+        model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
+        speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: TTSLangs | str = "eng",
-        # Arcana options
+        # Coda options
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
-        # Shared by arcana, mistv3, and coda (HTTP only; use speed_alpha on WebSocket)
+        # Shared by mistv3 and coda (HTTP only; use speed_alpha on WebSocket)
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Supported by all models; the only speed param that works over WebSocket
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -208,22 +192,32 @@ class TTS(tts.TTS):
                 "Rime API key is required, either as argument or set RIME_API_KEY environmental variable"  # noqa: E501
             )
 
-        _check_time_scale_factor_supported(model, time_scale_factor)
+        _warn_if_arcana(model)
+        if is_given(model):
+            resolved_model = model
+            model_is_explicit = True
+        else:
+            resolved_model = "coda"
+            model_is_explicit = False
+
+        _check_time_scale_factor_supported(resolved_model, time_scale_factor)
 
         if not is_given(speaker):
-            if _is_mist_model(model):
+            if not model_is_explicit:
+                speaker = "astra"
+            elif _is_mist_model(resolved_model):
                 speaker = DefaultMistVoice
-            elif model == "coda":
+            elif resolved_model == "coda":
                 speaker = DefaultCodaVoice
             else:
                 speaker = "astra"
 
         self._opts = _TTSOptions(
-            model=model,
+            model=resolved_model,
             speaker=speaker,
         )
-        if model == "arcana":
-            self._opts.arcana_options = _ArcanaOptions(
+        if resolved_model == "coda":
+            self._opts.coda_options = _CodaOptions(
                 repetition_penalty=repetition_penalty,
                 temperature=temperature,
                 top_p=top_p,
@@ -233,15 +227,7 @@ class TTS(tts.TTS):
                 speed_alpha=speed_alpha,
                 time_scale_factor=time_scale_factor,
             )
-        elif model == "coda":
-            self._opts.coda_options = _CodaOptions(
-                max_tokens=max_tokens,
-                lang=lang,
-                sample_rate=sample_rate,
-                speed_alpha=speed_alpha,
-                time_scale_factor=time_scale_factor,
-            )
-        elif _is_mist_model(model):
+        elif _is_mist_model(resolved_model):
             self._opts.mist_options = _MistOptions(
                 lang=lang,
                 sample_rate=sample_rate,
@@ -256,7 +242,7 @@ class TTS(tts.TTS):
         self._use_websocket = use_websocket
         self._segment = segment if is_given(segment) else "bySentence"
 
-        self._total_timeout = _timeout_for_model(model)
+        self._total_timeout = _timeout_for_model(resolved_model)
 
         self._streams: weakref.WeakSet[SynthesizeStream] = weakref.WeakSet()
         self._sentence_tokenizer = (
@@ -354,13 +340,12 @@ class TTS(tts.TTS):
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
         speaker: NotGivenOr[str] = NOT_GIVEN,
         lang: NotGivenOr[TTSLangs | str] = NOT_GIVEN,
-        # Arcana parameters
+        # Coda parameters
         repetition_penalty: NotGivenOr[float] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         max_tokens: NotGivenOr[int] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
-        # Coda parameters
         time_scale_factor: NotGivenOr[float] = NOT_GIVEN,
         # Mistv2 parameters
         speed_alpha: NotGivenOr[float] = NOT_GIVEN,
@@ -369,6 +354,7 @@ class TTS(tts.TTS):
         phonemize_between_brackets: NotGivenOr[bool] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        _warn_if_arcana(model)
         effective_model = model if is_given(model) else self._opts.model
         _check_time_scale_factor_supported(effective_model, time_scale_factor)
 
@@ -380,9 +366,7 @@ class TTS(tts.TTS):
             self._opts.model = model
             self._total_timeout = _timeout_for_model(model)
 
-            if model == "arcana" and self._opts.arcana_options is None:
-                self._opts.arcana_options = _ArcanaOptions()
-            elif model == "coda" and self._opts.coda_options is None:
+            if model == "coda" and self._opts.coda_options is None:
                 self._opts.coda_options = _CodaOptions()
             elif _is_mist_model(model) and self._opts.mist_options is None:
                 self._opts.mist_options = _MistOptions()
@@ -390,25 +374,13 @@ class TTS(tts.TTS):
         if is_given(speaker):
             self._opts.speaker = speaker
 
-        if self._opts.model == "arcana" and self._opts.arcana_options is not None:
+        if self._opts.model == "coda" and self._opts.coda_options is not None:
             if is_given(repetition_penalty):
-                self._opts.arcana_options.repetition_penalty = repetition_penalty
+                self._opts.coda_options.repetition_penalty = repetition_penalty
             if is_given(temperature):
-                self._opts.arcana_options.temperature = temperature
+                self._opts.coda_options.temperature = temperature
             if is_given(top_p):
-                self._opts.arcana_options.top_p = top_p
-            if is_given(max_tokens):
-                self._opts.arcana_options.max_tokens = max_tokens
-            if is_given(lang):
-                self._opts.arcana_options.lang = lang
-            if is_given(sample_rate):
-                self._opts.arcana_options.sample_rate = sample_rate
-            if is_given(speed_alpha):
-                self._opts.arcana_options.speed_alpha = speed_alpha
-            if is_given(time_scale_factor):
-                self._opts.arcana_options.time_scale_factor = time_scale_factor
-
-        elif self._opts.model == "coda" and self._opts.coda_options is not None:
+                self._opts.coda_options.top_p = top_p
             if is_given(max_tokens):
                 self._opts.coda_options.max_tokens = max_tokens
             if is_given(lang):
@@ -456,10 +428,7 @@ class ChunkedStream(tts.ChunkedStream):
             **_model_params(self._opts),
         }
         format = "audio/pcm"
-        if self._opts.model == "arcana" and self._opts.arcana_options is not None:
-            if is_given(self._opts.arcana_options.sample_rate):
-                payload["samplingRate"] = self._opts.arcana_options.sample_rate
-        elif self._opts.model == "coda" and self._opts.coda_options is not None:
+        if self._opts.model == "coda" and self._opts.coda_options is not None:
             if is_given(self._opts.coda_options.sample_rate):
                 payload["samplingRate"] = self._opts.coda_options.sample_rate
         elif _is_mist_model(self._opts.model) and self._opts.mist_options is not None:
@@ -486,7 +455,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                 if not resp.content_type.startswith("audio"):
                     content = await resp.text()
-                    logger.error("Rime returned non-audio data: %s", content)
+                    logger.error("Rime returned non-audio data", extra={"lk.pii.data": content})
                     return
 
                 output_emitter.initialize(

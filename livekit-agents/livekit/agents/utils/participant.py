@@ -245,6 +245,10 @@ async def wait_for_track_publication(
 
     When `include_local` is True, tracks published by the local participant are also considered;
     local publications resolve on publish and ignore ``wait_for_subscription``.
+
+    When ``identity`` is set, raises :class:`RuntimeError` if that participant
+    disconnects before a matching publication is found, so callers don't wait
+    on a participant that is gone.
     """
     if not room.isconnected():
         raise RuntimeError("room is not connected")
@@ -295,6 +299,14 @@ async def wait_for_track_publication(
         if (identity is None or local.identity == identity) and kind_match(publication.kind):
             fut.set_result(publication)
 
+    def _on_participant_disconnected(p: rtc.RemoteParticipant) -> None:
+        if p.identity == identity and not fut.done():
+            fut.set_exception(
+                RuntimeError(
+                    f"participant {identity!r} disconnected while waiting for track publication"
+                )
+            )
+
     def _on_connection_state_changed(state: int) -> None:
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for track publication"))
@@ -305,6 +317,8 @@ async def wait_for_track_publication(
         room.on("track_published", _on_track_published)
     if include_local:
         room.on("local_track_published", _on_local_track_published)
+    if identity is not None:
+        room.on("participant_disconnected", _on_participant_disconnected)
 
     room.on("connection_state_changed", _on_connection_state_changed)
 
@@ -332,4 +346,6 @@ async def wait_for_track_publication(
             room.off("track_published", _on_track_published)
         if include_local:
             room.off("local_track_published", _on_local_track_published)
+        if identity is not None:
+            room.off("participant_disconnected", _on_participant_disconnected)
         room.off("connection_state_changed", _on_connection_state_changed)

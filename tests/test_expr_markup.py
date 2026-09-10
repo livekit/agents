@@ -19,6 +19,7 @@ from livekit.agents.tts._provider_format import (
     llm_instructions,
     normalize_markup,
     split_all_markup,
+    strip_all_markup,
     strip_expr_markup,
 )
 
@@ -104,9 +105,10 @@ def test_convert_expr_cartesia() -> None:
         '<expr type="expression" label="excited"/> We won! '
         '<expr type="break" label="1s"/> <expr type="sound" label="laugh"/> Unbelievable.'
     )
-    # expression -> <emotion>, break stays, sound is dropped (no Cartesia support)
+    # expression -> <emotion>, break stays, sound is dropped (no Cartesia support) —
+    # without leaving the space it sat between behind as a doubled separator
     assert convert_markup("cartesia", text) == (
-        '<emotion value="excited"/> We won! <break time="1s"/>  Unbelievable.'
+        '<emotion value="excited"/> We won! <break time="1s"/> Unbelievable.'
     )
 
 
@@ -155,7 +157,7 @@ def test_convert_stray_expr_never_reaches_tts() -> None:
 
 def test_split_all_markup_strips_expr() -> None:
     clean, tags = split_all_markup(JOKE)
-    assert clean.strip() == "Why did the burger go to the gym?  Because it wanted better buns!"
+    assert clean.strip() == "Why did the burger go to the gym? Because it wanted better buns!"
     assert tags == [
         {"type": "expression", "value": "say playfully"},
         {"type": "break", "value": "500ms"},
@@ -198,7 +200,7 @@ def test_expr_regex_does_not_match_native_expression_tag() -> None:
     # must keep the native Inworld tag on the generic strip path with its own type
     text = '<expression value="speak calmly"/> Hi <expr type="break" label="1s"/> there.'
     clean, tags = split_all_markup(text)
-    assert clean == " Hi  there."
+    assert clean == " Hi there."
     assert {"type": "expression", "value": "speak calmly"} in tags
     assert {"type": "break", "value": "1s"} in tags
     # conversion must also leave the native tag for the provider pipeline, not eat it
@@ -220,6 +222,56 @@ def test_transcript_stripper_streaming_chunks() -> None:
     assert out == " Hello world!"
     assert stripper.tags[0] == {"type": "expression", "value": "say playfully"}
     assert {"type": "prosody", "value": "whisper"} in stripper.tags
+
+
+def test_split_all_markup_removed_tag_leaves_one_space() -> None:
+    # a marker between two spaces must not leave both behind, or punctuation ends up
+    # followed by a double space in the transcript
+    assert strip_all_markup('Right. <expr type="sound" label="laugh"/> Anyway.') == (
+        "Right. Anyway."
+    )
+    assert strip_all_markup('Right. <sound value="laugh"/> Anyway.') == "Right. Anyway."
+    # a wrapping marker keeps its inner text, so its spacing is untouched
+    assert strip_all_markup('a <expr type="prosody" label="loud">b</expr> c') == "a b c"
+    # only the doubled separator goes: a marker with text on one side keeps the space
+    assert strip_all_markup('Right.<expr type="sound" label="laugh"/> Anyway.') == "Right. Anyway."
+    assert strip_all_markup('Right. <expr type="sound" label="laugh"/>Anyway.') == "Right. Anyway."
+    # newlines are structure, not a separator a strip may collapse
+    assert strip_all_markup('a\n<expr type="sound" label="laugh"/>\nb') == "a\n\nb"
+
+
+def test_split_all_markup_keeps_trailing_space_for_stream() -> None:
+    # the space before a trailing marker is the separator for words still streaming in,
+    # so it survives the strip (the seam is deduped by TranscriptMarkupStripper)
+    assert strip_all_markup('Right. <expr type="sound" label="laugh"/>') == "Right. "
+
+
+def test_transcript_stripper_dedups_space_across_chunks() -> None:
+    # the space before the marker goes out with the previous chunk, so the in-text dedup
+    # can't see it — the stripper has to close that seam itself
+    for chunks in (
+        ["Right. ", '<expr type="sound" label="laugh"/>', " Anyway."],
+        ["Right. ", '<expr type="sound" label="laugh"/> Anyway.'],
+        ["Right. ", '<sound value="laugh"/>', " Anyway."],
+    ):
+        stripper = TranscriptMarkupStripper()
+        out = "".join(stripper.push(c) for c in chunks) + stripper.flush()
+        assert out == "Right. Anyway.", chunks
+
+
+def test_transcript_stripper_leaves_untagged_whitespace_alone() -> None:
+    # without a stripped tag at the seam there is nothing to dedup: whitespace the LLM
+    # itself emitted is passed through untouched
+    stripper = TranscriptMarkupStripper()
+    out = "".join(stripper.push(c) for c in ["Right. ", " Anyway."]) + stripper.flush()
+    assert out == "Right.  Anyway."
+
+    # a tag stripped earlier in the chunk doesn't license collapsing the seam either:
+    # the whitespace here trails "hello", not the removed tag
+    stripper = TranscriptMarkupStripper()
+    chunks = ['<sound value="x"/>hello  ', "   world"]
+    out = "".join(stripper.push(c) for c in chunks) + stripper.flush()
+    assert out == "hello     world"
 
 
 def test_expression_attribute_from_expr() -> None:
