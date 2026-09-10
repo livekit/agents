@@ -420,13 +420,12 @@ class TestApiClient:
         session = self._FakeSession([self._FakeResponse(200, body={"session_id": "sess_123"})])
         client = SynthesiaAPI(
             api_key=self.API_KEY,
-            api_url="https://developers.dev.synthesia.io",
+            api_url="https://developers.example",
             session=session,
         )
         await client.start_session(self._request())
         assert (
-            session.calls[0]["url"]
-            == "https://developers.dev.synthesia.io/api/interactive-avatars/sessions"
+            session.calls[0]["url"] == "https://developers.example/api/interactive-avatars/sessions"
         )
 
     async def test_request_carries_auth_header_and_payload(self):
