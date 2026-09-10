@@ -115,7 +115,7 @@ async def entrypoint(ctx: JobContext) -> None:
             voice="marin",
             # backend Responses model that handles reasoning and tools
             responses_options={
-                "model": "gpt-5.6-sol",
+                "model": "gpt-5.6-luna",
                 "instructions": "Use tools when current information is required.",
             },
         ),

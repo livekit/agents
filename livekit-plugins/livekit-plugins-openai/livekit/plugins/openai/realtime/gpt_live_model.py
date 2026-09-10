@@ -34,11 +34,10 @@ from . import gpt_live_types as types
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "gpt-live-1-diamond-alpha"
+DEFAULT_MODEL = "gpt-live-1"
 DEFAULT_VOICE = "marin"
-DEFAULT_BACKEND_MODEL = "gpt-5.6-sol"
+DEFAULT_BACKEND_MODEL = "gpt-5.6-luna"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-ALPHA_VALUE = "quicksilver=v3"
 
 # the service also caps startup history at 8192 tokens and an append at 500; there is no tokenizer
 # here, so those two are the service's to enforce
@@ -77,7 +76,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """
 
     model: str
-    """Responses model slug; ``gpt-5.6-sol`` when unset."""
+    """Responses model slug; ``gpt-5.6-luna`` when unset."""
     instructions: str
     """Instructions for the backend model, distinct from the voice model's."""
     tool_choice: llm.ToolChoice | None
@@ -146,7 +145,7 @@ class _LiveOptions:
 
 
 class GPTLiveModel(llm.DuplexModel):
-    """OpenAI GPT-Live full-duplex voice model (alpha), ready to pass to ``AgentSession(llm=)``."""
+    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``AgentSession(llm=)``."""
 
     def __init__(
         self,
@@ -166,8 +165,7 @@ class GPTLiveModel(llm.DuplexModel):
             model: GPT-Live voice model slug.
             voice: Output voice: a name from :data:`GPTLiveVoices`, another supported name, or
                 ``{"id": "voice_..."}`` for an authorized custom voice. Defaults to ``marin``.
-                Immutable after the session starts. Names pass through unchanged; coordinate
-                renamed voices with the provider because reused names select different voices.
+                Immutable after the session starts.
             delegation: Where delegated work goes, fixed for the life of the session.
                 ``responses`` runs it on a backend model, so ``@function_tool`` works as usual;
                 ``client`` hands it to the application as a ``delegation_created`` event, which
@@ -437,7 +435,6 @@ class GPTLiveSession(
         headers = {
             "User-Agent": "LiveKit Agents",
             "Authorization": f"Bearer {self._opts.api_key}",
-            "OpenAI-Alpha": ALPHA_VALUE,
         }
         parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
         path = parsed.path.rstrip("/")

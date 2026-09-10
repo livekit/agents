@@ -195,14 +195,14 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         first = ws.sent[0]
         assert first["type"] == "session.start"
         config = first["session"]
-        assert config["model"] == gpt_live_model.DEFAULT_MODEL
+        assert config["model"] == "gpt-live-1"
         assert config["instructions"] == "Be concise."
         assert config["audio"] == {
             "format": {"type": "audio/pcm", "rate": 24000},
             "output": {"voice": voice},
         }
         responses = config["delegation"]["responses"]
-        assert responses["model"] == gpt_live_model.DEFAULT_BACKEND_MODEL
+        assert responses["model"] == "gpt-5.6-luna"
         assert [t["name"] for t in responses["tools"]] == ["_get_weather"]
         assert responses["parallel_tool_calls"] is False
         assert config["input"] == [

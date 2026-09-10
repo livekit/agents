@@ -1,6 +1,6 @@
 # GPT-Live
 
-Two agents for the OpenAI GPT-Live full-duplex voice model (alpha): the ordinary one, and the variant where this process does the reasoning.
+Two agents for the OpenAI GPT-Live full-duplex voice model: the ordinary one, and the variant where this process does the reasoning.
 
 For setup instructions and more details, see the [main examples README](../../README.md).
 
@@ -12,18 +12,6 @@ python client_delegation.py console
 ## Voices
 
 Both examples use `voice="marin"`. `GPTLiveVoices` also offers `aster`, `beacon`, `cinder`, `stone`, and `vesper`. Other supported names and custom voice objects still pass through to the API.
-
-To keep the same voice across the provider's name switch, update your configuration with this map:
-
-| Previous name | New name |
-| --- | --- |
-| `fjord` | `beacon` |
-| `halo` | `aster` |
-| `beacon` | `stone` |
-| `cinder` | `vesper` |
-| `vesper` | `cinder` |
-
-Coordinate this change with the provider before merging or releasing it. Reused names select different voices. The plugin sends the selected name unchanged, so apply each mapping once to the previous configuration. A voice is fixed when its session starts.
 
 ## Context acknowledgments
 
