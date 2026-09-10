@@ -680,10 +680,9 @@ class TTS(tts.TTS):
         except Exception as e:
             logger.error(
                 "Failed to connect to Sarvam TTS WebSocket",
-                extra={"error": str(e), "url": ws_url},
-                exc_info=True,
+                extra={"exception_type": type(e).__name__},
             )
-            raise APIConnectionError(f"WebSocket connection failed: {e}") from e
+            raise APIConnectionError(f"WebSocket connection failed ({type(e).__name__})") from None
 
         self._start_keepalive(ws)
         return ws

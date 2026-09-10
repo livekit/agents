@@ -19,6 +19,19 @@ class DummyConnection:
         return f"DummyConnection({self.id})"
 
 
+class OrderedPopSet(set):
+    def __init__(self, values, pop_order):
+        super().__init__(values)
+        self._pop_order = iter(pop_order)
+
+    def pop(self):
+        for conn in self._pop_order:
+            if conn in self:
+                self.remove(conn)
+                return conn
+        return super().pop()
+
+
 def dummy_connect_factory():
     counter = 0
 
@@ -79,6 +92,22 @@ async def test_get_reuses_only_a_connection_with_a_matching_key():
 
     assert await pool.get(timeout=10.0, key="bulbul:v2") is v2
     assert await pool.get(timeout=10.0, key="bulbul:v3") is not v2
+
+
+@pytest.mark.asyncio
+async def test_matching_key_lookup_restores_skipped_connections():
+    dummy_connect = dummy_connect_factory()
+    pool = ConnectionPool(max_session_duration=60, connect_cb=dummy_connect)
+
+    v2 = await pool.get(timeout=10.0, key="bulbul:v2")
+    pool.put(v2)
+    v3 = await pool.get(timeout=10.0, key="bulbul:v3")
+    pool.put(v3)
+    pool._available = OrderedPopSet([v2, v3], [v3, v2])
+
+    assert await pool.get(timeout=10.0, key="bulbul:v2") is v2
+    assert pool._available == {v3}
+    assert await pool.get(timeout=10.0, key="bulbul:v3") is v3
 
 
 @pytest.mark.asyncio

@@ -171,6 +171,7 @@ class ConnectionPool(Generic[T]):
                     self._max_session_duration is None
                     or now - self._connections[conn] <= self._max_session_duration
                 ):
+                    self._available.update(mismatched)
                     if self._mark_refreshed_on_get:
                         self._connections[conn] = now
                     self.last_acquire_time = 0.0

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import cast
 from unittest.mock import Mock
 
+import aiohttp
 import pytest
 
+from livekit.agents import APIConnectionError
 from livekit.plugins.sarvam.tts import TTS, validate_model_speaker_compatibility
 
 pytestmark = pytest.mark.unit
@@ -140,5 +143,24 @@ async def test_rest_only_sample_rates_skip_websocket_prewarm() -> None:
     try:
         tts.prewarm()
         tts._pool.prewarm.assert_not_called()
+    finally:
+        await tts.aclose()
+
+
+async def test_websocket_connection_errors_do_not_expose_transport_details(caplog) -> None:
+    class FailingSession:
+        async def ws_connect(self, *args, **kwargs):
+            raise RuntimeError("api-key=secret")
+
+    tts = TTS(
+        api_key="secret",
+        http_session=cast(aiohttp.ClientSession, FailingSession()),
+    )
+    try:
+        with pytest.raises(APIConnectionError, match="RuntimeError") as exc_info:
+            await tts._connect_ws(1.0)
+        assert "api-key=secret" not in str(exc_info.value)
+        assert exc_info.value.__cause__ is None
+        assert all("api-key=secret" not in record.getMessage() for record in caplog.records)
     finally:
         await tts.aclose()
