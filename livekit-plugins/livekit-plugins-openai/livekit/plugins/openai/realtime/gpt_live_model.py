@@ -44,13 +44,11 @@ ALPHA_VALUE = "quicksilver=v3"
 # here, so those two are the service's to enforce
 _MAX_INPUT_ITEMS = 128
 
-# between turns the model sends digital silence, every sample zero, so the gate needs no noise
-# floor to learn. it does open each connection with a ~0.4 s tick that reaches this level, and
-# speech never comes in under 0.005, so a floor here separates the two
+# measured on the alpha: silence is all zeros bar a 0.4 s tick at connect, and speech starts an
+# order of magnitude above, so nothing has to be learned from the stream
 _SILENCE_RMS = 0.0006
-# a pause between sentences runs to about 0.5 s of that silence, and closing on one would split
-# a single utterance into two messages
-_SILENCE_HANGOVER = 0.8
+# long enough that a pause between sentences does not split an utterance in two
+_MIN_SILENCE_DURATION = 0.8
 
 # a speaker's fragments extend one message until a pause this long: on the model's clock between
 # the spans they cover, and for the user on the input audio pushed since the last one. fragments
@@ -236,7 +234,7 @@ class GPTLiveModel(llm.DuplexModel):
         return self._http_session
 
     def audio_gate(self) -> llm.AudioGate:
-        return llm.FixedGate(_SILENCE_RMS, hangover=_SILENCE_HANGOVER)
+        return llm.FixedGate(_SILENCE_RMS, min_silence_duration=_MIN_SILENCE_DURATION)
 
     def session(self) -> GPTLiveSession:
         return GPTLiveSession(self)
