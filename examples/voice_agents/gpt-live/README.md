@@ -9,6 +9,28 @@ python gpt_live_agent.py console
 python client_delegation.py console
 ```
 
+## Voices
+
+Both examples use `voice="marin"`. `GPTLiveVoices` also offers `aster`, `beacon`, `cinder`, `stone`, and `vesper`. Other supported names and custom voice objects still pass through to the API.
+
+To keep the same voice across the provider's name switch, update your configuration with this map:
+
+| Previous name | New name |
+| --- | --- |
+| `fjord` | `beacon` |
+| `halo` | `aster` |
+| `beacon` | `stone` |
+| `cinder` | `vesper` |
+| `vesper` | `cinder` |
+
+Coordinate this change with the provider before merging or releasing it. Reused names select different voices. The plugin sends the selected name unchanged, so apply each mapping once to the previous configuration. A voice is fixed when its session starts.
+
+## Context acknowledgments
+
+`append_instructions`, `append_thinking`, and `append_commentary` queue context and return without waiting for an acknowledgment. Their `session.*.appended` events arrive at the estimated context-injection end. They do not mean speech has finished. The plugin does not gate later commands on these events or apply an acknowledgment timeout. The adapter uses output audio to determine when speech ends.
+
+`session.closed.reason` accepts `close_requested`, `expired`, `content`, `remote_hangup`, and `connection_lost`. The plugin logs the reason and collects the final usage for each close event.
+
 ## Delegation
 
 GPT-Live listens and speaks at the same time, but it does no reasoning and runs no tools of its own. When the conversation needs either, it delegates. Where that work goes is fixed when the session opens and cannot change afterwards.

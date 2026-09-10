@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
+import logging
 import time
 from typing import Any
 
@@ -43,7 +45,9 @@ class _FakeWS:
         if event["type"] == "session.start":
             self.session._handle_event({"type": "session.started", "session": {"id": "live_test"}})
         elif event["type"] == "session.close":
-            self.session._handle_event({"type": "session.closed", "usage": {"seconds": 0}})
+            self.session._handle_event(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
 
     async def receive(self) -> None:
         await asyncio.Event().wait()
@@ -168,13 +172,17 @@ async def test_closing_releases_a_session_still_waiting_for_its_config(
     await model.aclose()
 
 
+@pytest.mark.parametrize(
+    "voice",
+    ["aster", "beacon", "cinder", "marin", "stone", "vesper", "future-voice", {"id": "voice_test"}],
+)
 async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, voice: str | dict[str, Any]
 ) -> None:
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(
-        api_key="sk-test", voice="marin", responses_options={"parallel_tool_calls": False}
+        api_key="sk-test", voice=voice, responses_options={"parallel_tool_calls": False}
     )
     session = model.session()
     try:
@@ -191,7 +199,7 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         assert config["instructions"] == "Be concise."
         assert config["audio"] == {
             "format": {"type": "audio/pcm", "rate": 24000},
-            "output": {"voice": "marin"},
+            "output": {"voice": voice},
         }
         responses = config["delegation"]["responses"]
         assert responses["model"] == gpt_live_model.DEFAULT_BACKEND_MODEL
@@ -465,8 +473,6 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
     try:
         await session._update_session()
         await asyncio.sleep(0.05)
-        import base64
-
         hundred_ms = base64.b64encode(b"\x00" * 4800).decode()
         for _ in range(3):
             session._handle_event({"type": "session.output_audio.delta", "delta": hundred_ms})
@@ -476,6 +482,87 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
         assert all(f.frame.sample_rate == 24000 and f.start_ms is None for f in frames)
     finally:
         await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    adapted = llm.DuplexRealtimeAdapter(model).session()
+    session = adapted.duplex_session
+    assert isinstance(session, GPTLiveSession)
+    generations: list[llm.GenerationCreatedEvent] = []
+    errors: list[llm.RealtimeModelError] = []
+    adapted.on("generation_created", generations.append)
+    adapted.on("error", errors.append)
+    next_audio: asyncio.Task[rtc.AudioFrame] | None = None
+    try:
+        await adapted._update_session()
+        await asyncio.sleep(0.05)
+        session.append_instructions("Be concise.")
+        session.append_thinking("The caller is returning a chair.")
+        session.append_commentary("Ask for the order number.")
+        session.push_audio(_silence(100))
+
+        # Context injection can outlast the connection timeout without holding later commands.
+        await asyncio.sleep(model._opts.conn_options.timeout * 2)
+        assert [event["type"] for event in ws.sent] == [
+            "session.start",
+            "session.instructions.append",
+            "session.thinking.append",
+            "session.commentary.append",
+            "session.input_audio.append",
+        ]
+        assert not errors
+        assert not generations
+
+        speech = {
+            "type": "session.output_audio.delta",
+            "delta": base64.b64encode(_pcm(0.2).data).decode(),
+        }
+        session._handle_event(_transcript("assistant", "What is", 0))
+        session._handle_event(speech)
+        await asyncio.sleep(0.05)
+        assert len(generations) == 1
+        message = await anext(generations[0].message_stream.__aiter__())
+        audio = message.audio_stream.__aiter__()
+        assert (await anext(audio)).duration == pytest.approx(0.1)
+        next_audio = asyncio.create_task(anext(audio))
+
+        for append in ws.sent[1:4]:
+            session._handle_event(
+                {"type": f"{append['type']}ed", "client_event_id": append["event_id"]}
+            )
+            await asyncio.sleep(0.05)
+            assert not next_audio.done()
+            assert len(generations) == 1
+            assert not adapted.chat_ctx.items
+
+        session._handle_event(_transcript("assistant", " your order number?", 100))
+        session._handle_event(speech)
+        assert (await asyncio.wait_for(next_audio, timeout=1)).duration == pytest.approx(0.1)
+
+        for _ in range(int(gpt_live_model._MIN_SILENCE_MS // 100)):
+            session._handle_event(
+                {
+                    "type": "session.output_audio.delta",
+                    "delta": base64.b64encode(_silence(100).data).decode(),
+                }
+            )
+        async for _ in audio:
+            pass
+        assert "".join([text async for text in message.text_stream]) == "What is your order number?"
+        assert len(generations) == 1
+        assert not errors
+    finally:
+        if next_audio is not None:
+            next_audio.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await next_audio
+        await adapted.aclose()
         await model.aclose()
 
 
@@ -602,11 +689,16 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
         await model.aclose()
 
 
+@pytest.mark.parametrize(
+    "reason",
+    ["close_requested", "expired", "content", "remote_hangup", "connection_lost", None],
+)
 async def test_a_delegated_model_is_billed_under_its_own_name(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, reason: str | None
 ) -> None:
     """The frontend is billed by duration; each backend response names the model that spent it."""
     _connect_hook(monkeypatch)
+    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
 
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
@@ -623,9 +715,12 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
             }
         )
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
-        session._handle_event(
-            {"type": "session.closed", "reason": "client_request", "usage": {"seconds": 27.0}}
-        )
+        closed: dict[str, Any] = {"type": "session.closed", "usage": {"seconds": 27.0}}
+        if reason is not None:
+            closed["reason"] = reason
+        session._handle_event(closed)
+        close_log = next(r for r in caplog.records if r.message == "gpt-live session closed")
+        assert close_log.reason == reason
 
         backend = [m for m in collected if isinstance(m, LLMMetrics)]
         assert [m.metadata.model_name for m in backend] == ["gpt-5.6-sol"]
