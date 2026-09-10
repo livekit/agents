@@ -1604,6 +1604,61 @@ async def test_a_rejected_upgrade_without_a_reason_still_explains_itself(
     await stream.aclose()
 
 
+async def test_a_send_failure_is_retryable(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = await reson8_server()
+
+    async def boom(self: object, *args: object, **kwargs: object) -> None:
+        raise aiohttp.ClientConnectionResetError("cannot write to closing transport")
+
+    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_bytes", boom)
+
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+    stream.push_frame(_frame())
+
+    with pytest.raises(APIConnectionError, match="Failed to send audio") as excinfo:
+        async with asyncio.timeout(10):
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.retryable is True
+    assert excinfo.value.__cause__ is None
+    await stream.aclose()
+
+
+async def test_a_send_failure_reconnects(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = await reson8_server()
+    real = aiohttp.ClientWebSocketResponse.send_bytes
+    failures = 0
+
+    async def fail_once(self: object, *args: object, **kwargs: object) -> None:
+        nonlocal failures
+        if failures == 0:
+            failures += 1
+            raise aiohttp.ClientConnectionResetError("cannot write to closing transport")
+        await real(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "send_bytes", fail_once)
+
+    stream = _stt(server.base_url, client_session).stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
+    )
+    try:
+        await asyncio.wait_for(server.connected.wait(), timeout=5)
+        stream.push_frame(_frame())
+        await server.wait_for_connections(2)
+        assert failures == 1
+    finally:
+        await stream.aclose()
+
+
 async def test_an_unreachable_host_is_a_connection_error(
     client_session: aiohttp.ClientSession,
 ) -> None:

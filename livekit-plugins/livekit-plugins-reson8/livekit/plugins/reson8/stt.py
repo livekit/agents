@@ -722,11 +722,13 @@ class SpeechStream(stt.RecognizeStream):
 
                     if flushing:
                         await ws.send_str(json.dumps({"type": "flush_request"}))
-            except (aiohttp.ClientError, ConnectionError):
+            except (aiohttp.ClientError, ConnectionError) as e:
                 if closing_ws or self._ensure_session().closed:
                     return
 
-                raise
+                raise APIConnectionError(
+                    f"Failed to send audio to Reson8 ({type(e).__name__})"
+                ) from None
 
             input_ended = True
             await self._await_final_turn()
