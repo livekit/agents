@@ -194,13 +194,22 @@ class SpeechHandle:
         `interrupt(force=True)` still lands, so a hold survives ordinary barge-in without
         making the speech impossible to stop.
 
-        **Two things a hold does not do.** While one is active the caller's audio is
-        replaced with silence on the paths feeding the STT and the realtime model, unless
-        the session opts out with
-        `turn_handling=TurnHandlingOptions(interruption={"discard_audio_if_uninterruptible": False})`
-        -- so by default the user is not heard for as long as the speech plays. And a user
-        turn completing while a speech is held generates no reply for that turn. A hold is
-        therefore for wording, not for a question whose answer is expected mid-sentence.
+        **What a hold does not do**, in the order it bites:
+
+        1. *It protects LiveKit-side playout, not a provider's own generation.* `say()`
+           speaks through the TTS plugin when there is one, and that audio is LiveKit's
+           to protect. With no TTS and a realtime model whose
+           `capabilities.supports_say` is True, the provider generates the audio and
+           cancels it itself when its own turn detection fires -- a hold cannot reach
+           that, so a held speech on that path can still end mid-sentence. Attach a TTS
+           model for wording that has to arrive whole.
+        2. *The caller is not heard while it plays.* Their audio is replaced with silence
+           on the paths feeding the STT and the realtime model, unless the session opts
+           out with
+           `turn_handling=TurnHandlingOptions(interruption={"discard_audio_if_uninterruptible": False})`.
+           Barge-in is not merely ignored by default; it is discarded.
+        3. *A user turn completing during a hold generates no reply for that turn.* A hold
+           is for wording, not for a question whose answer is expected mid-sentence.
 
         Example:
             ```python
