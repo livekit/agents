@@ -1659,6 +1659,45 @@ async def test_a_send_failure_reconnects(
         await stream.aclose()
 
 
+async def test_a_websocket_error_frame_surfaces_its_cause(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    An ERROR frame carries the transport failure in ``msg.data``.
+
+    aiohttp closes the socket before returning it, so a CLOSED would follow and
+    the stream would still fail -- but as a generic close, losing the cause.
+    """
+
+    server = await reson8_server()
+    sent = False
+
+    async def error_frame(self: object, *args: object, **kwargs: object) -> aiohttp.WSMessage:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return aiohttp.WSMessage(
+                aiohttp.WSMsgType.ERROR, aiohttp.WebSocketError(1002, "invalid frame"), None
+            )
+
+        await asyncio.sleep(0)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
+
+    monkeypatch.setattr(aiohttp.ClientWebSocketResponse, "receive", error_frame)
+
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    with pytest.raises(APIConnectionError, match="WebSocketError") as excinfo:
+        async with asyncio.timeout(10):
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.__cause__ is None
+    await stream.aclose()
+
+
 async def test_an_unreachable_host_is_a_connection_error(
     client_session: aiohttp.ClientSession,
 ) -> None:

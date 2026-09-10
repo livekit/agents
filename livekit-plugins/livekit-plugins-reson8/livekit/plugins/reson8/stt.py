@@ -788,6 +788,11 @@ class SpeechStream(stt.RecognizeStream):
                         f"Reson8 connection closed unexpectedly (code={ws.close_code})"
                     )
 
+                if msg.type is aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError(
+                        f"Reson8 connection failed ({type(msg.data).__name__})"
+                    ) from None
+
                 if msg.type is not aiohttp.WSMsgType.TEXT:
                     continue
 
