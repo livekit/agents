@@ -305,7 +305,7 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
     delegations: list[GPTLiveDelegation] = []
     session.on("delegation_created", delegations.append)
     try:
-        await session._update_session(instructions="Be concise.", tools=[_get_weather])
+        await session._update_session(instructions="Be concise.")
         await asyncio.sleep(0.05)
         assert ws.sent[0]["session"]["delegation"] == {"type": "client"}
 
@@ -352,6 +352,34 @@ async def test_client_delegation_reaches_the_application_and_is_answered(
         assert speak["content"] == "62 and raining."
         assert think["type"] == "session.thinking.append"
         assert think["content"] == "Still checking the forecast."
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_client_delegation_refuses_tools_it_could_never_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping them silently leaves an agent whose tools never run, which reads as a model fault."""
+    _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", delegation="client")
+    session = model.session()
+    try:
+        with pytest.raises(llm.RealtimeError, match="no tool channel"):
+            await session._update_session(instructions="Be concise.", tools=[_get_weather])
+
+        # an agent with no tools is the supported shape, and the activity passes an empty list
+        await session._update_session(instructions="Be concise.", tools=[])
+
+        # responses delegation is the way to have tools at all, so it still takes them
+        responses_model = GPTLiveModel(api_key="sk-test")
+        responses_session = responses_model.session()
+        try:
+            await responses_session._update_session(tools=[_get_weather])
+        finally:
+            await responses_session.aclose()
+            await responses_model.aclose()
     finally:
         await session.aclose()
         await model.aclose()

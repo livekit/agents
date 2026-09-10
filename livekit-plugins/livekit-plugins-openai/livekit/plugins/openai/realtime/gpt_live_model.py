@@ -951,10 +951,12 @@ class GPTLiveSession(
         self._tools = llm.ToolContext(tools)
         if self._opts.delegation == "client":
             if tools:
-                logger.warning(
-                    "gpt-live client delegation has no tool channel; answer delegation_created "
-                    "with append_commentary instead",
-                    extra={"tools": [tool.id for tool in self._tools.flatten()]},
+                # dropping them silently leaves an agent whose tools simply never run
+                raise llm.RealtimeError(
+                    "gpt-live client delegation has no tool channel, so the model can never call "
+                    f"{sorted(tool.id for tool in self._tools.flatten())}. Leave the agent's tools "
+                    "empty and answer delegation_created with append_commentary, or pass "
+                    'delegation="responses" to run tools on the backend model.'
                 )
             return
         self._send_delegation_update(
