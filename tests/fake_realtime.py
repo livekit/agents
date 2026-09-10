@@ -38,7 +38,7 @@ def fake_capabilities(**overrides: bool) -> RealtimeCapabilities:
         "per_response_tool_choice": True,
         "supports_say": True,
         # a different interruption model rather than a richer one, so it stays off
-        "paced_audio_output": False,
+        "supports_overlapping_speech": False,
     }
     defaults.update(overrides)
     return RealtimeCapabilities(**defaults)

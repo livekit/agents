@@ -279,6 +279,11 @@ class AgentActivity(RecognitionHooks):
 
         # session-scoped truth read by every server-side turn-detection check below
         self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
+        # the model speaks over the caller, so the caller's turn never gates its own
+        self._rt_overlapping_speech_enabled = (
+            isinstance(self.llm, llm.RealtimeModel)
+            and self.llm.capabilities.supports_overlapping_speech
+        )
         if (
             isinstance(self.llm, llm.RealtimeModel)
             and not self._rt_turn_detection_enabled
@@ -2055,12 +2060,8 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
-        if (
-            self._rt_turn_detection_enabled
-            and self._rt_session is not None
-            and self._rt_session.capabilities.paced_audio_output
-        ):
-            # nothing is buffered ahead of playout; clearing it would cut speech still coming
+        if self._rt_turn_detection_enabled and self._rt_overlapping_speech_enabled:
+            # the caller talking is not an interruption here; the model ends its own turn
             return
 
         try:
@@ -3864,7 +3865,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions:
+        if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         if speech_handle.interrupted:
@@ -4104,7 +4105,7 @@ class AgentActivity(RecognitionHooks):
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
         ]
-        if speech_handle.allow_interruptions:
+        if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
@@ -4609,6 +4610,10 @@ class AgentActivity(RecognitionHooks):
             )
 
     def _pause_enabled(self) -> bool:
+        if self._rt_overlapping_speech_enabled:
+            # the framework never interrupts on the caller here, so no interruption can be false
+            return False
+
         interruption_options = self._session.options.interruption
         return bool(
             interruption_options["resume_false_interruption"]

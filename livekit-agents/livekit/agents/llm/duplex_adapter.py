@@ -260,7 +260,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
                 auto_tool_reply_generation=caps.auto_tool_reply_generation,
                 audio_output=True,
                 manual_function_calls=False,
-                paced_audio_output=True,
+                supports_overlapping_speech=True,
                 mutable_chat_context=caps.mutable_chat_context,
                 mutable_instructions=caps.mutable_instructions,
                 mutable_tools=caps.mutable_tools,
