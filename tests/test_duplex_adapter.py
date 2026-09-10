@@ -1,8 +1,9 @@
 """
 Tests for the duplex adapter: a full-duplex model emits audio continuously and reports only
 fragments of its transcript, so the framework gates the audio against the model's own noise floor,
-cuts it into generations and attaches the words to the sound that carries them. Output the model
-never transcribes still plays, it simply produces no chat item.
+cuts it into generations, attaches the words to the sound that carries them and keeps the chat
+context the framework sees. Output the model never transcribes still plays, it simply produces no
+chat item.
 """
 
 from __future__ import annotations
@@ -57,8 +58,8 @@ class _FakeDuplexModel(llm.DuplexModel):
     def provider(self) -> str:
         return "fake"
 
-    def session(self, *, wait_for_config: bool = False) -> _FakeDuplexSession:
-        self.session_obj = _FakeDuplexSession(self, wait_for_config=wait_for_config)
+    def session(self) -> _FakeDuplexSession:
+        self.session_obj = _FakeDuplexSession(self)
         return self.session_obj
 
     async def aclose(self) -> None:
@@ -66,21 +67,17 @@ class _FakeDuplexModel(llm.DuplexModel):
 
 
 class _FakeDuplexSession(llm.DuplexSession):
-    def __init__(self, model: _FakeDuplexModel, *, wait_for_config: bool = False) -> None:
-        super().__init__(model, wait_for_config=wait_for_config)
+    def __init__(self, model: _FakeDuplexModel) -> None:
+        super().__init__(model)
         self.audio_ch = aio.Chan[llm.DuplexAudioFrame]()
-        self._chat_ctx = llm.ChatContext.empty()
         self._tools = llm.ToolContext([])
         self.config_batches: list[tuple[object, object, object]] = []
+        self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
         return self.audio_ch
-
-    @property
-    def chat_ctx(self) -> llm.ChatContext:
-        return self._chat_ctx
 
     @property
     def tools(self) -> llm.ToolContext:
@@ -89,8 +86,8 @@ class _FakeDuplexSession(llm.DuplexSession):
     async def _update_instructions(self, instructions: str) -> None:
         pass
 
-    async def _update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        self._chat_ctx = chat_ctx
+    async def _append_items(self, items: list[llm.ChatItem]) -> None:
+        self.appended.extend(items)
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
         pass
@@ -128,7 +125,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.config_batches.append((instructions, chat_ctx, tools))
         await super()._update_session(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
 
-    # -- test helpers ----------------------------------------------------------------------
+    # test helpers
 
     def push(self, level: float, *, count: int = 1, start_ms: int | None = None) -> None:
         for i in range(count):
@@ -141,7 +138,18 @@ class _FakeDuplexSession(llm.DuplexSession):
     def say(self, text: str, *, start_ms: int | None = None, end_ms: int | None = None) -> None:
         self.emit(
             "transcript_delta",
-            llm.DuplexTranscriptDelta(text=text, start_ms=start_ms, end_ms=end_ms),
+            llm.DuplexOutputTranscriptDelta(text=text, start_ms=start_ms, end_ms=end_ms),
+        )
+
+    def heard(self, item_id: str, text: str) -> None:
+        """The plugin's account of one finished user turn."""
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(item_id=item_id, transcript=text, is_final=True),
+        )
+        self.emit(
+            "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
         )
 
 
@@ -187,7 +195,7 @@ async def duplex() -> tuple[_FakeDuplexSession, _DuplexRealtimeSession, list]:
     await session.aclose()
 
 
-# -- the gate ------------------------------------------------------------------------------
+# the gate
 
 
 def test_gate_stays_closed_on_silence() -> None:
@@ -258,7 +266,7 @@ def test_gate_decides_on_audio_duration_not_on_frame_count() -> None:
     assert decisions[0][12] and not decisions[0][-1]
 
 
-# -- the segmenter -------------------------------------------------------------------------
+# the segmenter
 
 
 async def test_silence_alone_produces_no_generation(duplex) -> None:
@@ -551,12 +559,7 @@ async def test_the_callers_events_pass_through_and_leave_the_burst_alone(duplex)
     fake.push(0.001, count=20)
     fake.push(0.3, count=3)
     await _settle()
-    fake.emit("input_speech_started", llm.InputSpeechStartedEvent())
-    fake.emit(
-        "input_audio_transcription_completed",
-        llm.InputTranscriptionCompleted(item_id="u1", transcript="Wait", is_final=True),
-    )
-    fake.emit("input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False))
+    fake.heard("u1", "Wait")
     fake.push(0.3, count=3)
     await _settle()
 
@@ -569,7 +572,68 @@ async def test_the_callers_events_pass_through_and_leave_the_burst_alone(duplex)
     assert session._burst is not None
 
 
-# -- configuration and replies -------------------------------------------------------------
+# the chat context
+
+
+async def test_the_adapter_keeps_the_context_under_the_ids_the_framework_uses(duplex) -> None:
+    """The framework names the user message after the transcription's item and the assistant
+    message after the generation, so the adapter records both under those ids."""
+    fake, session, generations = duplex
+    fake.heard("u1", "What is the weather?")
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    fake.say("Let me check.", start_ms=2000, end_ms=2400)
+    fake.push(0.3, count=1)
+    call = llm.FunctionCall(call_id="c1", name="lookup", arguments="{}")
+    fake.emit("function_call", call)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    items = session.chat_ctx.items
+    assert [type(i).__name__ for i in items] == ["ChatMessage", "ChatMessage", "FunctionCall"]
+    user, assistant, recorded_call = items
+    assert isinstance(user, llm.ChatMessage) and isinstance(assistant, llm.ChatMessage)
+    assert (user.id, user.role, user.text_content) == ("u1", "user", "What is the weather?")
+    assert user.transcript_confidence is not None
+    assert (assistant.id, assistant.text_content) == (generations[0].response_id, "Let me check.")
+    assert recorded_call is call
+
+
+async def test_only_what_is_new_reaches_the_model(duplex, caplog) -> None:
+    """A context update is diffed against the adapter's own record: the model's speech, which the
+    framework hands back under the same ids, is never re-sent, and an edit is logged."""
+    fake, session, _generations = duplex
+    fake.heard("u1", "Hello")
+    await _settle()
+
+    chat_ctx = session.chat_ctx
+    chat_ctx.add_message(role="user", content="typed by the app", id="typed_1")
+    chat_ctx.items.append(llm.FunctionCallOutput(call_id="c1", output="rainy", is_error=False))
+    await session.update_chat_ctx(chat_ctx)
+    assert [i.id for i in fake.appended] == ["typed_1", chat_ctx.items[-1].id]
+
+    chat_ctx = session.chat_ctx
+    chat_ctx.remove("u1")
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        await session.update_chat_ctx(chat_ctx)
+    assert [r.message for r in caplog.records if r.levelno >= logging.WARNING] == [
+        "duplex context is append-only; the model keeps what it has been told"
+    ]
+    assert len(fake.appended) == 2
+
+
+async def test_startup_history_seeds_both_the_adapter_and_the_model(duplex) -> None:
+    fake, session, _generations = duplex
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="a prior turn", id="m1")
+    await session._update_session(chat_ctx=chat_ctx)
+
+    assert [i.id for i in fake.appended] == ["m1"]
+    assert [i.id for i in session.chat_ctx.items] == ["m1"]
+
+
+# configuration and replies
 
 
 async def test_configuration_is_handed_over_as_one_unit(duplex) -> None:
@@ -583,15 +647,14 @@ async def test_configuration_is_handed_over_as_one_unit(duplex) -> None:
     assert tools == []
 
 
-async def test_adapter_promises_the_session_a_configuration() -> None:
-    """Only the adapter knows AgentActivity will configure the session it just created."""
-    model = _FakeDuplexModel()
-    session = llm.DuplexRealtimeAdapter(model).session()
-    promised = model.session_obj
-    assert promised is not None and not promised._config_delivered.is_set()
-
-    assert model.session()._config_delivered.is_set(), "a session built directly must not wait"
-    await session.aclose()
+async def test_a_session_is_configured_once_the_adapter_hands_over_the_configuration(
+    duplex,
+) -> None:
+    """A model whose configuration is immutable once started waits on this before connecting."""
+    fake, session, _generations = duplex
+    assert not fake._configured.is_set()
+    await session._update_session(instructions="be brief")
+    assert fake._configured.is_set()
 
 
 async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex) -> None:

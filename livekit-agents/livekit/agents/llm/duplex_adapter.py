@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import numpy as np
@@ -13,17 +14,18 @@ from livekit import rtc
 
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
-from ..utils import aio, shortuuid
-from .chat_context import ChatContext, FunctionCall
+from ..utils import aio, is_given, shortuuid
+from .chat_context import ChatContext, ChatMessage, FunctionCall
 from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
     DuplexModel,
+    DuplexOutputTranscriptDelta,
     DuplexSession,
-    DuplexTranscriptDelta,
 )
 from .realtime import (
     GenerationCreatedEvent,
+    InputTranscriptionCompleted,
     MessageGeneration,
     RealtimeCapabilities,
     RealtimeError,
@@ -31,11 +33,13 @@ from .realtime import (
     RealtimeSession,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
+from .utils import compute_chat_ctx_diff
 
 # a floor this low is digital silence; it keeps the gate's ratios finite when a model emits zeros
 _SILENCE_FLOOR = 1e-4
 
-# audio heard with no burst open before waiting transcript is emitted on its own rather than lost
+# transcript is text the model says it spoke; when no sound ever opens a burst for it, this much
+# audio later it is emitted as a text-only generation rather than lost. audio is never held for it
 _UNCLAIMED_TRANSCRIPT_MS = 3000
 
 # how long a requested reply waits for the model to start speaking before it counts as declined
@@ -106,7 +110,11 @@ class AdaptiveNoiseGate:
 
 @dataclass
 class _Burst:
-    """One contiguous stretch of model output, presented to the framework as a generation."""
+    """One stretch of audible model output, presented to the framework as a generation.
+
+    It forwards the audio as it arrives and attaches the transcript fragments whose sound has been
+    reached, placing each on the forwarded audio for the synchronizer.
+    """
 
     id: str
     message_ch: aio.Chan[MessageGeneration]
@@ -116,10 +124,14 @@ class _Burst:
     audio_start_ms: int
     """Where on the adapter's audio clock the burst opened."""
     anchor_ms: int | None = None
-    """Span clock minus audio clock, fixed by the first fragment this burst carries."""
+    """Span clock minus audio clock, fixed by the first fragment: the sound that opened the gate
+    and the oldest unclaimed fragment describe the same moment."""
+    opened_at: float = field(default_factory=time.time)
+    transcript: str = ""
     _last_annotation: float = 0.0
 
-    def attach(self, fragment: DuplexTranscriptDelta) -> None:
+    def attach(self, fragment: DuplexOutputTranscriptDelta) -> None:
+        self.transcript += fragment.text
         text: str = fragment.text
         if fragment.start_ms is not None and self.anchor_ms is not None:
             # placed on the forwarded audio so the synchronizer paces against real speech; the
@@ -196,9 +208,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
-        # AgentActivity configures the session before it is used
-        duplex = self._duplex_model.session(wait_for_config=True)
-        return _DuplexRealtimeSession(self, duplex, self._gate())
+        return _DuplexRealtimeSession(self, self._duplex_model.session(), self._gate())
 
     async def aclose(self) -> None:
         await self._duplex_model.aclose()
@@ -215,21 +225,21 @@ class _DuplexRealtimeSession(RealtimeSession):
         # the adapter's clock: output audio heard so far, which is gapless and real-time
         self._audio_ms = 0
         # the model's words waiting for the sound that carries them, and since when
-        self._fragments: deque[DuplexTranscriptDelta] = deque()
+        self._fragments: deque[DuplexOutputTranscriptDelta] = deque()
         self._waiting_since_ms = 0
         # user_initiated has to be settled before a burst's event goes out, or the framework
         # schedules it as a turn of the model's own as well
         self._pending_reply: asyncio.Future[GenerationCreatedEvent] | None = None
+        # the conversation as the framework sees it: the adapter names every message, so this is
+        # what a context update diffs against, and only what is new reaches the model
+        self._chat_ctx = ChatContext.empty()
 
         duplex.on("transcript_delta", self._on_transcript_delta)
         duplex.on("function_call", self._on_function_call)
         duplex.on("session_reconnected", self._on_session_reconnected)
+        duplex.on("input_audio_transcription_completed", self._on_input_transcription)
         duplex.on("input_speech_started", lambda ev: self.emit("input_speech_started", ev))
         duplex.on("input_speech_stopped", lambda ev: self.emit("input_speech_stopped", ev))
-        duplex.on(
-            "input_audio_transcription_completed",
-            lambda ev: self.emit("input_audio_transcription_completed", ev),
-        )
         duplex.on("metrics_collected", lambda ev: self.emit("metrics_collected", ev))
         duplex.on("error", lambda ev: self.emit("error", ev))
 
@@ -259,9 +269,9 @@ class _DuplexRealtimeSession(RealtimeSession):
                 burst.audio_ch.send_nowait(f.frame)
             self._audio_ms += round(f.frame.duration * 1000)
 
-            # the first fragment anchors the span clock to the audio clock at the onset, the only
-            # moment the two are known to agree; every later one is due when the audio reaches
-            # its span, and one the burst ends before reaching describes the next burst
+            # the first fragment anchors the span clock to the audio clock at the onset; every
+            # later one is due when the audio reaches its span, and one the burst ends before
+            # reaching describes the next burst
             while self._fragments:
                 fragment = self._fragments[0]
                 if fragment.start_ms is not None:
@@ -278,7 +288,6 @@ class _DuplexRealtimeSession(RealtimeSession):
         elif (
             self._fragments and self._audio_ms - self._waiting_since_ms >= _UNCLAIMED_TRANSCRIPT_MS
         ):
-            # transcript no sound ever claims is emitted alone: losing it is worse than an odd item
             logger.error(
                 "duplex transcript outlived the audio it describes",
                 extra={"text": "".join(f.text for f in self._fragments)},
@@ -325,15 +334,41 @@ class _DuplexRealtimeSession(RealtimeSession):
         burst, self._burst = self._burst, None
         if burst is not None:
             burst.close()
+            if burst.transcript:
+                # under the id and time the framework will use for it, so a context update matches
+                self._chat_ctx.insert(
+                    ChatMessage(
+                        id=burst.id,
+                        role="assistant",
+                        content=[burst.transcript],
+                        created_at=burst.opened_at,
+                    )
+                )
         self._waiting_since_ms = self._audio_ms
 
-    def _on_transcript_delta(self, ev: DuplexTranscriptDelta) -> None:
+    def _on_transcript_delta(self, ev: DuplexOutputTranscriptDelta) -> None:
         # attached on the next frame: the sound places the words, and the frames never stop
         if not self._fragments:
             self._waiting_since_ms = self._audio_ms
         self._fragments.append(ev)
 
+    def _on_input_transcription(self, ev: InputTranscriptionCompleted) -> None:
+        if ev.is_final:
+            self._chat_ctx.insert(
+                ChatMessage(
+                    id=ev.item_id,
+                    role="user",
+                    content=[ev.transcript],
+                    transcript_confidence=ev.confidence if ev.confidence is not None else 1.0,
+                    created_at=ev.turn_started_at
+                    if ev.turn_started_at is not None
+                    else time.time(),
+                )
+            )
+        self.emit("input_audio_transcription_completed", ev)
+
     def _on_function_call(self, call: FunctionCall) -> None:
+        self._chat_ctx.insert(call)
         # a call joins the burst in flight so the tool runs while the model talks; alone, it is a
         # generation of its own, over as soon as it is delivered
         if self._burst is not None:
@@ -351,7 +386,7 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._pending_reply.cancel()
         self.emit("session_reconnected", ev)
 
-    # -- RealtimeSession -------------------------------------------------------------------
+    # RealtimeSession
 
     @property
     def duplex_session(self) -> DuplexSession:
@@ -360,7 +395,7 @@ class _DuplexRealtimeSession(RealtimeSession):
 
     @property
     def chat_ctx(self) -> ChatContext:
-        return self._duplex.chat_ctx
+        return self._chat_ctx.copy()
 
     @property
     def tools(self) -> ToolContext:
@@ -374,6 +409,9 @@ class _DuplexRealtimeSession(RealtimeSession):
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
         # as one unit: an immutable configuration must be complete before the first outbound event
+        if is_given(chat_ctx):
+            chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
+            self._chat_ctx = chat_ctx.copy()
         try:
             await self._duplex._update_session(
                 instructions=instructions, chat_ctx=chat_ctx, tools=tools
@@ -385,7 +423,28 @@ class _DuplexRealtimeSession(RealtimeSession):
         await self._duplex._update_instructions(instructions)
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
-        await self._duplex._update_chat_ctx(chat_ctx)
+        from ..voice.generation import remove_instructions
+
+        chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
+        remove_instructions(chat_ctx)
+        diff = compute_chat_ctx_diff(self._chat_ctx, chat_ctx)
+        # the framework records the model's speech as it was played, which may be less than what
+        # the model said; anything else it edits or removes, the model has already been told
+        if edited := [
+            item_id
+            for item_id in diff.to_remove + [item_id for _, item_id in diff.to_update]
+            if not isinstance(item := self._chat_ctx.get_by_id(item_id), ChatMessage)
+            or item.role != "assistant"
+        ]:
+            logger.warning(
+                "duplex context is append-only; the model keeps what it has been told",
+                extra={"item_ids": edited},
+            )
+        if new_items := [
+            item for _, item_id in diff.to_create if (item := chat_ctx.get_by_id(item_id))
+        ]:
+            await self._duplex._append_items(new_items)
+        self._chat_ctx = chat_ctx
 
     async def update_tools(self, tools: list[Tool]) -> None:
         await self._duplex._update_tools(tools)

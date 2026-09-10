@@ -12,7 +12,7 @@ from livekit import rtc
 
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
-from .chat_context import ChatContext
+from .chat_context import ChatContext, ChatItem
 from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext
 
@@ -27,7 +27,7 @@ class DuplexAudioFrame:
 
 
 @dataclass
-class DuplexTranscriptDelta:
+class DuplexOutputTranscriptDelta:
     """A fragment of the model's transcript of its own speech."""
 
     text: str
@@ -38,7 +38,7 @@ class DuplexTranscriptDelta:
 
 @dataclass
 class DuplexCapabilities:
-    """What varies between duplex providers; barge-in and the lack of truncation do not."""
+    """What varies between duplex providers."""
 
     user_transcription: bool
     """Whether the model transcribes the user's speech"""
@@ -96,8 +96,8 @@ class DuplexModel(ABC):
         return self._label
 
     @abstractmethod
-    def session(self, *, wait_for_config: bool = False) -> DuplexSession:
-        """Open a session; ``wait_for_config`` promises it a ``_update_session`` call before use."""
+    def session(self) -> DuplexSession:
+        """Open a session; the adapter configures it with ``_update_session`` before use."""
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -115,16 +115,12 @@ class DuplexModel(ABC):
 
 
 class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TEvent]):
-    def __init__(self, duplex_model: DuplexModel, *, wait_for_config: bool = False) -> None:
+    def __init__(self, duplex_model: DuplexModel) -> None:
         super().__init__()
         self._duplex_model = duplex_model
-        self._config_delivered = asyncio.Event()
-        if not wait_for_config:
-            self._config_delivered.set()
-
-    async def _await_config(self) -> None:
-        """Wait for the promised configuration; set ``_config_delivered`` from ``aclose`` too."""
-        await self._config_delivered.wait()
+        # set once _update_session has run; a model whose configuration is immutable once started
+        # waits on it before connecting, and sets it from aclose too or it never finishes closing
+        self._configured = asyncio.Event()
 
     @property
     def duplex_model(self) -> DuplexModel:
@@ -138,10 +134,6 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @abstractmethod
     def audio_stream(self) -> AsyncIterable[DuplexAudioFrame]:
         """The model's output audio for the life of the session, silence included."""
-
-    @property
-    @abstractmethod
-    def chat_ctx(self) -> ChatContext: ...
 
     @property
     @abstractmethod
@@ -164,7 +156,8 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     async def _update_instructions(self, instructions: str) -> None: ...
 
     @abstractmethod
-    async def _update_chat_ctx(self, chat_ctx: ChatContext) -> None: ...
+    async def _append_items(self, items: list[ChatItem]) -> None:
+        """Tell the model about new chat items; the adapter owns the context and sends only these."""
 
     @abstractmethod
     async def _update_tools(self, tools: list[Tool]) -> None: ...
@@ -197,12 +190,12 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
                 await self._update_instructions(instructions)
 
             if is_given(chat_ctx):
-                await self._update_chat_ctx(chat_ctx)
+                await self._append_items(chat_ctx.items)
 
             if is_given(tools):
                 await self._update_tools(tools)
         finally:
-            self._config_delivered.set()
+            self._configured.set()
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""

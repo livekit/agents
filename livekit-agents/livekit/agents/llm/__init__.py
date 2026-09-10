@@ -17,8 +17,8 @@ from .duplex import (
     DuplexAudioFrame,
     DuplexCapabilities,
     DuplexModel,
+    DuplexOutputTranscriptDelta,
     DuplexSession,
-    DuplexTranscriptDelta,
 )
 from .duplex_adapter import (
     AdaptiveNoiseGate,
@@ -120,7 +120,7 @@ __all__ = [
     "DuplexSession",
     "DuplexCapabilities",
     "DuplexAudioFrame",
-    "DuplexTranscriptDelta",
+    "DuplexOutputTranscriptDelta",
     "DuplexRealtimeAdapter",
     "AudioGate",
     "AdaptiveNoiseGate",
