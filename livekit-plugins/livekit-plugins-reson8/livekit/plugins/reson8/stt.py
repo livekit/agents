@@ -582,7 +582,21 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.RecognizeStream):
-    """Turn-aware streaming session against the ``/turns`` endpoint."""
+    """
+    Turn-aware streaming session against the ``/turns`` endpoint.
+
+    A reconnect -- whether the framework retrying this stream or an option
+    change redialling -- cannot resume the turn it interrupted. Frames are
+    consumed from the input channel as they are sent, so audio already handed
+    to a dead socket is gone, and Reson8 holds the turn state that would have
+    interpreted it. The replacement connection therefore starts clean: any
+    speech already announced is closed out with END_OF_SPEECH so the caller is
+    not left waiting, the pending candidate is dropped rather than promoted by
+    an unrelated ``turn_end``, and the utterance in progress is transcribed
+    from wherever the new connection picks it up. Buffering audio for replay
+    would be the alternative, at the cost of holding every utterance in memory
+    for a failure that is rare.
+    """
 
     def __init__(
         self,
@@ -655,6 +669,15 @@ class SpeechStream(stt.RecognizeStream):
 
         ``aclose`` cancels the run task instead of closing the input channel
         cleanly, so it never reaches this and stays immediate.
+
+        What this cannot do is tell one turn's confirmation from another's.
+        Reson8 confirms a turn while later audio is already on its way, and no
+        ``turn_end`` says how much of what was sent it covers -- so a
+        confirmation that arrives for an earlier turn releases the wait, and a
+        final turn still being transcribed can be missed. Requiring a
+        ``turn_end`` after the flush instead would stall every stream whose
+        flush had nothing left to finalise. Closing this properly needs a turn
+        id on the wire.
 
         Running out of time is a lost turn, not a clean finish, so it raises.
         The audio is already consumed from the input channel, which is why the
