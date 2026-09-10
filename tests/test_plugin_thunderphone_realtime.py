@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import types
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from livekit.agents import utils
-from livekit.plugins.openai.realtime import realtime_model as _openai
-from livekit.plugins.openai.realtime import utils as _openai_utils
+from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
 from livekit.plugins.thunderphone import RealtimeModel
 from livekit.plugins.thunderphone.realtime.realtime_model import (
     DEFAULT_BASE_URL,
@@ -88,7 +86,22 @@ def test_model_freezes_instructions_and_tools_and_never_reconnects() -> None:
     model = RealtimeModel(api_key=KEY, agent_id=1)
     assert model.capabilities.mutable_instructions is False
     assert model.capabilities.mutable_tools is False
+    assert model.capabilities.turn_detection is True
+    assert model.capabilities.can_disable_turn_detection is False
     assert model._opts.conn_options.max_retry == 0
+    # one socket is one call: never recycled, even if asked
+    assert model._opts.max_session_duration is None
+    recycled = RealtimeModel(api_key=KEY, agent_id=1, max_session_duration=60)
+    assert recycled._opts.max_session_duration is None
+
+
+async def test_sessions_are_registered_for_option_updates() -> None:
+    model = RealtimeModel(api_key=KEY, agent_id=1)
+    session = model.session()
+    try:
+        assert session in model._sessions
+    finally:
+        await session.aclose()
 
 
 # ------------------------------------------------------------- RealtimeSession
@@ -153,7 +166,7 @@ def _framework_session_update() -> dict:
     }
 
 
-def test_agent_mode_update_keeps_only_audio_formats(capture_upstream_send: None) -> None:
+async def test_agent_mode_update_keeps_only_audio_formats(capture_upstream_send: None) -> None:
     session = _make_session(agent_mode=True)
 
     session.send_event(_framework_session_update())
@@ -170,13 +183,15 @@ def test_agent_mode_update_keeps_only_audio_formats(capture_upstream_send: None)
     }
 
 
-def test_inline_update_is_held_until_flush_then_opts_into_call_events(
+async def test_inline_update_is_held_until_flush_then_opts_into_call_events(
     capture_upstream_send: None,
 ) -> None:
     session = _make_session(agent_mode=False, live_transcripts=True)
 
     session.send_event(_framework_session_update())
-    session.send_event({"type": "session.update", "session": {"tools": [{"type": "function", "name": "cancel"}]}})
+    session.send_event(
+        {"type": "session.update", "session": {"tools": [{"type": "function", "name": "cancel"}]}}
+    )
     assert session._sent == []  # held: the first update starts the call
 
     session._tp_flush()
@@ -193,7 +208,9 @@ def test_inline_update_is_held_until_flush_then_opts_into_call_events(
     assert shaped["audio"]["output"]["voice"] == "marin"
 
 
-def test_inline_non_audio_event_flushes_configuration_first(capture_upstream_send: None) -> None:
+async def test_inline_non_audio_event_flushes_configuration_first(
+    capture_upstream_send: None,
+) -> None:
     session = _make_session(agent_mode=False)
     session.send_event(_framework_session_update())
 
@@ -203,7 +220,7 @@ def test_inline_non_audio_event_flushes_configuration_first(capture_upstream_sen
     assert session._tp_holding is False
 
 
-def test_inline_audio_passes_through_while_holding(capture_upstream_send: None) -> None:
+async def test_inline_audio_passes_through_while_holding(capture_upstream_send: None) -> None:
     session = _make_session(agent_mode=False)
     session.send_event(_framework_session_update())
 
@@ -213,9 +230,9 @@ def test_inline_audio_passes_through_while_holding(capture_upstream_send: None) 
     assert session._tp_holding is True
 
 
-def test_unlabeled_response_is_credited_to_the_pending_reply() -> None:
+async def test_unlabeled_response_is_credited_to_the_pending_reply() -> None:
     session = _make_session(agent_mode=False)
-    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
     session._response_created_futures["response_create_x"] = fut
     event = {"type": "response.created", "response": {"id": "resp_1", "status": "in_progress"}}
 
@@ -224,9 +241,11 @@ def test_unlabeled_response_is_credited_to_the_pending_reply() -> None:
     assert event["response"]["metadata"] == {"client_event_id": "response_create_x"}
 
 
-def test_labeled_or_unrequested_responses_are_left_alone() -> None:
+async def test_labeled_or_unrequested_responses_are_left_alone() -> None:
     session = _make_session(agent_mode=False)
-    session._response_created_futures["response_create_x"] = asyncio.get_event_loop().create_future()
+    session._response_created_futures["response_create_x"] = (
+        asyncio.get_running_loop().create_future()
+    )
     labeled = {
         "type": "response.created",
         "response": {"id": "resp_1", "metadata": {"client_event_id": "response_create_y"}},
@@ -240,7 +259,7 @@ def test_labeled_or_unrequested_responses_are_left_alone() -> None:
     assert "metadata" not in unrequested["response"]
 
 
-def test_call_id_is_read_from_session_events() -> None:
+async def test_call_id_is_read_from_session_events() -> None:
     session = _make_session(agent_mode=True)
     session._tp_on_server_event({"type": "session.created", "session": {"call_id": "987"}})
     assert session.call_id == 987
@@ -248,7 +267,7 @@ def test_call_id_is_read_from_session_events() -> None:
     assert session.call_id == 988
 
 
-def test_call_events_are_emitted_and_call_ended_closes_the_session() -> None:
+async def test_call_events_are_emitted_and_call_ended_closes_the_session() -> None:
     session = _make_session(agent_mode=True)
     seen: list[tuple[str, dict]] = []
     session.on("thunderphone_call_event", lambda ev: seen.append(("event", ev)))
@@ -265,13 +284,21 @@ def test_call_events_are_emitted_and_call_ended_closes_the_session() -> None:
     assert session._msg_ch.closed
 
 
-def test_long_function_call_ids_are_restored_on_the_output(capture_upstream_send: None) -> None:
+async def test_long_function_call_ids_are_restored_on_the_output(
+    capture_upstream_send: None,
+) -> None:
     session = _make_session(agent_mode=True)
     long_id = "call_" + "a" * 32  # over OpenAI's 32-character cap
     session._tp_on_server_event(
         {
             "type": "response.output_item.done",
-            "item": {"id": "item_1", "type": "function_call", "call_id": long_id, "name": "book", "arguments": "{}"},
+            "item": {
+                "id": "item_1",
+                "type": "function_call",
+                "call_id": long_id,
+                "name": "book",
+                "arguments": "{}",
+            },
         }
     )
     hashed = _openai_utils._shorten_call_id(long_id)
@@ -280,13 +307,23 @@ def test_long_function_call_ids_are_restored_on_the_output(capture_upstream_send
     session.send_event(
         {
             "type": "conversation.item.create",
-            "item": {"id": "item_2", "type": "function_call_output", "call_id": hashed, "output": "{}"},
+            "item": {
+                "id": "item_2",
+                "type": "function_call_output",
+                "call_id": hashed,
+                "output": "{}",
+            },
         }
     )
     session.send_event(
         {
             "type": "conversation.item.create",
-            "item": {"id": "item_3", "type": "function_call_output", "call_id": "call_short", "output": "{}"},
+            "item": {
+                "id": "item_3",
+                "type": "function_call_output",
+                "call_id": "call_short",
+                "output": "{}",
+            },
         }
     )
 
