@@ -197,7 +197,7 @@ class STT(
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:
-        """Metadata used to label turn metrics emitted for this STT instance."""
+        """Metadata used to label metrics, traces, and error events for this STT instance."""
         return {"model_name": self.model, "model_provider": self.provider}
 
     @property
@@ -235,10 +235,7 @@ class STT(
                         label=self._label,
                         audio_duration=calculate_audio_duration(buffer),
                         streamed=False,
-                        metadata=Metadata(
-                            model_name=self.model,
-                            model_provider=self.provider,
-                        ),
+                        metadata=Metadata(**self.metrics_metadata),
                     )
                     self.emit("metrics_collected", stt_metrics)
                 return event
@@ -455,7 +452,7 @@ class RecognizeStream(ABC):
                 streamed=True,
                 acquire_time=acquire_time,
                 connection_reused=connection_reused,
-                metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+                metadata=Metadata(**self._stt.metrics_metadata),
             ),
         )
 
@@ -532,9 +529,7 @@ class RecognizeStream(ABC):
                     input_tokens=ev.recognition_usage.input_tokens,
                     output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
-                    metadata=Metadata(
-                        model_name=self._stt.model, model_provider=self._stt.provider
-                    ),
+                    metadata=Metadata(**self._stt.metrics_metadata),
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
