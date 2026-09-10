@@ -264,7 +264,6 @@ class GPTLiveSession(
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
 
-        self._closing = False
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
@@ -461,6 +460,11 @@ class GPTLiveSession(
             nonlocal closing
             # instructions, voice and history are immutable once the session starts
             await self._configured.wait()
+            if self._closing:
+                # closed before the configuration landed; there is no session to start or drain
+                closing = True
+                await ws_conn.close()
+                return
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
@@ -924,9 +928,7 @@ class GPTLiveSession(
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:
-        self._closing = True
-        # release the send loop, whether it waits on the config or holds audio
-        self._configured.set()
+        await super().aclose()
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()
