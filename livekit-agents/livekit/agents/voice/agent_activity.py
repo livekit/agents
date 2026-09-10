@@ -2057,11 +2057,22 @@ class AgentActivity(RecognitionHooks):
         try:
             self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
         except RuntimeError:
-            # only out of sync when the server cancelled its own response, with client-side turn
-            # taking an uninterruptible speech is expected
-            if self._rt_turn_detection_enabled:
+            # with client-side turn taking an uninterruptible speech is expected, and so is a
+            # speech someone deliberately held (`SpeechHandle.hold_interruptions`) -- that is
+            # what a hold is for, and `interrupt(force=True)` still cuts through it.
+            # Anything else is the desync this log was added for: the server cancelled its own
+            # response while this speech still believed it could not be interrupted.
+            speech = self._current_speech
+            if self._rt_turn_detection_enabled and not (
+                speech is not None and speech.interruptions_held
+            ):
                 logger.exception(
                     "RealtimeAPI input_speech_started, but current speech is not interruptable, this should never happen!"  # noqa: E501
+                )
+            else:
+                logger.debug(
+                    "RealtimeAPI input_speech_started while the current speech is held",
+                    extra={"speech_id": speech.id if speech is not None else None},
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
