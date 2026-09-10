@@ -52,7 +52,7 @@ _ATTACH_LEAD_MS = 300
 
 
 class AudioGate(Protocol):
-    """Decides which frames of a continuously-emitting model carry output worth playing."""
+    """Decides which frames of the model's output carry speech worth playing."""
 
     def update(self, frame: rtc.AudioFrame) -> bool:
         """True while the frame belongs to an open burst of output."""
@@ -277,7 +277,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._duplex = duplex
         self._gate = gate
         self._burst: _Burst | None = None
-        # the adapter's clock: output audio heard so far, which is gapless and real-time
+        # the adapter's clock: output audio heard so far, which arrives at playback pace
         self._audio_ms = 0
         # the model's words waiting for the sound that carries them, and since when
         self._fragments: deque[DuplexOutputTranscriptDelta] = deque()
@@ -413,7 +413,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._waiting_since_ms = self._audio_ms
 
     def _on_transcript_delta(self, ev: DuplexOutputTranscriptDelta) -> None:
-        # attached on the next frame: the sound places the words, and the frames never stop
+        # attached on the next frame, since the sound is what places the words
         if not self._fragments:
             self._waiting_since_ms = self._audio_ms
         self._fragments.append(ev)

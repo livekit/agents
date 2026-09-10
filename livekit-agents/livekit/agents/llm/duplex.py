@@ -137,7 +137,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     @property
     @abstractmethod
     def audio_stream(self) -> AsyncIterable[DuplexAudioFrame]:
-        """The model's output audio for the life of the session, silence included."""
+        """The model's output audio, its own silence included; it may stop between bursts."""
 
     @property
     @abstractmethod
