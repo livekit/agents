@@ -1,30 +1,3 @@
-"""OpenAI GPT-Live (alpha) full-duplex voice agent.
-
-GPT-Live is a server-driven, full-duplex voice model: it listens and speaks at the
-same time and decides for itself when to reply. Reasoning and tools are delegated to a
-backend Responses model (``gpt-5.6-sol``), so ordinary ``@function_tool`` methods and OpenAI's
-hosted tools, such as ``openai.tools.WebSearch``, work as usual.
-
-Notes for this alpha:
-- Barge-in is the model's own: it keeps listening while it speaks and decides when to yield,
-  so the framework does not cut playback when you start talking.
-- A ``chat_ctx`` passed before the session starts seeds the conversation as history;
-  afterwards the API is append-only, so nothing can be edited or removed. A reconnect
-  reseeds the whole conversation, so the model picks up where the dropped one stopped.
-- ``delegation="client"`` hands work to the application instead of a backend model: it
-  arrives as a ``GPTLiveDelegation`` on the session's ``delegation_created`` event, carrying
-  only an id. The ask is whatever the conversation says, which ``agent.chat_ctx`` holds;
-  answer with ``append_commentary(text, delegation_id=...)``. There is no tool channel
-  in that mode, so ``@function_tool`` is ignored, and the mode is fixed for the session.
-- The Agent's ``instructions`` are the voice persona and are immutable once the session
-  starts. ``generate_reply(instructions=...)`` asks the model to speak, which it does in its own
-  words. The backend reasoning model is configured via ``responses_options``.
-
-Run it in the terminal (needs OPENAI_API_KEY and alpha access):
-
-    python examples/voice_agents/openai_gpt_live.py console
-"""
-
 import logging
 
 from dotenv import load_dotenv
