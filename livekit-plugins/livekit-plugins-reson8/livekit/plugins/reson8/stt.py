@@ -717,9 +717,7 @@ class SpeechStream(stt.RecognizeStream):
         return self._session
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
-        url = build_url(
-            self._base_url, TURNS_PATH, self._opts.query_params(streaming=True), websocket=True
-        )
+        url = build_url(self._base_url, TURNS_PATH, self._opts.query_params(streaming=True))
 
         connect = self._ensure_session().ws_connect(
             url,

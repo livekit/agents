@@ -19,7 +19,7 @@ import os
 import re
 from collections.abc import Sequence
 from typing import Any, Literal, get_args
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from livekit.agents import APIStatusError, LanguageCode, create_api_error_from_http, stt
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
@@ -78,9 +78,7 @@ See https://docs.reson8.dev/api/speech-to-text/turns/.
 FILLER_MODES: tuple[str, ...] = get_args(FillerMode)
 
 _COMMA_OUTSIDE_BRACES = re.compile(r",(?![^{}]*})")
-
-# problem+json codes are lower_snake identifiers; anything else is treated as
-# free text, so nothing arbitrary can ride into an exception message on it
+_LOOPBACK_HOSTS = frozenset({"localhost", "::1", "[::1]"})
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
@@ -180,15 +178,30 @@ def resolve_base_url(base_url: str | None) -> str:
         logger.warning("RESON8_API_URL is deprecated, use RESON8_BASE_URL instead")
         resolved = legacy
 
-    return (resolved or DEFAULT_API_URL).rstrip("/")
+    base_url = (resolved or DEFAULT_API_URL).rstrip("/")
+    check_transport_security(base_url)
+
+    return base_url
 
 
-def build_url(base_url: str, path: str, params: dict[str, str], *, websocket: bool = False) -> str:
-    base = base_url.rstrip("/")
-    if websocket:
-        base = base.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
+def check_transport_security(base_url: str) -> None:
+    parsed = urlparse(base_url)
+    if parsed.scheme in ("https", "wss"):
+        return
 
-    return f"{base}{path}?{urlencode(params)}"
+    host = (parsed.hostname or "").lower()
+    if host in _LOOPBACK_HOSTS or host.startswith("127."):
+        return
+
+    logger.warning(
+        "Reson8 base URL is not encrypted, so the API key and audio are sent in "
+        "the clear; use https unless this is a trusted private network",
+        extra={"scheme": parsed.scheme},
+    )
+
+
+def build_url(base_url: str, path: str, params: dict[str, str]) -> str:
+    return f"{base_url.rstrip('/')}{path}?{urlencode(params)}"
 
 
 def auth_headers(api_key: str) -> dict[str, str]:

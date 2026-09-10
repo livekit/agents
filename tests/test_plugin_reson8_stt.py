@@ -794,13 +794,45 @@ def test_omitted_biasing_sends_nothing() -> None:
 @pytest.mark.parametrize(
     ("base_url", "expected"),
     [
-        ("https://api.reson8.dev", "wss://api.reson8.dev/turns?a=1"),
-        ("http://localhost:8080", "ws://localhost:8080/turns?a=1"),
-        ("https://api.reson8.dev/", "wss://api.reson8.dev/turns?a=1"),
+        ("https://api.reson8.dev", "https://api.reson8.dev/turns?a=1"),
+        ("https://api.reson8.dev/", "https://api.reson8.dev/turns?a=1"),
+        ("http://localhost:8080", "http://localhost:8080/turns?a=1"),
     ],
 )
-def test_build_url_swaps_the_scheme_for_websockets(base_url: str, expected: str) -> None:
-    assert build_url(base_url, "/turns", {"a": "1"}, websocket=True) == expected
+def test_build_url_keeps_the_scheme(base_url: str, expected: str) -> None:
+    assert build_url(base_url, "/turns", {"a": "1"}) == expected
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://reson8.internal.example",
+        "http://10.0.0.5:8080",
+    ],
+)
+def test_a_plaintext_base_url_warns(base_url: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        reson8.STT(api_key="k", base_url=base_url)
+
+    assert "not encrypted" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.reson8.dev",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+        "http://[::1]:8080",
+    ],
+)
+def test_an_encrypted_or_loopback_base_url_is_quiet(
+    base_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING"):
+        reson8.STT(api_key="k", base_url=base_url)
+
+    assert "not encrypted" not in caplog.text
 
 
 def test_build_url_encodes_params() -> None:
