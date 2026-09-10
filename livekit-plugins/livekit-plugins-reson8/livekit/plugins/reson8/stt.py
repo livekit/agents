@@ -632,8 +632,13 @@ class SpeechStream(stt.RecognizeStream):
         self._request_id = str(uuid.uuid4())
         self._reconnect_event = asyncio.Event()
 
+        # durable: Reson8 owes nothing for the audio it was sent. Read when
+        # classifying a close, and never touched by the waiter below
         self._turn_settled = asyncio.Event()
         self._turn_settled.set()
+        # notification: a turn_end arrived. The waiter clears this to notice the
+        # next one, which is why the two cannot be the same event
+        self._turn_ended = asyncio.Event()
         self._audio_sent = False
 
         self._speaking = False
@@ -711,16 +716,14 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             while True:
-                await asyncio.wait_for(self._turn_settled.wait(), max(deadline - time.time(), 0.0))
+                await asyncio.wait_for(self._turn_ended.wait(), max(deadline - time.time(), 0.0))
 
-                self._turn_settled.clear()
+                self._turn_ended.clear()
                 await asyncio.sleep(min(_FINAL_TURN_GRACE, max(deadline - time.time(), 0.0)))
 
-                if not self._turn_settled.is_set():
-                    self._turn_settled.set()
+                if not self._turn_ended.is_set():
                     return
         except asyncio.TimeoutError:
-            self._turn_settled.set()
             raise APITimeoutError(
                 "Reson8 did not finalise the last turn before input closed",
                 retryable=False,
@@ -774,6 +777,7 @@ class SpeechStream(stt.RecognizeStream):
                         self._speech_duration += frame.duration
                         self._audio_sent = True
                         self._turn_settled.clear()
+                        self._turn_ended.clear()
                         await ws.send_bytes(frame.data.tobytes())
 
                     if flushing:
@@ -859,6 +863,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._end_speaking()
                 self._candidate = None
                 self._turn_settled.set()
+                self._turn_ended.clear()
                 self._audio_sent = False
 
                 try:
@@ -962,6 +967,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._speech_duration = 0.0
 
             self._turn_settled.set()
+            self._turn_ended.set()
 
         else:
             logger.debug("ignoring unhandled Reson8 message", extra={"lk.pii.type": msg_type})

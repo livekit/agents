@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, cast
@@ -34,6 +35,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import reson8
+from livekit.plugins.reson8 import stt as reson8_stt
 from livekit.plugins.reson8._utils import (
     ERROR_MESSAGE_HEADER,
     INTEGRATION_HEADER,
@@ -115,6 +117,7 @@ def make_stream() -> MakeStream:
         stream._candidate = None
         stream._pending_reconnect = False
         stream._turn_settled = asyncio.Event()
+        stream._turn_ended = asyncio.Event()
         stream._start_time_offset = 0.0
         stream._speech_duration = 0.0
         stream._event_ch = FakeChan()  # type: ignore[assignment]
@@ -1366,9 +1369,55 @@ async def test_end_input_waits_for_the_final_transcript(
     assert final.alternatives[0].text == "hello world"
 
 
-async def test_end_input_waits_past_a_stale_confirmation(
-    reson8_server: StartServer, client_session: aiohttp.ClientSession
+async def test_a_close_right_after_the_final_turn_is_clean(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # wide enough that the close lands squarely inside the hold
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 2.0)
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.push_frame(_frame())
+    stream.end_input()
+    await server.wait_for_text()
+
+    async def answer_then_hang_up() -> None:
+        await server.send({"type": "turn_end_candidate", "text": "delivered"})
+        await server.send({"type": "turn_end"})
+        # let the waiter wake and start its hold, so the close arrives while
+        # the notification is cleared -- the moment the race needs
+        await asyncio.sleep(0.1)
+        assert server._ws is not None
+        await server._ws.close()
+
+    answering = asyncio.create_task(answer_then_hang_up())
+
+    events: list[stt.SpeechEvent] = []
+    try:
+        async with asyncio.timeout(10):
+            async for event in stream:
+                events.append(event)
+    finally:
+        await utils.aio.cancel_and_wait(answering)
+        await stream.aclose()
+
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["delivered"]
+
+
+async def test_end_input_waits_past_a_stale_confirmation(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # a wide hold, so the point under test is the ordering rather than a race
+    # between a real sleep and a real timer
+    monkeypatch.setattr(reson8_stt, "_FINAL_TURN_GRACE", 2.0)
+
     server = await reson8_server()
     stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
 
@@ -1381,7 +1430,7 @@ async def test_end_input_waits_past_a_stale_confirmation(
     await server.wait_for_text()
 
     async def confirm_a_then_b() -> None:
-        # A's delayed confirmation lands first, carrying no transcript for B
+        # A's confirmation lands alone first, carrying no transcript for B
         await server.send({"type": "turn_end"})
         await asyncio.sleep(0.05)
         await server.send({"type": "turn_end_candidate", "text": "turn B"})
@@ -1551,6 +1600,7 @@ async def test_an_internal_redial_is_not_counted_twice(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
     server = await reson8_server()
+    created = time.time()
     stream = _stt(server.base_url, client_session, language="en").stream(
         conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
     )
@@ -1559,8 +1609,7 @@ async def test_an_internal_redial_is_not_counted_twice(
     await asyncio.wait_for(server.connected.wait(), timeout=5)
     try:
         # an internal redial, which contributes to the offset
-        gap = 0.3
-        await asyncio.sleep(gap)
+        await asyncio.sleep(0.3)
         stream.update_options(language="de")
         await server.wait_for_connections(2)
 
@@ -1576,8 +1625,9 @@ async def test_an_internal_redial_is_not_counted_twice(
         await server.send({"type": "turn_end"})
 
         final = next(e for e in await log.wait_for(2) if e.type == SpeechEventType.FINAL_TRANSCRIPT)
-        # real elapsed is a few hundred ms; double counting would roughly double it
-        assert final.alternatives[0].start_time == pytest.approx(gap, abs=gap)
+        # the offset can never exceed wall clock; counting the redial twice does
+        elapsed = time.time() - created
+        assert final.alternatives[0].start_time <= elapsed
     finally:
         await log.aclose()
         await stream.aclose()
