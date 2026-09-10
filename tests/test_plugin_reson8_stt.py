@@ -1836,6 +1836,40 @@ async def test_an_unusable_batch_body_is_a_connection_error(
     assert excinfo.value.retryable is True
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param('{"text": "hi", "words": ["hi"]}', id="words-not-objects"),
+        pytest.param('{"text": "hi", "start_ms": "abc"}', id="turn-start-not-a-number"),
+        pytest.param(
+            '{"text": "hi", "words": [{"text": "hi", "confidence": "high"}]}',
+            id="confidence-a-string",
+        ),
+    ],
+)
+async def test_an_unmappable_batch_body_is_a_connection_error(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession, body: str
+) -> None:
+    server = await reson8_server(post_body=body)
+
+    with pytest.raises(APIConnectionError, match="malformed response body") as excinfo:
+        await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
+
+    assert excinfo.value.retryable is True
+    assert excinfo.value.__cause__ is None
+
+
+async def test_an_empty_batch_body_is_an_empty_transcript(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server(post_body="{}")
+
+    event = await _stt(server.base_url, client_session).recognize(_frame(), conn_options=NO_RETRY)
+
+    assert event.type == SpeechEventType.FINAL_TRANSCRIPT
+    assert event.alternatives[0].text == ""
+
+
 @pytest.mark.parametrize("frame", ["[]", "null", "5", '"text"', "not json"])
 async def test_an_unusable_turn_frame_is_skipped(
     reson8_server: StartServer, client_session: aiohttp.ClientSession, frame: str

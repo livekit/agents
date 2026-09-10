@@ -577,10 +577,15 @@ class STT(stt.STT):
         if not isinstance(body, dict):
             raise APIConnectionError("Reson8 returned a malformed response body") from None
 
+        try:
+            alternative = build_speech_data(body, language=lang)
+        except (AttributeError, TypeError, ValueError):
+            raise APIConnectionError("Reson8 returned a malformed response body") from None
+
         return stt.SpeechEvent(
             type=stt.SpeechEventType.FINAL_TRANSCRIPT,
             request_id=str(uuid.uuid4()),
-            alternatives=[build_speech_data(body, language=lang)],
+            alternatives=[alternative],
         )
 
 
