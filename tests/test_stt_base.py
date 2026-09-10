@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from livekit.agents import APIConnectionError, APIStatusError
 from livekit.agents.stt import (
     STT,
+    RecognitionUsage,
     RecognizeStream,
     SpeechData,
     SpeechEvent,
@@ -180,3 +182,58 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
     assert end_event.speech_end_time is not None
     assert final_event.speech_end_time == end_event.speech_end_time
     assert final_event.created_at - end_event.created_at == pytest.approx(0.5, abs=0.01)
+
+
+class _FlappingStream(RecognizeStream):
+    """Every connection succeeds, then drops. A real reconnect, every time."""
+
+    def __init__(self, *, stt: STT, drops: int, emit: SpeechEvent | None) -> None:
+        super().__init__(
+            stt=stt,
+            conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0),
+        )
+        self.runs = 0
+        self._drops = drops
+        self._emit = emit
+
+    async def _run(self) -> None:
+        self.runs += 1
+        if self._emit is not None:
+            self._event_ch.send_nowait(self._emit)
+            await asyncio.sleep(0)  # let the metrics task observe it
+        if self.runs <= self._drops:
+            raise APIConnectionError("socket dropped")
+        await asyncio.sleep(3600)  # healthy at last
+
+
+async def _survives(emit: SpeechEvent | None, *, drops: int = 10) -> bool:
+    stream = _FlappingStream(stt=_DummySTT(), drops=drops, emit=emit)
+    try:
+        for _ in range(500):
+            if stream._task.done() or stream.runs > drops:
+                break
+            await asyncio.sleep(0.01)
+        return not stream._task.done()
+    finally:
+        if not stream._task.done():
+            await stream.aclose()
+
+
+async def test_retry_budget_survives_drops_while_the_caller_is_silent() -> None:
+    """The budget counts consecutive failures, not the lifetime of the stream.
+
+    Every reconnect here succeeds, so the stream is healthy throughout. Resetting
+    only on FINAL_TRANSCRIPT tied the budget to the caller speaking: an agent
+    talking over a silent caller, or a caller on hold, never earned it back, and
+    max_retry drops spread over one long call killed the stream for good.
+    """
+    usage_only = SpeechEvent(
+        type=SpeechEventType.RECOGNITION_USAGE,
+        recognition_usage=RecognitionUsage(audio_duration=5.0),
+    )
+    assert await _survives(usage_only)
+
+
+async def test_retry_budget_still_gives_up_when_nothing_is_ever_delivered() -> None:
+    """A connection that has never delivered anything must not retry forever."""
+    assert not await _survives(None)

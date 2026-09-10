@@ -518,6 +518,14 @@ class RecognizeStream(ABC):
         """Task used to collect metrics"""
 
         async for ev in event_aiter:
+            # Any event proves the connection came up and delivered something, so the
+            # budget in _main_task is for consecutive failures rather than for the
+            # lifetime of the stream. Resetting only on FINAL_TRANSCRIPT tied it to
+            # the caller speaking: a stream that reconnected cleanly but sat through
+            # silence never got its budget back, and max_retry drops spread over a
+            # long call would kill it for good.
+            self._num_retries = 0
+
             if ev.type == SpeechEventType.RECOGNITION_USAGE:
                 assert ev.recognition_usage is not None, (
                     "recognition_usage must be provided for RECOGNITION_USAGE event"
@@ -538,9 +546,6 @@ class RecognizeStream(ABC):
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
-            elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                # reset the retry count after a successful recognition
-                self._num_retries = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
