@@ -291,3 +291,153 @@ async def test_flush_finalizes_after_the_buffered_audio():
         await _wait_until(lambda: ws.sent() == ["audio", "Finalize"])
     finally:
         await stream.aclose()
+
+
+class _RecordingSession:
+    """Stands in for the aiohttp session so the connect kwargs are assertable."""
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.kwargs: dict = {}
+        self._ws = _LiveWS()
+
+    async def ws_connect(self, url: str, **kwargs):
+        self.kwargs = kwargs
+        return self._ws
+
+
+class _DeadSocket:
+    """A socket that has silently gone away: writes fail, the read side never notices.
+
+    This is the half-open case (no FIN, no RST). recv_task can only park, so the
+    keepalive write is the one place the drop can surface.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self._closed = asyncio.Event()
+
+    async def send_str(self, data: str) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def send_bytes(self, data: bytes) -> None:
+        import aiohttp
+
+        raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    async def receive(self):
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def _v1_stream(*, http_session=None, connect=None):
+    """A real v1 SpeechStream running its real _run loop."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt import STT, SpeechStream
+
+    instance = STT(api_key="test-key", language="en-US", sample_rate=16000)
+    stream = SpeechStream(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, http_session or SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v1/listen",
+    )
+    if connect is not None:
+        stream._connect_ws = connect
+    return stream
+
+
+async def test_v1_socket_is_opened_with_a_heartbeat():
+    # aiohttp defaults heartbeat and receive_timeout to None, so without this the
+    # read side of a half-open socket parks forever and the reconnect loop in _run,
+    # which only runs when something raises, never gets a turn. stt_v2 already does
+    # this; v1 is the Nova-3 path and was the only Deepgram stream left unbounded.
+    session = _RecordingSession()
+    stream = _v1_stream(http_session=session)
+    try:
+        await _wait_until(lambda: "heartbeat" in session.kwargs)
+        assert session.kwargs["heartbeat"] == 30.0
+    finally:
+        await stream.aclose()
+
+
+async def test_keepalive_write_drop_reconnects_instead_of_stalling():
+    # the keepalive used to swallow every exception and return, which left send_task
+    # parked on the input channel and recv_task parked on receive(): _run stayed
+    # alive on a socket that was gone, and the session went quiet with no error.
+    sockets: list[_DeadSocket] = []
+
+    async def _connect():
+        ws = _DeadSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+    finally:
+        await stream.aclose()
+
+
+class _HeartbeatTimeoutSocket:
+    """A socket in the state aiohttp leaves it in when a ping goes unanswered.
+
+    The heartbeat closes the connection itself, so this arrives as WSMsgType.ERROR
+    rather than as a close frame, and the reason lives only on ws.exception().
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+        self.receives = 0
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    def exception(self):
+        import aiohttp
+
+        return aiohttp.ServerTimeoutError("No PONG received after 15.0s")
+
+    async def receive(self):
+        import aiohttp
+
+        self.receives += 1
+        # yield, so that a recv loop which steps over this rather than ending
+        # fails the test instead of starving the event loop and hanging it
+        await asyncio.sleep(0)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, self.exception(), None)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_heartbeat_timeout_reconnects_without_spinning():
+    # the ERROR has to end the recv loop. logging it as an unexpected type and
+    # continuing only works because aiohttp happens to report CLOSED next, and it
+    # throws away the one value that says why the socket went away.
+    sockets: list[_HeartbeatTimeoutSocket] = []
+
+    async def _connect():
+        ws = _HeartbeatTimeoutSocket()
+        sockets.append(ws)
+        return ws
+
+    stream = _v1_stream(connect=_connect)
+    try:
+        await _wait_until(lambda: len(sockets) > 1)
+        assert sockets[0].receives == 1
+    finally:
+        await stream.aclose()
