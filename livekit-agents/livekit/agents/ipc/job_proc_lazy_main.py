@@ -16,6 +16,7 @@ if current_process().name == "job_proc":
 
 import asyncio
 import contextlib
+import contextvars
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ from livekit import rtc
 
 from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
 from ..log import _add_global_log_fields, logger
-from ..telemetry import trace_types, tracer
+from ..telemetry import loop_monitor, trace_types, tracer
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -332,6 +333,10 @@ class _JobProc:
             current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
             current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
             current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
+            # blocked-loop reports emitted from the heartbeat need this job's context (for
+            # attribution) and the job_entrypoint span (as the parent when no session is up)
+            if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
+                monitor.set_report_context(contextvars.copy_context())
             await self._job_entrypoint_fnc(job_ctx)
 
         job_entry_task = asyncio.create_task(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import aiohttp
 
@@ -129,6 +130,23 @@ class TurnDetector(_BaseStreamingTurnDetector):
     @property
     def model(self) -> TurnDetectorModels:
         return self._model
+
+    def describe_options(self) -> dict[str, Any]:
+        """What the session report shows for this detector (``telemetry.DescribesOptions``):
+        the model and where it runs, plus the threshold overrides when the user set any.
+        Server-calibrated defaults are not repeated here; credentials and endpoints never."""
+        options: dict[str, Any] = {
+            "model": self.model,
+            "provider": self.provider,
+            "sample_rate": self._opts.sample_rate,
+            "local_fallback": self._local_fallback,
+        }
+        thresholds = self._opts.thresholds
+        if is_given(thresholds.overrides):
+            options["threshold_overrides"] = thresholds.overrides
+        if is_given(thresholds.backchannel_overrides):
+            options["backchannel_threshold_overrides"] = thresholds.backchannel_overrides
+        return options
 
     def _warn_threshold_override(self) -> None:
         thresholds = self._opts.thresholds

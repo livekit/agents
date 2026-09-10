@@ -72,10 +72,19 @@ if __name__ == "__main__":
     cli.run_app(server)
 ```
 
-```bash
-cd examples
-uv run voice_agents/phonic_realtime_agent.py dev
+### Reusing tools with Phonic Responses
+
+Convert an existing LiveKit `ToolContext` into the schema-only definitions
+accepted by Phonic's Responses API:
+
+```python
+from livekit.plugins.phonic.realtime import to_phonic_tool_definitions
+
+tool_definitions = to_phonic_tool_definitions(tool_context)
 ```
+
+The executable functions remain in the `ToolContext`; only their names,
+descriptions, and parameter schemas are returned.
 
 ## Configuration
 
@@ -85,7 +94,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | --- | --- | --- |
 | `api_key` | `str` | Phonic API key. Falls back to `PHONIC_API_KEY` environment variable |
 | `phonic_agent` | `str` | Phonic agent name. Options set explicitly here override agent settings |
-| `voice` | `str` | Voice ID — `sabrina`, `grant`, `virginia`, `landon`, `eleanor`, `shelby`, `nolan` |
+| `voice` | `str` | Voice ID — see [available voices](https://docs.phonic.ai/docs/build/agents/voices) |
 | `welcome_message` | `str` | Message the agent says when the conversation starts. Ignored when `generate_welcome_message` is True |
 | `generate_welcome_message` | `bool` | Auto-generate the welcome message (ignores `welcome_message`) |
 | `project` | `str` | Project name (default: `main`) |
@@ -112,6 +121,7 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `pronunciation_dictionary` | `list[PronunciationEntry]` | `{ word, pronunciation }` entries; words must be unique |
 | `template_variables` | `dict[str, str]` | Variables substituted into the system prompt and welcome message |
 | `enable_redaction` | `bool` | Redact PII/PHI from transcripts and bleep it from audio after the conversation |
+| `enable_watermarking` | `bool` | Embed an inaudible provenance watermark in generated audio. Adds a very small amount of latency |
 | `mcp_servers` | `list[str]` | Names of pre-configured MCP servers to make available (must be unique) |
 | `observability_integrations` | `list["braintrust"]` | Observability integrations to forward traces to |
 | `configuration_endpoint` | `ConfigurationEndpoint` \| `None` | Endpoint the agent calls to fetch per-conversation configuration |
@@ -137,10 +147,11 @@ RealtimeModel(
 | `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
 | `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
 | `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
+| `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
 | `respond_after_sec` | `float` | — | **`choose_not_to_respond` only.** Seconds to wait after the tool fires; if the user stays silent, the agent speaks a follow-up. Omit to keep the default (stay silent). |
 | `speech_before_tool_call` | `str` | — | **`keypad_input` / `natural_conversation_ending` only.** `required` \| `optional` \| `suppressed`. |
 
-The plugin always sends tool calls with `wait_for_speech_before_tool_call` on and `allow_tool_chaining` off; these are not configurable per tool.
+The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
 
 > **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
 
