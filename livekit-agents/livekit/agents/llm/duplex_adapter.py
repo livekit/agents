@@ -30,6 +30,7 @@ from .realtime import (
     RealtimeCapabilities,
     RealtimeError,
     RealtimeModel,
+    RealtimeModelError,
     RealtimeSession,
 )
 from .tool_context import Tool, ToolChoice, ToolContext
@@ -250,8 +251,19 @@ class _DuplexRealtimeSession(RealtimeSession):
                 self._on_audio_frame(f)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as e:
+            # the session's only audio consumer, and the stream cannot be resumed: reporting it
+            # keeps a live session from going permanently silent
             logger.exception("duplex audio stream failed")
+            self.emit(
+                "error",
+                RealtimeModelError(
+                    timestamp=time.time(),
+                    label=self._duplex.duplex_model.label,
+                    error=e,
+                    recoverable=False,
+                ),
+            )
         finally:
             self._close_burst()
 
@@ -286,7 +298,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         ):
             logger.error(
                 "duplex transcript outlived the audio it describes",
-                extra={"text": "".join(f.text for f in self._fragments)},
+                extra={"lk.pii.transcript": "".join(f.text for f in self._fragments)},
             )
             burst = self._open_burst()
             while self._fragments:

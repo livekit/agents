@@ -780,3 +780,27 @@ async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
         await session.start(agent)
         with pytest.raises(RuntimeError, match="not running a DuplexModel"):
             _ = agent.duplex_session
+
+
+async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> None:
+    """The stream cannot be resumed, so a silent exit would leave the session permanently deaf."""
+
+    class _Boom(Exception):
+        pass
+
+    class _FailingGate:
+        def update(self, frame: rtc.AudioFrame) -> bool:
+            raise _Boom
+
+    fake, session, _generations = duplex
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    session._gate = _FailingGate()
+
+    fake.audio_ch.send_nowait(llm.DuplexAudioFrame(frame=_frame(0.5)))
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    assert [e.recoverable for e in errors] == [False]
+    assert isinstance(errors[0].error, _Boom)
+    assert errors[0].label == fake.duplex_model.label
