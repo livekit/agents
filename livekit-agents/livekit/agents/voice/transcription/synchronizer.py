@@ -250,6 +250,10 @@ class _SegmentSynchronizerImpl:
         self._text_data.word_stream.push_text(text)
         self._text_data.pushed_text += text
 
+        if end_time is not None:
+            # a closed span releases the trailing word instead of waiting for the next delimiter
+            self._text_data.word_stream.flush()
+
     def end_text_input(self) -> None:
         if self.closed:
             logger.warning(

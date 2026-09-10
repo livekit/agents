@@ -8,6 +8,8 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.voice.events import ConversationItemAddedEvent
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -286,3 +288,29 @@ async def test_realtime_audio_redaction_warning_is_emitted_once_per_session(
             await session._update_activity_atask
 
     assert caplog.messages.count(_REALTIME_AUDIO_REDACTION_WARNING) == 1
+
+
+async def test_usage_reported_as_the_session_closes_is_still_collected() -> None:
+    """A session-billed model only learns its final usage as the connection drains."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="test"))
+        model.active_session.closing_metrics = RealtimeModelMetrics(
+            request_id="sess_1",
+            timestamp=time.time(),
+            session_duration=12.5,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_token_details=RealtimeModelMetrics.InputTokenDetails(audio_tokens=90),
+            output_token_details=RealtimeModelMetrics.OutputTokenDetails(audio_tokens=40),
+            metadata=Metadata(model_name="fake-live", model_provider="fake.provider"),
+        )
+
+    (usage,) = [u for u in session.usage.model_usage if u.provider == "fake.provider"]
+    assert usage.input_tokens == 100
+    assert usage.input_audio_tokens == 90
+    assert usage.output_tokens == 50
+    assert usage.output_audio_tokens == 40
+    assert usage.session_duration == 12.5
