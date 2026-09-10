@@ -279,9 +279,11 @@ class AgentActivity(RecognitionHooks):
 
         # session-scoped truth read by every server-side turn-detection check below
         self._rt_turn_detection_enabled = self._resolve_rt_turn_detection_enabled()
-        # the model speaks over the caller, so the caller's turn never gates its own
+        # the model speaks over the caller, so the caller's turn never gates its own. only while
+        # the model owns turn-taking: once the client drives turns, the framework owns the floor
         self._rt_overlapping_speech_enabled = (
             isinstance(self.llm, llm.RealtimeModel)
+            and self._rt_turn_detection_enabled
             and self.llm.capabilities.supports_overlapping_speech
         )
         if (
@@ -2060,7 +2062,7 @@ class AgentActivity(RecognitionHooks):
                     user_speaking_span=self._session._user_speaking_span,
                 )
 
-        if self._rt_turn_detection_enabled and self._rt_overlapping_speech_enabled:
+        if self._rt_overlapping_speech_enabled:
             # the caller talking is not an interruption here; the model ends its own turn
             return
 

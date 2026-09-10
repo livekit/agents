@@ -221,3 +221,33 @@ async def test_a_model_that_cannot_overlap_still_waits_the_caller_out() -> None:
         # the reply is never even asked for while the caller holds the floor
         assert not model.active_session._reply_futs
         assert session.agent_state != "speaking"
+
+
+async def test_client_side_turn_taking_takes_the_floor_back() -> None:
+    # overlap is the model's only while it owns turn-taking; once the client drives turns the
+    # framework does, and its VAD would otherwise cut a reply it never gated
+    model = FakeRealtimeModel(
+        capabilities=fake_capabilities(
+            supports_overlapping_speech=True, can_disable_turn_detection=True
+        )
+    )
+
+    async with AgentSession(
+        llm=model,
+        vad=FakeVAD(),
+        turn_handling=TurnHandlingOptions(turn_detection="vad"),
+        aec_warmup_duration=None,
+    ) as session:
+        session.output.audio = _TracingAudioOutput(can_pause=True)
+        await session.start(Agent(instructions="be concise"))
+        assert (activity := session._activity) is not None
+        assert activity._rt_turn_detection_enabled is False
+        assert activity._rt_overlapping_speech_enabled is False
+
+        activity.on_start_of_speech(None, speech_start_time=time.time())
+        session.generate_reply()
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+        assert not model.active_session._reply_futs
+        assert session.agent_state != "speaking"
