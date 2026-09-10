@@ -128,6 +128,16 @@ async def test_defaults_to_stock_pal_and_face_when_neither_given():
     assert payload["face_id"] == DEFAULT_FACE_ID
 
 
+async def test_extra_payload_pal_keeps_its_own_face():
+    api = _api()
+    with patch.object(api, "_post", new=_mock_post()) as m:
+        await api.create_conversation(extra_payload={"pal_id": "custom-pal"})
+    payload = m.call_args.args[1]
+    # extra_payload replaces the pal, so the stock face must not be attached to it
+    assert payload["pal_id"] == "custom-pal"
+    assert "face_id" not in payload
+
+
 async def test_env_face_wins_over_default_face(monkeypatch):
     monkeypatch.setenv("TAVUS_FACE_ID", "envf")
     api = _api()
