@@ -46,6 +46,10 @@ _UNCLAIMED_TRANSCRIPT_MS = 3000
 # how long a requested reply waits for the model to start speaking before it counts as declined
 _REPLY_TIMEOUT = 10.0
 
+# a provider may stop sending rather than stream its own silence; waiting out the frame in hand
+# plus this long is the silence the gate never received
+_AUDIO_TIMEOUT = 0.8
+
 # how far ahead of its sound a fragment is handed over: span labels sit about a frame early
 # against the audible onset, and text a little early reads better than late
 _ATTACH_LEAD_MS = 300
@@ -58,6 +62,10 @@ class AudioGate(Protocol):
         """True while the frame belongs to an open burst of output."""
         ...
 
+    def deactivate(self) -> None:
+        """End the open burst, keeping whatever has been learned about the model."""
+        ...
+
 
 class FixedGate:
     """Opens on output that stands out from a silence the plugin already knows."""
@@ -66,14 +74,18 @@ class FixedGate:
         self,
         silence: float,
         *,
-        open_ratio: float = 3.0,
-        close_ratio: float = 1.8,
-        hangover: float = 0.5,
+        activation_ratio: float = 3.0,
+        deactivation_ratio: float = 1.8,
+        min_silence_duration: float = 0.5,
     ) -> None:
         self._floor = max(silence, _SILENCE_FLOOR)
-        self._open_ratio = open_ratio
-        self._close_ratio = close_ratio
-        self._hangover = hangover
+        self._activation_ratio = activation_ratio
+        self._deactivation_ratio = deactivation_ratio
+        self._min_silence_duration = min_silence_duration
+        self._open = False
+        self._quiet = 0.0
+
+    def deactivate(self) -> None:
         self._open = False
         self._quiet = 0.0
 
@@ -82,12 +94,12 @@ class FixedGate:
         rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
 
         if not self._open:
-            if rms > self._floor * self._open_ratio:
+            if rms > self._floor * self._activation_ratio:
                 self._open = True
                 self._quiet = 0.0
-        elif rms < self._floor * self._close_ratio:
+        elif rms < self._floor * self._deactivation_ratio:
             self._quiet += frame.duration
-            if self._quiet >= self._hangover:
+            if self._quiet >= self._min_silence_duration:
                 self._open = False
         else:
             self._quiet = 0.0
@@ -98,8 +110,8 @@ class FixedGate:
 class AdaptiveNoiseGate:
     """Opens on output that stands out from the model's own silence.
 
-    The floor is the quietest ``hangover``-long stretch the model produced while it was not
-    speaking, within ``window``: speech never raises it, and no single frame can define it.
+    The floor is the quietest ``min_silence_duration`` stretch the model produced while it was
+    not speaking, within ``window``: speech never raises it, and no single frame defines it.
     Thresholds are ratios against it and durations count audio rather than wall clock, so one
     set of defaults ports across providers, frame sizes and networks.
     """
@@ -107,20 +119,23 @@ class AdaptiveNoiseGate:
     def __init__(
         self,
         *,
-        open_ratio: float = 3.0,
-        close_ratio: float = 1.8,
-        # rides out the ~400 ms pauses inside an utterance without merging it into the next
-        hangover: float = 0.5,
+        activation_ratio: float = 3.0,
+        deactivation_ratio: float = 1.8,
+        min_silence_duration: float = 0.5,
         window: float = 10.0,
     ) -> None:
-        self._open_ratio = open_ratio
-        self._close_ratio = close_ratio
-        self._hangover = hangover
+        self._activation_ratio = activation_ratio
+        self._deactivation_ratio = deactivation_ratio
+        self._min_silence_duration = min_silence_duration
         self._window = window
         self._history: deque[tuple[float, float]] = deque()
         self._history_duration = 0.0
         self._stretch_sum = 0.0
         self._stretch_duration = 0.0
+        self._open = False
+        self._quiet = 0.0
+
+    def deactivate(self) -> None:
         self._open = False
         self._quiet = 0.0
 
@@ -132,7 +147,7 @@ class AdaptiveNoiseGate:
             # only silence teaches the floor, and only a whole stretch of it
             self._stretch_sum += rms * frame.duration
             self._stretch_duration += frame.duration
-            if self._stretch_duration >= self._hangover:
+            if self._stretch_duration >= self._min_silence_duration:
                 mean = self._stretch_sum / self._stretch_duration
                 self._history.append((mean, self._stretch_duration))
                 self._history_duration += self._stretch_duration
@@ -149,12 +164,12 @@ class AdaptiveNoiseGate:
         floor = max(floor, _SILENCE_FLOOR)
 
         if not self._open:
-            if rms > floor * self._open_ratio:
+            if rms > floor * self._activation_ratio:
                 self._open = True
                 self._quiet = 0.0
-        elif rms < floor * self._close_ratio:
+        elif rms < floor * self._deactivation_ratio:
             self._quiet += frame.duration
-            if self._quiet >= self._hangover:
+            if self._quiet >= self._min_silence_duration:
                 self._open = False
         else:
             self._quiet = 0.0
@@ -225,7 +240,17 @@ class DuplexRealtimeAdapter(RealtimeModel):
         duplex_model: DuplexModel,
         *,
         gate: Callable[[], AudioGate] | None = None,
+        audio_timeout: float = _AUDIO_TIMEOUT,
     ) -> None:
+        """Run a duplex model as an ordinary realtime session.
+
+        Args:
+            duplex_model: The model to wrap.
+            gate: Decides which output frames carry speech. Defaults to the model's own gate,
+                or an adaptive one that learns the model's silence.
+            audio_timeout: How long to wait for the next frame before the output counts as
+                finished, for a provider that stops sending rather than streaming its silence.
+        """
         caps: DuplexCapabilities = duplex_model.capabilities
         super().__init__(
             capabilities=RealtimeCapabilities(
@@ -245,6 +270,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
         )
         self._duplex_model = duplex_model
         self._gate = gate
+        self._audio_timeout = audio_timeout
 
     @property
     def duplex_model(self) -> DuplexModel:
@@ -261,9 +287,9 @@ class DuplexRealtimeAdapter(RealtimeModel):
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
         gate = (
-            self._gate() if self._gate else self._duplex_model.audio_gate() or AdaptiveNoiseGate()
-        )
-        return _DuplexRealtimeSession(self, self._duplex_model.session(), gate)
+            self._gate() if self._gate else self._duplex_model.audio_gate()
+        ) or AdaptiveNoiseGate()
+        return _DuplexRealtimeSession(self, self._duplex_model.session(), gate, self._audio_timeout)
 
     async def aclose(self) -> None:
         await self._duplex_model.aclose()
@@ -271,12 +297,17 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
 class _DuplexRealtimeSession(RealtimeSession):
     def __init__(
-        self, adapter: DuplexRealtimeAdapter, duplex: DuplexSession, gate: AudioGate
+        self,
+        adapter: DuplexRealtimeAdapter,
+        duplex: DuplexSession,
+        gate: AudioGate,
+        audio_timeout: float,
     ) -> None:
         super().__init__(adapter)
         self._duplex = duplex
         self._gate = gate
         self._burst: _Burst | None = None
+        self._audio_timeout = audio_timeout
         # the adapter's clock: output audio heard so far, which arrives at playback pace
         self._audio_ms = 0
         # the model's words waiting for the sound that carries them, and since when
@@ -303,9 +334,25 @@ class _DuplexRealtimeSession(RealtimeSession):
         )
 
     async def _segment_task(self) -> None:
+        def _on_timeout() -> None:
+            # the provider stopped sending, and that absence is silence too
+            self._gate.deactivate()
+            self._close_burst()
+
+        loop = asyncio.get_running_loop()
+        idle_timeout: asyncio.TimerHandle | None = None
         try:
             async for f in self._duplex.audio_stream:
+                if idle_timeout is not None:
+                    idle_timeout.cancel()
+
                 self._on_audio_frame(f)
+
+                if self._burst is not None:
+                    # from the end of the audio just handed over, not from its arrival
+                    idle_timeout = loop.call_later(
+                        self._audio_timeout + f.frame.duration, _on_timeout
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -322,6 +369,8 @@ class _DuplexRealtimeSession(RealtimeSession):
                 ),
             )
         finally:
+            if idle_timeout is not None:
+                idle_timeout.cancel()
             self._close_burst()
 
     def _on_audio_frame(self, f: DuplexAudioFrame) -> None:
@@ -477,12 +526,9 @@ class _DuplexRealtimeSession(RealtimeSession):
         if is_given(chat_ctx):
             chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
             self._chat_ctx = chat_ctx.copy()
-        try:
-            await self._duplex._update_session(
-                instructions=instructions, chat_ctx=chat_ctx, tools=tools
-            )
-        except RealtimeError:
-            logger.exception("failed to configure the duplex session")
+        await self._duplex._update_session(
+            instructions=instructions, chat_ctx=chat_ctx, tools=tools
+        )
 
     async def update_instructions(self, instructions: str) -> None:
         await self._duplex._update_instructions(instructions)

@@ -79,6 +79,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.config_batches: list[tuple[object, object, object]] = []
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
+        self.fail_instructions = False
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
@@ -89,7 +90,8 @@ class _FakeDuplexSession(llm.DuplexSession):
         return self._tools
 
     async def _update_instructions(self, instructions: str) -> None:
-        pass
+        if self.fail_instructions:
+            raise llm.RealtimeError("no")
 
     async def _append_items(self, items: list[llm.ChatItem]) -> None:
         self.appended.extend(items)
@@ -221,13 +223,13 @@ def test_gate_opens_on_speech_over_room_tone() -> None:
     assert gate.update(_frame(0.3))
 
 
-def test_gate_holds_through_hangover_then_closes() -> None:
-    gate = AdaptiveNoiseGate(hangover=0.25)
+def test_gate_holds_through_the_silence_window_then_closes() -> None:
+    gate = AdaptiveNoiseGate(min_silence_duration=0.25)
     for _ in range(30):
         gate.update(_frame(0.001))
     assert gate.update(_frame(0.3))
 
-    # two 100 ms quiet frames are inside the 250 ms hangover, the third crosses it
+    # two 100 ms quiet frames are inside the 250 ms window, the third crosses it
     assert gate.update(_frame(0.001))
     assert gate.update(_frame(0.001))
     assert not gate.update(_frame(0.001))
@@ -322,12 +324,32 @@ async def test_the_adapter_prefers_the_gate_the_model_declares() -> None:
     assert isinstance(await gate_of(explicit), AdaptiveNoiseGate)
 
 
+async def test_a_stream_that_stops_mid_burst_still_ends_the_generation(duplex) -> None:
+    """A provider may stop sending instead of streaming its own silence; the burst must not hang."""
+    fake, session, generations = duplex
+    session._audio_timeout = 0.05
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    assert len(generations) == 1
+    assert session._burst is not None
+
+    await asyncio.sleep(0.25)  # no further frames arrive; the timer also waits out the last one
+    assert session._burst is None
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[0] == 3
+
+    # the gate went with it, so the next frames open a new burst rather than joining the old one
+    fake.push(0.3, count=3)
+    await _settle()
+    assert len(generations) == 2
+
+
 def test_gate_decides_on_audio_duration_not_on_frame_count() -> None:
     """The same sound streamed at two frame sizes is gated identically."""
     levels = [0.001] * 12 + [0.3] * 6 + [0.001] * 12
     decisions: list[list[bool]] = []
     for frame_ms in (20, FRAME_MS):
-        gate = AdaptiveNoiseGate(window=1.0, hangover=0.45)
+        gate = AdaptiveNoiseGate(window=1.0, min_silence_duration=0.45)
         states: list[bool] = []
         for level in levels:
             for _ in range(FRAME_MS // frame_ms):
@@ -383,7 +405,7 @@ async def test_a_pause_inside_an_utterance_stays_in_one_generation(duplex) -> No
     fake, _session, generations = duplex
     fake.push(0.001, count=20)  # let the gate learn the model's floor
     fake.push(0.3, count=3)
-    fake.push(0.001, count=3)  # shorter than the gate's hangover
+    fake.push(0.001, count=3)  # shorter than the gate's silence window
     fake.push(0.3, count=3)
     fake.push(0.001, count=8)
     await _settle()
@@ -729,6 +751,18 @@ async def test_a_session_is_configured_once_the_adapter_hands_over_the_configura
     assert not fake._configured.is_set()
     await session._update_session(instructions="be brief")
     assert fake._configured.is_set()
+
+
+async def test_a_half_applied_configuration_never_reaches_the_model(duplex) -> None:
+    """An immutable model gets one chance at its configuration, so a partial one must not ship."""
+    fake, session, _generations = duplex
+    fake.fail_instructions = True
+
+    with pytest.raises(llm.RealtimeError):
+        await session._update_session(instructions="be brief", tools=[])
+
+    # the plugin waits on this before connecting, so the model never starts half configured
+    assert not fake._configured.is_set()
 
 
 async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex) -> None:

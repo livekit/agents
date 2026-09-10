@@ -122,8 +122,8 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     def __init__(self, duplex_model: DuplexModel) -> None:
         super().__init__()
         self._duplex_model = duplex_model
-        # set once _update_session has run; a model whose configuration is immutable once started
-        # waits on it before connecting, and sets it from aclose too or it never finishes closing
+        # set once the whole configuration is applied; a model whose configuration is immutable
+        # once started waits on it before connecting, and aclose sets it so closing can finish
         self._configured = asyncio.Event()
 
     @property
@@ -189,17 +189,17 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
         """Apply the whole configuration at once, right after the session is created."""
-        try:
-            if is_given(instructions):
-                await self._update_instructions(instructions)
+        if is_given(instructions):
+            await self._update_instructions(instructions)
 
-            if is_given(chat_ctx):
-                await self._append_items(chat_ctx.items)
+        if is_given(chat_ctx):
+            await self._append_items(chat_ctx.items)
 
-            if is_given(tools):
-                await self._update_tools(tools)
-        finally:
-            self._configured.set()
+        if is_given(tools):
+            await self._update_tools(tools)
+
+        # only a complete configuration releases a model that cannot be reconfigured later
+        self._configured.set()
 
     def _report_connection_acquired(self, acquire_time: float) -> None:
         """Report connection timing as a RealtimeModelMetrics event with zero usage."""
