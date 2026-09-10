@@ -638,6 +638,10 @@ async def test_reconnect_releases_the_burst_and_the_words_waiting_on_it(duplex) 
     await _settle()
 
     assert session._burst is None and not session._fragments
+    # the gate closed with the burst, so the model's silence opens no generation of its own
+    fake.push(0.001, count=3)
+    await _settle()
+    assert len(generations) == 1
     assert (await asyncio.wait_for(_read(generations[0]), timeout=1)) == (4, "Half a")
 
 
@@ -898,6 +902,9 @@ async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> N
     class _FailingGate:
         def update(self, frame: rtc.AudioFrame) -> bool:
             raise _Boom
+
+        def deactivate(self) -> None:
+            pass
 
     fake, session, _generations = duplex
     errors: list[llm.RealtimeModelError] = []

@@ -336,7 +336,6 @@ class _DuplexRealtimeSession(RealtimeSession):
     async def _segment_task(self) -> None:
         def _on_timeout() -> None:
             # the provider stopped sending, and that absence is silence too
-            self._gate.deactivate()
             self._close_burst()
 
         loop = asyncio.get_running_loop()
@@ -447,6 +446,8 @@ class _DuplexRealtimeSession(RealtimeSession):
 
     def _close_burst(self) -> None:
         burst, self._burst = self._burst, None
+        # the gate never stays open past the burst it opened, so the next one opens on sound again
+        self._gate.deactivate()
         if burst is not None:
             burst.close()
             if burst.transcript:
