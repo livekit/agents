@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import time
+from types import SimpleNamespace
 from typing import Any
 
 import aiohttp
@@ -235,8 +236,9 @@ async def test_startup_failures_exhaust_retries(
 
 
 @pytest.mark.parametrize("timed", [False, True])
+@pytest.mark.parametrize("reason", ["expired", "connection_lost"])
 async def test_reconnect_drains_and_waits_for_each_sessions_close(
-    monkeypatch: pytest.MonkeyPatch, timed: bool
+    monkeypatch: pytest.MonkeyPatch, timed: bool, reason: str
 ) -> None:
     sockets = [_LifecycleWS(), _LifecycleWS()]
     connections = 0
@@ -253,12 +255,23 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
     session = model.session()
     metrics: list[RealtimeModelMetrics] = []
     session.on("metrics_collected", metrics.append)
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
     close_task: asyncio.Task[None] | None = None
     try:
         await session._update_session()
         await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
         await session._session_started_fut
         session._opts.max_session_duration = None
+        await session._update_tools([_get_weather])
+        session._update_options(tool_choice="none")
+        await session._append_items(
+            [
+                llm.FunctionCallOutput(
+                    call_id="call_1", name="_get_weather", output="rainy", is_error=False
+                )
+            ]
+        )
         if timed:
             await asyncio.wait_for(sockets[0].close_requested.wait(), timeout=1)
             assert not sockets[0].closed.is_set()
@@ -270,12 +283,24 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
             )
             audio = await asyncio.wait_for(anext(session.audio_stream.__aiter__()), timeout=1)
             assert audio.frame.duration == pytest.approx(0.1)
-        sockets[0].emit({"type": "session.closed", "reason": "expired", "usage": {"seconds": 5}})
+        sockets[0].emit({"type": "session.closed", "reason": reason, "usage": {"seconds": 5}})
         if not timed:
             await sockets[0].close()
         await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
         await session._session_started_fut
         assert [m.session_duration for m in metrics] == [5]
+        assert not errors
+        restored = sockets[1].sent[0]["session"]
+        responses = restored["delegation"]["responses"]
+        assert responses["tool_choice"] == "none"
+        assert [tool["name"] for tool in responses["tools"]] == ["_get_weather"]
+        assert restored["input"] == [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Tool _get_weather returned rainy"}],
+            }
+        ]
 
         close_task = asyncio.create_task(session.aclose())
         await asyncio.wait_for(sockets[1].close_requested.wait(), timeout=1)
@@ -341,28 +366,44 @@ async def test_provider_content_is_only_logged_under_pii_fields(
         await model.aclose()
 
 
-@pytest.mark.parametrize("operation", ["send", "receive"])
+@pytest.mark.parametrize("operation", ["connect", "send", "receive"])
+@pytest.mark.parametrize("max_retry", [0, 1])
 async def test_transport_errors_do_not_expose_provider_payloads(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, operation: str
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    operation: str,
+    max_retry: int,
 ) -> None:
     private = "private-transport-payload"
     ws = _LifecycleWS()
 
-    async def fail(*args: Any) -> Any:
+    async def fail(*args: Any, **kwargs: Any) -> Any:
         raise aiohttp.ClientConnectionError(private)
 
     async def connect(self: GPTLiveSession) -> _LifecycleWS:
         return ws
 
-    monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
-    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
-    model = GPTLiveModel(api_key="sk-test", conn_options=APIConnectOptions(max_retry=0))
+    model = GPTLiveModel(
+        api_key="sk-test",
+        conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0),
+    )
+    if operation == "connect":
+        monkeypatch.setattr(model, "_ensure_http_session", lambda: SimpleNamespace(ws_connect=fail))
+    else:
+        monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
+        monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
     session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
     try:
         await session._update_session()
-        with pytest.raises(APIConnectionError, match=f"GPT-Live {operation} failed"):
+        with pytest.raises(APIConnectionError):
             await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=1)
+        assert len(errors) == max_retry + 1
+        assert all(private not in repr(event.error) for event in errors)
         assert private not in caplog.text
+        if max_retry:
+            assert any("retrying in" in record.getMessage() for record in caplog.records)
     finally:
         with contextlib.suppress(APIError):
             await session.aclose()

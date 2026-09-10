@@ -508,7 +508,7 @@ class GPTLiveSession(
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing:
+                    if closing or self._session_closed_fut.done():
                         return
                     raise APIConnectionError(
                         f"{self._live_model._provider_label} connection closed unexpectedly"
