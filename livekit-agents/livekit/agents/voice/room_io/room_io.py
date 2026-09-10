@@ -8,6 +8,7 @@ from livekit import api, rtc
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
+from ...telemetry import trace_types
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -331,7 +332,10 @@ class RoomIO:
 
         logger.info(
             "RoomIO linked to participant",
-            extra={"participant": participant_identity, "room": self._room.name},
+            extra={
+                trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity,
+                trace_types.ATTR_ROOM_NAME: self._room.name,
+            },
         )
 
     def unset_participant(self) -> None:
