@@ -132,3 +132,13 @@ async def test_rest_only_sample_rates_remain_valid_for_synthesis(sample_rate: in
         assert tts.sample_rate == sample_rate
     finally:
         await tts.aclose()
+
+
+async def test_rest_only_sample_rates_skip_websocket_prewarm() -> None:
+    tts = TTS(api_key="test-key", speech_sample_rate=48000)
+    tts._pool.prewarm = Mock()
+    try:
+        tts.prewarm()
+        tts._pool.prewarm.assert_not_called()
+    finally:
+        await tts.aclose()

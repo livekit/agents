@@ -477,6 +477,11 @@ class SarvamTTSOptions:
     output_audio_codec: str = "mp3"
 
 
+def _ws_connection_key(opts: SarvamTTSOptions) -> tuple[str, str, str, bool]:
+    """Return the options that determine a Sarvam WebSocket connection."""
+    return (opts.api_key, opts.ws_url, opts.model, opts.send_completion_event)
+
+
 class TTS(tts.TTS):
     """Sarvam.ai Text-to-Speech implementation.
 
@@ -635,16 +640,25 @@ class TTS(tts.TTS):
             mark_refreshed_on_get=False,
         )
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self,
+        timeout: float,
+        *,
+        opts: SarvamTTSOptions | None = None,
+    ) -> aiohttp.ClientWebSocketResponse:
+        if opts is None:
+            opts = self._opts
         session = self._ensure_session()
         headers = {
-            "api-subscription-key": self._opts.api_key,
+            "api-subscription-key": opts.api_key,
             "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
         # Add model parameter to URL like the client does
-        ws_url = f"{self._opts.ws_url}?model={self._opts.model}&send_completion_event={self._opts.send_completion_event}"
+        ws_url = (
+            f"{opts.ws_url}?model={opts.model}&send_completion_event={opts.send_completion_event}"
+        )
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
@@ -927,7 +941,15 @@ class TTS(tts.TTS):
 
     def prewarm(self) -> None:
         """Prewarm WebSocket connections."""
-        self._pool.prewarm()
+        if not self.capabilities.streaming:
+            return
+
+        # Resolve the options for each connection attempt. If update_options()
+        # invalidates a handshake in flight, the retry must use the new URL.
+        self._pool.prewarm(
+            key=lambda: _ws_connection_key(self._opts),
+            connect_cb=lambda timeout: self._connect_ws(timeout, opts=replace(self._opts)),
+        )
 
     async def aclose(self) -> None:
         """Close all active streams and connections."""
@@ -1277,7 +1299,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+            async with self._tts._pool.connection(
+                timeout=self._conn_options.timeout,
+                key=_ws_connection_key(self._opts),
+                connect_cb=lambda timeout: self._tts._connect_ws(timeout, opts=self._opts),
+            ) as ws:
                 # Pause the keepalive task while we own the connection so its
                 # ping frames don't interleave with config / text / flush
                 # traffic. The task was started either by ``_connect_ws`` (for
