@@ -1479,6 +1479,42 @@ async def test_usage_is_not_reported_without_audio(
         await stream.aclose()
 
 
+async def test_an_internal_redial_is_not_counted_twice(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0.1, timeout=5)
+    )
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        # an internal redial, which contributes to the offset
+        gap = 0.3
+        await asyncio.sleep(gap)
+        stream.update_options(language="de")
+        await server.wait_for_connections(2)
+
+        # then a failure, so the framework retries the whole run
+        assert server._ws is not None
+        await server._ws.close()
+        await server.wait_for_connections(3)
+
+        await server.send({"type": "turn_start"})
+        await server.send(
+            {"type": "turn_end_candidate", "text": "after both", "start_ms": 0, "duration_ms": 100}
+        )
+        await server.send({"type": "turn_end"})
+
+        final = next(e for e in await log.wait_for(2) if e.type == SpeechEventType.FINAL_TRANSCRIPT)
+        # real elapsed is a few hundred ms; double counting would roughly double it
+        assert final.alternatives[0].start_time == pytest.approx(gap, abs=gap)
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_a_reconnect_does_not_rewind_transcript_timing(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
