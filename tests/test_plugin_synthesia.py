@@ -763,6 +763,9 @@ class TestAvatarSession:
         def __init__(self):
             self.audio = None
 
+        def replace_audio_tail(self, sink):
+            self.audio = sink
+
     class _FakeAgentSession:
         def __init__(self):
             self._started = False
@@ -1107,7 +1110,8 @@ class TestAvatarSession:
             await self._start(session, room, agent)
         assert exc.value.type is ErrorType.TIMEOUT
 
-        assert agent.output.audio is None
+        assert agent.output.audio.closed is True
+        assert session._audio_output is None
         assert room.listener_count("disconnected") == 0
         assert agent.listener_count("conversation_item_added") == 0
 
@@ -1121,7 +1125,10 @@ class TestAvatarSession:
             await self._start(session, room, agent)
         assert exc.value.type is ErrorType.AUTH
 
+        # The Synthesia API call fails before the audio output is ever
+        # installed, so there is nothing to close.
         assert agent.output.audio is None
+        assert session._audio_output is None
         assert agent.listener_count("conversation_item_added") == 0
 
     async def test_mid_session_track_drop_logs_and_tears_down(
@@ -1206,7 +1213,8 @@ class TestAvatarSession:
         await session.aclose()
 
         assert audio.closed is True
-        assert agent.output.audio is None
+        assert agent.output.audio is audio
+        assert session._audio_output is None
 
     async def test_aclose_sets_close_done_even_if_audio_close_raises(
         self, api_recorder, instant_join
@@ -1220,7 +1228,7 @@ class TestAvatarSession:
             async def aclose(self):
                 raise RuntimeError("audio boom")
 
-        agent.output.audio = _RaisingAudio(room, destination_identity=session.avatar_identity)
+        session._audio_output = _RaisingAudio(room, destination_identity=session.avatar_identity)
 
         with pytest.raises(RuntimeError):
             await session.aclose()
@@ -1428,7 +1436,8 @@ class TestAvatarSession:
         assert room.listener_count("disconnected") == 0
         assert room.listener_count("track_unpublished") == 0
         assert agent.listener_count("conversation_item_added") == 0
-        assert agent.output.audio is None
+        assert agent.output.audio.closed is True
+        assert session._audio_output is None
 
 
 class TestUsageExample:
@@ -1442,6 +1451,9 @@ class TestUsageExample:
     class _Output:
         def __init__(self):
             self.audio = None
+
+        def replace_audio_tail(self, sink):
+            self.audio = sink
 
     class _AgentSession:
         """Stand-in for ``livekit.agents.AgentSession``."""

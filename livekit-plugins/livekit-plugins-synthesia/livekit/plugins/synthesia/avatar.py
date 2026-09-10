@@ -120,6 +120,11 @@ class AvatarSession(BaseAvatarSession):
         self._close_done = asyncio.Event()
         self._session_id: str | None = None
         self._teardown_task: asyncio.Task[None] | None = None
+        # The exact sink this session installed, tracked by identity rather than
+        # type or chain position: AgentSession.start() can wrap it in
+        # TranscriptSynchronizer/RecorderAudioOutput, and a caller may already
+        # have their own DataStreamAudioOutput installed before start() runs.
+        self._audio_output: DataStreamAudioOutput | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -194,28 +199,32 @@ class AvatarSession(BaseAvatarSession):
                 # TODO: confirm the avatar worker's expected audio sample rate and
                 # pass sample_rate explicitly once it is verified against the real
                 # worker.
-                agent_session.output.audio = DataStreamAudioOutput(
+                audio_output = DataStreamAudioOutput(
                     room,
                     destination_identity=self.avatar_identity,
                     wait_remote_track=rtc.TrackKind.KIND_VIDEO,
                 )
+                # replace_audio_tail keeps any wrapper AgentSession.start() adds
+                # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
+                agent_session.output.replace_audio_tail(audio_output)
+                self._audio_output = audio_output
 
                 await self.wait_for_join(timeout=self._config.join_timeout)
             except asyncio.TimeoutError as e:
                 await self.aclose()
-                await self._discard_partial_start(agent_session)
+                await self._discard_partial_start()
                 raise SynthesiaError(
                     f"avatar did not join within {self._config.join_timeout}s",
                     type=ErrorType.TIMEOUT,
                 ) from e
             except BaseException:
                 await self.aclose()
-                await self._discard_partial_start(agent_session)
+                await self._discard_partial_start()
                 raise
 
             if self._state is _State.CLOSED:
                 await self._close_done.wait()
-                await self._discard_partial_start(agent_session)
+                await self._discard_partial_start()
                 raise SynthesiaError("avatar session was closed while starting")
 
             room.on("disconnected", self._on_room_disconnected)
@@ -225,16 +234,19 @@ class AvatarSession(BaseAvatarSession):
         finally:
             self._starting = False
 
-    async def _discard_partial_start(self, agent_session: AgentSession) -> None:
+    async def _discard_partial_start(self) -> None:
         # An aclose() that ran concurrently with start() cannot see the audio
         # output and session id that start() set after it completed, so a failed
         # start cleans them up itself, closing the audio output's background
-        # tasks rather than just dropping the reference.
-        audio = agent_session.output.audio
-        if isinstance(audio, DataStreamAudioOutput):
-            agent_session.output.audio = None
-            if hasattr(audio, "aclose"):
-                await audio.aclose()
+        # tasks rather than just dropping the reference. Only the sink this
+        # session installed is touched: it may now be wrapped by
+        # AgentSession.start() (TranscriptSynchronizer, RecorderAudioOutput), and
+        # the caller may have had their own DataStreamAudioOutput before this
+        # session ever ran, so neither the current chain head nor its type says
+        # what to close.
+        audio_output, self._audio_output = self._audio_output, None
+        if audio_output is not None and hasattr(audio_output, "aclose"):
+            await audio_output.aclose()
         self._session_id = None
 
     async def swap_avatar(self, avatar_id: str, *, timeout: float = DEFAULT_SWAP_TIMEOUT) -> str:
@@ -363,14 +375,16 @@ class AvatarSession(BaseAvatarSession):
         self._session_id = None
 
         try:
-            agent_session = self._agent_session
-            if agent_session is not None and isinstance(
-                agent_session.output.audio, DataStreamAudioOutput
-            ):
-                audio = agent_session.output.audio
-                agent_session.output.audio = None
-                if hasattr(audio, "aclose"):
-                    await audio.aclose()
+            # Only the sink this session installed is closed, by identity: it may
+            # now be wrapped by AgentSession.start() (TranscriptSynchronizer,
+            # RecorderAudioOutput), and the caller may have had their own
+            # DataStreamAudioOutput before this session ever ran, so neither the
+            # current chain head nor its type says what to close. The wrapper
+            # chain itself is left in place; there is no public API to remove a
+            # tail sink from it without supplying a replacement.
+            audio_output, self._audio_output = self._audio_output, None
+            if audio_output is not None and hasattr(audio_output, "aclose"):
+                await audio_output.aclose()
 
             if self._room is not None:
                 self._room.off("disconnected", self._on_room_disconnected)
