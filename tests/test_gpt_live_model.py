@@ -728,9 +728,11 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         assert isinstance(interim, llm.InputTranscriptionCompleted)
         assert (interim.transcript, interim.is_final) == (" What is the", False)
 
-        for _ in range(9):
+        # every frame but the last leaves the pause just short of ending the turn
+        frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
+        for _ in range(frames - 1):
             session.push_audio(_silence(100))
-        assert len(events) == 3  # quiet, but not yet for the gap
+        assert len(events) == 3  # quiet, but not yet for the whole pause
 
         session.push_audio(_silence(100))
         assert [name for name, _ in events[-2:]] == [

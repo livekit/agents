@@ -49,11 +49,7 @@ _MAX_INPUT_ITEMS = 128
 _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
-
-# a speaker's fragments extend one message until a pause this long: on the model's clock between
-# the spans they cover, and for the user on the input audio pushed since the last one. fragments
-# inside an utterance come a few hundred ms apart, a pause between phrases reaches ~800 ms
-_SPEECH_GAP_MS = 1000
+_MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
 
 # the asks generate_reply sends as commentary. each ends with the same two sentences, which make
 # the model speak now rather than wait for the caller; what precedes them says what to speak
@@ -615,7 +611,7 @@ class GPTLiveSession(
             speech is not None
             and speech.end_ms is not None
             and event.start_ms is not None
-            and event.start_ms - speech.end_ms > _SPEECH_GAP_MS
+            and event.start_ms - speech.end_ms > _MIN_SILENCE_MS
         ):
             self._end_speech(role)
             speech = None
@@ -872,7 +868,7 @@ class GPTLiveSession(
         # the caller's turn ends on their own audio: this much pushed since their last fragment
         if (speech := self._speech.get("user")) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
-            if speech.quiet_ms >= _SPEECH_GAP_MS:
+            if speech.quiet_ms >= _MIN_SILENCE_MS:
                 self._end_speech("user")
 
         if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
