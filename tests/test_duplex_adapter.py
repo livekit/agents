@@ -697,6 +697,44 @@ async def test_a_requested_reply_is_the_speech_that_follows_it() -> None:
     await session.aclose()
 
 
+async def test_a_lone_function_call_is_not_the_reply_the_speech_after_it_is() -> None:
+    """The model may delegate before it speaks; the handle must resolve on the speech, since the
+    framework treats the resolved generation as the whole reply."""
+    fake, session = _askable()
+    fut = session.generate_reply()
+    fake.push(0.001, count=20)
+    await _settle()
+    call = llm.FunctionCall(call_id="c1", name="lookup", arguments="{}")
+    fake.emit("function_call", call)
+    assert not fut.done()
+
+    fake.push(0.5, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated
+    assert [m.message_id async for m in generation.message_stream] == [generation.response_id]
+    await session.aclose()
+
+
+async def test_a_superseded_or_abandoned_ask_fails_rather_than_cancels() -> None:
+    """The framework's reply task handles RealtimeError; a cancelled future would end it."""
+    fake, session = _askable()
+    first = session.generate_reply()
+    second = session.generate_reply()
+    with pytest.raises(llm.RealtimeError, match="superseded"):
+        await first
+
+    fake.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+    with pytest.raises(llm.RealtimeError, match="reconnected"):
+        await second
+
+    third = session.generate_reply()
+    await session.aclose()
+    with pytest.raises(llm.RealtimeError, match="closed"):
+        await third
+
+
 async def test_a_reply_the_model_never_gives_does_not_strand_the_caller(monkeypatch) -> None:
     """Asking a duplex model is a request; it stays free to say nothing at all."""
     monkeypatch.setattr("livekit.agents.llm.duplex_adapter._REPLY_TIMEOUT", 0.05)

@@ -312,8 +312,9 @@ class _DuplexRealtimeSession(RealtimeSession):
             user_initiated=False,
             response_id=burst.id,
         )
-        # the model answers on the one stream it has, so a burst opening is the reply asked for
-        if self._pending_reply is not None and not self._pending_reply.done():
+        # the model answers on the one stream it has, so speech opening is the reply asked for; a
+        # call on its own is not, the speech it leads to is
+        if message and self._pending_reply is not None and not self._pending_reply.done():
             ev.user_initiated = True
             self._pending_reply.set_result(ev)
         self.emit("generation_created", ev)
@@ -382,8 +383,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         # describe, or the reply it was asked for
         self._fragments.clear()
         self._close_burst()
-        if self._pending_reply is not None and not self._pending_reply.done():
-            self._pending_reply.cancel()
+        self._fail_pending_reply("the session reconnected before the model replied")
         self.emit("session_reconnected", ev)
 
     # RealtimeSession
@@ -474,9 +474,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             fut.set_exception(e)
             return fut
 
-        # the reply is the next burst to open; asking is a request the model may never answer
-        if self._pending_reply is not None and not self._pending_reply.done():
-            self._pending_reply.cancel()
+        # the reply is the next speech to open; asking is a request the model may never answer
+        self._fail_pending_reply("a newer ask superseded this one")
         self._pending_reply = fut
 
         def _on_timeout() -> None:
@@ -506,10 +505,14 @@ class _DuplexRealtimeSession(RealtimeSession):
     ) -> None:
         pass  # the model owns its output timeline
 
+    def _fail_pending_reply(self, reason: str) -> None:
+        # the framework's reply task handles RealtimeError; a cancelled future would end it
+        if self._pending_reply is not None and not self._pending_reply.done():
+            self._pending_reply.set_exception(RealtimeError(reason))
+
     async def aclose(self) -> None:
         await aio.cancel_and_wait(self._segment_atask)
         self._close_burst()
-        if self._pending_reply is not None and not self._pending_reply.done():
-            self._pending_reply.cancel()
+        self._fail_pending_reply("the session closed before the model replied")
         with contextlib.suppress(Exception):
             await self._duplex.aclose()
