@@ -187,7 +187,15 @@ async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
 class _FlappingStream(RecognizeStream):
     """Every connection succeeds, then drops. A real reconnect, every time."""
 
-    def __init__(self, *, stt: STT, drops: int, emit: SpeechEvent | None) -> None:
+    def __init__(
+        self,
+        *,
+        stt: STT,
+        drops: int,
+        emit: SpeechEvent | None,
+        silent_runs: int = 0,
+        yield_after_emit: bool = True,
+    ) -> None:
         super().__init__(
             stt=stt,
             conn_options=dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0),
@@ -195,19 +203,34 @@ class _FlappingStream(RecognizeStream):
         self.runs = 0
         self._drops = drops
         self._emit = emit
+        self._silent_runs = silent_runs
+        self._yield_after_emit = yield_after_emit
 
     async def _run(self) -> None:
         self.runs += 1
-        if self._emit is not None:
+        if self._emit is not None and self.runs > self._silent_runs:
             self._event_ch.send_nowait(self._emit)
-            await asyncio.sleep(0)  # let the metrics task observe it
+            if self._yield_after_emit:
+                await asyncio.sleep(0)
         if self.runs <= self._drops:
             raise APIConnectionError("socket dropped")
         await asyncio.sleep(3600)  # healthy at last
 
 
-async def _survives(emit: SpeechEvent | None, *, drops: int = 10) -> bool:
-    stream = _FlappingStream(stt=_DummySTT(), drops=drops, emit=emit)
+async def _survives(
+    emit: SpeechEvent | None,
+    *,
+    drops: int = 10,
+    silent_runs: int = 0,
+    yield_after_emit: bool = True,
+) -> bool:
+    stream = _FlappingStream(
+        stt=_DummySTT(),
+        drops=drops,
+        emit=emit,
+        silent_runs=silent_runs,
+        yield_after_emit=yield_after_emit,
+    )
     try:
         for _ in range(500):
             if stream._task.done() or stream.runs > drops:
@@ -237,3 +260,24 @@ async def test_retry_budget_survives_drops_while_the_caller_is_silent() -> None:
 async def test_retry_budget_still_gives_up_when_nothing_is_ever_delivered() -> None:
     """A connection that has never delivered anything must not retry forever."""
     assert not await _survives(None)
+
+
+async def test_retry_budget_resets_even_when_the_producer_never_yields() -> None:
+    """The reset must land in the producer's turn, not the consumer's.
+
+    `send_nowait` wakes the metrics consumer but does not run it. An attempt that
+    publishes an event and then raises in the same event-loop turn would otherwise
+    reach the terminal branch of `_main_task` with the budget still exhausted, and
+    a plugin can emit its last usage event during teardown, just before the socket
+    error propagates. Enters the event-delivering attempt already at max_retry.
+    """
+    usage_only = SpeechEvent(
+        type=SpeechEventType.RECOGNITION_USAGE,
+        recognition_usage=RecognitionUsage(audio_duration=5.0),
+    )
+    assert await _survives(
+        usage_only,
+        drops=12,
+        silent_runs=DEFAULT_API_CONNECT_OPTIONS.max_retry,
+        yield_after_emit=False,
+    )
