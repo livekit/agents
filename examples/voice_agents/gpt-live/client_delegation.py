@@ -124,6 +124,8 @@ class Assistant(Agent):
 
     def _on_delegation_created(self, delegation: GPTLiveDelegation) -> None:
         # emitted from the plugin's read loop, so the work has to run in a task of its own
+        # TODO: each task knows only its own request, so a later delegation cannot supersede an
+        # earlier one; the framework will hold one expert per conversation and do that (see README)
         task = asyncio.create_task(self._answer(delegation), name=f"desk:{delegation.id}")
         self._desk_tasks.add(task)
         task.add_done_callback(self._desk_tasks.discard)

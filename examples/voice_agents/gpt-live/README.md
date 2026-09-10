@@ -33,3 +33,9 @@ The tools live on an ordinary `llm.LLM` that `run_delegation` drives itself, and
 The event arrives before the caller's turn reaches the chat context, so the words that triggered it ride on it as `pending_transcript`; everything before that is already history.
 
 `delegation_created` is emitted from the plugin's read loop, so the handler starts a task and returns instead of blocking it.
+
+### A simple example, and what it cannot do
+
+Each delegation answers on its own, in its own task, knowing only its own request. So a later delegation cannot replace an earlier one: ask to book Monday, change your mind to Tuesday a moment later, and both run and both answer.
+
+Superseding needs one expert that holds the whole conversation and sees the correction. The framework will support it.
