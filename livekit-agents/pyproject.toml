@@ -27,7 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "certifi>=2025.6.15",
-    "livekit==1.1.17",
+    "livekit==1.1.18",
     "livekit-api>=1.2.0,<2",
     "livekit-local-inference>=0.2.7",
     "livekit-protocol>=1.1.21,<2",
@@ -43,7 +43,7 @@ dependencies = [
     "colorama>=0.4.6",
     "av>=14.0.0",
     "numpy>=1.26.0",
-    "pydantic>=2.0,<3",
+    "pydantic>=2.5,<3",
     "nest-asyncio>=1.6.0",
     "opentelemetry-api>=1.39.0,<1.45",
     "opentelemetry-sdk>=1.39.0,<1.45",
@@ -99,6 +99,7 @@ langchain = ["livekit-plugins-langchain>=1.8.0"]
 lemonslice = ["livekit-plugins-lemonslice>=1.8.0"]
 liveavatar = ["livekit-plugins-liveavatar>=1.8.0"]
 lmnt = ["livekit-plugins-lmnt>=1.8.0"]
+meta = ["livekit-plugins-meta>=1.8.0"]
 minimax = ["livekit-plugins-minimax-ai>=1.8.0"]
 mistralai = ["livekit-plugins-mistralai>=1.8.0"]
 murf = ["livekit-plugins-murf>=1.8.0"]

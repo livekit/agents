@@ -3,7 +3,7 @@ import json
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PositiveInt, ValidationError
 
 from livekit.agents import Agent
 from livekit.agents.llm import (
@@ -415,6 +415,114 @@ class TestToolExecution:
         for bad in (0, 11):
             with pytest.raises(ValidationError):
                 model(count=bad)
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    def test_annotated_type_constraints_preserved(self, with_field: bool):
+        annotation = (
+            Annotated[PositiveInt, Field(description="how many")] if with_field else PositiveInt
+        )
+
+        @function_tool
+        async def book(count: annotation) -> str:
+            """Book a thing."""
+            return str(count)
+
+        model = function_arguments_to_pydantic_model(book)
+        assert model.model_json_schema()["properties"]["count"]["exclusiveMinimum"] == 0
+        for bad in (0, -1):
+            with pytest.raises(ValidationError):
+                model(count=bad)
+        assert prepare_function_arguments(fnc=book, json_arguments='{"count": 2}')[0] == (2,)
+
+    @pytest.mark.parametrize("with_field", [False, True])
+    async def test_annotated_validators_run_in_order(self, with_field: bool):
+        calls: list[str] = []
+
+        def before(value: str) -> str:
+            calls.append("before")
+            return value.strip()
+
+        def after(value: str) -> str:
+            calls.append("after")
+            return value.upper()
+
+        annotation = Annotated[
+            str,
+            BeforeValidator(before),
+            AfterValidator(after),
+        ]
+        if with_field:
+            annotation = Annotated[annotation, Field(description="label")]
+
+        @function_tool
+        async def label(value: annotation) -> str:
+            """Normalize a label."""
+            return value
+
+        args, kwargs = prepare_function_arguments(
+            fnc=label, json_arguments='{"value": "  hello  "}'
+        )
+        assert await label(*args, **kwargs) == "HELLO"
+        assert calls == ["before", "after"]
+
+    def test_annotated_field_constraint_runs_after_validator(self):
+        @function_tool
+        async def label(
+            value: Annotated[str, AfterValidator(lambda value: ""), Field(min_length=1)],
+        ) -> str:
+            """Require a nonempty normalized label."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        with pytest.raises(ValidationError, match="at least 1"):
+            model(value="hello")
+
+    def test_annotated_field_attributes_and_defaults_preserved(self):
+        metadata = Field(default="ready", description="status", alias="status")
+
+        @function_tool
+        async def label(value: Annotated[str, metadata] = "fallback") -> str:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        assert model().value == "ready"
+        assert model(status="done").value == "done"
+        assert model.model_json_schema()["properties"]["status"]["description"] == "status"
+        assert metadata.default == "ready"
+        assert metadata.description == "status"
+
+    def test_annotated_field_default_factory_preserved(self):
+        @function_tool
+        async def label(value: Annotated[list[str], Field(default_factory=list)]) -> list[str]:
+            """Label a thing."""
+            return value
+
+        model = function_arguments_to_pydantic_model(label)
+        first = model()
+        first.value.append("one")
+        assert model().value == []
+
+    def test_annotated_field_docstring_and_default_fallbacks(self):
+        metadata = Field(gt=0)
+
+        @function_tool
+        async def book(count: Annotated[int, metadata] = 2) -> str:
+            """Book items.
+
+            Args:
+                count: Number of items.
+            """
+            return str(count)
+
+        for _ in range(2):
+            model = function_arguments_to_pydantic_model(book)
+            assert model().count == 2
+            prop = model.model_json_schema()["properties"]["count"]
+            assert prop["description"] == "Number of items."
+            assert prop["exclusiveMinimum"] == 0
+        assert metadata.is_required()
+        assert metadata.description is None
 
     async def test_tool_execution(self):
         args, kwargs = prepare_function_arguments(

@@ -142,6 +142,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             return
+
+        # a detaching sink never reaches the playout wait, so the playhead is reported here
+        self._report_run(
+            offset=self._source_pushed_duration - self._audio_source.queued_duration,
+            ended_at=time.time(),
+        )
         self._interrupted_event.set()
 
     def pause(self) -> None:
@@ -156,7 +162,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def _report_run(
         self, *, offset: float, ended_at: float, resumes_at: float | None = None
     ) -> None:
-        """Report the open run, and begin the next past any audio that never played."""
+        """Report the open run, and begin the next past any audio that never played.
+
+        The run covers ``[_run_offset, offset)`` and stopped at ``ended_at``. The next one
+        starts at ``offset``, or at ``resumes_at`` when the audio between the two was
+        discarded rather than played.
+        """
         if self._dry_at is not None:
             # a run cannot outlast the audio the source held, however late the caller noticed
             ended_at = min(ended_at, self._dry_at)
