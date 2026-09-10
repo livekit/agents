@@ -1066,23 +1066,7 @@ class RealtimeSession(
             self._response_created_futures.clear()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {"User-Agent": "LiveKit Agents"}
-        if self._opts.is_azure:
-            if self._opts.entra_token:
-                headers["Authorization"] = f"Bearer {self._opts.entra_token}"
-
-            if self._opts.api_key:
-                headers["api-key"] = self._opts.api_key
-        else:
-            headers["Authorization"] = f"Bearer {self._opts.api_key}"
-
-        url = process_base_url(
-            self._opts.base_url,
-            self._opts.model,
-            is_azure=self._opts.is_azure,
-            api_version=self._opts.api_version,
-            azure_deployment=self._opts.azure_deployment,
-        )
+        url, headers = self._create_ws_url_and_headers()
 
         if lk_oai_debug:
             logger.debug(f"connecting to Realtime API: {url}")
@@ -1103,6 +1087,26 @@ class RealtimeSession(
             raise APIConnectionError(
                 message=f"{self._realtime_model._provider_label} connection timed out",
             ) from e
+
+    def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
+        headers = {"User-Agent": "LiveKit Agents"}
+        if self._opts.is_azure:
+            if self._opts.entra_token:
+                headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+
+            if self._opts.api_key:
+                headers["api-key"] = self._opts.api_key
+        else:
+            headers["Authorization"] = f"Bearer {self._opts.api_key}"
+
+        url = process_base_url(
+            self._opts.base_url,
+            self._opts.model,
+            is_azure=self._opts.is_azure,
+            api_version=self._opts.api_version,
+            azure_deployment=self._opts.azure_deployment,
+        )
+        return url, headers
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
@@ -2279,7 +2283,7 @@ class RealtimeSession(
             # failures are largely undocumented by openai, so we assume optimistically
             # recoverable unless the code is a known-fatal one (quota / auth / billing),
             # which is raised so the recv loop breaks and _main_task stops reconnecting
-            recoverable = not _is_fatal_error(error_body)
+            recoverable = not self._is_fatal_error(error_body)
             error = APIError(
                 message=message,
                 body=error_body,
@@ -2312,6 +2316,9 @@ class RealtimeSession(
         else:
             logger.debug("Unknown response status: %s", event.response.status)
 
+    def _is_fatal_error(self, error: object | None) -> bool:
+        return _is_fatal_error(error)
+
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         if event_id := event.error.event_id:
             # a rejected item event gets no deleted/added reply, so fail its future rather than
@@ -2324,7 +2331,7 @@ class RealtimeSession(
                     else:
                         fut.set_exception(llm.RealtimeError(event.error.message))
                 # a terminal one still has to end the session, whatever it came in reply to
-                if not _is_fatal_error(event.error):
+                if not self._is_fatal_error(event.error):
                     return
             # a rejected response.create gets no response.created; fail its future now
             # instead of orphaning it until the 10s timeout (still emitted/raised below)
@@ -2346,7 +2353,7 @@ class RealtimeSession(
             f"{provider_label} returned an error: {event.error}",
             extra={"error": event.error},
         )
-        recoverable = not _is_fatal_error(event.error)
+        recoverable = not self._is_fatal_error(event.error)
         error = APIError(
             message=f"{provider_label} returned an error",
             body=event.error,

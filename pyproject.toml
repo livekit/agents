@@ -28,7 +28,6 @@ livekit-plugins-gladia = { workspace = true }
 livekit-plugins-gnani = { workspace = true }
 livekit-plugins-google = { workspace = true }
 livekit-plugins-groq = { workspace = true }
-livekit-plugins-hedra = { workspace = true }
 livekit-plugins-hamming = { workspace = true }
 livekit-plugins-hume = { workspace = true }
 livekit-plugins-inworld = { workspace = true }
@@ -38,6 +37,7 @@ livekit-plugins-langchain = { workspace = true }
 livekit-plugins-lemonslice = { workspace = true }
 livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
+livekit-plugins-meta = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-murf = { workspace = true }
@@ -72,6 +72,7 @@ livekit-plugins-trugen = { workspace = true }
 livekit-plugins-turn-detector = { workspace = true }
 livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
+livekit-plugins-vakyam = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
@@ -91,7 +92,7 @@ dev = [
     "mypy",
     "scikit-learn",
     "pytest>=9.0.3,<9.1",
-    "ruff",
+    { include-group = "lint" },
     "pytest-asyncio>=0.25.3",
     "pytest-asyncio-concurrent==0.5.2",
     "jiwer>=3.1.0",
@@ -101,6 +102,7 @@ dev = [
     "playwright>=1.58.0",
 ]
 docs = ["pdoc3", "setuptools", "beautifulsoup4", "markdownify"]
+lint = ["ruff"]
 typing = [
     # .pyi stubs, never used at runtime
     "pandas-stubs>=3.0.3.260530",
@@ -141,6 +143,7 @@ select = [
     "B",  # flake8-bugbear
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    "RUF006", # asyncio-dangling-task: the event loop only weakly references a bare task
 ]
 ignore = ["E501"]
 

@@ -23,14 +23,20 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents>=1.7.1",
+    "livekit-agents>=1.8.0",
     "aiobotocore>=3.0.0",
-    "aws_sdk_transcribe_streaming>=0.2.0; python_version >= '3.12'",
+    # StartStreamTranscription is bidirectional, which only the CRT transport provides;
+    # transcribe-streaming 0.11 dropped it from its own base dependencies.
+    "aws_sdk_transcribe_streaming>=0.11.0; python_version >= '3.12'",
+    "smithy-http[awscrt]; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
 realtime = [
     "aws-sdk-bedrock-runtime>=0.2.0; python_version >= '3.12'",
+    # Sonic needs duplex streaming, which only the CRT transport provides; bedrock-runtime
+    # 0.11 dropped it from its own base dependencies.
+    "smithy-http[awscrt]; python_version >= '3.12'",
     "aws-sdk-signers>=0.0.3; python_version >= '3.12'",
     "boto3>1.35.10",
 ]

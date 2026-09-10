@@ -45,6 +45,7 @@ from aws_sdk_bedrock_runtime.models import (
 from smithy_aws_core.identity import AWSCredentialsIdentity
 from smithy_aws_event_stream.exceptions import InvalidEventBytes
 from smithy_core.aio.interfaces.identity import IdentityResolver
+from smithy_http.aio.crt import AWSCRTHTTPClient
 
 from livekit import rtc
 from livekit.agents import (
@@ -552,6 +553,10 @@ class RealtimeSession(  # noqa: F811
         # Session recycling: proactively restart before credential expiry or 8-min limit
         self._session_start_time: float | None = None
         self._session_recycle_task: asyncio.Task[None] | None = None
+        # Held only so the loop's weak reference cannot collect them mid-flight.
+        # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
+        self._user_text_tasks: set[asyncio.Task[None]] = set()
+        self._deferred_tool_recycle_tasks: set[asyncio.Task[None]] = set()
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -609,6 +614,9 @@ class RealtimeSession(  # noqa: F811
         0.11 then dropped the old names entirely. Keep both construction paths so
         the locked 0.7 extra and a fresh pip install of 0.11 both import.
         See https://github.com/livekit/agents/issues/6994.
+
+        Sonic streams bidirectionally, so the transport has to be the CRT client.
+        0.11 defaults to aiohttp, which does not support duplex.
         """
         kwargs: dict[str, Any] = {
             "endpoint_uri": (
@@ -617,6 +625,7 @@ class RealtimeSession(  # noqa: F811
             "region": self._realtime_model._opts.region,
             "aws_credentials_identity_resolver": _get_credentials_resolver(),
             "user_agent_extra": "x-client-framework:livekit-plugins-aws[realtime]",
+            "transport": AWSCRTHTTPClient(),
         }
         if _BEDROCK_CONFIG_USES_RESOLVE:
             config = await _BedrockRuntimeConfig.resolve(**kwargs)
@@ -1860,7 +1869,11 @@ class RealtimeSession(  # noqa: F811
                                 if self._pending_generation_fut is fut:
                                     self._pending_generation_fut = None
 
-                        asyncio.create_task(_send_user_text())
+                        task = asyncio.create_task(
+                            _send_user_text(), name="RealtimeSession._send_user_text"
+                        )
+                        self._user_text_tasks.add(task)
+                        task.add_done_callback(self._user_text_tasks.discard)
 
                     self._sent_message_ids.add(item.id)
                     self._chat_ctx.items.append(item)
@@ -1926,7 +1939,11 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            asyncio.create_task(self._deferred_tool_recycle())
+            task = asyncio.create_task(
+                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+            )
+            self._deferred_tool_recycle_tasks.add(task)
+            task.add_done_callback(self._deferred_tool_recycle_tasks.discard)
         else:
             logger.debug("Tool list updated locally")
 

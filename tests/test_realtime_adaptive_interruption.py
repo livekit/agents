@@ -10,6 +10,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
@@ -547,6 +548,57 @@ def test_positive_verdict_does_not_reopen_overlap_during_transcript_replay() -> 
     assert ar._overlap_open is False
     assert ar._transcript_gate_active is False
     assert _sentinel_names(ch) == []
+
+
+@pytest.mark.parametrize("interruption", [NOT_GIVEN, True, False])
+def test_end_of_speech_passes_interruption_verdict_to_endpointing(
+    interruption: NotGivenOr[bool],
+) -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._speaking = True
+
+    ar._on_end_of_speech(ended_at=10.0, interruption=interruption)
+
+    ar._endpointing.on_end_of_speech.assert_called_once_with(
+        ended_at=10.0,
+        interruption=interruption,
+    )
+
+
+def test_agent_speech_end_keeps_gate_closed_during_transcript_replay() -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._on_start_of_agent_speech(started_at=9.0)
+    ar._on_start_of_speech(started_at=9.5)
+    ar._active_vad_speech_started_at = 9.5
+    ar._transcript_buffer.append(MagicMock(created_at=9.5, speech_end_time=None))
+    ar._process_stt_event = MagicMock(  # type: ignore[method-assign]
+        side_effect=lambda _: ar._on_start_of_speech(started_at=9.5)
+    )
+
+    ar._on_end_of_agent_speech(ended_at=10.0)
+
+    assert not ar._agent_speaking
+    assert not ar._transcript_gate_active
+    assert not ar._transcript_buffer
+
+
+@pytest.mark.parametrize("gate_active", [False, True])
+def test_agent_speech_end_releases_stale_transcripts_when_already_not_speaking(
+    gate_active: bool,
+) -> None:
+    ar, _ = _recognition_with_interruption_ch()
+    ar._agent_speech_started_at = 9.0
+    ar._active_vad_speech_started_at = 9.5
+    ar._transcript_gate_active = gate_active
+    held_event = MagicMock(created_at=9.5, speech_end_time=None)
+    ar._transcript_buffer.append(held_event)
+    ar._process_stt_event = MagicMock()  # type: ignore[method-assign]
+
+    ar._on_end_of_agent_speech(ended_at=10.0)
+
+    ar._process_stt_event.assert_called_once_with(held_event)  # type: ignore[attr-defined]
+    assert not ar._transcript_gate_active
+    assert not ar._transcript_buffer
 
 
 async def test_agent_speech_end_closes_overlap_before_reset() -> None:

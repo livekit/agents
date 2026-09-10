@@ -39,7 +39,13 @@ from livekit.protocol import agent, models
 from .log import logger
 from .observability import Tagger
 from .telemetry import _upload_session_report, otel_metrics
-from .telemetry.traces import _BufferingHandler, _setup_cloud_tracer, _shutdown_telemetry
+from .telemetry.traces import (
+    _BufferingHandler,
+    _cloud_log_handler,
+    _JobTelemetry,
+    _setup_cloud_tracer,
+    _shutdown_telemetry,
+)
 from .types import (
     ATTRIBUTE_REDACTION_ENABLED,
     ATTRIBUTE_SIMULATION_ENABLED,
@@ -239,6 +245,11 @@ class JobContext:
         self._recording_initialized = False
         self._redaction_enabled = info.job.enable_redaction
         self._early_log_handler: _BufferingHandler | None = None
+        # this job's cloud-telemetry registration, set by init_recording():
+        # span/log/metric attribution and upload gating resolve from it (the
+        # OTel providers are shared across possibly-concurrent jobs). None while
+        # the job has no registration to release.
+        self._telemetry_state: _JobTelemetry | None = None
 
     def _on_setup(self) -> None:
         root_logger = logging.getLogger()
@@ -276,14 +287,13 @@ class JobContext:
         if not replay:
             return
 
-        # find the OTLP LoggingHandler that _setup_cloud_tracer just added
-        from opentelemetry.sdk._logs import LoggingHandler
-
-        for h in logging.getLogger().handlers:
-            if isinstance(h, LoggingHandler):
-                for record in handler.buffer:
-                    h.emit(record)
-                break
+        # replay through the framework's own OTLP handler that _setup_cloud_tracer
+        # just attached — the integrator may have their own OTel LoggingHandler on
+        # the root logger, and the buffered records must not be routed into it
+        otlp_handler = _cloud_log_handler()
+        if otlp_handler is not None and otlp_handler in logging.getLogger().handlers:
+            for record in handler.buffer:
+                otlp_handler.emit(record)
 
     async def _on_session_end(self) -> None:
         from .cli import AgentsConsole
@@ -329,7 +339,10 @@ class JobContext:
                     report=report,
                     tagger=self._tagger,
                     http_session=http_context.http_session(),
-                    metadata=self._otel_metadata(report.options.recording_options),
+                    metadata=self._otel_metadata(
+                        report.options.recording_options,
+                        redaction_enabled=self._redaction_enabled,
+                    ),
                 )
             except Exception:
                 logger.exception("failed to upload the session report to LiveKit Cloud")
@@ -349,7 +362,10 @@ class JobContext:
                 self._stop_log_buffering()
 
         self._tempdir.cleanup()
-        _shutdown_telemetry()
+        # telemetry registrations are per job: releasing this job's flushes its
+        # remaining telemetry and leaves any concurrent job's export untouched
+        if self._telemetry_state is not None:
+            _shutdown_telemetry(self.job.id)
 
         for handler in self._handlers_with_filter:
             handler.removeFilter(self._log_filter)
@@ -823,14 +839,14 @@ class JobContext:
             return
 
         logger.debug("configuring session recording")
-        _setup_cloud_tracer(
+        self._telemetry_state = _setup_cloud_tracer(
             room_id=self.job.room.sid,
             job_id=self.job.id,
             agent_name=self.job.agent_name,
             observability_url=obs_url,
             enable_traces=options["traces"],
             enable_logs=options["logs"],
-            metadata=self._otel_metadata(options),
+            metadata=self._otel_metadata(options, redaction_enabled=redaction_enabled),
         )
         # init_recording is typically called during session.start(), at which point a bunch of
         # the logs would have already been emitted. we want to capture all of the logs as it
@@ -877,7 +893,9 @@ class JobContext:
     def token_claims(self) -> Claims:
         return api.TokenVerifier().verify(self._info.token, verify_signature=False)
 
-    def _otel_metadata(self, options: RecordingOptions | None = None) -> dict[str, Any] | None:
+    def _otel_metadata(
+        self, options: RecordingOptions | None = None, *, redaction_enabled: bool = False
+    ) -> dict[str, Any] | None:
         metadata: dict[str, Any] = {}
         if (sim := self.simulation_context()) is not None:
             metadata[ATTRIBUTE_SIMULATION_ENABLED] = True
@@ -888,7 +906,10 @@ class JobContext:
                 metadata[ATTRIBUTE_SIMULATION_RUN_ID] = sim.simulation_run_id
             if sim.simulation_job_id:
                 metadata[ATTRIBUTE_SIMULATION_JOB_ID] = sim.simulation_job_id
-        if options and options.get("redaction", False):
+        # stamped on every span and log so redaction can be resolved per-record, off the
+        # record itself, rather than from the ambient job context. Takes the resolved
+        # flag so project-wide redaction counts, not just the per-session option.
+        if redaction_enabled or (options and options.get("redaction", False)):
             metadata[ATTRIBUTE_REDACTION_ENABLED] = True
         return metadata or None
 

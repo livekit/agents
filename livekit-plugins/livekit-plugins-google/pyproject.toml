@@ -23,13 +23,15 @@ classifiers = [
 ]
 dependencies = [
     "google-auth >= 2, < 3",
-    "google-cloud-speech >= 2, < 3",
+    # 2.36 is the floor for cloud_speech_v2.CustomPromptConfig /
+    # RecognitionFeatures.custom_prompt_config, used by STT's custom_prompt_config option.
+    "google-cloud-speech >= 2.36, < 3",
     "google-cloud-texttospeech >= 2.32, < 3",
     # 2.13 is the floor for the Live transcription surface this package uses:
     # LiveServerContent.interim_input_transcription landed in 2.9 and
     # AudioTranscriptionConfig.custom_vocabulary in 2.13.
     "google-genai >= 2.13; python_version >= '3.10'",
-    "livekit-agents>=1.7.1",
+    "livekit-agents>=1.8.0",
 ]
 
 [project.urls]

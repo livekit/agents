@@ -50,7 +50,9 @@ class RunContext(Generic[Userdata_T]):
         session: AgentSession[Userdata_T],
         speech_handle: SpeechHandle,
         function_call: FunctionCall,
+        activity: AgentActivity | None = None,
     ) -> None:
+        self._activity = activity
         self._session = session
         self._speech_handle = speech_handle
         self._function_call = function_call
@@ -88,13 +90,15 @@ class RunContext(Generic[Userdata_T]):
     def disallow_interruptions(self) -> None:
         """Disable interruptions for this FunctionCall.
 
-        Delegates to the SpeechHandle.allow_interruptions setter,
-        which will raise a RuntimeError if the handle is already interrupted.
+        Also releases an active false-interruption pause.
 
         Raises:
             RuntimeError: If the SpeechHandle is already interrupted.
         """
-        self.speech_handle.allow_interruptions = False
+        if self._activity is not None:
+            self._activity._disallow_interruptions(self.speech_handle)
+        else:
+            self.speech_handle.allow_interruptions = False
 
     async def wait_for_playout(self) -> None:
         """Waits for the speech playout corresponding to this function call step.

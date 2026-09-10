@@ -49,6 +49,7 @@ class UIView:
 
     def __init__(self, ctx: JobContext) -> None:
         self._ctx = ctx
+        self._push_tasks: set[asyncio.Task[None]] = set()
 
     def slots_listed(
         self,
@@ -85,7 +86,10 @@ class UIView:
 
     def _push(self, payload: str) -> None:
         for p in list(self._ctx.room.remote_participants.values()):
-            asyncio.create_task(self._push_to(p.identity, payload))
+            # hold the task: the loop only weakly references it
+            task = asyncio.create_task(self._push_to(p.identity, payload))
+            self._push_tasks.add(task)
+            task.add_done_callback(self._push_tasks.discard)
 
     async def _push_to(self, identity: str, payload: str) -> None:
         try:

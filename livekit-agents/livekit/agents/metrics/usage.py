@@ -58,6 +58,8 @@ class LLMModelUsage(_BaseModelUsage):
     """Output audio tokens (for multimodal models)."""
     output_text_tokens: int = 0
     """Output text tokens."""
+    output_reasoning_tokens: int = 0
+    """Output tokens spent on hidden reasoning. Already counted in ``output_tokens``."""
 
     session_duration: float = 0.0
     """Total session connection duration in seconds (for session-based billing like xAI)."""
@@ -205,6 +207,7 @@ class ModelUsageCollector:
             usage.input_cached_tokens += metrics.prompt_cached_tokens
             usage.input_cache_creation_tokens += metrics.cache_creation_tokens
             usage.output_tokens += metrics.completion_tokens
+            usage.output_reasoning_tokens += metrics.reasoning_tokens
 
         elif isinstance(metrics, RealtimeModelMetrics):
             provider, model = self._extract_provider_model(metrics)

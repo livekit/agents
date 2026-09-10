@@ -35,7 +35,7 @@ from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, loop_monitor, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -698,12 +698,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
+        # the latest user turn no agent speech has reported e2e_latency for yet
+        self._unanswered_user_metrics: MetricsReport | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+        # event loop stalls seen while this session ran, summarised on the agent_session span
+        self._loop_stall_count = 0
+        self._loop_stall_total = 0.0
+        self._loop_stall_max = 0.0
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
@@ -958,6 +964,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._root_span_context = otel_context.get_current()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
+            self._loop_stall_count = 0
+            self._loop_stall_total = 0.0
+            self._loop_stall_max = 0.0
+            # the session is the convention's workflow: agent turns (`invoke_agent`),
+            # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
+            gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
 
             self._agent = agent
             self._update_agent_state("initializing")
@@ -1928,6 +1940,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_outbound_sip and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
+
+    def _record_loop_stall(self, duration: float, *, timestamp_ns: int) -> None:
+        """Mark a blocked event loop on the agent_session span: one event per stall plus a
+        running count / total / max, so a session with stalls is findable from its list entry."""
+        span = self._session_span
+        if span is None or not span.is_recording():
+            return
+        self._loop_stall_count += 1
+        self._loop_stall_total += duration
+        self._loop_stall_max = max(self._loop_stall_max, duration)
+        span.add_event(
+            loop_monitor.SPAN_NAME,
+            {trace_types.ATTR_BLOCKING_DURATION: duration},
+            timestamp=timestamp_ns,
+        )
+        span.set_attributes(
+            {
+                trace_types.ATTR_BLOCKING_COUNT: self._loop_stall_count,
+                trace_types.ATTR_BLOCKING_TOTAL_DURATION: self._loop_stall_total,
+                trace_types.ATTR_BLOCKING_MAX_DURATION: self._loop_stall_max,
+            }
+        )
 
     def _update_agent_state(
         self,
