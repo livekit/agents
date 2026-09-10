@@ -94,6 +94,34 @@ def test_credentials_and_url_follow_inference_environment(
     assert model._opts.base_url == "https://inference.example/v1"
 
 
+async def test_openai_environment_does_not_enable_azure_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    paused_realtime_main: None,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_VERSION", "2025-04-01-preview")
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://azure.example")
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        base_url="https://inference.example/v1",
+        api_key="key",
+        api_secret="secret-with-at-least-32-bytes-for-jwt",
+    )
+    session = model.session()
+
+    url, _ = session._create_ws_url_and_headers()
+    parsed = urlparse(url)
+    event = session._msg_ch.recv_nowait()
+    dumped = event.model_dump(exclude_unset=True) if hasattr(event, "model_dump") else event
+
+    assert model._opts.is_azure is False
+    assert model._opts.api_version is None
+    assert parsed.scheme == "wss"
+    assert parsed.path == "/v1/realtime"
+    assert parse_qs(parsed.query) == {"model": ["openai/gpt-realtime"]}
+    assert dumped["session"]["type"] == "realtime"
+    await session.aclose()
+
+
 async def test_connection_refreshes_livekit_auth_and_custom_headers(
     monkeypatch: pytest.MonkeyPatch,
     paused_realtime_main: None,

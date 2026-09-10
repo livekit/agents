@@ -131,6 +131,10 @@ class InferenceRealtimeModel(RealtimeModel):
             max_session_duration=max_session_duration,
             conn_options=conn_options,
         )
+        # LiveKit Inference always uses the OpenAI-compatible protocol; ambient Azure
+        # settings must not change its URL or session wire format.
+        self._opts.is_azure = False
+        self._opts.api_version = None
         if is_xai:
             self._capabilities.can_disable_turn_detection = can_disable_turn_detection
         self._inference_opts = _InferenceOptions(
