@@ -42,8 +42,7 @@ from pydantic import BaseModel
 from livekit.agents import llm, utils
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
-from livekit.plugins.openai.realtime import realtime_model as _openai
-from livekit.plugins.openai.realtime import utils as _openai_utils
+from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
 
 from ..log import logger
 
@@ -59,6 +58,11 @@ API_KEY_PREFIX = "sk_live_"
 
 # Session keys owned by a saved ThunderPhone agent. The server rejects changes
 # to them once the call is live, so they are stripped from every update.
+# Session events beyond the framework's own; typed Any because the base class
+# fixes its event-name Literal.
+CALL_EVENT: Any = "thunderphone_call_event"
+CALL_ENDED_EVENT: Any = "thunderphone_call_ended"
+
 _AGENT_OWNED_KEYS = ("instructions", "tools", "tool_choice")
 # OpenAI-only knobs ThunderPhone does not use; harmless, but keep the wire clean.
 _OPENAI_ONLY_KEYS = ("tracing", "truncation", "reasoning", "max_output_tokens")
@@ -144,6 +148,10 @@ class RealtimeModel(_openai.RealtimeModel):
             from_number=from_number,
             to_number=to_number,
         )
+        # The framework recycles an OpenAI socket after max_session_duration
+        # (20 min by default) by closing it and reconnecting. On ThunderPhone
+        # that would hang up and start a second, separately billed call.
+        kwargs["max_session_duration"] = None
         super().__init__(
             model=SERVER_MODEL,
             voice=voice if is_given(voice) else "default",
@@ -156,8 +164,14 @@ class RealtimeModel(_openai.RealtimeModel):
         self._provider_label = "ThunderPhone"
         # ThunderPhone freezes instructions and tools once the call starts, so a
         # later agent handoff keeps the first configuration rather than erroring.
+        # Turn taking is ThunderPhone's and always on; the framework must not
+        # run its own VAD or turn detector against it.
         self._capabilities = dataclasses.replace(
-            self._capabilities, mutable_instructions=False, mutable_tools=False
+            self._capabilities,
+            mutable_instructions=False,
+            mutable_tools=False,
+            turn_detection=True,
+            can_disable_turn_detection=False,
         )
 
     @property
@@ -175,7 +189,9 @@ class RealtimeModel(_openai.RealtimeModel):
                 "ThunderPhone turn detection is server-side and always on; "
                 "turn_detection_disabled is ignored"
             )
-        return RealtimeSession(self)
+        sess = RealtimeSession(self)
+        self._sessions.add(sess)
+        return sess
 
 
 class RealtimeSession(_openai.RealtimeSession):
@@ -228,7 +244,9 @@ class RealtimeSession(_openai.RealtimeSession):
         if payload.get("type") == "conversation.item.create":
             item = payload.get("item")
             if isinstance(item, dict) and item.get("type") == "function_call_output":
-                item["call_id"] = self._tp_call_ids.get(item.get("call_id"), item.get("call_id"))
+                call_id = item.get("call_id")
+                if isinstance(call_id, str):
+                    item["call_id"] = self._tp_call_ids.get(call_id, call_id)
         super().send_event(payload)
 
     def _tp_shape_session_update(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -248,9 +266,7 @@ class RealtimeSession(_openai.RealtimeSession):
                 for direction in ("input", "output"):
                     leg = audio.get(direction)
                     if isinstance(leg, dict):
-                        audio[direction] = {
-                            k: v for k, v in leg.items() if k == "format"
-                        }
+                        audio[direction] = {k: v for k, v in leg.items() if k == "format"}
         else:
             config = dict(session.get("config") or {})
             # Opt into ThunderPhone's call.* events (hang-up reason, transfer, keypad).
@@ -326,11 +342,11 @@ class RealtimeSession(_openai.RealtimeSession):
             return
         if not isinstance(event_type, str) or not event_type.startswith("call."):
             return
-        self.emit("thunderphone_call_event", event)
+        self.emit(CALL_EVENT, event)
         if event_type == "call.ended" and not self._tp_call_ended:
             self._tp_call_ended = True
-            logger.info("ThunderPhone call ended", extra={"reason": event.get("reason")})
-            self.emit("thunderphone_call_ended", event)
+            logger.info("ThunderPhone call ended", extra={"lk.pii.event": event})
+            self.emit(CALL_ENDED_EVENT, event)
             # The server closes the socket right after this event. Closing the
             # outgoing channel first makes that close expected, so the session
             # ends cleanly instead of being retried as a connection failure.
