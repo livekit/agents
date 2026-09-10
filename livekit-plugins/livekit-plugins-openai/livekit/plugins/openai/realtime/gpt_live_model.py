@@ -61,7 +61,14 @@ _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
 _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
-_FATAL_ERROR_CODES = frozenset({"insufficient_quota", "invalid_api_key"})
+_FATAL_ERROR_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "invalid_api_key",
+        "account_deactivated",
+        "billing_hard_limit_reached",
+    }
+)
 
 Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
