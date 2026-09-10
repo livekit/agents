@@ -43,6 +43,7 @@ class ConnectionPool(Generic[T]):
         self._available: set[T] = set()
         self._connect_timeout = connect_timeout
         self._connect_lock = asyncio.Lock()
+        self._invalidation_generation = 0
 
         # store connections to be reaped (closed) later.
         self._to_close: set[T] = set()
@@ -64,9 +65,16 @@ class ConnectionPool(Generic[T]):
         """
         if self._connect_cb is None:
             raise NotImplementedError("Must provide connect_cb or implement connect()")
-        connection = await self._connect_cb(timeout)
-        self._connections[connection] = time.time()
-        return connection
+        while True:
+            generation = self._invalidation_generation
+            connection = await self._connect_cb(timeout)
+            if generation != self._invalidation_generation:
+                self._to_close.add(connection)
+                await self._drain_to_close()
+                continue
+
+            self._connections[connection] = time.time()
+            return connection
 
     async def _drain_to_close(self) -> None:
         """Drain and close all the connections queued for closing."""
@@ -160,8 +168,10 @@ class ConnectionPool(Generic[T]):
     def invalidate(self) -> None:
         """Clear all existing connections.
 
-        Marks all current connections to be closed during the next drain cycle.
+        Marks all current connections to be closed during the next drain cycle and
+        discards any connection that is still being created.
         """
+        self._invalidation_generation += 1
         for conn in list(self._connections.keys()):
             self._to_close.add(conn)
         self._connections.clear()

@@ -105,10 +105,10 @@ async def test_update_options_is_atomic_when_the_new_model_rejects_the_existing_
 
 
 async def test_update_options_invalidates_connections_when_url_options_change() -> None:
-    tts = TTS(api_key="test-key")
+    tts = TTS(api_key="test-key", model="bulbul:v2")
     tts._pool.invalidate = Mock()
     try:
-        tts.update_options(model="bulbul:v3")
+        tts.update_options(model="bulbul:v3", speaker="anand")
         tts._pool.invalidate.assert_called_once_with()
     finally:
         await tts.aclose()

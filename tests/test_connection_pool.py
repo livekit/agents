@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -64,6 +65,75 @@ async def test_get_creates_new_connection_when_none_available():
     # so calling get() again should create a new connection.
     conn2 = await pool.get(timeout=10.0)
     assert conn1 is not conn2, "Expected a new connection when no available connection exists."
+
+
+@pytest.mark.asyncio
+async def test_get_discards_connection_invalidated_while_connecting():
+    first_connect_started = asyncio.Event()
+    release_first_connect = asyncio.Event()
+    connections = []
+    closed_connections = []
+
+    async def connect(timeout: float):
+        connection = DummyConnection(len(connections) + 1)
+        connections.append(connection)
+        if len(connections) == 1:
+            first_connect_started.set()
+            await release_first_connect.wait()
+        return connection
+
+    async def close(connection):
+        closed_connections.append(connection)
+
+    pool = ConnectionPool(connect_cb=connect, close_cb=close)
+    try:
+        get_task = asyncio.create_task(pool.get(timeout=10.0))
+        await first_connect_started.wait()
+
+        pool.invalidate()
+        release_first_connect.set()
+
+        connection = await get_task
+        assert connection is connections[1]
+        assert connections[0] in closed_connections
+    finally:
+        await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_discards_connection_invalidated_while_connecting():
+    first_connect_started = asyncio.Event()
+    release_first_connect = asyncio.Event()
+    connections = []
+    closed_connections = []
+
+    async def connect(timeout: float):
+        connection = DummyConnection(len(connections) + 1)
+        connections.append(connection)
+        if len(connections) == 1:
+            first_connect_started.set()
+            await release_first_connect.wait()
+        return connection
+
+    async def close(connection):
+        closed_connections.append(connection)
+
+    pool = ConnectionPool(connect_cb=connect, close_cb=close)
+    try:
+        pool.prewarm()
+        task = pool._prewarm_task()
+        assert task is not None
+        await first_connect_started.wait()
+
+        pool.invalidate()
+        release_first_connect.set()
+        await task
+
+        assert connections[0] in closed_connections
+        assert set(pool._connections) == {connections[1]}
+        assert pool._available == {connections[1]}
+    finally:
+        await pool.aclose()
 
 
 @pytest.mark.asyncio
