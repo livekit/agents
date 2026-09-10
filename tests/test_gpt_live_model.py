@@ -320,6 +320,66 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
         await model.aclose()
 
 
+@pytest.mark.parametrize("input_rate", [24000, 48000])
+async def test_reconnect_discards_partial_input_audio(
+    monkeypatch: pytest.MonkeyPatch, input_rate: int
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    def frame(level: int, duration_ms: int) -> rtc.AudioFrame:
+        samples = input_rate * duration_ms // 1000
+        return rtc.AudioFrame(
+            data=np.full(samples, level, dtype=np.int16).tobytes(),
+            sample_rate=input_rate,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+        session.push_audio(frame(16000, 60))
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await session._session_started_fut
+
+        session.push_audio(frame(0, 40))
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in sockets[1].sent] == ["session.start"]
+
+        session.push_audio(frame(0, 200))
+        await asyncio.sleep(0.05)
+        audio = [
+            base64.b64decode(event["audio"])
+            for event in sockets[1].sent
+            if event["type"] == "session.input_audio.append"
+        ]
+        assert audio
+        for chunk in audio:
+            samples = np.frombuffer(chunk, dtype=np.int16)
+            assert len(samples) == gpt_live_model.SAMPLE_RATE // 10
+            # Resampling silence can add one bit of quantization noise.
+            assert np.max(np.abs(samples.astype(np.int32))) <= 1
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_provider_content_is_only_logged_under_pii_fields(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

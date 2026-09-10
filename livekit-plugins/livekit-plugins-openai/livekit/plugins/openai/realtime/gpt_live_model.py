@@ -424,6 +424,8 @@ class GPTLiveSession(
     def _reset_for_reconnect(self) -> None:
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
+        self._bstream.clear()
+        self._input_resampler = None
         self._session_started_fut = asyncio.Future()
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
