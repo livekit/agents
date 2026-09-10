@@ -24,6 +24,7 @@ from .duplex_adapter import (
     AdaptiveNoiseGate,
     AudioGate,
     DuplexRealtimeAdapter,
+    FixedGate,
 )
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (
@@ -124,6 +125,7 @@ __all__ = [
     "DuplexRealtimeAdapter",
     "AudioGate",
     "AdaptiveNoiseGate",
+    "FixedGate",
     "RealtimeModel",
     "RealtimeError",
     "RealtimeModelError",

@@ -16,7 +16,11 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import llm
-from livekit.agents.llm.duplex_adapter import AdaptiveNoiseGate, _DuplexRealtimeSession
+from livekit.agents.llm.duplex_adapter import (
+    AdaptiveNoiseGate,
+    FixedGate,
+    _DuplexRealtimeSession,
+)
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import aio
 
@@ -247,6 +251,75 @@ def test_speech_longer_than_the_window_does_not_raise_the_floor_to_its_own_level
         assert gate.update(_frame(0.001))
     assert not gate.update(_frame(0.001))
     assert gate.update(_frame(0.3))
+
+
+def test_a_gapless_monologue_never_wedges_the_gate_shut() -> None:
+    """Speech must not teach the gate its own level, however long the model runs on for."""
+    gate = AdaptiveNoiseGate()
+    for _ in range(30):
+        gate.update(_frame(0.002))
+
+    assert all(gate.update(_frame(0.2)) for _ in range(400))
+
+    for _ in range(5):
+        gate.update(_frame(0.002))
+    assert not gate.update(_frame(0.002))
+
+
+def test_one_dropped_frame_does_not_define_the_floor() -> None:
+    """A lost packet is not evidence the model went quieter; only a whole stretch counts."""
+    gate = AdaptiveNoiseGate()
+    for _ in range(30):
+        gate.update(_frame(0.002))
+
+    gate.update(_frame(0.0))
+    assert not any(gate.update(_frame(0.002)) for _ in range(300))
+
+
+def test_the_floor_recovers_once_the_model_is_really_silent() -> None:
+    gate = AdaptiveNoiseGate()
+    # the session opens mid-speech, so the gate starts out with speech for a floor
+    assert not any(gate.update(_frame(0.2)) for _ in range(30))
+
+    for _ in range(20):
+        gate.update(_frame(0.002))
+    assert gate.update(_frame(0.2))
+
+
+def test_a_declared_silence_needs_no_learning() -> None:
+    gate = FixedGate(0.002)
+    assert gate.update(_frame(0.2))
+    assert all(gate.update(_frame(0.2)) for _ in range(600))
+
+    for _ in range(5):
+        gate.update(_frame(0.002))
+    assert not gate.update(_frame(0.002))
+
+
+def test_a_declared_silence_still_ignores_steady_room_tone() -> None:
+    gate = FixedGate(0.02)
+    assert not any(gate.update(_frame(0.02)) for _ in range(40))
+    assert gate.update(_frame(0.3))
+
+
+async def test_the_adapter_prefers_the_gate_the_model_declares() -> None:
+    async def gate_of(adapter: llm.DuplexRealtimeAdapter) -> object:
+        session = adapter.session()
+        assert isinstance(session, _DuplexRealtimeSession)
+        gate = session._gate
+        await session.aclose()
+        return gate
+
+    model = _FakeDuplexModel()
+    assert isinstance(await gate_of(llm.DuplexRealtimeAdapter(model)), AdaptiveNoiseGate)
+
+    declared = FixedGate(0.002)
+    model.audio_gate = lambda: declared  # type: ignore[method-assign]
+    assert await gate_of(llm.DuplexRealtimeAdapter(model)) is declared
+
+    # an explicit gate still wins
+    explicit = llm.DuplexRealtimeAdapter(model, gate=AdaptiveNoiseGate)
+    assert isinstance(await gate_of(explicit), AdaptiveNoiseGate)
 
 
 def test_gate_decides_on_audio_duration_not_on_frame_count() -> None:

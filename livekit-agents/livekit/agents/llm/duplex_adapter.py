@@ -59,11 +59,49 @@ class AudioGate(Protocol):
         ...
 
 
-class AdaptiveNoiseGate:
-    """Opens on output that stands out from the model's own noise floor.
+class FixedGate:
+    """Opens on output that stands out from a silence the plugin already knows."""
 
-    Thresholds are ratios against the quietest recent frame and durations count audio rather than
-    wall clock, so one set of defaults ports across providers, frame sizes and networks.
+    def __init__(
+        self,
+        silence: float,
+        *,
+        open_ratio: float = 3.0,
+        close_ratio: float = 1.8,
+        hangover: float = 0.5,
+    ) -> None:
+        self._floor = max(silence, _SILENCE_FLOOR)
+        self._open_ratio = open_ratio
+        self._close_ratio = close_ratio
+        self._hangover = hangover
+        self._open = False
+        self._quiet = 0.0
+
+    def update(self, frame: rtc.AudioFrame) -> bool:
+        samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+        rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
+
+        if not self._open:
+            if rms > self._floor * self._open_ratio:
+                self._open = True
+                self._quiet = 0.0
+        elif rms < self._floor * self._close_ratio:
+            self._quiet += frame.duration
+            if self._quiet >= self._hangover:
+                self._open = False
+        else:
+            self._quiet = 0.0
+
+        return self._open
+
+
+class AdaptiveNoiseGate:
+    """Opens on output that stands out from the model's own silence.
+
+    The floor is the quietest ``hangover``-long stretch the model produced while it was not
+    speaking, within ``window``: speech never raises it, and no single frame can define it.
+    Thresholds are ratios against it and durations count audio rather than wall clock, so one
+    set of defaults ports across providers, frame sizes and networks.
     """
 
     def __init__(
@@ -81,6 +119,8 @@ class AdaptiveNoiseGate:
         self._window = window
         self._history: deque[tuple[float, float]] = deque()
         self._history_duration = 0.0
+        self._stretch_sum = 0.0
+        self._stretch_duration = 0.0
         self._open = False
         self._quiet = 0.0
 
@@ -88,11 +128,25 @@ class AdaptiveNoiseGate:
         samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
         rms = float(np.sqrt(np.mean(np.square(samples)))) / 32768.0 if samples.size else 0.0
 
-        self._history.append((rms, frame.duration))
-        self._history_duration += frame.duration
-        while self._history_duration > self._window and len(self._history) > 1:
-            self._history_duration -= self._history.popleft()[1]
-        floor = max(min(level for level, _ in self._history), _SILENCE_FLOOR)
+        if not self._open:
+            # only silence teaches the floor, and only a whole stretch of it
+            self._stretch_sum += rms * frame.duration
+            self._stretch_duration += frame.duration
+            if self._stretch_duration >= self._hangover:
+                mean = self._stretch_sum / self._stretch_duration
+                self._history.append((mean, self._stretch_duration))
+                self._history_duration += self._stretch_duration
+                self._stretch_sum = self._stretch_duration = 0.0
+                while self._history_duration > self._window and len(self._history) > 1:
+                    self._history_duration -= self._history.popleft()[1]
+
+        if self._history:
+            floor = min(level for level, _ in self._history)
+        elif self._stretch_duration:
+            floor = self._stretch_sum / self._stretch_duration
+        else:
+            floor = rms
+        floor = max(floor, _SILENCE_FLOOR)
 
         if not self._open:
             if rms > floor * self._open_ratio:
@@ -170,7 +224,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
         self,
         duplex_model: DuplexModel,
         *,
-        gate: Callable[[], AudioGate] = AdaptiveNoiseGate,
+        gate: Callable[[], AudioGate] | None = None,
     ) -> None:
         caps: DuplexCapabilities = duplex_model.capabilities
         super().__init__(
@@ -206,7 +260,10 @@ class DuplexRealtimeAdapter(RealtimeModel):
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
-        return _DuplexRealtimeSession(self, self._duplex_model.session(), self._gate())
+        gate = (
+            self._gate() if self._gate else self._duplex_model.audio_gate() or AdaptiveNoiseGate()
+        )
+        return _DuplexRealtimeSession(self, self._duplex_model.session(), gate)
 
     async def aclose(self) -> None:
         await self._duplex_model.aclose()

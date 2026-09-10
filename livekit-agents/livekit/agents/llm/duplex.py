@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 from livekit import rtc
 
@@ -15,6 +15,9 @@ from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
 from .realtime import RealtimeError
 from .tool_context import Tool, ToolChoice, ToolContext
+
+if TYPE_CHECKING:
+    from .duplex_adapter import AudioGate
 
 
 @dataclass
@@ -91,6 +94,10 @@ class DuplexModel(ABC):
     @property
     def label(self) -> str:
         return self._label
+
+    def audio_gate(self) -> AudioGate | None:
+        """The gate for this model's output, or None to let the adapter infer one."""
+        return None
 
     @abstractmethod
     def session(self) -> DuplexSession:
