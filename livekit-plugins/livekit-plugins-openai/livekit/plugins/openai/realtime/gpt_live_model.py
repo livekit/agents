@@ -34,11 +34,10 @@ from . import gpt_live_types as types
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "gpt-live-1-diamond-alpha"
+DEFAULT_MODEL = "gpt-live-1"
 DEFAULT_VOICE = "marin"
-DEFAULT_BACKEND_MODEL = "gpt-5.6-sol"
+DEFAULT_BACKEND_MODEL = "gpt-5.6-luna"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
-ALPHA_VALUE = "quicksilver=v3"
 
 # the service also caps startup history at 8192 tokens and an append at 500; there is no tokenizer
 # here, so those two are the service's to enforce
@@ -65,6 +64,7 @@ _CLOSING_EVENTS = frozenset({"session.usage.updated", "session.closed"})
 _FATAL_ERROR_CODES = frozenset({"insufficient_quota", "invalid_api_key"})
 
 Role = Literal["user", "assistant"]
+GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
@@ -76,7 +76,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """
 
     model: str
-    """Responses model slug; ``gpt-5.6-sol`` when unset."""
+    """Responses model slug; ``gpt-5.6-luna`` when unset."""
     instructions: str
     """Instructions for the backend model, distinct from the voice model's."""
     tool_choice: llm.ToolChoice | None
@@ -145,13 +145,13 @@ class _LiveOptions:
 
 
 class GPTLiveModel(llm.DuplexModel):
-    """OpenAI GPT-Live full-duplex voice model (alpha), ready to pass to ``AgentSession(llm=)``."""
+    """OpenAI GPT-Live full-duplex voice model, ready to pass to ``AgentSession(llm=)``."""
 
     def __init__(
         self,
         *,
         model: str = DEFAULT_MODEL,
-        voice: str | dict[str, Any] = DEFAULT_VOICE,
+        voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
         api_key: str | None = None,
@@ -163,8 +163,9 @@ class GPTLiveModel(llm.DuplexModel):
         """
         Args:
             model: GPT-Live voice model slug.
-            voice: Output voice: a name such as ``marin``, or ``{"id": "voice_..."}`` for an
-                authorized custom voice. Immutable after the session starts.
+            voice: Output voice: a name from :data:`GPTLiveVoices`, another supported name, or
+                ``{"id": "voice_..."}`` for an authorized custom voice. Defaults to ``marin``.
+                Immutable after the session starts.
             delegation: Where delegated work goes, fixed for the life of the session.
                 ``responses`` runs it on a backend model, so ``@function_tool`` works as usual;
                 ``client`` hands it to the application as a ``delegation_created`` event, which
@@ -251,6 +252,9 @@ class GPTLiveSession(
     - openai_server_event_received: raw server events
     - openai_client_event_queued: raw client events sent to the server
     - delegation_created: a :class:`GPTLiveDelegation`, under client delegation
+
+    The ``append_*`` methods queue context and return without waiting. Their ``*.appended``
+    events arrive at the estimated context-injection end; they do not mean speech has finished.
     """
 
     def __init__(self, duplex_model: GPTLiveModel) -> None:
@@ -431,7 +435,6 @@ class GPTLiveSession(
         headers = {
             "User-Agent": "LiveKit Agents",
             "Authorization": f"Bearer {self._opts.api_key}",
-            "OpenAI-Alpha": ALPHA_VALUE,
         }
         parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
         path = parsed.path.rstrip("/")
@@ -580,7 +583,8 @@ class GPTLiveSession(
             "session.thinking.appended",
             "session.commentary.appended",
         ):
-            # acknowledgments; nothing waits on them
+            # Context append receipts arrive at the estimated injection end, not speech end.
+            # Nothing waits on these acknowledgments.
             logger.debug(
                 "gpt-live acknowledged a command",
                 extra={"type": etype, "client_event_id": event.get("client_event_id")},
@@ -798,6 +802,10 @@ class GPTLiveSession(
         self._handle_usage(event.usage)
 
     def _handle_session_closed(self, event: types.SessionClosedEvent) -> None:
+        logger.debug(
+            "gpt-live session closed",
+            extra={"reason": event.reason, "session_id": self._session_id},
+        )
         self._handle_usage(event.usage)
         if not self._session_closed_fut.done():
             self._session_closed_fut.set_result(None)

@@ -301,6 +301,9 @@ class SessionUsageUpdatedEvent(BaseModel):
 
 class SessionClosedEvent(BaseModel):
     type: Literal["session.closed"] = "session.closed"
+    reason: (
+        Literal["close_requested", "expired", "content", "remote_hangup", "connection_lost"] | None
+    ) = None
     usage: Usage = Usage()
 
 

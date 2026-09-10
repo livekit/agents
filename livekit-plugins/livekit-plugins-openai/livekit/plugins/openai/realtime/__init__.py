@@ -2,6 +2,7 @@ from .gpt_live_model import (
     GPTLiveDelegation,
     GPTLiveModel,
     GPTLiveSession,
+    GPTLiveVoices,
     ResponsesDelegationOptions,
 )
 from .realtime_model import RealtimeModel, RealtimeSession
@@ -12,6 +13,7 @@ __all__ = [
     "GPTLiveModel",
     "GPTLiveSession",
     "GPTLiveDelegation",
+    "GPTLiveVoices",
     "ResponsesDelegationOptions",
 ]
 

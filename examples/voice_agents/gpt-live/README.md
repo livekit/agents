@@ -1,6 +1,6 @@
 # GPT-Live
 
-Two agents for the OpenAI GPT-Live full-duplex voice model (alpha): the ordinary one, and the variant where this process does the reasoning.
+Two agents for the OpenAI GPT-Live full-duplex voice model: the ordinary one, and the variant where this process does the reasoning.
 
 For setup instructions and more details, see the [main examples README](../../README.md).
 
@@ -8,6 +8,16 @@ For setup instructions and more details, see the [main examples README](../../RE
 python gpt_live_agent.py console
 python client_delegation.py console
 ```
+
+## Voices
+
+Both examples use `voice="marin"`. `GPTLiveVoices` also offers `aster`, `beacon`, `cinder`, `stone`, and `vesper`. Other supported names and custom voice objects still pass through to the API.
+
+## Context acknowledgments
+
+`append_instructions`, `append_thinking`, and `append_commentary` queue context and return without waiting for an acknowledgment. Their `session.*.appended` events arrive at the estimated context-injection end. They do not mean speech has finished. The plugin does not gate later commands on these events or apply an acknowledgment timeout. The adapter uses output audio to determine when speech ends.
+
+`session.closed.reason` accepts `close_requested`, `expired`, `content`, `remote_hangup`, and `connection_lost`. The plugin logs the reason and collects the final usage for each close event.
 
 ## Delegation
 
