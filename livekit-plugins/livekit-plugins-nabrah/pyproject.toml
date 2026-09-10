@@ -9,7 +9,7 @@ description = "LiveKit Agents plugin for Nabrah Arabic speech-to-text"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
-authors = [{ name = "LiveKit", email = "support@livekit.io" }]
+authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
 keywords = [
     "webrtc",
     "realtime",
@@ -32,10 +32,12 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.6.10", "aiohttp"]
+dependencies = ["livekit-agents>=1.8.0", "aiohttp"]
 
 [project.urls]
-Homepage = "https://nabrah.ai"
+Documentation = "https://docs.livekit.io"
+Website = "https://nabrah.ai"
+Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
 path = "livekit/plugins/nabrah/version.py"
@@ -45,3 +47,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

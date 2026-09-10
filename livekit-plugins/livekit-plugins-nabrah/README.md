@@ -12,7 +12,7 @@ pip install livekit-plugins-nabrah
 ## Pre-requisites
 
 You'll need an API key from Nabrah. It can be set as an environment variable:
-`NABRAH_API_KEY`. 
+`NABRAH_API_KEY`.
 
 ## Usage
 
@@ -67,7 +67,8 @@ edited without touching code. Create `boosting.json` next to your agent:
 {
   "boost_threshold": 0.5,
   "words": [
-    ...
+    "مستشفى الملك فيصل التخصصي",
+    "رقم الهوية الوطنية"
   ]
 }
 ```
@@ -109,7 +110,14 @@ import pathlib
 
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    TurnHandlingOptions,
+    inference,
+)
 from livekit.plugins import nabrah
 
 load_dotenv()
@@ -127,7 +135,7 @@ class Assistant(Agent):
 
 
 @server.rtc_session()
-async def entrypoint(ctx: JobContext):
+async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=nabrah.STT(
             recognition_model="eot_nabrah",
@@ -137,19 +145,16 @@ async def entrypoint(ctx: JobContext):
             priority_words=boosting["words"],
             priority_words_strength=boosting["boost_threshold"],
         ),
-        
-        # llm
-        # tts
-
+        llm=inference.LLM("openai/gpt-4.1-mini"),
+        tts=inference.TTS("cartesia/sonic-3"),
         turn_handling=TurnHandlingOptions(
-            turn_detection="stt",  
-            endpointing={
-                "min_delay": 0
-            },
-        )
+            turn_detection="stt",
+            endpointing={"min_delay": 0},
+        ),
     )
 
     await session.start(agent=Assistant(), room=ctx.room)
+    await ctx.connect()
 
 
 if __name__ == "__main__":

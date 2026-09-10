@@ -1,9 +1,22 @@
+# Copyright 2026 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Nabrah STT plugin for LiveKit Agents.
 
-The backend relays the recognizer's raw output verbatim no word timings, no
-confidence, no end-of-turn interpretation  so everything above the transport
-lives here: token stripping, EOT detection, debounce, cross-utterance
-accumulation and audio-position tracking.
+The backend relays recognizer output with minimal interpretation, so the plugin
+handles token stripping, EOT detection, debounce, cross-utterance accumulation,
+word conversion, and audio-position tracking.
 
 Wire contract (server -> client):
     {"type": "ready"}
@@ -23,12 +36,14 @@ Two facts drive the whole design:
   backends, so the local counter stays as a fallback.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
-import logging
+import math
 import os
 import time
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -46,7 +61,7 @@ from livekit.agents.language import LanguageCode
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import is_given
 
-logger = logging.getLogger(__name__)
+from .log import logger
 
 DEFAULT_BASE_URL = "wss://api.nabrah.ai/api/ext/stt/ws"
 
@@ -78,17 +93,47 @@ def _normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
 
 
-def _word_text(w: dict) -> str:
-    return str(w.get("word", "")).replace(EOT_TOKEN, "").strip()
+def _append_text(existing: str, new: str) -> str:
+    """Join transcript fragments without inserting spaces before punctuation."""
+    head = new.lstrip()[:1]
+    separator = "" if not existing or head in _NO_SPACE_BEFORE else " "
+    return _normalize_whitespace(existing + separator + new)
 
 
-def _timed_word(w: dict, offset: float) -> TimedString:
+def _word_text(w: dict[str, Any]) -> str:
+    value = w.get("word", "")
+    if not isinstance(value, str):
+        raise ValueError("nabrah word text must be a string")
+    return value.replace(EOT_TOKEN, "").strip()
+
+
+def _finite_number(value: object, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"nabrah {field} must be a number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"nabrah {field} must be finite and non-negative")
+    return number
+
+
+def _timed_word(w: dict[str, Any], offset: float) -> TimedString:
     """One backend word entry as a TimedString. Timestamps arrive in ms."""
+    start_time = _finite_number(w.get("start_time", 0), field="word start_time")
+    end_time = _finite_number(w.get("end_time", 0), field="word end_time")
+    if end_time < start_time:
+        raise ValueError("nabrah word end_time must not precede start_time")
+
+    confidence_value = w.get("confidence", NOT_GIVEN)
+    confidence = (
+        NOT_GIVEN
+        if confidence_value is None or not is_given(confidence_value)
+        else _finite_number(confidence_value, field="word confidence")
+    )
     return TimedString(
         _word_text(w),
-        start_time=w.get("start_time", 0) / 1000.0 + offset,
-        end_time=w.get("end_time", 0) / 1000.0 + offset,
-        confidence=w.get("confidence", NOT_GIVEN),
+        start_time=start_time / 1000.0 + offset,
+        end_time=end_time / 1000.0 + offset,
+        confidence=confidence,
     )
 
 
@@ -107,7 +152,7 @@ class STT(stt.STT):
         max_silence_before_finalize_seconds: float | None = 1.5,
         end_of_turn_confirm_delay_seconds: float | None = 0.4,
         http_session: aiohttp.ClientSession | None = None,
-    ):
+    ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -198,7 +243,7 @@ class SpeechStream(stt.SpeechStream):
         conn_options: APIConnectOptions,
         language: str,
         http_session: aiohttp.ClientSession,
-    ):
+    ) -> None:
         super().__init__(stt=stt_instance, conn_options=conn_options, sample_rate=16000)
         self._stt: STT = stt_instance
         self._language = LanguageCode(language)
@@ -228,7 +273,7 @@ class SpeechStream(stt.SpeechStream):
         self._reported_audio_position: float = 0.0
         self._last_message_position: float = 0.0
 
-    def _config_frame(self) -> dict:
+    def _config_frame(self) -> dict[str, Any]:
         return {
             "api_key": self._stt._api_key,
             "recognition_model": self._stt._recognition_model,
@@ -251,6 +296,9 @@ class SpeechStream(stt.SpeechStream):
         ) as e:
             raise APIConnectionError("failed to connect to nabrah STT") from e
 
+    def _stream_failure(self, message: str) -> APIConnectionError:
+        return APIConnectionError(message, retryable=self._audio_position == 0.0)
+
     async def _run(self) -> None:
         self._latest_audio_processed = None
         self._audio_position = 0.0
@@ -260,17 +308,36 @@ class SpeechStream(stt.SpeechStream):
 
         ws = await self._connect_ws()
         try:
-            await ws.send_str(json.dumps(self._config_frame()))
+            try:
+                await ws.send_str(json.dumps(self._config_frame()))
+            except Exception as e:
+                raise APIConnectionError(
+                    f"nabrah STT configuration send failed ({type(e).__name__})"
+                ) from None
 
             async def _await_ready() -> None:
                 while True:
-                    msg = await ws.receive()
+                    try:
+                        msg = await ws.receive()
+                    except Exception as e:
+                        raise APIConnectionError(
+                            f"nabrah STT ready handshake failed ({type(e).__name__})"
+                        ) from None
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         raise APIConnectionError("nabrah STT closed before ready")
-                    payload = json.loads(msg.data)
+                    try:
+                        payload = json.loads(msg.data)
+                    except (json.JSONDecodeError, TypeError):
+                        raise APIConnectionError(
+                            "nabrah STT sent an invalid ready response"
+                        ) from None
+                    if not isinstance(payload, dict):
+                        raise APIConnectionError("nabrah STT sent an invalid ready response")
                     if payload.get("type") == "error":
-                        raise RuntimeError(
-                            payload.get("message", "nabrah backend rejected config"),
+                        raise APIStatusError(
+                            "nabrah STT rejected the configuration",
+                            status_code=-1,
+                            retryable=False,
                         )
                     if payload.get("type") == "ready":
                         return
@@ -288,7 +355,11 @@ class SpeechStream(stt.SpeechStream):
             finally:
                 watchdog_task.cancel()
                 await utils.aio.gracefully_cancel(send_task, recv_task, watchdog_task)
-                if self._current_text() or self._is_speaking:
+                if (
+                    self._current_text()
+                    or self._is_speaking
+                    or self._audio_clock() > self._reported_audio_position
+                ):
                     self._flush_eos()
         finally:
             await ws.close()
@@ -323,20 +394,27 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send_bytes(audio_bytes)
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
-        except (aiohttp.ClientError, ConnectionError) as e:
-            raise APIConnectionError("nabrah STT send failed") from e
+        except Exception as e:
+            raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         while True:
-            msg = await ws.receive()
+            try:
+                msg = await ws.receive()
+            except Exception as e:
+                raise self._stream_failure(
+                    f"nabrah STT receive failed ({type(e).__name__})"
+                ) from None
             if msg.type in (
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSE,
                 aiohttp.WSMsgType.CLOSING,
             ):
                 if not self._input_done:
-                    raise APIConnectionError("nabrah STT closed unexpectedly")
+                    raise self._stream_failure("nabrah STT closed unexpectedly")
                 return
+            if msg.type == aiohttp.WSMsgType.ERROR:
+                raise self._stream_failure("nabrah STT WebSocket failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
@@ -344,7 +422,9 @@ class SpeechStream(stt.SpeechStream):
             except APIError:
                 raise
             except Exception:
-                logger.exception("failed to process nabrah STT message")
+                # Never attach an exception or payload here: malformed messages can
+                # contain customer transcripts. Later cumulative results can recover.
+                logger.warning("nabrah STT returned malformed data")
 
     def _emit(self, event: stt.SpeechEvent) -> None:
         self._event_ch.send_nowait(event)
@@ -365,9 +445,7 @@ class SpeechStream(stt.SpeechStream):
         return self._turn_words + self._utt_words
 
     def _current_text(self) -> str:
-        head = self._utt_clean.lstrip()[:1]
-        sep = "" if head in _NO_SPACE_BEFORE else " "
-        return _normalize_whitespace(self._turn_text + sep + self._utt_clean)
+        return _append_text(self._turn_text, self._utt_clean)
 
     def _flush_eos(self) -> None:
         text = self._current_text()
@@ -391,18 +469,18 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-            audio_clock = self._audio_clock()
-            usage_duration = audio_clock - self._reported_audio_position
-            if usage_duration > 0:
-                self._emit(
-                    stt.SpeechEvent(
-                        type=stt.SpeechEventType.RECOGNITION_USAGE,
-                        recognition_usage=stt.RecognitionUsage(
-                            audio_duration=usage_duration,
-                        ),
-                    )
+        audio_clock = self._audio_clock()
+        usage_duration = audio_clock - self._reported_audio_position
+        if usage_duration > 0:
+            self._emit(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(
+                        audio_duration=usage_duration,
+                    ),
                 )
-                self._reported_audio_position = audio_clock
+            )
+            self._reported_audio_position = audio_clock
 
         if self._is_speaking:
             self._emit(
@@ -419,9 +497,7 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-        self._utt_flushed_clean = _normalize_whitespace(
-            self._utt_flushed_clean + " " + self._utt_clean,
-        )
+        self._utt_flushed_clean = _append_text(self._utt_flushed_clean, self._utt_clean)
         # index into the backend's raw `words` list, so count raw entries consumed,
         # not the filtered survivors, or blank entries shift the cursor backwards
         # and already-emitted words get replayed.
@@ -457,12 +533,12 @@ class SpeechStream(stt.SpeechStream):
             )
         )
 
-    def _process_message(self, data: dict) -> None:
+    def _process_message(self, data: dict[str, Any]) -> None:
         msg_type = data.get("type")
 
         if msg_type == "error":
             raise APIStatusError(
-                message=data.get("message", "nabrah STT error"),
+                message="nabrah STT reported an error",
                 status_code=-1,
                 request_id=None,
                 body=None,
@@ -473,14 +549,20 @@ class SpeechStream(stt.SpeechStream):
             return
 
         text = data.get("text", "")
-        utt_final = bool(data.get("is_final"))
+        is_final = data.get("is_final", False)
+        if not isinstance(is_final, bool):
+            raise ValueError("nabrah is_final must be a boolean")
+        utt_final = is_final
 
         previous_audio_position = self._last_message_position
         reported = data.get("audio_processed")
-        if reported is not None and (
-            self._latest_audio_processed is None or reported > self._latest_audio_processed
-        ):
-            self._latest_audio_processed = reported
+        if reported is not None:
+            reported_seconds = _finite_number(reported, field="audio_processed")
+            if (
+                self._latest_audio_processed is None
+                or reported_seconds > self._latest_audio_processed
+            ):
+                self._latest_audio_processed = reported_seconds
         self._last_message_position = self._audio_clock()
 
         if not text:
@@ -491,15 +573,13 @@ class SpeechStream(stt.SpeechStream):
         clean_prev, _ = _strip_and_detect_eot(self._utt_raw)
         clean_prev = _normalize_whitespace(clean_prev)
         if clean_prev:
-            continues = clean_now.startswith(clean_prev) or (
-                not self._utt_closed and clean_prev.startswith(clean_now)
+            continues = not self._utt_closed and (
+                clean_now.startswith(clean_prev) or clean_prev.startswith(clean_now)
             )
         else:
             continues = True
         if not continues:
-            self._turn_text = _normalize_whitespace(
-                self._turn_text + " " + self._utt_clean,
-            )
+            self._turn_text = _append_text(self._turn_text, self._utt_clean)
             self._utt_clean = ""
             self._utt_raw = ""
             self._utt_flushed_clean = ""
