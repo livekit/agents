@@ -63,6 +63,7 @@ from ._utils import (
 from .log import logger
 
 KEEPALIVE_INTERVAL = 30.0
+_FINAL_TURN_GRACE = 0.25
 _SEND_CHUNK_MS = 100
 
 
@@ -633,6 +634,7 @@ class SpeechStream(stt.RecognizeStream):
 
         self._turn_settled = asyncio.Event()
         self._turn_settled.set()
+        self._audio_sent = False
 
         self._speaking = False
         # the most recent turn-end candidate, promoted to a final transcript
@@ -688,23 +690,37 @@ class SpeechStream(stt.RecognizeStream):
         ``aclose`` cancels the run task instead of closing the input channel
         cleanly, so it never reaches this and stays immediate.
 
-        What this cannot do is tell one turn's confirmation from another's.
-        Reson8 confirms a turn while later audio is already on its way, and no
-        ``turn_end`` says how much of what was sent it covers -- so a
-        confirmation that arrives for an earlier turn releases the wait, and a
-        final turn still being transcribed can be missed. Requiring a
+        No ``turn_end`` says how much of the audio sent it covers, and Reson8
+        confirms one turn while later audio is already on its way -- so a
+        confirmation owed from before the flush can satisfy the wait on its own.
+        Rather than hang up on that, the wait settles and then holds briefly for
+        anything further; each new turn restarts the hold. Requiring a
         ``turn_end`` after the flush instead would stall every stream whose
-        flush had nothing left to finalise. Closing this properly needs a turn
-        id on the wire.
+        flush had nothing left to finalise, which is why the wait is skipped
+        outright when no audio went out on this connection.
 
         Running out of time is a lost turn, not a clean finish, so it raises.
         The audio is already consumed from the input channel, which is why the
         error is not retryable: another attempt has nothing left to send.
         """
 
+        if not self._audio_sent:
+            return
+
+        deadline = time.time() + self._conn_options.timeout
+
         try:
-            await asyncio.wait_for(self._turn_settled.wait(), self._conn_options.timeout)
+            while True:
+                await asyncio.wait_for(self._turn_settled.wait(), max(deadline - time.time(), 0.0))
+
+                self._turn_settled.clear()
+                await asyncio.sleep(min(_FINAL_TURN_GRACE, max(deadline - time.time(), 0.0)))
+
+                if not self._turn_settled.is_set():
+                    self._turn_settled.set()
+                    return
         except asyncio.TimeoutError:
+            self._turn_settled.set()
             raise APITimeoutError(
                 "Reson8 did not finalise the last turn before input closed",
                 retryable=False,
@@ -756,6 +772,7 @@ class SpeechStream(stt.RecognizeStream):
 
                     for frame in frames:
                         self._speech_duration += frame.duration
+                        self._audio_sent = True
                         self._turn_settled.clear()
                         await ws.send_bytes(frame.data.tobytes())
 
@@ -842,6 +859,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._end_speaking()
                 self._candidate = None
                 self._turn_settled.set()
+                self._audio_sent = False
 
                 try:
                     ws = await self._connect_ws()

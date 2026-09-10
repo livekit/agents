@@ -1366,6 +1366,42 @@ async def test_end_input_waits_for_the_final_transcript(
     assert final.alternatives[0].text == "hello world"
 
 
+async def test_end_input_waits_past_a_stale_confirmation(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+
+    # turn A is outstanding, then audio for turn B goes out
+    await server.send({"type": "turn_start"})
+    stream.push_frame(_frame())
+    stream.end_input()
+    await server.wait_for_text()
+
+    async def confirm_a_then_b() -> None:
+        # A's delayed confirmation lands first, carrying no transcript for B
+        await server.send({"type": "turn_end"})
+        await asyncio.sleep(0.05)
+        await server.send({"type": "turn_end_candidate", "text": "turn B"})
+        await server.send({"type": "turn_end"})
+
+    answering = asyncio.create_task(confirm_a_then_b())
+
+    events: list[stt.SpeechEvent] = []
+    try:
+        async with asyncio.timeout(10):
+            async for event in stream:
+                events.append(event)
+    finally:
+        await utils.aio.cancel_and_wait(answering)
+        await stream.aclose()
+
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["turn B"]
+
+
 async def test_a_close_before_the_final_turn_is_an_error(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
