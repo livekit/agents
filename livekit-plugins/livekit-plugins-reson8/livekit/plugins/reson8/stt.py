@@ -870,12 +870,22 @@ class SpeechStream(stt.RecognizeStream):
 
         elif msg_type == "turn_end_candidate":
             self._start_speaking()
+
+            try:
+                current = build_speech_data(
+                    msg,
+                    language=self._opts.language,
+                    start_time_offset=self.start_time_offset,
+                )
+            except (AttributeError, TypeError, ValueError) as e:
+                logger.warning(
+                    "Ignoring malformed Reson8 turn payload",
+                    extra={"error": type(e).__name__, "lk.pii.message": msg},
+                )
+                return
+
             previous = self._candidate
-            self._candidate = build_speech_data(
-                msg,
-                language=self._opts.language,
-                start_time_offset=self.start_time_offset,
-            )
+            self._candidate = current
 
             repeated = previous is not None and previous.text == self._candidate.text
             if self._candidate.text and not repeated:

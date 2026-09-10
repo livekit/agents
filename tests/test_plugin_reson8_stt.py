@@ -1138,6 +1138,57 @@ async def test_closing_the_recognizer_survives_an_already_closed_stream(
         second.push_frame(_frame())
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"words": ["hi"]}, id="words-not-objects"),
+        pytest.param({"start_ms": "abc"}, id="turn-start-not-a-number"),
+        pytest.param({"words": [{"text": "hi", "confidence": "high"}]}, id="confidence-a-string"),
+        pytest.param(
+            {"words": [{"text": "hi", "start_ms": "x", "duration_ms": 1}]},
+            id="word-start-a-string",
+        ),
+    ],
+)
+async def test_a_malformed_turn_payload_is_skipped(
+    reson8_server: StartServer,
+    client_session: aiohttp.ClientSession,
+    payload: dict[str, object],
+) -> None:
+    """
+    Nested words and timings are provider data, not something to trust.
+
+    Mapping them raises AttributeError or TypeError, which escapes recv_task
+    as a bare exception outside the API-error mapping, so the framework ends
+    the stream instead of retrying.
+    """
+
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    try:
+        await server.send({"type": "turn_start"})
+        await server.send({"type": "turn_end_candidate", "text": "hi", **payload})
+
+        # the bad frame is dropped, and recognition carries on
+        await server.send({"type": "turn_end_candidate", "text": "recovered"})
+        await server.send({"type": "turn_end"})
+
+        events = await log.wait_for(4)
+        assert [e.type for e in events] == [
+            SpeechEventType.START_OF_SPEECH,
+            SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            SpeechEventType.FINAL_TRANSCRIPT,
+            SpeechEventType.END_OF_SPEECH,
+        ]
+        assert events[2].alternatives[0].text == "recovered"
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_a_turn_over_the_wire(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:
