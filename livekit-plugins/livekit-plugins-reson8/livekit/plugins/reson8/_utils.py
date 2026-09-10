@@ -125,6 +125,12 @@ def check_comma_joined(
 
     ``allow_braced_commas`` keeps a comma inside ``{}`` — a ``{m,n}`` repeat
     range in a pattern — which the server does not treat as a separator.
+
+    A rejected entry is never quoted back. Phrases and patterns are customer
+    vocabulary — names, identifiers, domain terms — and an exception message is
+    not a structured attribute, so anything put there survives redaction.
+    Closed-set values such as a language code or an encoding are named, being
+    configuration rather than data.
     """
 
     if values is None:
@@ -133,7 +139,7 @@ def check_comma_joined(
     if isinstance(values, str):
         raise ValueError(
             f"{name} takes a sequence of strings, not a single string; "
-            f"pass [{values!r}] for one entry"
+            f"wrap a single entry in a list"
         )
 
     if limit is not None and len(values) > limit:
@@ -146,13 +152,12 @@ def check_comma_joined(
         if allow_braced_commas:
             if _COMMA_OUTSIDE_BRACES.search(value):
                 raise ValueError(
-                    f"{name} entries are comma-separated on the wire, so a comma outside "
-                    f"braces would split this entry: {value!r}. A comma inside a {{m,n}} "
-                    f"range is fine."
+                    f"{name} entries cannot contain a comma outside braces, since they "
+                    f"are comma-separated on the wire; a comma inside a {{m,n}} range is fine"
                 )
         elif "," in value:
             raise ValueError(
-                f"{name} is comma-separated on the wire, so no entry may contain a comma: {value!r}"
+                f"{name} entries cannot contain a comma, since they are comma-separated on the wire"
             )
 
 

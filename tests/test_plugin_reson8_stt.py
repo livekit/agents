@@ -584,8 +584,36 @@ def test_the_documented_phrase_maximum_is_accepted() -> None:
 
 
 def test_a_comma_inside_a_phrase_raises() -> None:
-    with pytest.raises(ValueError, match="may contain a comma"):
+    with pytest.raises(ValueError, match="cannot contain a comma"):
         BiasingOptions(phrases=["fine", "not,fine"])
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(lambda v: BiasingOptions(phrases=[v]), id="phrases-comma"),
+        pytest.param(lambda v: BiasingOptions(patterns=[f"{v},x"]), id="patterns-comma"),
+        pytest.param(lambda v: BiasingOptions(phrases=v), id="phrases-bare-string"),
+    ],
+)
+def test_rejected_vocabulary_is_not_quoted_back(
+    build: Callable[[str], BiasingOptions],
+) -> None:
+    """
+    Phrases and patterns are customer vocabulary.
+
+    A ValueError message is not a structured attribute, so anything put there
+    survives redaction and reaches any log that formats the exception.
+    """
+
+    name = "Jan, Willem de Vries"
+
+    with pytest.raises(ValueError) as excinfo:
+        build(name)
+
+    assert "Jan" not in str(excinfo.value)
+    assert "Willem" not in str(excinfo.value)
+    assert "phrases" in str(excinfo.value) or "patterns" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
