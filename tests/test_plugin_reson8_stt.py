@@ -1507,6 +1507,32 @@ async def test_update_options_reconnects_immediately(
         await stream.aclose()
 
 
+async def test_an_unchanged_update_does_not_reconnect(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="nl").stream(conn_options=NO_RETRY)
+    log = EventLog(stream)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    await server.send({"type": "turn_start"})
+    await server.send({"type": "turn_end_candidate", "text": "mid turn"})
+    await log.wait_for(2)
+
+    try:
+        stream.update_options(language="nl", transcript=TranscriptOptions())
+        await asyncio.sleep(0.3)
+        assert server.connections == 1, "redialled for an unchanged configuration"
+
+        await server.send({"type": "turn_end"})
+        events = await log.wait_for(4)
+        assert events[2].type == SpeechEventType.FINAL_TRANSCRIPT
+        assert events[2].alternatives[0].text == "mid turn"
+    finally:
+        await log.aclose()
+        await stream.aclose()
+
+
 async def test_update_options_mid_turn_abandons_that_turn(
     reson8_server: StartServer, client_session: aiohttp.ClientSession
 ) -> None:

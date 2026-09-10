@@ -649,9 +649,13 @@ class SpeechStream(stt.RecognizeStream):
         transcript: NotGivenOr[TranscriptOptions] = NOT_GIVEN,
         biasing: NotGivenOr[BiasingOptions] = NOT_GIVEN,
     ) -> None:
+        previous = self._opts
         self._opts = self._opts.merged(
             language=language, turn=turn, transcript=transcript, biasing=biasing
         )
+
+        if self._opts == previous:
+            return
 
         self._reconnect_event.set()
 
