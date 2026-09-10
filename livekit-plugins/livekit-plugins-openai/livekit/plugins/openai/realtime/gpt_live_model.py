@@ -44,6 +44,14 @@ ALPHA_VALUE = "quicksilver=v3"
 # here, so those two are the service's to enforce
 _MAX_INPUT_ITEMS = 128
 
+# between turns the model sends digital silence, every sample zero, so the gate needs no noise
+# floor to learn. it does open each connection with a ~0.4 s tick that reaches this level, and
+# speech never comes in under 0.005, so a floor here separates the two
+_SILENCE_RMS = 0.0006
+# a pause between sentences runs to about 0.5 s of that silence, and closing on one would split
+# a single utterance into two messages
+_SILENCE_HANGOVER = 0.8
+
 # a speaker's fragments extend one message until a pause this long: on the model's clock between
 # the spans they cover, and for the user on the input audio pushed since the last one. fragments
 # inside an utterance come a few hundred ms apart, a pause between phrases reaches ~800 ms
@@ -179,8 +187,6 @@ class GPTLiveModel(llm.DuplexModel):
                 user_transcription=True,
                 # the model continues on its own once every tool result reaches the backend
                 auto_tool_reply_generation=True,
-                # no client event creates a turn, but appended commentary asks for one
-                manual_response_creation=True,
                 mutable_chat_context=False,
                 mutable_instructions=False,
                 # tools live on the backend model, and a client delegation has none
@@ -228,6 +234,9 @@ class GPTLiveModel(llm.DuplexModel):
                 self._http_session = aiohttp.ClientSession()
                 self._http_session_owned = True
         return self._http_session
+
+    def audio_gate(self) -> llm.AudioGate:
+        return llm.FixedGate(_SILENCE_RMS, hangover=_SILENCE_HANGOVER)
 
     def session(self) -> GPTLiveSession:
         return GPTLiveSession(self)

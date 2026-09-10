@@ -6,6 +6,7 @@ import json
 import time
 from typing import Any
 
+import numpy as np
 import pytest
 
 from livekit import rtc
@@ -448,6 +449,46 @@ async def test_output_audio_is_forwarded_as_frames(monkeypatch: pytest.MonkeyPat
     finally:
         await session.aclose()
         await model.aclose()
+
+
+def _pcm(level: float, *, duration_ms: int = 100) -> rtc.AudioFrame:
+    """A frame whose RMS is exactly ``level`` (0..1), from an alternating square wave."""
+    num_samples = gpt_live_model.SAMPLE_RATE * duration_ms // 1000
+    samples = np.empty(num_samples, dtype=np.int16)
+    samples[0::2] = int(level * 32767)
+    samples[1::2] = -int(level * 32767)
+    return rtc.AudioFrame(
+        data=samples.tobytes(),
+        sample_rate=gpt_live_model.SAMPLE_RATE,
+        num_channels=1,
+        samples_per_channel=num_samples,
+    )
+
+
+def test_the_gate_holds_through_the_tick_each_connection_opens_with() -> None:
+    """Measured against the alpha: silence is all zeros bar a 0.4 s tick reaching 0.0006 RMS."""
+    gate = GPTLiveModel(api_key="sk-test").audio_gate()
+
+    assert not gate.update(_pcm(0.000578))
+    assert not any(gate.update(_pcm(level)) for level in (0.000093, 0.000027, 0.000013))
+    assert not gate.update(_pcm(0.0))
+
+    # the quietest speech frame the alpha produced was 0.005
+    assert gate.update(_pcm(0.005))
+
+
+def test_the_gate_rides_out_a_pause_between_sentences() -> None:
+    """A sentence pause is ~0.5 s of true silence; closing on one would split the utterance."""
+    gate = GPTLiveModel(api_key="sk-test").audio_gate()
+    assert gate.update(_pcm(0.05))
+
+    assert all(gate.update(_pcm(0.0)) for _ in range(5))
+    assert gate.update(_pcm(0.05))
+
+    # the turn itself still ends
+    for _ in range(9):
+        gate.update(_pcm(0.0))
+    assert not gate.update(_pcm(0.0))
 
 
 async def test_a_backend_function_call_is_answered_and_the_response_continued(
