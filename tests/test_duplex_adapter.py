@@ -108,6 +108,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         pass
 
     async def aclose(self) -> None:
+        await super().aclose()
         if not self.audio_ch.closed:
             self.audio_ch.close()
 
@@ -761,12 +762,27 @@ async def test_a_half_applied_configuration_never_reaches_the_model(duplex) -> N
     """An immutable model gets one chance at its configuration, so a partial one must not ship."""
     fake, session, _generations = duplex
     fake.fail_instructions = True
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="a prior turn", id="m1")
 
     with pytest.raises(llm.RealtimeError):
-        await session._update_session(instructions="be brief", tools=[])
+        await session._update_session(instructions="be brief", chat_ctx=chat_ctx, tools=[])
 
-    # the plugin waits on this before connecting, so the model never starts half configured
+    # nothing past the step that failed is applied, and the session that cannot carry the
+    # configuration is closed: the framework never closes a session whose start failed
+    assert fake.appended == []
+    assert fake.audio_ch.closed
+    assert session._segment_atask.done()
+
+
+async def test_closing_before_the_configuration_lands_releases_the_model(duplex) -> None:
+    """A model waiting on the configuration before it connects must still be able to close."""
+    fake, session, _generations = duplex
     assert not fake._configured.is_set()
+
+    await session.aclose()
+
+    assert fake._configured.is_set()
 
 
 async def test_generate_reply_is_rejected_by_a_model_that_cannot_be_asked(duplex) -> None:

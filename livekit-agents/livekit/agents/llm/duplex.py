@@ -122,8 +122,9 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     def __init__(self, duplex_model: DuplexModel) -> None:
         super().__init__()
         self._duplex_model = duplex_model
+        self._closing = False
         # set once the whole configuration is applied; a model whose configuration is immutable
-        # once started waits on it before connecting, and aclose sets it so closing can finish
+        # once started waits on it before connecting
         self._configured = asyncio.Event()
 
     @property
@@ -150,8 +151,14 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         """Feed a video frame to the model; ignored by models without video input."""
         pass
 
-    @abstractmethod
-    async def aclose(self) -> None: ...
+    async def aclose(self) -> None:
+        """Close the session; an override calls ``super().aclose()`` first.
+
+        It releases a model that waits on ``_configured``, which then reads ``_closing`` to see
+        that the configuration was abandoned rather than applied.
+        """
+        self._closing = True
+        self._configured.set()
 
     # underscored until the shape settles: this is the framework's contract with the plugin, and
     # apps reach a plugin's own methods through Agent.duplex_session

@@ -527,9 +527,15 @@ class _DuplexRealtimeSession(RealtimeSession):
         if is_given(chat_ctx):
             chat_ctx = chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
             self._chat_ctx = chat_ctx.copy()
-        await self._duplex._update_session(
-            instructions=instructions, chat_ctx=chat_ctx, tools=tools
-        )
+        try:
+            await self._duplex._update_session(
+                instructions=instructions, chat_ctx=chat_ctx, tools=tools
+            )
+        except BaseException:
+            # a session that cannot be configured is unusable, and a session whose start failed is
+            # never closed by the framework: nothing else would stop what session() has started
+            await self.aclose()
+            raise
 
     async def update_instructions(self, instructions: str) -> None:
         await self._duplex._update_instructions(instructions)
