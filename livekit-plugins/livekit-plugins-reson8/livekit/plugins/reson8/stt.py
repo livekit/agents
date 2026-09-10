@@ -253,6 +253,12 @@ class BiasingOptions:
         if self.strength is not None and self.strength < 0:
             raise ValueError(f"strength must be non-negative, got {self.strength}")
 
+        if self.phrases is not None:
+            object.__setattr__(self, "phrases", tuple(self.phrases))
+
+        if self.patterns is not None:
+            object.__setattr__(self, "patterns", tuple(self.patterns))
+
     def query_params(self) -> dict[str, str]:
         params: dict[str, str] = {}
 

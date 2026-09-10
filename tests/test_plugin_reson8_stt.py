@@ -580,7 +580,7 @@ def test_too_many_phrases_raises() -> None:
 
 def test_the_documented_phrase_maximum_is_accepted() -> None:
     phrases = [f"p{i}" for i in range(250)]
-    assert BiasingOptions(phrases=phrases).phrases == phrases
+    assert BiasingOptions(phrases=phrases).phrases == tuple(phrases)
 
 
 def test_a_comma_inside_a_phrase_raises() -> None:
@@ -648,13 +648,45 @@ def test_a_bare_string_is_rejected(build: Callable[[], BiasingOptions]) -> None:
 def test_a_braced_repeat_range_survives_validation(pattern: str) -> None:
     """The comma in ``{m,n}`` is not a separator on the wire, so it must be allowed."""
 
-    assert BiasingOptions(patterns=[pattern]).patterns == [pattern]
+    assert BiasingOptions(patterns=[pattern]).patterns == (pattern,)
 
 
 @pytest.mark.parametrize("pattern", ["a,b", "AMZ[0-9]{6},X"])
 def test_a_comma_outside_braces_still_raises(pattern: str) -> None:
     with pytest.raises(ValueError, match="outside"):
         BiasingOptions(patterns=[pattern])
+
+
+@pytest.mark.parametrize("field", ["phrases", "patterns"])
+def test_a_mutated_sequence_cannot_change_a_built_option(field: str) -> None:
+    shared = ["LiveKit"]
+    options = BiasingOptions(**{field: shared})
+
+    shared.append("Reson8")
+
+    assert getattr(options, field) == ("LiveKit",)
+    assert options.query_params()[field] == "LiveKit"
+
+
+async def test_a_mutated_sequence_still_triggers_a_reconnect(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    shared = ["LiveKit"]
+    stream = _stt(server.base_url, client_session, biasing=BiasingOptions(phrases=shared)).stream(
+        conn_options=NO_RETRY
+    )
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    assert server.query["phrases"] == "LiveKit"
+
+    try:
+        shared.append("Reson8")
+        stream.update_options(biasing=BiasingOptions(phrases=shared))
+        await server.wait_for_connections(2)
+        assert server.query["phrases"] == "LiveKit,Reson8"
+    finally:
+        await stream.aclose()
 
 
 def test_negative_strength_raises() -> None:
