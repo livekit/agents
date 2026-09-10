@@ -273,6 +273,7 @@ class GPTLiveSession(
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
         self._session_id: str | None = None
+        self._num_retries = 0
         # session usage is reported cumulatively; kept to emit per-event deltas
         self._usage_total = types.Usage()
 
@@ -376,7 +377,6 @@ class GPTLiveSession(
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        num_retries = 0
         max_retries = self._opts.conn_options.max_retry
         reconnecting = False
 
@@ -386,7 +386,6 @@ class GPTLiveSession(
                     ws_conn = await self._create_ws_conn()
                     if reconnecting:
                         self._reset_for_reconnect()
-                        num_retries = 0
                         self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
                     try:
                         await self._run_ws(ws_conn)
@@ -397,25 +396,27 @@ class GPTLiveSession(
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
                         raise
-                    elif num_retries == max_retries:
+                    elif self._num_retries == max_retries:
                         self._emit_error(e, recoverable=False)
                         raise APIConnectionError(
                             f"{self._live_model._provider_label} connection failed after "
-                            f"{num_retries} attempts",
+                            f"{self._num_retries} attempts",
                         ) from e
                     else:
                         self._emit_error(e, recoverable=True)
-                        interval = self._opts.conn_options._interval_for_retry(num_retries)
+                        interval = self._opts.conn_options._interval_for_retry(self._num_retries)
                         logger.warning(
                             f"{self._live_model._provider_label} connection failed, "
                             f"retrying in {interval}s",
                             exc_info=e,
                         )
                         await asyncio.sleep(interval)
-                    num_retries += 1
+                    self._num_retries += 1
                 except Exception as e:
-                    self._emit_error(e, recoverable=False)
-                    raise
+                    logger.error("gpt-live session failed", extra={"error_type": type(e).__name__})
+                    error = APIConnectionError("GPT-Live session failed", retryable=False)
+                    self._emit_error(error, recoverable=False)
+                    raise error from None
                 reconnecting = True
         finally:
             self._audio_ch.close()
@@ -424,6 +425,7 @@ class GPTLiveSession(
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
         self._session_started_fut = asyncio.Future()
+        self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
         self._delegated_responses.clear()
@@ -442,7 +444,7 @@ class GPTLiveSession(
             path = f"{path}/live/sessions"
         url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
         if lk_oai_debug:
-            logger.debug(f"connecting to GPT-Live API: {url}")
+            logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
         t0 = time.perf_counter()
         try:
@@ -452,13 +454,28 @@ class GPTLiveSession(
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise APIConnectionError(f"{self._live_model._provider_label} connection error") from e
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            raise APIConnectionError(
+                f"{self._live_model._provider_label} connection error"
+            ) from None
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
 
-        @utils.log_exceptions(logger=logger)
+        async def _close_ws() -> None:
+            nonlocal closing
+            if not closing:
+                closing = True
+                if self._session_start_sent:
+                    with contextlib.suppress(Exception):
+                        await self._ws_send(ws_conn, types.SessionCloseEvent())
+            if self._session_started_fut.done() and not self._session_started_fut.cancelled():
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(self._session_closed_fut), _SESSION_CLOSE_TIMEOUT
+                    )
+            await ws_conn.close()
+
         async def _send_task() -> None:
             nonlocal closing
             # instructions, voice and history are immutable once the session starts
@@ -478,21 +495,14 @@ class GPTLiveSession(
                     await self._session_started_fut
                 await self._ws_send(ws_conn, msg)
 
-            closing = True
-            with contextlib.suppress(Exception):
-                await self._ws_send(ws_conn, types.SessionCloseEvent())
-            # the service drains, then reports the final usage in session.closed
-            if self._session_started_fut.done() and not self._session_started_fut.cancelled():
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(
-                        asyncio.shield(self._session_closed_fut), _SESSION_CLOSE_TIMEOUT
-                    )
-            await ws_conn.close()
+            await _close_ws()
 
-        @utils.log_exceptions(logger=logger)
         async def _recv_task() -> None:
             while True:
-                msg = await ws_conn.receive()
+                try:
+                    msg = await ws_conn.receive()
+                except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+                    raise APIConnectionError("GPT-Live receive failed") from None
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
@@ -516,14 +526,13 @@ class GPTLiveSession(
                 except Exception as e:
                     if isinstance(e, APIError) and not e.retryable:
                         raise
-                    logger.exception(
-                        "failed to handle gpt-live event", extra={"type": event.get("type")}
+                    logger.warning(
+                        "failed to handle gpt-live event",
+                        extra={"type": event.get("type"), "error_type": type(e).__name__},
                     )
 
-        tasks = [
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-        ]
+        send_task = asyncio.create_task(_send_task(), name="_send_task")
+        tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task]
         wait_reconnect_task: asyncio.Task | None = None
         if self._opts.max_session_duration is not None:
             wait_reconnect_task = asyncio.create_task(
@@ -535,6 +544,9 @@ class GPTLiveSession(
             for task in done:
                 if task != wait_reconnect_task:
                     task.result()
+            if wait_reconnect_task in done:
+                await utils.aio.cancel_and_wait(send_task)
+                await _close_ws()
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
@@ -545,15 +557,18 @@ class GPTLiveSession(
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
         self.emit("openai_client_event_queued", raw)
         if lk_oai_debug and raw.get("type") != "session.input_audio.append":
-            logger.debug(f">>> {raw}")
-        await ws_conn.send_str(json.dumps(raw))
+            logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
+        try:
+            await ws_conn.send_str(json.dumps(raw))
+        except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+            raise APIConnectionError("GPT-Live send failed") from None
 
     # inbound events
 
     def _handle_event(self, event: dict[str, Any]) -> None:
         etype = event.get("type", "")
         if lk_oai_debug and etype != "session.output_audio.delta":
-            logger.debug(f"<<< {event}")
+            logger.debug("gpt-live server event", extra={"lk.pii.event": event})
 
         if etype == "session.started":
             self._handle_session_started(types.SessionStartedEvent.construct(**event))
@@ -590,10 +605,11 @@ class GPTLiveSession(
                 extra={"type": etype, "client_event_id": event.get("client_event_id")},
             )
         elif lk_oai_debug:
-            logger.debug(f"unhandled gpt-live event: {etype}")
+            logger.debug("unhandled gpt-live event", extra={"lk.pii.type": etype})
 
     def _handle_session_started(self, event: types.SessionStartedEvent) -> None:
         self._session_id = event.session.id or self._session_id
+        self._num_retries = 0
         if not self._session_started_fut.done():
             self._session_started_fut.set_result(None)
 
@@ -770,8 +786,8 @@ class GPTLiveSession(
                 extra={
                     "type": event.type,
                     "delegation_id": d_id,
-                    "error": response.error if response else None,
-                    "incomplete_details": response.incomplete_details if response else None,
+                    "lk.pii.error": response.error if response else None,
+                    "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
             if (pending := self._delegated_responses.pop(d_id, None)) is not None:
@@ -837,13 +853,12 @@ class GPTLiveSession(
 
     def _handle_error(self, error: types.ErrorBody) -> None:
         logger.error(
-            f"{self._live_model._provider_label} returned an error",
-            extra={"error": error.model_dump(exclude_none=True)},
+            "gpt-live returned an error",
+            extra={"lk.pii.error": error.model_dump(exclude_none=True)},
         )
         recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
         api_error = APIError(
-            message=error.message or f"{self._live_model._provider_label} returned an error",
-            body=error.model_dump(exclude_none=True),
+            message="GPT-Live returned an error",
             retryable=recoverable,
         )
         if not recoverable:
@@ -1066,7 +1081,9 @@ def _build_delegation_tools(tools: list[llm.Tool]) -> list[dict[str, Any]]:
         elif isinstance(tool, OpenAITool):
             oai_tools.append(tool.to_dict())
         else:
-            logger.debug("gpt-live delegation ignores unsupported tool", extra={"tool": tool})
+            logger.debug(
+                "gpt-live delegation ignores unsupported tool", extra={"lk.pii.tool": tool}
+            )
     return oai_tools
 
 

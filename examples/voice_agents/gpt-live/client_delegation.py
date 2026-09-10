@@ -30,7 +30,7 @@ async def check_order_status(order_id: str) -> str:
     Args:
         order_id: The order reference, such as A1042.
     """
-    logger.info("desk tool: checking order %s", order_id)
+    logger.info("desk tool: checking order", extra={"lk.pii.order_id": order_id})
     status = ORDERS.get(order_id.upper())
     return f"Order {order_id} is {status}." if status else f"There is no order {order_id}."
 
@@ -42,7 +42,7 @@ async def lookup_weather(location: str) -> str:
     Args:
         location: The city or region to look up.
     """
-    logger.info("desk tool: looking up weather for %s", location)
+    logger.info("desk tool: looking up weather", extra={"lk.pii.location": location})
     return f"The weather in {location} is 62 degrees and partly cloudy."
 
 
@@ -66,7 +66,10 @@ async def run_delegation(delegation_llm: llm.LLM, chat_ctx: llm.ChatContext) -> 
         try:
             return str(await tool(**json.loads(call.arguments))), False
         except Exception as e:
-            logger.exception("desk tool %s failed", call.name)
+            logger.warning(
+                "desk tool failed",
+                extra={"lk.pii.tool_name": call.name, "error_type": type(e).__name__},
+            )
             return f"{call.name} failed: {e}", True
 
     for _ in range(MAX_DESK_ROUNDS):
@@ -128,15 +131,21 @@ class Assistant(Agent):
         # earlier one; the framework will hold one expert per conversation and do that (see README)
         task = asyncio.create_task(self._answer(delegation), name=f"desk:{delegation.id}")
         self._desk_tasks.add(task)
-        task.add_done_callback(self._desk_tasks.discard)
+        task.add_done_callback(self._on_answer_done)
 
-    @utils.log_exceptions(logger=logger)
+    def _on_answer_done(self, task: asyncio.Task[None]) -> None:
+        self._desk_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("delegation failed", extra={"error_type": type(error).__name__})
+
     async def _answer(self, delegation: GPTLiveDelegation) -> None:
         logger.info(
-            "delegation %s asked with pending_transcript=%r, over %d items of history",
-            delegation.id,
-            delegation.pending_transcript,
-            len(self.chat_ctx.items),
+            "delegation requested",
+            extra={
+                "delegation_id": delegation.id,
+                "lk.pii.pending_transcript": delegation.pending_transcript,
+                "history_items": len(self.chat_ctx.items),
+            },
         )
 
         chat_ctx = llm.ChatContext.empty()
@@ -151,7 +160,10 @@ class Assistant(Agent):
             chat_ctx.add_message(role="user", content=delegation.pending_transcript)
 
         answer = await run_delegation(self._desk_llm, chat_ctx)
-        logger.info("delegation %s answered: %s", delegation.id, answer)
+        logger.info(
+            "delegation answered",
+            extra={"delegation_id": delegation.id, "lk.pii.answer": answer},
+        )
 
         assert isinstance(self.duplex_session, GPTLiveSession)
         # commentary is what the model says next, in its own words, capped at 500 tokens
@@ -163,7 +175,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
-    ctx.log_context_fields = {"room": ctx.room.name}
+    ctx.log_context_fields = {"lk.pii.room": ctx.room.name}
 
     session = AgentSession(
         llm=GPTLiveModel(voice="marin", delegation="client"),

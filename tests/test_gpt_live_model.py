@@ -8,11 +8,12 @@ import logging
 import time
 from typing import Any
 
+import aiohttp
 import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
@@ -66,6 +67,39 @@ def _connect_hook(monkeypatch: pytest.MonkeyPatch, *, auto_start: bool = True) -
 
     monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", _create_ws_conn)
     return ws
+
+
+class _LifecycleWS:
+    def __init__(self, *, start: bool = True, disconnect_on_start: bool = False) -> None:
+        self.start = start
+        self.disconnect_on_start = disconnect_on_start
+        self.sent: list[dict[str, Any]] = []
+        self.incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+        self.started = asyncio.Event()
+        self.close_requested = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    def emit(self, event: dict[str, Any]) -> None:
+        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(event), ""))
+
+    async def send_str(self, data: str) -> None:
+        event = json.loads(data)
+        self.sent.append(event)
+        if event["type"] == "session.start":
+            if self.start:
+                self.emit({"type": "session.started", "session": {"id": "live_test"}})
+            self.started.set()
+            if self.disconnect_on_start:
+                await self.close()
+        elif event["type"] == "session.close":
+            self.close_requested.set()
+
+    async def receive(self) -> aiohttp.WSMessage:
+        return await self.incoming.get()
+
+    async def close(self) -> None:
+        self.closed.set()
+        self.incoming.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, ""))
 
 
 def _chat_ctx() -> llm.ChatContext:
@@ -170,6 +204,169 @@ async def test_closing_releases_a_session_still_waiting_for_its_config(
     elapsed = time.perf_counter() - started
     assert elapsed < 0.5, f"aclose blocked {elapsed:.2f}s on a configuration that never came"
     await model.aclose()
+
+
+@pytest.mark.parametrize("healthy_attempt,expected_attempts", [(None, 3), (2, 4)])
+async def test_startup_failures_exhaust_retries(
+    monkeypatch: pytest.MonkeyPatch, healthy_attempt: int | None, expected_attempts: int
+) -> None:
+    sockets: list[_LifecycleWS] = []
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        ws = _LifecycleWS(start=len(sockets) + 1 == healthy_attempt, disconnect_on_start=True)
+        sockets.append(ws)
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=2, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        with pytest.raises(APIConnectionError, match="failed after 2 attempts"):
+            await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=2)
+        assert len(sockets) == expected_attempts
+        assert all(ws.closed.is_set() for ws in sockets)
+    finally:
+        with contextlib.suppress(APIError):
+            await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("timed", [False, True])
+async def test_reconnect_drains_and_waits_for_each_sessions_close(
+    monkeypatch: pytest.MonkeyPatch, timed: bool
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = 0
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        nonlocal connections
+        ws = sockets[connections]
+        connections += 1
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(gpt_live_model, "_SESSION_CLOSE_TIMEOUT", 0.5)
+    model = GPTLiveModel(api_key="sk-test", max_session_duration=0.1 if timed else None)
+    session = model.session()
+    metrics: list[RealtimeModelMetrics] = []
+    session.on("metrics_collected", metrics.append)
+    close_task: asyncio.Task[None] | None = None
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+        session._opts.max_session_duration = None
+        if timed:
+            await asyncio.wait_for(sockets[0].close_requested.wait(), timeout=1)
+            assert not sockets[0].closed.is_set()
+            sockets[0].emit(
+                {
+                    "type": "session.output_audio.delta",
+                    "delta": base64.b64encode(_pcm(0.2).data).decode(),
+                }
+            )
+            audio = await asyncio.wait_for(anext(session.audio_stream.__aiter__()), timeout=1)
+            assert audio.frame.duration == pytest.approx(0.1)
+        sockets[0].emit({"type": "session.closed", "reason": "expired", "usage": {"seconds": 5}})
+        if not timed:
+            await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await session._session_started_fut
+        assert [m.session_duration for m in metrics] == [5]
+
+        close_task = asyncio.create_task(session.aclose())
+        await asyncio.wait_for(sockets[1].close_requested.wait(), timeout=1)
+        await asyncio.sleep(0.01)
+        assert not close_task.done()
+        assert not sockets[1].closed.is_set()
+        sockets[1].emit(
+            {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 7}}
+        )
+        await asyncio.wait_for(close_task, timeout=1)
+        assert [m.session_duration for m in metrics] == [5, 7]
+    finally:
+        if close_task is None:
+            await session.aclose()
+        else:
+            await close_task
+        await model.aclose()
+
+
+async def test_provider_content_is_only_logged_under_pii_fields(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    monkeypatch.setattr(gpt_live_model, "lk_oai_debug", 1)
+    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
+    private = "private-customer-payload"
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    errors: list[llm.RealtimeModelError] = []
+    session.on("error", errors.append)
+    try:
+        await session._update_session(instructions=private)
+        await asyncio.sleep(0.05)
+        await session._ws_send(ws, {"type": "session.thinking.append", "content": private})
+        session._handle_event(_transcript("user", private, 0))
+        session._handle_event(
+            _response_event(
+                "d1",
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "error": {"message": private},
+                        "incomplete_details": {"reason": private},
+                    },
+                },
+            )
+        )
+        session._handle_event({"type": "error", "error": {"message": private}})
+        with pytest.raises(APIError) as fatal:
+            session._handle_event(
+                {"type": "error", "error": {"code": "invalid_api_key", "message": private}}
+            )
+        assert private not in repr(fatal.value)
+        assert private not in repr(errors[-1].error)
+        for record in caplog.records:
+            assert private not in record.getMessage()
+            for key, value in vars(record).items():
+                if private in repr(value):
+                    assert ".pii." in key
+        assert any("lk.pii.event" in vars(record) for record in caplog.records)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("operation", ["send", "receive"])
+async def test_transport_errors_do_not_expose_provider_payloads(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, operation: str
+) -> None:
+    private = "private-transport-payload"
+    ws = _LifecycleWS()
+
+    async def fail(*args: Any) -> Any:
+        raise aiohttp.ClientConnectionError(private)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return ws
+
+    monkeypatch.setattr(ws, "send_str" if operation == "send" else "receive", fail)
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(api_key="sk-test", conn_options=APIConnectOptions(max_retry=0))
+    session = model.session()
+    try:
+        await session._update_session()
+        with pytest.raises(APIConnectionError, match=f"GPT-Live {operation} failed"):
+            await asyncio.wait_for(asyncio.shield(session._main_atask), timeout=1)
+        assert private not in caplog.text
+    finally:
+        with contextlib.suppress(APIError):
+            await session.aclose()
+        await model.aclose()
 
 
 @pytest.mark.parametrize(

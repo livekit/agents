@@ -73,7 +73,7 @@ class Assistant(Agent):
         Args:
             location: The city or region to look up.
         """
-        logger.info("looking up weather for %s", location)
+        logger.info("looking up weather", extra={"lk.pii.location": location})
         # the backend Responses model calls this tool; the framework runs it here and the
         # plugin returns the result to the backend
         return f"The weather in {location} is 62 degrees and partly cloudy."
@@ -85,7 +85,7 @@ class Assistant(Agent):
         Args:
             order_id: The order reference, such as A1042.
         """
-        logger.info("checking order %s", order_id)
+        logger.info("checking order", extra={"lk.pii.order_id": order_id})
         status = ORDERS.get(order_id.upper())
         return f"Order {order_id} is {status}." if status else f"I cannot find order {order_id}."
 
@@ -97,7 +97,7 @@ class Assistant(Agent):
             order_id: The order reference, such as A1042.
             day: The requested day, such as Tuesday.
         """
-        logger.info("scheduling %s for %s", order_id, day)
+        logger.info("scheduling delivery", extra={"lk.pii.order_id": order_id, "lk.pii.day": day})
         if order_id.upper() not in ORDERS:
             return f"I cannot find order {order_id}, so I did not schedule anything."
         return f"Delivery for order {order_id} is booked for {day}."
@@ -108,7 +108,7 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
-    ctx.log_context_fields = {"room": ctx.room.name}
+    ctx.log_context_fields = {"lk.pii.room": ctx.room.name}
 
     session = AgentSession(
         llm=GPTLiveModel(
