@@ -472,6 +472,9 @@ class STT(stt.STT):
         nothing in the protocol ties a ``turn_end`` to a position in the audio
         that was sent, so there is no way to know what the server still owes.
 
+        This reaches every live stream, so it also replaces a ``language``
+        that was passed to :meth:`stream` for one of them.
+
         :class:`AudioOptions` is deliberately absent: the input resampler is
         built when a stream opens, so changing the rate mid-stream would
         describe the audio to Reson8 as something it is not.
