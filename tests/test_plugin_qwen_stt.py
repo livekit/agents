@@ -12,6 +12,7 @@ import base64
 import logging
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
+from unittest.mock import MagicMock
 
 import aiohttp
 import pytest
@@ -740,3 +741,32 @@ async def test_recognize_emits_exactly_one_metric(server, session) -> None:
     assert len(metrics) == 1
     assert metrics[0].streamed is False
     assert metrics[0].audio_duration == pytest.approx(0.1, abs=1e-3)
+
+
+async def test_recognize_leaves_retries_to_the_base_class() -> None:
+    # STT.recognize() retries the whole buffer around _recognize_impl. If the inner stream
+    # kept its own retry budget too, attempts would multiply (4 x 4 = 16 connections on the
+    # defaults). The inner stream is opened with max_retry=0 so the count is the outer's.
+    session = MagicMock()
+    session.ws_connect = MagicMock(side_effect=OSError("connection refused"))
+    stt_ = STT(api_key="sk-test", http_session=session)
+
+    with pytest.raises(APIConnectionError):
+        await stt_.recognize(
+            audio_frame(1600),
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.0, timeout=1.0),
+        )
+
+    assert session.ws_connect.call_count == 2  # one per outer attempt, none from the inner
+
+
+async def test_base_url_with_an_existing_query_keeps_both_parameters(server, session) -> None:
+    # A gateway URL can already carry a query. Concatenating "?model=" onto it would bury
+    # the model id inside the last existing value.
+    stt_ = STT(
+        api_key="sk-test",
+        base_url=server.url + "?tenant=acme",
+        http_session=session,
+    )
+    await collect(stt_)
+    assert server.query == {"tenant": "acme", "model": "qwen3-asr-flash-realtime"}

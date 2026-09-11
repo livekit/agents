@@ -179,7 +179,15 @@ class STT(stt.STT):
         explicitly rather than waiting on the server's silence window.
         """
         opts = self._options_for(language)
-        stream = SpeechStream(stt=self, opts=opts, conn_options=conn_options, manual_commit=True)
+        # STT.recognize() already retries the whole buffer around this call, and that is
+        # the only replay that can work: the inner stream cannot re-send audio it has
+        # consumed. Leaving its own retries on as well would multiply the attempts.
+        stream = SpeechStream(
+            stt=self,
+            opts=opts,
+            conn_options=replace(conn_options, max_retry=0),
+            manual_commit=True,
+        )
         stream.push_frame(rtc.combine_audio_frames(buffer))
         stream.end_input()
         final: stt.SpeechEvent | None = None

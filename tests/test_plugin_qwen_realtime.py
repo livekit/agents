@@ -8,6 +8,7 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
+import aiohttp
 import pytest
 from aiohttp import RequestInfo, WSServerHandshakeError
 from multidict import CIMultiDict, CIMultiDictProxy
@@ -168,18 +169,25 @@ class _FakeWS:
 
     closed = False
 
-    def __init__(self, *, stall_send: bool = False) -> None:
+    def __init__(self, *, stall_send: bool = False, stall_close: bool = False) -> None:
         self.sent: list[dict[str, Any]] = []
         self.close_calls = 0
         self._stall_send = stall_send
+        self._stall_close = stall_close
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         if self._stall_send:
             await asyncio.sleep(30)
         self.sent.append(payload)
 
+    async def receive(self) -> aiohttp.WSMessage:
+        # Answers the finish handshake with a close, so `_finish_handshake` completes.
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, None, None)
+
     async def close(self) -> bool:
         self.close_calls += 1
+        if self._stall_close:
+            await asyncio.sleep(30)
         return True
 
 
@@ -206,3 +214,18 @@ async def test_close_with_finish_is_bounded_against_a_stalled_peer() -> None:
     # Budget is 0.2 s here and the stub would stall 30 s; 2 s tolerates a loaded runner.
     assert elapsed < 2.0, f"close_with_finish blocked for {elapsed:.2f}s"
     assert ws.close_calls == 1, "the close must still be attempted after the finish stalls"
+
+
+async def test_close_gracefully_bounds_the_close_handshake_too() -> None:
+    # The finish wait was already bounded; the aiohttp close handshake that follows it
+    # was not, and its default lets a stalled peer add up to 10 s to session teardown.
+    from livekit.plugins.qwen._realtime import RealtimeSocket
+
+    ws = _FakeWS(stall_close=True)
+    started = time.monotonic()
+    await RealtimeSocket(ws).close_gracefully(timeout=0.2)  # type: ignore[arg-type]
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"close_gracefully blocked for {elapsed:.2f}s"
+    assert [p["type"] for p in ws.sent] == ["session.finish"]
+    assert ws.close_calls == 1

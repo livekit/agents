@@ -28,6 +28,7 @@ import time
 from typing import Any
 
 import aiohttp
+from yarl import URL
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, utils
 
@@ -64,11 +65,15 @@ async def connect(
     api_key: str,
     timeout: float,
 ) -> aiohttp.ClientWebSocketResponse:
-    """Open ``<base_url>?model=<model>`` with a bearer token, mapping failures to API errors."""
+    """Open ``base_url`` with ``model`` added to its query, mapping failures to API errors.
+
+    Built with ``yarl`` rather than string concatenation so a gateway URL that already
+    carries a query keeps its parameters and the model id is percent-encoded.
+    """
     try:
         return await asyncio.wait_for(
             session.ws_connect(
-                f"{base_url}?model={model}",
+                URL(base_url).update_query(model=model),
                 headers={"Authorization": f"Bearer {api_key}"},
             ),
             timeout=timeout,
@@ -142,28 +147,37 @@ class RealtimeSocket:
         except Exception:
             pass
         finally:
-            # Always leave a little budget for the close itself, so a finish that ate the
-            # whole allowance still gets the transport torn down rather than leaked.
-            remaining = max(0.1, deadline - time.monotonic())
-            try:
-                await asyncio.wait_for(self._ws.close(), remaining)
-            except Exception:
-                pass
+            await self._close_before(deadline)
 
     async def close_gracefully(self, timeout: float = TEARDOWN_FINISH_TIMEOUT) -> None:
         """Complete the finish handshake if it never ran, then close.
 
         For the cancellation path: the receive loop is already stopped, so this drains
-        the socket itself until ``session.finished`` or the bound. Best effort: never
-        raises, always closes.
+        the socket itself until ``session.finished`` or the bound. The close handshake
+        that follows is held to the same budget; aiohttp's own default would let a
+        stalled peer add up to 10 s on top. Best effort: never raises, always attempts
+        the close.
         """
+        deadline = time.monotonic() + timeout
         try:
             if not self._finish_sent and not self._ws.closed:
                 await asyncio.wait_for(self._finish_handshake(), timeout)
         except Exception:
             pass
         finally:
-            await self._ws.close()
+            await self._close_before(deadline)
+
+    async def _close_before(self, deadline: float) -> None:
+        """Close the socket within what is left of ``deadline``, always trying.
+
+        A small floor is kept even when the preceding step ate the whole budget, so the
+        transport is torn down rather than leaked. Never raises.
+        """
+        remaining = max(0.1, deadline - time.monotonic())
+        try:
+            await asyncio.wait_for(self._ws.close(), remaining)
+        except Exception:
+            pass
 
     async def _finish_handshake(self) -> None:
         await self.finish()
