@@ -128,6 +128,68 @@ def test_aws_image_content_rejects_external_urls():
         chat_ctx.to_provider_format(format="aws")
 
 
+def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
+    # the shape generate_reply(instructions=...) produces: a trailing system message
+    instructions = "Ask the caller for the year they were born."
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="assistant", content=["Hello! How can I help you?"])
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=[instructions])
+    return chat_ctx, instructions
+
+
+def test_openai_format_preserves_mid_conversation_system_messages():
+    # intentional pass-through: the openai serializer keeps system messages where they are;
+    # providers that need repositioning handle it in their own serializer
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    messages, _ = chat_ctx.to_provider_format(format="openai")
+
+    assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
+    assert messages[0] == {"role": "system", "content": "You are a helpful assistant."}
+    assert messages[-1]["content"] == instructions
+
+
+def test_mistralai_format_converts_mid_conversation_instructions():
+    chat_ctx, instructions = _ctx_with_per_turn_instructions()
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert entries[-1] == {
+        "type": "message.input",
+        "role": "user",
+        "content": f"<instructions>\n{instructions}\n</instructions>",
+    }
+
+
+def test_per_turn_instructions_convert_without_a_preamble():
+    # no base system message: the trailing per-turn message is still mid-conversation
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content=["I'd like to refill my prescription."])
+    chat_ctx.add_message(role="system", content=["Ask the caller for the year they were born."])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions is None
+    assert [e["role"] for e in entries] == ["user", "user"]
+    assert entries[-1]["content"].startswith("<instructions>")
+
+
+def test_empty_mid_conversation_system_messages_are_dropped():
+    # a text-less later system message must not shadow the base preamble
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="system", content=["You are a helpful assistant."])
+    chat_ctx.add_message(role="user", content=["Hi!"])
+    chat_ctx.add_message(role="system", content=[""])
+
+    entries, extra_data = chat_ctx.to_provider_format(format="mistralai")
+
+    assert extra_data.instructions == "You are a helpful assistant."
+    assert [e["role"] for e in entries] == ["user"]
+
+
 def test_chat_ctx_can_be_serialized_and_deserialized_with_defaults():
     from livekit.agents.llm import AgentHandoff, ChatContext, ChatMessage
 
