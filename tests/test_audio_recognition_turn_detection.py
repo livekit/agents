@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, vad
+from livekit.agents import LanguageCode, stt, vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -200,6 +200,62 @@ class TestResumedSpeechAbortsCommit:
             await task
         assert task.cancelled()
         ar._hooks.on_end_of_turn.assert_not_called()
+
+    async def test_sos_clears_stranded_committed_flag(self) -> None:
+        """Regression (#7010): ``START_OF_SPEECH`` must clear
+        ``_user_turn_committed`` when it cancels the manual EOU task."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detection_mode = "manual"
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None and not task.done()
+        ar._user_turn_committed = True
+
+        await ar._on_vad_event(_start_of_speech())
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        assert task.cancelled()
+        assert ar._user_turn_committed is False
+
+    async def test_stt_events_not_dropped_after_sos_cancels_manual_commit(
+        self,
+    ) -> None:
+        """Regression (#7010): after SOS cancels a manual commit, the
+        manual-mode STT guard must no longer reject subsequent transcripts
+        because of the stale committed flag."""
+        ar = _make_full_recognition_for_eou()
+        ar._turn_detection_mode = "manual"
+        chat_ctx = _make_chat_ctx_stub()
+
+        ar._run_eou_detection(chat_ctx, trigger="manual")
+        task = ar._end_of_turn_task
+        assert task is not None
+        ar._user_turn_committed = True
+
+        await ar._on_vad_event(_start_of_speech())
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Reproduce the guard condition from _on_stt_event for a
+        # FINAL_TRANSCRIPT — if _user_turn_committed were still True,
+        # the guard would block the event (task.done() is True).
+        event_type = stt.SpeechEventType.FINAL_TRANSCRIPT
+        guard_would_block = (
+            ar._turn_detection_mode == "manual"
+            and ar._user_turn_committed
+            and (
+                ar._end_of_turn_task is None
+                or ar._end_of_turn_task.done()
+                or event_type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+            )
+        )
+        assert not guard_would_block, (
+            "_user_turn_committed stranded True — subsequent FINAL_TRANSCRIPT "
+            "would be dropped by the manual-mode guard"
+        )
 
 
 def _inference_done(*, raw_speech: float, raw_silence: float = 0.0) -> vad.VADEvent:
