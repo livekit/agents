@@ -12,10 +12,9 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
-import numpy as np
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents import APIConnectionError, APIError, inference, llm, utils, vad
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -50,6 +49,8 @@ _SILENCE_RMS = 0.0006
 # long enough that a pause between sentences does not split an utterance in two
 _MIN_SILENCE_DURATION = 0.8
 _MIN_SILENCE_MS = _MIN_SILENCE_DURATION * 1000
+_INPUT_SPEECH_THRESHOLD = 0.5
+_INPUT_SPEECH_CONTINUATION_THRESHOLD = 0.35
 
 # the asks generate_reply sends as commentary. each ends with the same two sentences, which make
 # the model speak now rather than wait for the caller; what precedes them says what to speak
@@ -119,8 +120,10 @@ class _Speech:
     text: str = ""
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
-    quiet_ms: int = 0
-    """Consecutive silent input audio pushed since the user's last fragment."""
+    quiet_ms: float = 0
+    """Consecutive non-speech input processed since the user's last fragment."""
+    input_audio_ms: float = 0
+    """Input already queued when this fragment arrived; delayed VAD results cannot count it."""
 
 
 # Responses delegation hands work to a backend Responses model, whose events arrive wrapped in
@@ -275,6 +278,13 @@ class GPTLiveSession(
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
+        self._input_vad: vad.VADStream | None = None
+        self._input_vad_task: asyncio.Task[None] | None = None
+        self._input_audio_ms = 0.0
+        self._input_vad_ms = 0.0
+        self._input_speaking = False
+        self._input_muted = False
+        self._sent_input_muted = False
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
@@ -307,8 +317,20 @@ class GPTLiveSession(
     # outbound
 
     def send_event(self, event: types.ClientEvent | dict[str, Any]) -> None:
+        if self._msg_ch.closed:
+            return
         with contextlib.suppress(utils.aio.channel.ChanClosed):
+            event_type = event.get("type") if isinstance(event, dict) else event.type
+            if event_type in ("session.input_audio.mute", "session.input_audio.unmute"):
+                if self._input_resampler is not None:
+                    for frame in self._input_resampler.flush():
+                        self._process_input_audio(frame)
+                    self._input_resampler = None
+                for frame in self._bstream.flush():
+                    self._queue_input_audio(frame)
             self._msg_ch.send_nowait(event)
+            if event_type in ("session.input_audio.mute", "session.input_audio.unmute"):
+                self._input_muted = event_type == "session.input_audio.mute"
 
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
@@ -393,7 +415,7 @@ class GPTLiveSession(
                 try:
                     ws_conn = await self._create_ws_conn()
                     if reconnecting:
-                        self._reset_for_reconnect()
+                        await self._reset_for_reconnect()
                         self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
                     try:
                         await self._run_ws(ws_conn)
@@ -427,9 +449,10 @@ class GPTLiveSession(
                     raise error from None
                 reconnecting = True
         finally:
+            await self._close_input_vad()
             self._audio_ch.close()
 
-    def _reset_for_reconnect(self) -> None:
+    async def _reset_for_reconnect(self) -> None:
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
         self._bstream.clear()
@@ -442,6 +465,7 @@ class GPTLiveSession(
         self._fnc_call_to_delegation.clear()
         self._usage_total = types.Usage()
         self._session_id = None
+        await self._close_input_vad()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         headers = {
@@ -498,6 +522,9 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
+            if self._sent_input_muted:
+                await self._session_started_fut
+                await self._ws_send(ws_conn, types.InputAudioMuteEvent())
 
             async for msg in self._msg_ch:
                 # the protocol asks for session.started before any audio or command goes out
@@ -570,6 +597,8 @@ class GPTLiveSession(
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
         try:
             await ws_conn.send_str(json.dumps(raw))
+            if raw.get("type") in ("session.input_audio.mute", "session.input_audio.unmute"):
+                self._sent_input_muted = raw["type"] == "session.input_audio.mute"
         except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
             raise APIConnectionError("GPT-Live send failed") from None
 
@@ -664,6 +693,8 @@ class GPTLiveSession(
                 self.emit("input_speech_started", llm.InputSpeechStartedEvent())
         speech.text += event.delta
         speech.quiet_ms = 0
+        if role == "user":
+            speech.input_audio_ms = self._input_audio_ms
         if event.end_ms is not None:
             speech.end_ms = max(speech.end_ms or 0, event.end_ms)
         if isinstance(message := self._history.get_by_id(speech.message_id), llm.ChatMessage):
@@ -902,15 +933,8 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # the caller's turn ends after sustained silent input since their last fragment
-        if (speech := self._speech.get("user")) is not None:
-            samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32) / 32768
-            rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0
-            speech.quiet_ms = (
-                speech.quiet_ms + round(frame.duration * 1000) if rms <= _SILENCE_RMS else 0
-            )
-            if speech.quiet_ms >= _MIN_SILENCE_MS:
-                self._end_speech("user")
+        if self._closing:
+            return
 
         if self._input_resampler and frame.sample_rate != self._input_resampler._input_rate:
             self._input_resampler = None
@@ -922,10 +946,68 @@ class GPTLiveSession(
             )
         frames = self._input_resampler.push(frame) if self._input_resampler else [frame]
         for f in frames:
-            for nf in self._bstream.write(f.data.tobytes()):
-                self.send_event(
-                    types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
-                )
+            self._process_input_audio(f)
+
+    def _process_input_audio(self, f: rtc.AudioFrame) -> None:
+        """Feed normalized audio to the local detector and the ordered provider queue."""
+        if self._input_vad is None:
+            self._input_vad = inference.VAD(
+                activation_threshold=_INPUT_SPEECH_THRESHOLD,
+                deactivation_threshold=_INPUT_SPEECH_CONTINUATION_THRESHOLD,
+            ).stream()
+            self._input_vad_task = asyncio.create_task(
+                self._detect_input_speech(self._input_vad), name="GPTLiveSession._input_vad"
+            )
+        self._input_audio_ms += f.duration * 1000
+        self._input_vad.push_frame(
+            rtc.AudioFrame.create(f.sample_rate, f.num_channels, f.samples_per_channel)
+            if self._input_muted
+            else f
+        )
+        for nf in self._bstream.write(f.data.tobytes()):
+            self._queue_input_audio(nf)
+
+    def _queue_input_audio(self, frame: rtc.AudioFrame) -> None:
+        """Queue an input frame, including partial frames before a mute transition."""
+        self.send_event(types.InputAudioAppendEvent(audio=base64.b64encode(frame.data).decode()))
+
+    @utils.log_exceptions(logger=logger)
+    async def _detect_input_speech(self, stream: vad.VADStream) -> None:
+        """Finalize transcripts after non-speech input, excluding already queued audio."""
+        async for event in stream:
+            if event.type != vad.VADEventType.INFERENCE_DONE:
+                continue
+            previous_ms = self._input_vad_ms
+            self._input_vad_ms += sum(frame.duration for frame in event.frames) * 1000
+            threshold = (
+                _INPUT_SPEECH_CONTINUATION_THRESHOLD
+                if self._input_speaking
+                else _INPUT_SPEECH_THRESHOLD
+            )
+            self._input_speaking = event.probability >= threshold
+            if self._closing or (speech := self._speech.get("user")) is None:
+                continue
+            duration_ms = max(0.0, self._input_vad_ms - max(previous_ms, speech.input_audio_ms))
+            if not duration_ms:
+                continue
+            speech.quiet_ms = 0 if self._input_speaking else speech.quiet_ms + duration_ms
+            if speech.quiet_ms >= _MIN_SILENCE_MS - 1e-6:
+                self._end_speech("user")
+
+    async def _close_input_vad(self) -> None:
+        """Detach and settle the detector before replacing its input timeline."""
+        stream, self._input_vad = self._input_vad, None
+        task, self._input_vad_task = self._input_vad_task, None
+        self._input_audio_ms = self._input_vad_ms = 0.0
+        self._input_speaking = False
+        if task is not None:
+            task.cancel()
+        try:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+        finally:
+            if stream is not None:
+                await stream.aclose()
 
     def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
         """Add a standing rule to the model's instructions, capped at 500 tokens."""
