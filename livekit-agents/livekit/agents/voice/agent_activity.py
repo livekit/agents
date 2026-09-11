@@ -4704,6 +4704,22 @@ class AgentActivity(RecognitionHooks):
                 and audio_output.can_pause
                 and not self._paused_speech.handle.done()
             ):
+                recognition = self._audio_recognition
+                if recognition is not None and not (
+                    recognition._speaking or recognition._vad_speech_started
+                ):
+                    # this turn is being discarded, so clear it before the state restore
+                    # marks the agent speaking again; otherwise its speech anchors leak
+                    # into the next real user turn.
+                    # skipped while speech is still tracked: an stt end of turn arms this
+                    # timer while vad is mid-segment (see the "stt end of speech received
+                    # while vad is still in a speech segment" warning), and those anchors
+                    # belong to a live utterance rather than the abandoned one.
+                    # the stt stream is kept alive: the provider may still be decoding
+                    # this audio, and if the barge-in was real after all (a vad miss) that
+                    # late final is the only thing that can still interrupt the resumed
+                    # speech.
+                    recognition._clear_user_turn(reset_stt=False)
                 self._restore_paused_speech_state(self._paused_speech)
                 audio_output.resume()
                 resumed = True

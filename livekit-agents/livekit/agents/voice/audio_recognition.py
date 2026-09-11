@@ -984,7 +984,12 @@ class AudioRecognition:
         self._turn_detector_prediction_fut = None
         return stream
 
-    def _clear_user_turn(self) -> None:
+    def _clear_user_turn(self, *, reset_stt: bool = True) -> None:
+        """Drop the in-progress user turn.
+
+        ``reset_stt=False`` keeps the provider stream alive, for callers that discard the
+        turn while its audio may still be in flight.
+        """
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -1007,10 +1012,11 @@ class AudioRecognition:
         self._stt_request_ids = []
         self._reset_transcription_timeout()
 
-        # reset stt to clear the buffer from previous user turn
-        stt = self._stt
-        self._update_stt(None)
-        self._update_stt(stt)
+        if reset_stt:
+            # reset stt to clear the buffer from previous user turn
+            stt = self._stt
+            self._update_stt(None)
+            self._update_stt(stt)
 
     def _commit_user_turn(
         self,
