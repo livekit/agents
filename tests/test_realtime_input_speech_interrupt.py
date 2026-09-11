@@ -39,6 +39,8 @@ def _speech_started(activity: AgentActivity, *, allow_interruptions: bool) -> Sp
     handle = SpeechHandle.create(allow_interruptions=allow_interruptions)
     activity._current_speech = handle
     activity._rt_session = MagicMock()
+    # a bare MagicMock reports every capability as true; report the model's own instead
+    activity._rt_session.capabilities = activity.llm.capabilities
     activity._on_input_speech_started(llm.InputSpeechStartedEvent())
     return handle
 

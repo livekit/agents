@@ -73,6 +73,10 @@ class RealtimeCapabilities:
     can_disable_turn_detection: bool = False
     """Whether server-side turn detection can be disabled for a session so the client drives
     turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
+    supports_overlapping_speech: bool = False
+    """Whether the model and the caller may speak at once, the model deciding when to yield. The
+    framework then never holds the model's speech back for silence, nor cuts it when the caller
+    starts, so its output reaches the caller as it is generated"""
     mutable_chat_context: bool = False
     """Whether the chat context can be updated mid-session"""
     mutable_instructions: bool = False

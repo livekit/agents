@@ -147,10 +147,11 @@ RealtimeModel(
 | `require_speech_before_tool_call` | `bool` | `False` | Require the agent to speak before the tool can be called |
 | `forbid_speech_after_tool_call` | `bool` | `False` | Suppress the auto-generated spoken reply after the tool. Use for tools that always hand off to another agent (a non-handoff tool set here would leave the agent silent) |
 | `forbid_tool_call_after_speech` | `bool` | `False` | Drop the tool call if the agent already spoke this turn |
+| `allow_tool_chaining` | `bool` | `False` | Allow another tool call immediately after this tool's output |
 | `respond_after_sec` | `float` | — | **`choose_not_to_respond` only.** Seconds to wait after the tool fires; if the user stays silent, the agent speaks a follow-up. Omit to keep the default (stay silent). |
 | `speech_before_tool_call` | `str` | — | **`keypad_input` / `natural_conversation_ending` only.** `required` \| `optional` \| `suppressed`. |
 
-The plugin always sends tool calls with `wait_for_speech_before_tool_call` on and `allow_tool_chaining` off; these are not configurable per tool.
+The plugin always sends tool calls with `wait_for_speech_before_tool_call` on; this is not configurable per tool.
 
 > **Deprecated:** the top-level `forbid_speech_after_tool_call: list[str]` option still works but is deprecated — it now folds each listed tool into `configs_for_tools` as `forbid_speech_after_tool_call=True` (an explicit `configs_for_tools` entry wins) and logs a warning. Prefer `configs_for_tools`.
 
