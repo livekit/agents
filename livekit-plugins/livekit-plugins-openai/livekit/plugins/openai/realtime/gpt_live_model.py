@@ -12,6 +12,7 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
+import numpy as np
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
@@ -119,7 +120,7 @@ class _Speech:
     end_ms: int | None = None
     started_at: float = field(default_factory=time.time)
     quiet_ms: int = 0
-    """Input audio pushed since the user's last fragment."""
+    """Consecutive silent input audio pushed since the user's last fragment."""
 
 
 # Responses delegation hands work to a backend Responses model, whose events arrive wrapped in
@@ -901,9 +902,13 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        # the caller's turn ends on their own audio: this much pushed since their last fragment
+        # the caller's turn ends after sustained silent input since their last fragment
         if (speech := self._speech.get("user")) is not None:
-            speech.quiet_ms += round(frame.duration * 1000)
+            samples = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32) / 32768
+            rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0
+            speech.quiet_ms = (
+                speech.quiet_ms + round(frame.duration * 1000) if rms <= _SILENCE_RMS else 0
+            )
             if speech.quiet_ms >= _MIN_SILENCE_MS:
                 self._end_speech("user")
 

@@ -1097,7 +1097,7 @@ async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
 
 
 async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.MonkeyPatch) -> None:
-    """There are no turn events: the caller's fragments accumulate, and a second of their audio
+    """There are no turn events: the caller's fragments accumulate, and a second of silent input audio
     pushed with no new fragment ends the turn."""
     _connect_hook(monkeypatch)
 
@@ -1137,6 +1137,37 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         assert (final.transcript, final.is_final) == (" What is the", True)
         assert final.item_id == interim.item_id
         assert final.turn_started_at == interim.turn_started_at
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("quiet_frames_before_speech", [0, 5])
+async def test_continuing_input_speech_resets_the_user_turn_silence(
+    monkeypatch: pytest.MonkeyPatch, quiet_frames_before_speech: int
+) -> None:
+    """Transcript delivery can pause while input speech continues."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", events.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "Keep listening.", 100))
+        for _ in range(quiet_frames_before_speech):
+            session.push_audio(_pcm(0.0))
+        for _ in range(15):
+            session.push_audio(_pcm(0.2))
+        assert not [event for event in events if event.is_final]
+
+        frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
+        for _ in range(frames - 1):
+            session.push_audio(_pcm(0.0))
+        assert not [event for event in events if event.is_final]
+        session.push_audio(_pcm(0.0))
+        assert [event.transcript for event in events if event.is_final] == ["Keep listening."]
     finally:
         await session.aclose()
         await model.aclose()
