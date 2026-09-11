@@ -252,10 +252,10 @@ async def test_llm_fallback_records_failed_and_serving_provider(
 def test_interrupt_source_first_wins() -> None:
     from livekit.agents.voice.speech_handle import SpeechHandle
 
-    handle = SpeechHandle.__new__(SpeechHandle)
-    handle._interrupt_source = None
-    handle._set_interrupt_source("audio_activity")
-    handle._set_interrupt_source("user_turn")
+    handle = SpeechHandle.create()
+    handle.interrupt(source="audio_activity")
+    handle.interrupt(source="user_turn")  # already interrupted: the first cause stands
     assert handle._interrupt_source == "audio_activity"
+    assert SpeechHandle.create().interrupt()._interrupt_source == "programmatic"
     # unrelated: keep the module import used
     assert llm is not None and time is not None

@@ -1781,7 +1781,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
                 speaking=True,
             )
         )
-        current_speech.interrupt.assert_called_once_with()
+        current_speech.interrupt.assert_called_once_with(source="audio_activity")
         assert any(
             record.levelno == logging.INFO
             and "falling back to VAD-based interruption" in record.message

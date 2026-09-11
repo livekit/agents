@@ -342,6 +342,8 @@ class FallbackChunkedStream(ChunkedStream):
                         logger.warning(
                             f"{tts.label} already synthesized of audio, ignoring fallback"
                         )
+                        # the caller heard this instance's audio: it served, partially
+                        _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return
 
             self._try_recovery(tts)
@@ -535,6 +537,10 @@ class FallbackSynthesizeStream(SynthesizeStream):
                         if output_emitter.pushed_duration() > 0.0:
                             logger.warning(
                                 f"{tts.label} already synthesized of audio, ignoring the current segment for the tts fallback"  # noqa: E501
+                            )
+                            # the caller heard this instance's audio: it served, partially
+                            _record_fallback_served(
+                                tts, i, self._tts_request_span, self._caller_span
                             )
                             return
 

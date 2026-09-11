@@ -97,7 +97,7 @@ from .generation import (
     update_expressive_instructions,
     update_instructions,
 )
-from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
+from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
 from .turn import (
     EndpointingOptions,
@@ -1805,19 +1805,24 @@ class AgentActivity(RecognitionHooks):
     def _resume_authorization(self) -> None:
         self._authorization_allowed.set()
 
-    def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
+    def _interrupt_background_speeches(
+        self, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
         for speech in self._background_speeches:
             if force or speech.allow_interruptions:
-                interrupted_speeches.append(speech.interrupt(force=force))
+                interrupted_speeches.append(speech.interrupt(force=force, source=source))
 
         return interrupted_speeches
 
-    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(
+        self, *, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
         A queued speech that disallows interruptions keeps playing, along with the ones
-        behind it, unless ``force`` is set.
+        behind it, unless ``force`` is set. ``source`` names the cause on the speeches'
+        ``agent_turn`` spans.
 
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
@@ -1831,10 +1836,10 @@ class AgentActivity(RecognitionHooks):
 
         future = asyncio.Future[None]()
 
-        interrupted_speeches = self._interrupt_background_speeches(force=force)
+        interrupted_speeches = self._interrupt_background_speeches(force=force, source=source)
 
         if self._current_speech is not None:
-            self._current_speech.interrupt(force=force)
+            self._current_speech.interrupt(force=force, source=source)
             interrupted_speeches.append(self._current_speech)
 
         if self._rt_session is not None:
@@ -1843,7 +1848,7 @@ class AgentActivity(RecognitionHooks):
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
             try:
-                speech.interrupt(force=force)
+                speech.interrupt(force=force, source=source)
             except RuntimeError:
                 # the speeches behind this one are going to play, so stopping
                 # here keeps the conversation contiguous
@@ -2141,7 +2146,8 @@ class AgentActivity(RecognitionHooks):
             return
 
         try:
-            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
+            # the server's own speech detection: a barge-in, like the VAD path
+            self.interrupt(source="audio_activity")
         except RuntimeError:
             # only out of sync when the server cancelled its own response, with client-side turn
             # taking an uninterruptible speech is expected
@@ -2293,8 +2299,7 @@ class AgentActivity(RecognitionHooks):
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
 
-                self._current_speech._set_interrupt_source("audio_activity")
-                self._current_speech.interrupt()
+                self._current_speech.interrupt(source="audio_activity")
         elif self._current_speech is None or not self._current_speech.interrupted:
             self._interruption_detected = False
 
@@ -2694,11 +2699,9 @@ class AgentActivity(RecognitionHooks):
                     extra={"lk.pii.user_input": info.new_transcript},
                 )
                 return
-            # before the pause cancel: that is what interrupts the paused handle
-            current_speech._set_interrupt_source("user_turn")
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
-            await current_speech.interrupt()
+            await current_speech.interrupt(source="user_turn")
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -2812,7 +2815,7 @@ class AgentActivity(RecognitionHooks):
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
             # await the interrupt to make sure user message is added to the chat context before the new task starts
-            await speech_handle.interrupt()
+            await speech_handle.interrupt(source="user_turn")
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
@@ -4898,9 +4901,8 @@ class AgentActivity(RecognitionHooks):
             and not self._paused_speech.handle.interrupted
             and self._paused_speech.handle.allow_interruptions
         ):
-            # a final transcript or a committed turn ended the pause (first cause wins)
-            self._paused_speech.handle._set_interrupt_source("user_turn")
-            self._paused_speech.handle.interrupt()
+            # a final transcript or a committed turn ended the pause
+            self._paused_speech.handle.interrupt(source="user_turn")
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never
             # authorized won't have an active generation future.
