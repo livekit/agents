@@ -734,6 +734,8 @@ class GPTLiveSession(
             item = event.item
             if item is None or item.type != "function_call":
                 return
+            if item.status != "completed":
+                return
             if not item.call_id or not item.name or item.arguments is None:
                 logger.warning(
                     "gpt-live dropping function call with missing fields",
@@ -746,6 +748,8 @@ class GPTLiveSession(
                     extra={"call_id": item.call_id, "delegation_id": d_id},
                 )
                 pending = self._delegated_responses[d_id] = _DelegatedResponse(completed=True)
+            if item.call_id in pending.call_ids:
+                return
             pending.call_ids.add(item.call_id)
             self._fnc_call_to_delegation[item.call_id] = d_id
 
