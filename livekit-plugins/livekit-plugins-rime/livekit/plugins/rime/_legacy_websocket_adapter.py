@@ -35,6 +35,7 @@ from livekit.agents import (
 from livekit.agents.voice.io import TimedString
 
 from ._pool_manager import PoolManager
+from ._stream_tts import StreamTTS
 from .log import logger
 
 NUM_CHANNELS = 1
@@ -152,14 +153,12 @@ class _LegacyWebSocketSynthesizeStream(tts.SynthesizeStream):
         conn_options: APIConnectOptions,
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
-        super().__init__(tts=tts_instance, conn_options=conn_options)
+        super().__init__(
+            tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
+        )
         self._pool = pool
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
-
-    @property
-    def _metrics_model(self) -> str:
-        return self._options.model
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()

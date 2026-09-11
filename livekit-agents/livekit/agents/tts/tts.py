@@ -571,11 +571,6 @@ class SynthesizeStream(ABC):
 
         self._tts_request_span: trace.Span | None = None
 
-    @property
-    def _metrics_model(self) -> str:
-        """Model used for metrics; providers with fixed stream options can override this."""
-        return self._tts.model
-
     def _set_token_usage(self, *, input_tokens: int = 0, output_tokens: int = 0) -> None:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
@@ -722,9 +717,7 @@ class SynthesizeStream(ABC):
                 streamed=True,
                 acquire_time=self._acquire_time,
                 connection_reused=self._connection_reused,
-                metadata=Metadata(
-                    model_name=self._metrics_model, model_provider=self._tts.provider
-                ),
+                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(

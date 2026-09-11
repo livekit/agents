@@ -26,6 +26,7 @@ from livekit.agents.utils import is_given
 
 from . import _websocket_v1
 from ._pool_manager import PoolManager
+from ._stream_tts import StreamTTS
 
 _Pool = utils.ConnectionPool[_websocket_v1.Connection]
 
@@ -174,15 +175,13 @@ class _WebSocketV1SynthesizeStream(tts.SynthesizeStream):
         sentence_tokenizer: tokenize.SentenceTokenizer,
     ) -> None:
         self._sample_rate = tts_instance.sample_rate
-        super().__init__(tts=tts_instance, conn_options=conn_options)
+        super().__init__(
+            tts=StreamTTS(tts_instance, model=options.model), conn_options=conn_options
+        )
         self._pool = pool
         self._options = options
         self._sentence_tokenizer = sentence_tokenizer
         self._end_input_sentinel: object | None = None
-
-    @property
-    def _metrics_model(self) -> str:
-        return self._options.model
 
     def _enqueue_tokenizer_drain(self) -> tts.SynthesizeStream._FlushSentinel:
         sentinel = self._FlushSentinel()

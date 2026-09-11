@@ -31,6 +31,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
 )
+from livekit.agents.telemetry import trace_types
 from livekit.agents.telemetry.traces import _DynamicTracer
 from livekit.agents.tts import tts as tts_module
 from livekit.plugins.rime import TTS
@@ -703,6 +704,8 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
 
     monkeypatch.setattr(LegacyWebSocketAdapter, "_connect", connect_ws)
     tts = TTS(api_key="test-key", model="coda", use_websocket=True)
+    errors: list[tts_module.TTSError] = []
+    tts.on("error", errors.append)
     stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
     stream.push_text("hello")
     stream.end_input()
@@ -716,6 +719,9 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
 
     _assert_exception_is_safe(exc_info.value)
     assert exc_info.value.__cause__ is None
+    assert len(errors) == 1
+    assert errors[0].error is exc_info.value
+    assert errors[0].label == tts.label
 
 
 @pytest.mark.parametrize("stream_count", [1, 2])
@@ -1569,7 +1575,17 @@ async def test_v1_stream_snapshots_websocket_url() -> None:
     ]
 
 
-async def test_v1_stream_metrics_keep_model_after_endpoint_update() -> None:
+@pytest.mark.parametrize("new_stream_first", [False, True], ids=["old-first", "new-first"])
+async def test_v1_stream_metrics_keep_model_after_endpoint_update(
+    new_stream_first: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = _DynamicTracer("test-rime-stream-metrics")
+    tracer.set_provider(provider)
+    monkeypatch.setattr(tts_module, "tracer", tracer)
+
     async with _RimeV1Server() as first_server, _RimeV1Server() as second_server:
         tts = _v1_tts(first_server)
         metrics = []
@@ -1577,19 +1593,39 @@ async def test_v1_stream_metrics_keep_model_after_endpoint_update() -> None:
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
         stream.push_text("first")
         stream.flush()
+        new_stream = None
         try:
             await asyncio.wait_for(first_server.wait_for_text_messages(1), timeout=2)
             mist_url = second_server.websocket_url.replace("/coda/ws", "/mist/ws")
             tts.update_options(websocket_url=mist_url)
-            stream.end_input()
-            await _collect(stream)
+            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            new_stream.push_text("second")
+            streams = [(stream, "coda"), (new_stream, "mistv3")]
+            if new_stream_first:
+                streams.reverse()
+
+            for count, (active_stream, model) in enumerate(streams, start=1):
+                active_stream.end_input()
+                events = await _collect(active_stream)
+                await active_stream.aclose()
+                assert len(metrics) == count
+                assert metrics[-1].request_id == events[0].request_id
+                assert metrics[-1].metadata.model_name == model
+                assert metrics[-1].metadata.model_provider == tts.provider
+                assert metrics[-1].label == tts.label
+                assert tts.model == "mistv3"
         finally:
             await stream.aclose()
+            if new_stream is not None:
+                await new_stream.aclose()
             await tts.aclose()
 
-    assert tts.model == "mistv3"
-    assert len(metrics) == 1
-    assert metrics[0].metadata.model_name == "coda"
+    spans = [span for span in exporter.get_finished_spans() if span.name == "tts_request"]
+    assert len(spans) == 2
+    for span, metric in zip(spans, metrics, strict=True):
+        assert span.attributes is not None
+        assert span.attributes[trace_types.ATTR_TTS_LABEL] == tts.label
+        assert json.loads(span.attributes[trace_types.ATTR_TTS_METRICS]) == metric.model_dump()
 
 
 async def test_v1_omits_retained_time_scale_factor_after_switch_to_mistv2() -> None:
@@ -2329,6 +2365,7 @@ async def test_v1_retries_after_write_failure_before_audio(
     assert events[-1].is_final
     assert server.connections == 2
     assert len(errors) == 1
+    assert errors[0].label == tts.label
     assert isinstance(errors[0].error, APIConnectionError)
     assert errors[0].recoverable is True
     _assert_exception_is_safe(errors[0].error)
