@@ -1701,7 +1701,10 @@ class RealtimeSession(  # noqa: F811
 
         finally:
             logger.info("main output response stream processing task exiting")
-            self._is_sess_active.clear()
+            # A retry can replace this task before the old task reaches its
+            # cleanup block. Keep the session active for the replacement task.
+            if asyncio.current_task() is self._response_task:
+                self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation
