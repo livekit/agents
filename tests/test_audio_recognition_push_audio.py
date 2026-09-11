@@ -30,6 +30,7 @@ def _make_recognition() -> AudioRecognition:
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
+    ar._session.amd._discard_pre_answer_audio = False
     ar._turn_detector_stream = None  # type: ignore[attr-defined]
     return ar
 
@@ -46,17 +47,17 @@ def test_push_audio_routes_real_frame_everywhere_by_default() -> None:
     ar._interruption_ch.send_nowait.assert_called_once_with(frame)
 
 
-def test_push_audio_substitutes_stt_frame_only_on_stt_path() -> None:
+def test_push_audio_substitutes_stt_frame_on_both_stt_paths() -> None:
     ar = _make_recognition()
     real = _make_frame(byte=0x11)
     silence = _make_frame(byte=0x00)
 
     ar._push_audio(real, stt_frame=silence)
 
-    # STT pipeline sees the substitute (silence), nothing else does.
+    # Both STT paths use the same echo/uninterruptible-speech guard.
     ar._stt_pipeline.audio_ch.send_nowait.assert_called_once_with(silence)
     ar._vad_ch.send_nowait.assert_called_once_with(real)
-    ar._session.amd.push_audio.assert_called_once_with(real)
+    ar._session.amd.push_audio.assert_called_once_with(silence)
     ar._interruption_ch.send_nowait.assert_called_once_with(real)
 
 
@@ -79,3 +80,18 @@ def test_push_audio_records_sample_rate_and_input_start() -> None:
 
     assert ar._sample_rate == 24000  # type: ignore[attr-defined]
     assert ar._input_started_at is not None  # type: ignore[attr-defined]
+
+
+def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
+    ar = _make_recognition()
+    ar._session.amd._discard_pre_answer_audio = True
+    ar._turn_detector_stream = MagicMock()
+
+    ar._push_audio(_make_frame())
+
+    ar._stt_pipeline.audio_ch.send_nowait.assert_not_called()
+    ar._vad_ch.send_nowait.assert_not_called()
+    ar._session.amd.push_audio.assert_not_called()
+    ar._interruption_ch.send_nowait.assert_not_called()
+    ar._turn_detector_stream.push_audio.assert_not_called()
+    assert ar._input_started_at is None

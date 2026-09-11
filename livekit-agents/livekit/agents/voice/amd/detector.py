@@ -1,647 +1,908 @@
 from __future__ import annotations
 
 import asyncio
-import os
+import json
+import time
+import uuid
+from collections import deque
+from collections.abc import Coroutine
+from dataclasses import dataclass, field
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal, TypedDict
-
-from opentelemetry import trace
+from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
-from ...inference import LLM as _InferenceLLM, STT as _InferenceSTT, LLMModels
-from ...job import get_job_context
-from ...llm import LLM as _LLM
+from ... import inference, llm, stt
 from ...log import logger
-from ...stt import STT as _STT
-from ...telemetry import trace_types, tracer
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
-from ...utils.misc import is_cloud
-from ...utils.participant import (
-    wait_for_participant_attribute,
-    wait_for_track_publication,
-)
-from .classifier import (
-    AMD_PROMPT,
-    HUMAN_SILENCE_THRESHOLD,
-    HUMAN_SPEECH_THRESHOLD,
-    MACHINE_SILENCE_THRESHOLD,
-    MAX_ENDPOINTING_DELAY,
-    NO_SPEECH_THRESHOLD,
-    TIMEOUT,
-    AMDCategory,
-    AMDPredictionEvent,
-    _AMDClassifier,
-)
+from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
+from . import _inference
+from ._transcription import TurnTranscript
+from .classifier import MACHINE_SILENCE_THRESHOLD, AMDCategory, AMDPredictionEvent
+from .events import AMDCompletedEvent, AMDMenuObservedEvent
 
 if TYPE_CHECKING:
-    from ...llm import LLM
-    from ...stt import STT
     from ..agent_session import AgentSession
     from ..audio_recognition import _EndOfTurnInfo
+    from ..events import AgentFalseInterruptionEvent, AgentStateChangedEvent, SpeechCreatedEvent
+    from ..speech_handle import SpeechHandle
 
-EVALUATED_LLM_MODELS: set[str] = {
-    "google/gemini-3.1-flash-lite",
-    "google/gemini-3-flash-preview",
-    "openai/gpt-4.1",
-    "openai/gpt-5.2",
-    "openai/gpt-5.4",
-    "openai/gpt-5.1",
-    "openai/gpt-4o",
-    "openai/gpt-5.1-chat-latest",
-    "openai/gpt-4.1-mini",
-    "openai/gpt-4.1-nano",
-    "openai/gpt-5.2-chat-latest",
-    "google/gemini-2.5-flash-lite",
-}
-
-EVALUATED_STT_MODELS: set[str] = {
-    "deepgram/nova-3",
-    "assemblyai/universal-streaming-multilingual",
-    "cartesia/ink-whisper",
-}
-
-_SIP_CALL_STATUS_ATTR = "sip.callStatus"
-_SIP_CALL_STATUS_ACTIVE = "active"
-_TRACK_PUBLICATION_TIMEOUT = 5.0
-
-
-class DetectionOptions(TypedDict, total=False):
-    human_speech_threshold: float
-    human_silence_threshold: float
-    machine_silence_threshold: float
-    no_speech_threshold: float
-    timeout: float
-    max_endpointing_delay: float
-    prompt: str
+DEFAULT_SCREENING_INSTRUCTIONS = (
+    "Call state: automated call screening. Answer the screening assistant's latest "
+    "prompt briefly. Use what you know about who you are and why you are calling. "
+    "Then wait for its next prompt."
+)
+DEFAULT_VOICEMAIL_INSTRUCTIONS = (
+    "Call state: voicemail. Deliver one concise, self-contained message. "
+    "State who you are, why you are calling, and the next step for the recipient."
+)
+DEFAULT_IVR_INSTRUCTIONS = (
+    "Call state: an automated phone menu. Use the participant's actual prompt and "
+    "the purpose of this call to choose the next step. Use send_dtmf_events for an "
+    "explicit keypad choice, or give a short spoken answer when requested. "
+    "Do not invent a menu option. After the action, wait for the next prompt."
+)
+_HUMAN_INSTRUCTIONS = (
+    "Call state: a human has answered. The latest participant turn is from "
+    "the human, not the automated system. Earlier automated prompts no longer "
+    "apply. Respond to the human's latest message and continue the call normally. "
+    "Do not resume a response to an earlier automated prompt."
+)
 
 
-_DEFAULT_DETECTION_OPTIONS: DetectionOptions = {
-    "human_speech_threshold": HUMAN_SPEECH_THRESHOLD,
-    "human_silence_threshold": HUMAN_SILENCE_THRESHOLD,
-    "machine_silence_threshold": MACHINE_SILENCE_THRESHOLD,
-    "no_speech_threshold": NO_SPEECH_THRESHOLD,
-    "timeout": TIMEOUT,
-    "max_endpointing_delay": MAX_ENDPOINTING_DELAY,
-    "prompt": AMD_PROMPT,
-}
+@dataclass
+class _Turn:
+    turn_id: int
+    committed_at: float
+    transcript: str
+    speech_duration: float
+    decision: asyncio.Future[AMDPredictionEvent]
+    speech_epoch: int
+    silence_started_at: float
+    dtmf_digits: str = ""
+    timer: asyncio.TimerHandle | None = None
+    release_timer: asyncio.TimerHandle | None = None
+    prediction: AMDPredictionEvent | None = None
+    timed_out: bool = False
+    updated_turn_ids: set[int] = field(default_factory=set)
 
 
-class AMD(EventEmitter[Literal["amd_prediction"]]):
-    """Answering Machine Detection (AMD).
+class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_observed"]]):
+    """Experimental client-side, multi-turn answering-machine detection.
 
-    Detects whether an outbound call is answered by a human or a machine.
+    Start an AgentSession before entering AMD. Enter AMD before creating a SIP
+    participant. execute() waits for completion, not the first machine prediction.
+    The SDK owns classification and stage control. Models can use any provider.
 
-    Listens to the call greeting and uses an LLM to classify it into one of
-    the following categories:
+    This MVP uses the customer's current pipeline Agent. Realtime models and
+    agent handoffs during AMD are not supported yet. The final active-Agent API
+    remains undecided. Normal hooks, interruptions, playback, and StopResponse
+    stay in AgentSession. Menu events are informational and never execute actions.
 
-    - ``human``: a real person answered.
-    - ``machine-ivr``: an IVR / DTMF menu prompt was detected.
-    - ``machine-vm``: a voicemail greeting where leaving a message is possible.
-    - ``machine-unavailable``: the mailbox is full or not set up; leaving a message is not possible.
-    - ``uncertain``: the transcript is ambiguous and could not be classified.
-
-    Start AMD before creating the SIP participant so no audio is missed. Its
-    detection timeout begins only after listening starts; SIP settings bound
-    the pre-answer phase. If the call ends before audio arrives, AMD settles
-    immediately with an ``uncertain`` verdict (``reason="participant_missing"``).
-
-    For SIP participants, the no-speech timer and
-    audio/transcript processing are deferred until ``sip.callStatus ==
-    "active"`` so pre-answer audio (ringback, carrier early media, dialtone)
-    does not poison the classifier or burn the no-speech budget.
-
-    The recommended pattern is the async context manager::
-
-        async with AMD(session, llm="openai/gpt-4.1-mini") as detector:
-            await ctx.api.sip.create_sip_participant(...)  # wait_until_answered=True
-            result = await detector.execute()
+    Example:
+        async with AMD(session) as amd:
+            result = await amd.execute()
 
     Args:
-        session: The :class:`AgentSession` to wire AMD to.
-        llm: LLM used for greeting classification. Accepts an :class:`LLM`
-            instance or an inference model string (e.g.
-            ``"openai/gpt-4.1-mini"``). When omitted, AMD auto-selects:
-            if LiveKit inference credentials are available in the environment
-            it uses ``"google/gemini-3.1-flash-lite"`` via the
-            inference gateway; otherwise it falls back to the session's own
-            LLM. Pass ``None`` to always reuse the session's LLM.
-        interrupt_on_machine: If ``True`` (default), interrupt any pending
-            agent speech immediately when a machine is detected.
-        ivr_detection: If ``True`` (default), automatically start IVR
-            navigation when a ``machine-ivr`` result is returned.
-        participant_identity: If set, AMD listens only to this participant's
-            audio track, and settles immediately if that participant
-            disconnects before publishing audio. If omitted, the first remote
-            audio track wins and the publisher is resolved from the track sid.
-        stt: STT used for transcript generation. Accepts an :class:`STT`
-            instance or an inference model string (e.g.
-            ``"cartesia/ink-whisper"``). When omitted, AMD auto-selects:
-            if LiveKit inference credentials are available it uses
-            ``"cartesia/ink-whisper"`` via the inference gateway; otherwise
-            it reuses the session's existing STT transcripts. Pass ``None`` to
-            always reuse the session's STT transcripts.
-        suppress_compatibility_warning: If ``True``, do not log a warning when
-            the resolved STT or LLM is not among the bundled AMD-tested model
-            strings. Has no effect on classification behavior.
-        detection_options: Optional overrides for timing thresholds and the AMD
-            classification prompt (see :class:`DetectionOptions`). When
-            omitted, library defaults apply. ``max_endpointing_delay`` can be
-            set here to override the session activity's endpointing backstop
-            for AMD.
-        wait_until_finished: If ``True``, once any speech has been heard the
-            ``detection_timeout`` no longer forces emission — AMD will keep
-            waiting for post-speech silence and either a session end-of-turn
-            signal or the session's max endpointing delay before emitting.
-            Useful for outbound voicemail flows where leaving a message early
-            would overlap the greeting. ``no_speech_timeout`` (uncertain)
-            still fires normally (no audio at all means there is nothing to
-            wait for). Continuous audio without a speech-end or end-of-turn can
-            therefore extend detection beyond ``timeout``; set this to
-            ``False`` when ``timeout`` should remain a hard cap after speech
-            starts. Defaults to ``True``.
+        session: Started session whose participant audio and client-side EOT to use.
+        llm: Classification and menu model. Defaults to the current Agent's LLM.
+            A string selects a LiveKit Inference model. Supplied models stay open
+            when AMD completes.
+        stt: Optional second STT model. A string selects a LiveKit Inference model.
+            None or NOT_GIVEN uses only the session transcript.
+        participant_identity: Select the participant before placing an outbound call.
+        wait_until_answered: Discard pre-answer audio from AMD and AgentSession
+            when True. When False, listen to subscribed SIP early media.
+        screening_instructions: Instructions for each screening turn.
+        voicemail_instructions: Instructions for one message per voicemail stage.
+        ivr_instructions: Instructions for each IVR turn. The SDK supplies a DTMF
+            tool only to IVR reply generations.
+        idle_timeout: Silent, inactive time before AMD completes outside voicemail.
+        voicemail_idle_timeout: Silent, inactive time in voicemail. Starts after
+            playback finishes, to allow a delayed post-message menu to arrive.
+        timeout: Hard limit from the start of listening.
+        inference_timeout: Prediction deadline per committed turn. A late result
+            can update the stage, but cannot change a reply that already started.
+        machine_silence_threshold: Continuous participant silence before a machine
+            prediction releases the turn. Includes silence before and during
+            classification. Human and initial uncertain predictions do not wait.
+            Set to zero to disable the extra silence wait.
+        max_uncertain_turns: Consecutive uncertain predictions before completion.
     """
-
-    _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
-    _DEFAULT_STT_MODEL: str = "cartesia/ink-whisper"
 
     def __init__(
         self,
         session: AgentSession,
         *,
-        llm: NotGivenOr[LLM | LLMModels | str | None] = NOT_GIVEN,
-        stt: NotGivenOr[STT | str | None] = NOT_GIVEN,
-        interrupt_on_machine: bool = True,
-        ivr_detection: bool = True,
+        llm: NotGivenOr[llm.LLM | str] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
-        suppress_compatibility_warning: bool = False,
-        detection_options: NotGivenOr[DetectionOptions] = NOT_GIVEN,
-        wait_until_finished: bool = True,
+        wait_until_answered: bool = True,
+        screening_instructions: str = DEFAULT_SCREENING_INSTRUCTIONS,
+        voicemail_instructions: str = DEFAULT_VOICEMAIL_INSTRUCTIONS,
+        ivr_instructions: str = DEFAULT_IVR_INSTRUCTIONS,
+        idle_timeout: float = 10.0,
+        voicemail_idle_timeout: float = 60.0,
+        timeout: float = 120.0,
+        inference_timeout: float = 1.5,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
+        max_uncertain_turns: int = 3,
     ) -> None:
         super().__init__()
-
-        if not is_given(llm) or not is_given(stt):
-            api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
-            api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
-                "LIVEKIT_API_SECRET"
-            )
-            auto_select = (
-                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
-            )
-            if not is_given(llm):
-                llm = self._DEFAULT_LLM_MODEL if auto_select else None
-            if not is_given(stt):
-                stt = self._DEFAULT_STT_MODEL if auto_select else None
-
-        self._llm_config: LLM | LLMModels | str | None = llm
-        self._session: AgentSession = session
-        self._interrupt_on_machine = interrupt_on_machine
-        self._ivr_detection = ivr_detection
-        self._wait_until_finished = wait_until_finished
-        self._suppress_compatibility_warning = suppress_compatibility_warning
-        self._participant_identity: NotGivenOr[str] = participant_identity
-        self._stt: _STT | None = _InferenceSTT(stt) if isinstance(stt, str) else stt
-
-        self._classifier: _AMDClassifier | None = None
-        self._result: AMDPredictionEvent | None = None
-        self._closed = False
-        self._span: trace.Span | None = None
-
-        self._provided_detection_options: DetectionOptions = (
-            detection_options if is_given(detection_options) else {}
-        )
-        self._opts: DetectionOptions = {
-            **_DEFAULT_DETECTION_OPTIONS,
-            **self._provided_detection_options,
+        if (
+            min(idle_timeout, voicemail_idle_timeout, timeout, inference_timeout) <= 0
+            or max_uncertain_turns < 1
+        ):
+            raise ValueError("AMD timeouts and max_uncertain_turns must be positive")
+        if machine_silence_threshold < 0:
+            raise ValueError("machine_silence_threshold must be nonnegative")
+        self._session = session
+        self._owns_llm = isinstance(llm, str)
+        self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
+        self._owns_stt = isinstance(stt, str)
+        self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt
+        self._participant_identity = participant_identity
+        self._wait_until_answered = wait_until_answered
+        self._instructions = {
+            AMDCategory.MACHINE_SCREENING: screening_instructions,
+            AMDCategory.MACHINE_VM: voicemail_instructions,
+            AMDCategory.MACHINE_IVR: ivr_instructions,
         }
-
-        if not self._suppress_compatibility_warning:
-            if self._stt is not None:
-                _warn_if_not_evaluated(
-                    self._stt.model,
-                    EVALUATED_STT_MODELS,
-                    model_kind="stt",
-                )
-
-        self._setup_task: asyncio.Task[None] | None = None
-        self._sip_answer_task: asyncio.Task[None] | None = None
-        self._audio_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._idle_timeout = idle_timeout
+        self._voicemail_idle_timeout = voicemail_idle_timeout
+        self._timeout = timeout
+        self._inference_timeout = inference_timeout
+        self._machine_silence_threshold = machine_silence_threshold
+        self._max_uncertain_turns = max_uncertain_turns
+        self._session_id = uuid.uuid4().hex
+        self._control_prefix = f"amd_{uuid.uuid4().hex}_"
+        self._entered = False
+        self._closed = False
+        self._listening = False
+        self._speaking_since: float | None = None
+        self._speech_ended_at: float | None = None
+        self._speech_epoch = 0
+        self._speech_duration = 0.0
+        self._category = AMDCategory.UNCERTAIN
+        self._previous_turn: AMDCategory | None = None
+        self._previous_stage: AMDCategory | None = None
+        self._should_wait = False
+        self._voicemail_message_played = False
+        self._voicemail_started = False
+        self._voicemail_handle: SpeechHandle | None = None
+        self._voicemail_audio_start = 0
+        self._uncertain_turns = 0
+        self._inference_timeouts = 0
+        self._turn_id = 0
+        self._pending_dtmf_digits = ""
+        self._turns: dict[int, _Turn] = {}
+        self._history: deque[dict[str, Any]] = deque(maxlen=20)
+        self._updated_turn_ids: set[int] = set()
+        self._transcript: TurnTranscript | None = None
+        self._transcripts: dict[int, TurnTranscript] = {}
+        self._last_inference_turn_id = 0
+        self._pending_turn: _Turn | None = None
+        self._reused_turns: list[_Turn] = []
+        self._classifier_task: asyncio.Task[None] | None = None
+        self._menu_task: asyncio.Task[None] | None = None
+        self._latest: AMDPredictionEvent | None = None
+        self._completion: asyncio.Future[AMDCompletedEvent] | None = None
+        self._finishing: asyncio.Task[None] | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._hard_timer: asyncio.TimerHandle | None = None
+        self._idle_timer: asyncio.TimerHandle | None = None
+        self._speeches: set[SpeechHandle] = set()
+        self._agent: Any = None
 
     @property
     def enabled(self) -> bool:
-        return self._classifier is not None
+        return self._entered and not self._closed
 
     @property
     def pending(self) -> bool:
-        return self._classifier is not None and self._result is None
+        return self.enabled
 
     @property
     def started(self) -> bool:
-        return self._classifier is not None and self._classifier.listening
+        return self.enabled and self._listening
 
-    async def execute(self) -> AMDPredictionEvent:
-        """Run AMD and return the result.
-
-        While executing, speech playout authorization is locked. Once the
-        result is available, authorization is resumed and automatic actions
-        (interrupt on machine, ivr detection) are applied based on the
-        configured options.
-        """
-        if self._classifier:
-            await self._classifier._verdict_ready.wait()
-
-        if not self._result:
-            raise RuntimeError("amd closed before a result was available")
-
-        result = self._result
-
-        if result.is_machine and self._interrupt_on_machine:
-            await self._session.interrupt(force=True)
-
-        if result.category == AMDCategory.MACHINE_IVR and self._ivr_detection:
-            await self._session._start_ivr_detection(
-                transcript=result.transcript,
-            )
-
-        # eagerly resume so agent can speak immediately to a human
-        if self._session._activity:
-            self._session._activity._resume_authorization()
-
-        return result
-
-    def _on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
-        """Forward EOT to the classifier and signal whether AMD is consuming
-        this turn so the agent activity should skip the normal reply pipeline.
-
-        Returns ``True`` when AMD has decided this is a machine and the caller
-        asked us to take over via ``interrupt_on_machine``; the caller is
-        expected to drive its own ``generate_reply`` (e.g. leaving a voicemail)
-        and the auto-reply triggered by user-turn completion would otherwise
-        race with it.
-        """
-        if self._closed or not self._classifier:
-            return False
-        self._classifier.on_end_of_turn()
-        if not (
-            self._interrupt_on_machine and self._result is not None and self._result.is_machine
-        ):
-            return False
-        logger.debug(
-            "skipping auto reply: AMD already returned a machine verdict",
-            extra={
-                "category": self._result.category.value,
-                "lk.pii.transcript": info.new_transcript,
-            },
-        )
-        return True
+    @property
+    def _discard_pre_answer_audio(self) -> bool:
+        return self.enabled and not self._listening
 
     async def __aenter__(self) -> AMD:
-        await self._run(self._session)
+        if self._entered or self._completion is not None:
+            raise RuntimeError("Use a new AMD instance for each run")
+        activity = self._session._activity
+        if activity is None:
+            raise RuntimeError("Start AgentSession before entering AMD")
+        if isinstance(activity.llm, llm.RealtimeModel):
+            raise ValueError(
+                "AMD MVP supports pipeline STT/LLM/TTS only; "
+                "realtime reply control is not implemented yet"
+            )
+        if self._session.amd is not None:
+            raise RuntimeError("AMD is already active")
+        if self._session.options.ivr_detection or self._session._ivr_activity is not None:
+            raise ValueError("Disable session-level ivr_detection when using AMD")
+        if not is_given(self._llm):
+            if not isinstance(activity.llm, llm.LLM):
+                raise ValueError("AMD requires an LLM for classification")
+            self._llm = activity.llm
+        self._agent = activity._agent
+        self._completion = asyncio.get_running_loop().create_future()
+        self._transcript = self._new_transcript()
+        self._entered = True
+        self._session._amd = self
+        activity._pause_authorization()
+        self._session.on("speech_created", self._on_speech_created)
+        self._session.on("agent_state_changed", self._on_agent_state_changed)
+        self._session.on("agent_false_interruption", self._on_false_interruption)
+        if self._session._room_io:
+            self._session._room_io.room.on("participant_disconnected", self._on_disconnected)
+            if is_given(self._participant_identity):
+                self._session._room_io.set_participant(self._participant_identity)
+        self._spawn(self._setup_listening())
         return self
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+        return task
+
+    def _on_task_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error("AMD task failed", exc_info=error)
+            self._finish("inference_error")
+
+    async def execute(self) -> AMDCompletedEvent:
+        if not self._entered or self._completion is None:
+            raise RuntimeError("Enter AMD before calling execute()")
+        return await asyncio.shield(self._completion)
 
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
     ) -> None:
         await self.aclose()
 
-    # region: lifecycle hooks (called by AudioRecognition)
+    async def aclose(self) -> None:
+        if not self._entered:
+            return
+        self._finish("cancelled")
+        assert self._finishing is not None
+        await asyncio.shield(self._finishing)
+
+    async def _setup_listening(self) -> None:
+        try:
+            if not self._session._room_io:
+                self._start_listening()
+                return
+            room = self._session._room_io.room
+            publication = await wait_for_track_publication(
+                room=room,
+                identity=self._participant_identity
+                if is_given(self._participant_identity)
+                else None,
+                kind=rtc.TrackKind.KIND_AUDIO,
+                wait_for_subscription=True,
+            )
+            publisher = next(
+                (
+                    p
+                    for p in room.remote_participants.values()
+                    if publication.sid in p.track_publications
+                ),
+                None,
+            )
+            if publisher is None:
+                self._finish("participant_missing")
+                return
+            self._participant_identity = publisher.identity
+            if (
+                self._wait_until_answered
+                and publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+            ):
+                await wait_for_participant_attribute(
+                    room, identity=publisher.identity, attribute="sip.callStatus", value="active"
+                )
+            if not self._closed:
+                self._start_listening()
+        except RuntimeError:
+            self._finish("participant_missing")
+
+    def _start_listening(self) -> None:
+        if self._closed or self._listening:
+            return
+        self._listening = True
+        loop = asyncio.get_running_loop()
+        self._hard_timer = loop.call_later(self._timeout, self._finish, "timeout")
+        self._rearm_idle()
+        logger.info("AMD listening", extra={"session_id": self._session_id})
+
+    def _on_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if participant.identity == self._participant_identity:
+            self._finish("participant_disconnected")
+
+    def _new_transcript(self) -> TurnTranscript:
+        return TurnTranscript(
+            self._stt if is_given(self._stt) else None,
+            self._session.conn_options.stt_conn_options,
+            self._on_transcript_update,
+        )
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if not (self._classifier and self._classifier.listening):
+        if self.started and self._transcript is not None:
+            self._transcript.push_audio(frame)
+
+    def _on_transcript_update(self, transcript: TurnTranscript) -> None:
+        if self._closed:
             return
-        if self._audio_ch and not self._audio_ch.closed:
-            self._audio_ch.send_nowait(frame)
+        for entry in self._history:
+            if entry["turn_id"] == transcript.turn_id:
+                updated = {**entry, **transcript.history()}
+                if updated != entry:
+                    entry.update(updated)
+                    assert transcript.turn_id is not None
+                    self._updated_turn_ids.add(transcript.turn_id)
+                return
+
+    def notify_dtmf_sent(self, digits: str) -> None:
+        """Report digits after their local send succeeds, in send order.
+
+        The built-in send_dtmf_events tool calls this automatically. Custom
+        senders must call it after publish_dtmf returns successfully. Report
+        each digit separately when a sequence can fail or be cancelled midway.
+        The next client-side EOT includes these digits in classification context.
+        This does not send DTMF to the participant or change the AMD stage.
+        Calls outside an active AMD run are ignored.
+        """
+        if not self.enabled:
+            return
+        if not digits or any(digit not in "0123456789*#ABCD" for digit in digits):
+            raise ValueError("digits must contain only 0-9, *, #, or A-D")
+        self._pending_dtmf_digits += digits
 
     def _on_user_speech_started(self) -> None:
-        if self._classifier:
-            self._classifier.on_user_speech_started()
+        if self.started:
+            self._speech_epoch += 1
+            self._speaking_since = time.monotonic()
+            self._speech_ended_at = None
+            for turn in self._turns.values():
+                if turn.release_timer:
+                    turn.release_timer.cancel()
+                    turn.release_timer = None
+            self._cancel_idle()
+            if activity := self._session._activity:
+                activity._pause_authorization()
 
     def _on_user_speech_ended(self, silence_duration: float) -> None:
-        if self._classifier:
-            self._classifier.on_user_speech_ended(silence_duration)
+        self._speech_ended_at = time.monotonic() - max(0, silence_duration)
+        if self._speaking_since is not None:
+            self._speech_duration += max(0, self._speech_ended_at - self._speaking_since)
+        self._speaking_since = None
+        for turn in self._turns.values():
+            if turn.speech_epoch == self._speech_epoch:
+                turn.silence_started_at = self._speech_ended_at
+                self._release_prediction(turn)
 
     def _on_transcript(self, text: str) -> None:
-        if self._classifier:
-            self._classifier.push_text(text)
+        if self.started and self._transcript is not None:
+            self._transcript.add_session_text(text)
 
-    async def aclose(self) -> None:
+    def _on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
+        if not self.started:
+            return False
+        self._turn_id += 1
+        info.amd_turn_id = self._turn_id
+        self._cancel_idle()
+        if activity := self._session._activity:
+            activity._pause_authorization()
+        speech_duration = self._speech_duration
+        self._speech_duration = 0
+        if self._speaking_since is not None:
+            speech_duration += time.monotonic() - self._speaking_since
+            self._speaking_since = time.monotonic()
+        committed_at = time.monotonic()
+        silence_started_at = self._speech_ended_at
+        if silence_started_at is None:
+            silence_started_at = committed_at - max(0, info.metrics.end_of_turn_delay or 0)
+        turn = _Turn(
+            self._turn_id,
+            committed_at,
+            info.new_transcript.strip()[-16000:],
+            speech_duration,
+            asyncio.get_running_loop().create_future(),
+            speech_epoch=self._speech_epoch,
+            silence_started_at=silence_started_at,
+            dtmf_digits=self._pending_dtmf_digits,
+        )
+        self._turns[turn.turn_id] = turn
+        assert self._transcript is not None
+        transcript = self._transcript
+        transcript.commit(turn.turn_id, info.new_transcript)
+        self._transcripts[turn.turn_id] = transcript
+        self._transcript = self._new_transcript()
+        self._history.append({**transcript.history(), "dtmf_digits": turn.dtmf_digits})
+        self._updated_turn_ids.intersection_update(entry["turn_id"] for entry in self._history)
+        self._pending_dtmf_digits = ""
+        if not transcript.ready.is_set() and transcript.pending:
+            self._spawn(self._wait_for_transcript(turn, transcript))
+        else:
+            self._start_classification(turn)
+        return False
+
+    async def _wait_for_transcript(self, turn: _Turn, transcript: TurnTranscript) -> None:
+        try:
+            await asyncio.wait_for(transcript.ready.wait(), min(0.5, self._inference_timeout))
+        except asyncio.TimeoutError:
+            pass
+        if not self._closed:
+            self._start_classification(turn)
+
+    def _start_classification(self, turn: _Turn) -> None:
+        transcript = self._transcripts[turn.turn_id]
+        turn.transcript = transcript.text
+        history = [entry for entry in self._history if entry["turn_id"] < turn.turn_id]
+        history_ids = {entry["turn_id"] for entry in history}
+        updated_turn_ids = self._updated_turn_ids & history_ids
+        if not turn.transcript and not updated_turn_ids:
+            if self._pending_turn is not None and (
+                not self._pending_turn.decision.done() or self._pending_turn.prediction is not None
+            ):
+                self._reused_turns.append(turn)
+                self._pending_turn.speech_epoch = turn.speech_epoch
+                self._pending_turn.silence_started_at = turn.silence_started_at
+                self._release_prediction(self._pending_turn)
+            else:
+                self._supersede_predictions(turn)
+                self._fallback(turn, "reused")
+            return
+        if turn.turn_id < self._last_inference_turn_id:
+            self._fallback(turn, "superseded")
+            return
+        if self._classifier_task is not None:
+            self._classifier_task.cancel()
+        self._supersede_predictions(turn)
+        if self._pending_turn is not None:
+            self._updated_turn_ids.update(self._pending_turn.updated_turn_ids)
+            self._fallback(self._pending_turn, "superseded")
+            self._flush_reused_turns(reason="superseded")
+        if self._menu_task is not None:
+            self._menu_task.cancel()
+        turn.updated_turn_ids = self._updated_turn_ids & history_ids
+        self._updated_turn_ids.difference_update(turn.updated_turn_ids | {turn.turn_id})
+        self._last_inference_turn_id = turn.turn_id
+        self._pending_turn = turn
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(role="system", content=_inference.CLASSIFY_PROMPT)
+        entry = {**transcript.history(), "dtmf_digits": turn.dtmf_digits}
+        entry.pop("alternative_transcript", None)
+        chat_ctx.add_message(
+            role="user",
+            content=json.dumps(
+                {
+                    "stage": self._category.value,
+                    "allowed_next_categories": sorted(_inference.ALLOWED[self._category]),
+                    "earlier_turns": history,
+                    "updated_turn_ids": sorted(turn.updated_turn_ids),
+                    "speech_duration": turn.speech_duration,
+                    **entry,
+                }
+            ),
+        )
+        self._classifier_task = self._spawn(self._classify(turn, chat_ctx))
+        turn.timer = asyncio.get_running_loop().call_later(
+            max(0, turn.committed_at + self._inference_timeout - time.monotonic()),
+            self._on_prediction_timeout,
+            turn,
+        )
+
+    def _supersede_predictions(self, turn: _Turn) -> None:
+        for previous in self._turns.values():
+            if previous.turn_id < turn.turn_id and previous.prediction is not None:
+                self._fallback(previous, "superseded")
+
+    async def _classify(self, turn: _Turn, chat_ctx: llm.ChatContext) -> None:
+        assert is_given(self._llm)
+        started = time.monotonic()
+        try:
+            result = await asyncio.wait_for(_inference.classify(self._llm, chat_ctx), 30)
+            if self._closed or self._pending_turn is not turn:
+                return
+            category = (
+                self._category if result.category == AMDCategory.UNCERTAIN else result.category
+            )
+            if category not in _inference.ALLOWED[self._category]:
+                raise ValueError("Invalid AMD stage transition")
+        except Exception as exc:
+            if not self._closed and self._pending_turn is turn:
+                logger.warning(
+                    "AMD classification failed",
+                    extra={"turn_id": turn.turn_id, "error_type": type(exc).__name__},
+                )
+                self._fallback(turn, "inference_error")
+                self._pending_turn = None
+                self._flush_reused_turns()
+            return
+        if turn.timer:
+            turn.timer.cancel()
+        self._inference_timeouts = 0
+        logger.debug(
+            "AMD classification",
+            extra={"turn_id": turn.turn_id, "raw_category": result.category.value},
+        )
+        turn.prediction = AMDPredictionEvent(
+            turn_id=turn.turn_id,
+            category=category,
+            reason="late_prediction" if turn.timed_out else "prediction",
+            transcript=turn.transcript,
+            speech_duration=turn.speech_duration,
+            delay=time.monotonic() - turn.committed_at,
+            inference_duration=time.monotonic() - started,
+            voicemail_message_played=self._voicemail_message_played,
+        )
+        self._release_prediction(turn)
+
+    def _release_prediction(self, turn: _Turn) -> None:
+        if turn.release_timer:
+            turn.release_timer.cancel()
+            turn.release_timer = None
+        event = turn.prediction
+        if self._closed or event is None:
+            return
+        if event.is_machine and self._machine_silence_threshold > 0:
+            self._cancel_idle()
+            # New speech requires another EOT before this result can be released.
+            if self._speaking_since is not None or turn.speech_epoch != self._speech_epoch:
+                return
+            remaining = turn.silence_started_at + self._machine_silence_threshold - time.monotonic()
+            if remaining > 0:
+                turn.release_timer = asyncio.get_running_loop().call_later(
+                    remaining, self._release_prediction, turn
+                )
+                return
+        turn.prediction = None
+        try:
+            self._apply_prediction(turn, event)
+        except Exception:
+            logger.exception("AMD prediction release failed")
+            self._finish("inference_error")
+
+    def _apply_prediction(self, turn: _Turn, event: AMDPredictionEvent) -> None:
+        event.delay = time.monotonic() - turn.committed_at
+        event.voicemail_message_played = self._voicemail_message_played
+        if event.reason not in {"prediction", "late_prediction"}:
+            self._emit_prediction(event)
+            self._latest = event
+            if not turn.decision.done():
+                turn.decision.set_result(event)
+            if event.reason == "inference_timeout" and self._inference_timeouts >= 3:
+                self._finish("inference_timeout")
+            else:
+                self._rearm_idle()
+            return
+        category = event.category
+        changed = self._category != category
+        event.prev_turn_category = self._latest.category if self._latest else None
+        event.prev_stage_category = self._category if changed else self._previous_stage
+        event.state_changed = changed
+        self._category = category
+        self._previous_turn = event.prev_turn_category
+        self._previous_stage = event.prev_stage_category
+        self._should_wait = event.should_wait
+        self._latest = event
+        self._pending_turn = None
+        if changed:
+            self._cancel_idle()
+            self._voicemail_started = False
+            if activity := self._session._activity:
+                activity._cancel_preemptive_generation()
+        self._uncertain_turns = (
+            self._uncertain_turns + 1 if category == AMDCategory.UNCERTAIN else 0
+        )
+        self._emit_prediction(event)
+        if not turn.decision.done():
+            turn.decision.set_result(event)
+        if category in _inference.TERMINAL:
+            self._finish("finished")
+            return
+        self._flush_reused_turns()
+        if self._uncertain_turns >= self._max_uncertain_turns:
+            self._finish("max_uncertain_turns")
+        else:
+            self._rearm_idle()
+            if category == AMDCategory.MACHINE_IVR:
+                self._menu_task = self._spawn(self._extract_menu(turn))
+
+    def _flush_reused_turns(self, *, reason: str = "reused") -> None:
+        turns, self._reused_turns = self._reused_turns, []
+        for turn in turns:
+            self._fallback(turn, reason)
+
+    def _emit_prediction(self, event: AMDPredictionEvent) -> None:
+        self.emit("amd_prediction", event)
+        if (host := self._session._session_host) is not None:
+            host._on_amd_prediction(event)
+        logger.info(
+            "AMD prediction",
+            extra={
+                "turn_id": event.turn_id,
+                "category": event.category.value,
+                "reason": event.reason,
+                "session_id": self._session_id,
+            },
+        )
+
+    def _fallback(self, turn: _Turn, reason: str) -> None:
+        if turn.timer:
+            turn.timer.cancel()
+        if turn.release_timer:
+            turn.release_timer.cancel()
+            turn.release_timer = None
+        turn.prediction = None
+        if turn.decision.done():
+            return
+        event = AMDPredictionEvent(
+            turn_id=turn.turn_id,
+            category=self._category,
+            reason=reason,
+            transcript=turn.transcript,
+            speech_duration=turn.speech_duration,
+            delay=time.monotonic() - turn.committed_at,
+            prev_turn_category=self._previous_turn,
+            prev_stage_category=self._previous_stage,
+            should_wait=self._should_wait,
+            voicemail_message_played=self._voicemail_message_played,
+        )
+        if reason == "superseded":
+            turn.decision.set_result(event)
+            return
+        turn.prediction = event
+        self._release_prediction(turn)
+
+    def _on_prediction_timeout(self, turn: _Turn) -> None:
+        if self._closed or turn.decision.done():
+            return
+        turn.timed_out = True
+        self._inference_timeouts += 1
+        self._fallback(turn, "inference_timeout")
+        self._flush_reused_turns()
+
+    async def _extract_menu(self, turn: _Turn) -> None:
+        assert is_given(self._llm)
+        started = time.monotonic()
+        try:
+            menu = await asyncio.wait_for(_inference.extract_menu(self._llm, turn.transcript), 5)
+        except Exception as exc:
+            logger.debug("AMD menu extraction failed", extra={"error_type": type(exc).__name__})
+            return
+        if self._closed or not (menu.menu or menu.options):
+            return
+        self.emit(
+            "amd_menu_observed",
+            AMDMenuObservedEvent(
+                session_id=self._session_id,
+                turn_id=turn.turn_id,
+                menu=menu.menu,
+                options=menu.options,
+                extraction_duration=time.monotonic() - started,
+            ),
+        )
+
+    async def _prepare_reply(self, info: _EndOfTurnInfo, chat_ctx: llm.ChatContext) -> bool:
+        turn = self._turns.get(info.amd_turn_id or 0)
+        if turn is None:
+            return not self._closed or self._category != AMDCategory.MACHINE_UNAVAILABLE
+        await asyncio.shield(turn.decision)
+        if turn.turn_id != self._turn_id:
+            return False
+        if self._closed:
+            if self._category == AMDCategory.HUMAN:
+                chat_ctx.add_message(
+                    id=f"{self._control_prefix}{turn.turn_id}",
+                    role="user",
+                    content=_HUMAN_INSTRUCTIONS,
+                    extra={"amd_run": self._session_id, "amd_stage": self._category.value},
+                )
+            return self._category != AMDCategory.MACHINE_UNAVAILABLE
+        if self._session.current_agent is not self._agent:
+            self._finish("agent_changed")
+            return False
+        if self._should_wait:
+            self._rearm_idle()
+            return False
+        if self._category == AMDCategory.MACHINE_VM and self._voicemail_started:
+            self._rearm_idle()
+            return False
+        if self._category == AMDCategory.MACHINE_VM:
+            self._voicemail_started = True
+        if instructions := self._instructions.get(self._category):
+            chat_ctx.add_message(
+                id=f"{self._control_prefix}{turn.turn_id}",
+                role="user",
+                content=instructions
+                + (
+                    "\nThe voicemail message already played locally."
+                    if self._category == AMDCategory.MACHINE_IVR and self._voicemail_message_played
+                    else ""
+                ),
+                extra={"amd_run": self._session_id, "amd_stage": self._category.value},
+            )
+        if activity := self._session._activity:
+            activity._resume_authorization()
+        return True
+
+    def _reply_tools(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
+        if self.started and self._category == AMDCategory.MACHINE_IVR and not self._should_wait:
+            from ...beta.tools.send_dtmf import send_dtmf_events
+
+            if not any(tool.id == send_dtmf_events.id for tool in tools):
+                return [*tools, send_dtmf_events]
+        return tools
+
+    def _on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
+        if (
+            not self._closed
+            and turn_id == self._turn_id
+            and self._category == AMDCategory.MACHINE_VM
+        ):
+            self._voicemail_handle = handle
+            output = self._session.output.audio
+            self._voicemail_audio_start = output.captured_playout_segments if output else 0
+
+    def _on_speech_created(self, event: SpeechCreatedEvent) -> None:
+        if self._closed:
+            return
+        self._cancel_idle()
+        self._speeches.add(event.speech_handle)
+        event.speech_handle.add_done_callback(self._on_speech_done)
+
+    def _on_speech_done(self, handle: SpeechHandle) -> None:
+        self._speeches.discard(handle)
+        if (
+            handle is self._voicemail_handle
+            and not handle.interrupted
+            and handle.exception() is None
+        ):
+            output = self._session.output.audio
+            if output and output.captured_playout_segments > self._voicemail_audio_start:
+                self._voicemail_message_played = True
+        self._rearm_idle()
+
+    def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
+        self._rearm_idle()
+
+    def _on_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
+        # AgentSession clears its pause state after it emits this event.
+        asyncio.get_running_loop().call_soon(self._rearm_idle)
+
+    def _cancel_idle(self) -> None:
+        if self._idle_timer:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+    def _rearm_idle(self) -> None:
+        activity = self._session._activity
+        waiting = any(
+            not turn.decision.done() or turn.prediction is not None for turn in self._turns.values()
+        )
+        if (
+            not self.started
+            or self._speaking_since is not None
+            or self._should_wait
+            or waiting
+            or self._speeches
+            or activity is None
+            or not activity._no_pending_speech
+            or activity._paused_speech is not None
+            or activity._false_interruption_timer is not None
+            or activity._false_interruption_pending
+            or self._session.agent_state in {"speaking", "thinking"}
+            or (
+                self._session.output.audio is not None
+                and self._session.output.audio._pending_playback_count > 0
+            )
+            or (
+                activity._user_turn_completed_atask is not None
+                and not activity._user_turn_completed_atask.done()
+            )
+        ):
+            self._cancel_idle()
+            return
+        if self._idle_timer is None:
+            idle_timeout = (
+                self._voicemail_idle_timeout
+                if self._category == AMDCategory.MACHINE_VM
+                else self._idle_timeout
+            )
+            self._idle_timer = asyncio.get_running_loop().call_later(
+                idle_timeout, self._finish, "idle_timeout"
+            )
+
+    def _finish(self, reason: str) -> None:
         if self._closed:
             return
         self._closed = True
-
-        pending = [t for t in (self._sip_answer_task, self._setup_task) if t is not None]
-        if pending:
-            await aio.cancel_and_wait(*pending)
-        self._sip_answer_task = None
-        self._setup_task = None
-
-        if self._audio_ch and not self._audio_ch.closed:
-            self._audio_ch.close()
-
-        if self._classifier:
-            self._classifier.off("amd_prediction", self._on_amd_prediction)
-            await self._classifier.close()
-            self._classifier = None
-
-        self._end_span()
-
-        if self._session._activity:
-            self._session._activity._resume_authorization()
-
-        self._session._amd = None
-
-    # endregion
-
-    # region: internal methods
-
-    async def _run(self, session: AgentSession) -> None:
-        if self._classifier:
-            logger.warning("AMD already running, skipping")
-            return
-
-        self._session = session
-        self._classifier = self._resolve_classifier(session)
-        if not self._classifier:
-            raise ValueError(
-                "AMD classifier could not be resolved, please provide a compatible model"
-            )
-        self._classifier.on("amd_prediction", self._on_amd_prediction)
-        self._closed = False
-        self._result = None
-
-        if session.options.ivr_detection:
-            logger.warning("session level ivr_detection will be disabled when AMD is used")
-            session.options.ivr_detection = False
-
-        if session._ivr_activity:
-            logger.warning(
-                "session-level IVR detection was already started, "
-                "closing it so AMD can manage the IVR lifecycle"
-            )
-            await session._ivr_activity.aclose()
-            session._ivr_activity = None
-
-        session._amd = self
-
-        # classifier is dormant until start_detection_timer / start_listening;
-        # the listening gate stays closed so pre-setup audio is dropped.
-        self._start_span()
-        if session._activity:
-            session._activity._pause_authorization()
-
-        self._setup_task = asyncio.create_task(self._setup(session), name="amd_setup")
-
-    async def _setup(self, session: AgentSession) -> None:
-        if self._closed:
-            return
-        if not session._room_io:
-            logger.warning(
-                "session room_io unavailable, starting amd timers immediately as fallback"
-            )
-            self._start_listening()
-        else:
-            room = session._room_io.room
-            try:
-                publication = await asyncio.wait_for(
-                    wait_for_track_publication(
-                        room=room,
-                        identity=self._participant_identity or None,
-                        kind=rtc.TrackKind.KIND_AUDIO,
-                        wait_for_subscription=True,
-                    ),
-                    timeout=_TRACK_PUBLICATION_TIMEOUT,
+        self._cancel_idle()
+        self._pending_dtmf_digits = ""
+        if self._hard_timer:
+            self._hard_timer.cancel()
+        for turn in self._turns.values():
+            if turn.timer:
+                turn.timer.cancel()
+            if turn.release_timer:
+                turn.release_timer.cancel()
+                turn.release_timer = None
+            turn.prediction = None
+            if not turn.decision.done():
+                turn.decision.set_result(
+                    self._latest
+                    or AMDPredictionEvent(
+                        turn_id=turn.turn_id,
+                        category=self._category,
+                        reason=reason,
+                        transcript=turn.transcript,
+                        speech_duration=turn.speech_duration,
+                        delay=0,
+                    )
                 )
-            except asyncio.TimeoutError:
-                self._settle_participant_missing("timed out waiting for participant audio track")
-                return
-            except RuntimeError as e:
-                self._settle_participant_missing(str(e))
-                return
-            if self._closed or not self._classifier:
-                return
+        self._finishing = asyncio.create_task(self._cleanup(reason))
 
-            if self._participant_identity:
-                publisher = room.remote_participants.get(self._participant_identity)
-            else:
-                publisher = next(
-                    (
-                        p
-                        for p in room.remote_participants.values()
-                        if publication.sid in p.track_publications
-                    ),
-                    None,
-                )
-            if publisher is None:
-                self._settle_participant_missing("participant disappeared after track subscription")
-                return
-
-            if publisher.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
-                self._sip_answer_task = asyncio.create_task(
-                    self._wait_for_sip_answer(room, publisher.identity),
-                    name="amd_sip_answer",
-                )
-            else:
-                self._start_listening()
-
-        if self._stt is not None and not self._closed:
-            logger.debug("starting amd stt pipeline")
-            await self._run_stt()
-
-    def _start_listening(self) -> None:
-        if self._closed or not self._classifier:
-            return
-        self._classifier.start_detection_timer()
-        self._classifier.start_listening()
-        logger.debug("AMD starts listening")
-
-    def _settle_participant_missing(self, error: str) -> None:
-        if self._closed or not self._classifier:
-            return
-        logger.debug(
-            "AMD: call ended before detection could run, settling",
-            extra={"error": error},
-        )
-        self._classifier.settle(AMDCategory.UNCERTAIN, reason="participant_missing")
-
-    async def _wait_for_sip_answer(self, room: rtc.Room, identity: str) -> None:
+    async def _cleanup(self, reason: str) -> None:
         try:
-            await wait_for_participant_attribute(
-                room,
-                identity=identity,
-                attribute=_SIP_CALL_STATUS_ATTR,
-                value=_SIP_CALL_STATUS_ACTIVE,
-            )
-        except RuntimeError as e:
-            self._settle_participant_missing(str(e))
-            return
-
-        if not self._closed:
-            self._start_listening()
-
-    async def _run_stt(self) -> None:
-        assert self._stt is not None
-        assert self._classifier
-
-        self._audio_ch = aio.Chan[rtc.AudioFrame]()
-
-        async with self._stt.stream() as stt_stream:
-
-            async def _send(chan: aio.Chan[rtc.AudioFrame]) -> None:
-                async for frame in chan:
-                    stt_stream.push_frame(frame)
-
-                stt_stream.end_input()
-
-            async def _receive() -> None:
-                from ...stt import SpeechEventType
-
-                async for event in stt_stream:
+            await aio.cancel_and_wait(*self._tasks)
+            transcripts = list(self._transcripts.values())
+            if self._transcript is not None:
+                transcripts.append(self._transcript)
+            close_tasks = [transcript.aclose() for transcript in transcripts]
+            if self._owns_stt and is_given(self._stt) and self._stt is not None:
+                close_tasks.append(self._stt.aclose())
+            if self._owns_llm and is_given(self._llm):
+                close_tasks.append(self._llm.aclose())
+            for error in await asyncio.gather(*close_tasks, return_exceptions=True):
+                if isinstance(error, BaseException):
+                    logger.warning(
+                        "AMD resource cleanup failed", extra={"error_type": type(error).__name__}
+                    )
+            self._session.off("speech_created", self._on_speech_created)
+            self._session.off("agent_state_changed", self._on_agent_state_changed)
+            self._session.off("agent_false_interruption", self._on_false_interruption)
+            if self._session._room_io:
+                self._session._room_io.room.off("participant_disconnected", self._on_disconnected)
+            for speech in self._speeches:
+                speech.remove_done_callback(self._on_speech_done)
+            if activity := self._session._activity:
+                activity._cancel_preemptive_generation()
+                # Cancel only queued/held replies. AgentSession owns current playback.
+                if self._category == AMDCategory.MACHINE_UNAVAILABLE:
+                    for _, _, speech in activity._speech_q:
+                        speech._cancel()
+                    current = activity._current_speech
                     if (
-                        event.type == SpeechEventType.FINAL_TRANSCRIPT
-                        and event.alternatives
-                        and self._classifier
-                        and (text := event.alternatives[0].text)
+                        current
+                        and self._session.agent_state != "speaking"
+                        and activity._paused_speech is None
                     ):
-                        self._classifier.push_text(text, source="amd_stt")
-
-            tasks = [
-                asyncio.create_task(_send(self._audio_ch), name="amd_stt_send"),
-                asyncio.create_task(_receive(), name="amd_stt_receive"),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                await aio.cancel_and_wait(*tasks)
-
-    def _on_amd_prediction(self, result: AMDPredictionEvent) -> None:
-        self._result = result
-        logger.info(
-            "amd prediction",
-            extra={
-                "category": result.category.value,
-                "reason": result.reason,
-                "speech_duration": result.speech_duration,
-                "delay": result.delay,
-                "lk.pii.transcript": result.transcript,
-            },
-        )
-        if self._classifier:
-            self._classifier.end_input()
-        if self._audio_ch:
-            self._audio_ch.close()
-
-        if self._span:
-            self._span.set_attributes(
-                {
-                    trace_types.ATTR_AMD_CATEGORY: result.category.value,
-                    trace_types.ATTR_AMD_REASON: result.reason,
-                    trace_types.ATTR_AMD_SPEECH_DURATION: result.speech_duration,
-                    trace_types.ATTR_AMD_DELAY: result.delay,
-                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
-                }
+                        current._cancel()
+                activity._resume_authorization()
+            if self._session._amd is self:
+                self._session._amd = None
+        finally:
+            assert self._completion is not None
+            result = AMDCompletedEvent(
+                category=self._category,
+                reason=reason,
+                turn_id=self._latest.turn_id if self._latest else self._turn_id,
+                transcript=self._latest.transcript if self._latest else "",
+                prev_turn_category=self._previous_turn,
+                prev_stage_category=self._previous_stage,
+                voicemail_message_played=self._voicemail_message_played,
             )
-
-        self._end_span()
-
-        try:
-            ctx = get_job_context()
-            ctx.tagger.add(
-                f"lk.amd:{result.category.value}",
-                metadata={
-                    "category": result.category.value,
-                    "speech_duration": result.speech_duration,
-                    "reason": result.reason,
-                    trace_types.ATTR_AMD_TRANSCRIPT: result.transcript,
-                    "delay": result.delay,
-                },
-            )
-        except RuntimeError:
-            pass
-
-        if (host := self._session._session_host) is not None:
-            host._on_amd_prediction(result)
-
-        self.emit("amd_prediction", result)
-
-    def _start_span(self) -> None:
-        if self._span:
-            return
-        self._span = tracer.start_span("amd", context=self._session._root_span_context)
-
-    def _end_span(self) -> None:
-        if not self._span:
-            return
-        self._span.end()
-        self._span = None
-
-    def _resolve_classifier(
-        self,
-        session: AgentSession,
-    ) -> _AMDClassifier | None:
-        _llm: _InferenceLLM | _LLM | None = None
-        if isinstance(self._llm_config, str):
-            _llm = _InferenceLLM(self._llm_config)
-        elif isinstance(self._llm_config, _LLM):
-            _llm = self._llm_config
-        elif (candidate := session.llm) and isinstance(candidate, _LLM):
-            _llm = candidate
-
-        if not self._suppress_compatibility_warning:
-            _warn_if_not_evaluated(
-                _llm.model if _llm else None,
-                EVALUATED_LLM_MODELS,
-                model_kind="llm",
-            )
-
-        if _llm:
-            max_endpointing_delay = (
-                self._provided_detection_options["max_endpointing_delay"]
-                if "max_endpointing_delay" in self._provided_detection_options
-                else (
-                    session._activity.max_endpointing_delay
-                    if session._activity
-                    else self._opts["max_endpointing_delay"]
-                )
-            )
-            return _AMDClassifier(
-                _llm,
-                human_speech_threshold=self._opts["human_speech_threshold"],
-                human_silence_threshold=self._opts["human_silence_threshold"],
-                machine_silence_threshold=self._opts["machine_silence_threshold"],
-                no_speech_threshold=self._opts["no_speech_threshold"],
-                timeout=self._opts["timeout"],
-                prompt=self._opts["prompt"],
-                source="amd_stt" if self._stt is not None else "stt",
-                wait_until_finished=self._wait_until_finished,
-                max_endpointing_delay=max_endpointing_delay,
-            )
-
-        return None
-
-    # endregion
-
-
-def _warn_if_not_evaluated(
-    model: str | None,
-    evaluated_models: set[str],
-    *,
-    model_kind: str,
-) -> None:
-    if not model:
-        return
-
-    model = model.lower()
-    if all(
-        model != candidate.lower() and model not in candidate.lower()
-        for candidate in evaluated_models
-    ):
-        logger.warning(
-            "%s model %s hasn't been evaluated with our benchmark, it might not be compatible "
-            "with amd. Set `suppress_compatibility_warning=True` to silence this warning.",
-            model_kind,
-            model,
-        )
+            self._completion.set_result(result)
+            self.emit("amd_completed", result)
