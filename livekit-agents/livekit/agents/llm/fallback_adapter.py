@@ -43,6 +43,7 @@ class FallbackAdapter(
         llm: list[LLM],
         *,
         attempt_timeout: float = 5.0,
+        fallback_attempt_timeout: float | None = None,
         # use fallback instead of retrying
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
@@ -53,6 +54,10 @@ class FallbackAdapter(
         Args:
             llm (list[LLM]): List of LLM instances to fallback to.
             attempt_timeout (float, optional): Timeout for each LLM attempt. Defaults to 5.0.
+            fallback_attempt_timeout (float, optional): Timeout for attempts on every LLM after
+                the first. Fallback providers typically run cold (e.g. without a warmed prompt
+                cache), so they may need a longer window than the primary's latency target.
+                Defaults to None, meaning ``attempt_timeout`` applies to all providers.
             max_retry_per_llm (int, optional): Internal retries per LLM. Defaults to 0, which means no
                 internal retries, the failed LLM will be skipped and the next LLM will be used.
             retry_interval (float, optional): Interval between retries. Defaults to 0.5.
@@ -69,6 +74,9 @@ class FallbackAdapter(
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
+        self._fallback_attempt_timeout = (
+            fallback_attempt_timeout if fallback_attempt_timeout is not None else attempt_timeout
+        )
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
@@ -82,6 +90,13 @@ class FallbackAdapter(
 
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
+
+    def _attempt_timeout_for(self, llm: LLM) -> float:
+        """Attempt timeout for one provider: the primary keeps ``attempt_timeout``,
+        every other provider gets ``fallback_attempt_timeout``."""
+        if llm is self._llm_instances[0]:
+            return self._attempt_timeout
+        return self._fallback_attempt_timeout
 
     @property
     def model(self) -> str:
@@ -193,7 +208,7 @@ class FallbackLLMStream(LLMStream):
                 conn_options=dataclasses.replace(
                     self._conn_options,
                     max_retry=self._fallback_adapter._max_retry_per_llm,
-                    timeout=self._fallback_adapter._attempt_timeout,
+                    timeout=self._fallback_adapter._attempt_timeout_for(llm),
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
