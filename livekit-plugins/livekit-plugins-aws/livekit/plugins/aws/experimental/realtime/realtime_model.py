@@ -556,7 +556,15 @@ class RealtimeSession(  # noqa: F811
         # Held only so the loop's weak reference cannot collect them mid-flight.
         # Their lifecycle - cancellation, coalescing, shutdown - is #7052's subject.
         self._user_text_tasks: set[asyncio.Task[None]] = set()
-        self._deferred_tool_recycle_tasks: set[asyncio.Task[None]] = set()
+        # One at a time: update_tools coalesces into whichever recycle is already live.
+        self._deferred_tool_recycle_task: asyncio.Task[None] | None = None
+        # True once a recycle is past its debounce and into teardown/restart, where
+        # cancelling would strand the session; pending coalesces updates arriving then.
+        self._tool_recycle_running = False
+        self._tool_recycle_pending = False
+        # Permanent, unlike _is_sess_active, which a recycle clears and sets again.
+        self._closing = False
+        self._closed = False
         self._last_audio_output_time: float = 0.0  # Track when assistant last produced audio
         self._audio_end_turn_received: bool = False  # Track when assistant finishes speaking
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
@@ -744,6 +752,14 @@ class RealtimeSession(  # noqa: F811
 
     async def _graceful_session_recycle(self) -> None:
         """Gracefully recycle the session, preserving conversation state."""
+        # Both the tool-update path and the recycle timer reach a restart through here, and
+        # step 7 rebinds the response, audio input and timer tasks. Checking at the entry to
+        # the primitive is what stops a recycle already past its caller's check from
+        # rebuilding the session after aclose() has torn it down.
+        if self._closing:
+            logger.debug("[SESSION] Session closing, skipping recycle")
+            return
+
         logger.info("[SESSION] Starting graceful session recycle")
 
         # Step 1: Drain any pending tool results
@@ -1939,35 +1955,64 @@ class RealtimeSession(  # noqa: F811
                 f"[SESSION] Tools changed (added={new_tools - old_tools}, "
                 f"removed={old_tools - new_tools}), scheduling deferred session recycle"
             )
-            task = asyncio.create_task(
-                self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
-            )
-            self._deferred_tool_recycle_tasks.add(task)
-            task.add_done_callback(self._deferred_tool_recycle_tasks.discard)
+            recycle_task = self._deferred_tool_recycle_task
+            if recycle_task is None or recycle_task.done():
+                self._deferred_tool_recycle_task = asyncio.create_task(
+                    self._deferred_tool_recycle(), name="RealtimeSession._deferred_tool_recycle"
+                )
+            elif self._tool_recycle_running:
+                # Past its debounce and tearing the session down. Starting a second recycle
+                # races it, and cancelling it would leave the session stopped, so let it
+                # finish and loop once more with the tools set above.
+                self._tool_recycle_pending = True
+            # Otherwise a recycle is still inside its debounce window. initialize_streams
+            # reads self._tools when it fires, so it already carries this update; a second
+            # task would only race it through _graceful_session_recycle.
         else:
             logger.debug("Tool list updated locally")
 
     async def _deferred_tool_recycle(self) -> None:
         """Wait for in-flight tool results to be delivered, then recycle."""
-        # Short yield to let the tool result be sent to Bedrock
-        # before we tear down the session.
-        await asyncio.sleep(0.15)
+        try:
+            while True:
+                # Short yield to let the tool result be sent to Bedrock
+                # before we tear down the session. Cancellable up to here.
+                await asyncio.sleep(0.15)
 
-        if not self._is_sess_active.is_set():
-            logger.debug("[SESSION] Session no longer active, skipping tool recycle")
-            return
+                if self._closing or not self._is_sess_active.is_set():
+                    logger.debug("[SESSION] Session no longer active, skipping tool recycle")
+                    return
 
-        logger.info("[SESSION] Recycling session for updated tools")
-        # Clear pending tools so stale results from update_chat_ctx are ignored
-        self._pending_tools.clear()
-        # Drain and discard any queued tool results
-        while True:
-            try:
-                discarded = self._tool_results_ch.recv_nowait()
-                logger.debug(f"[SESSION] Discarding stale tool result: {discarded['tool_use_id']}")
-            except utils.aio.channel.ChanEmpty:
-                break
-        await self._graceful_session_recycle()
+                logger.info("[SESSION] Recycling session for updated tools")
+                self._tool_recycle_running = True
+                try:
+                    # Clear pending tools so stale results from update_chat_ctx are ignored
+                    self._pending_tools.clear()
+                    # Drain and discard any queued tool results
+                    while True:
+                        try:
+                            discarded = self._tool_results_ch.recv_nowait()
+                            logger.debug(
+                                "[SESSION] Discarding stale tool result",
+                                extra={"lk.pii.tool_use_id": discarded["tool_use_id"]},
+                            )
+                        except utils.aio.channel.ChanEmpty:
+                            break
+                    await self._graceful_session_recycle()
+                finally:
+                    self._tool_recycle_running = False
+
+                if self._closing or not self._tool_recycle_pending:
+                    return
+                # update_tools landed while the recycle was uncancellable; go round again
+                # so the newest tool set reaches the session.
+                self._tool_recycle_pending = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Nothing awaits this task, so retrieve the failure here and log it through the
+            # plugin logger instead of letting asyncio dump the traceback on collection.
+            logger.exception("[SESSION] Deferred tool recycle failed")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Live update of inference options is not supported by Sonic yet."""
@@ -2209,7 +2254,12 @@ class RealtimeSession(  # noqa: F811
                     if self._pending_generation_fut is fut:
                         self._pending_generation_fut = None
 
-            send_task = asyncio.create_task(_send_text())
+            send_task = asyncio.create_task(_send_text(), name="RealtimeSession._send_instructions")
+            # Same ownership as _send_user_text: close settles the future with set_exception,
+            # and _on_fut_done drops the send only on f.cancelled(), so without this the send
+            # can wait on _stream_ready forever or write into a stream being torn down.
+            self._user_text_tasks.add(send_task)
+            send_task.add_done_callback(self._user_text_tasks.discard)
 
             # Set timeout from model configuration
             def _on_timeout() -> None:
@@ -2347,23 +2397,49 @@ class RealtimeSession(  # noqa: F811
     @utils.log_exceptions(logger=logger)
     async def aclose(self) -> None:
         """Gracefully shut down the realtime session and release network resources."""
-        logger.info("attempting to shutdown agent session")
-        if not self._is_sess_active.is_set():
-            logger.info("agent session already inactive")
+        # Set first and never cleared, so a recycle already running stops at its next check
+        # even though _is_sess_active alone cannot tell "recycling" from "closed". A failed
+        # attempt leaves _closed False, so a retry re-runs cleanup rather than returning
+        # having released nothing.
+        self._closing = True
+        if self._closed:
             return
 
-        # Cancel any pending generation futures
+        logger.info("attempting to shutdown agent session")
+
+        # Stop background work first, so an in-flight recycle cannot rebuild the session
+        # while it is being torn down below. The recycle timer belongs here too: it restarts
+        # the session on its own schedule, and initialize_streams rebinds it.
+        closing_tasks: list[asyncio.Task[Any]] = []
+        for task in [
+            self._deferred_tool_recycle_task,
+            self._session_recycle_task,
+            *self._user_text_tasks,
+        ]:
+            if task is not None and not task.done():
+                task.cancel()
+                closing_tasks.append(task)
+        if closing_tasks:
+            await asyncio.gather(*closing_tasks, return_exceptions=True)
+
+        # Settle this before anything can return: cancelling a user-text send raises
+        # CancelledError, which _send_user_text's `except Exception` does not catch, so the
+        # future would stay pending and generate_reply(user_input=...) would hang.
         if self._pending_generation_fut and not self._pending_generation_fut.done():
             self._pending_generation_fut.set_exception(
                 llm.RealtimeError("Session closed while waiting for generation")
             )
-            self._pending_generation_fut = None
+        self._pending_generation_fut = None
 
-        for event in self._event_builder.create_prompt_end_block():
-            await self._send_raw_event(event)
-        # allow event loops to fall out naturally
-        # otherwise, the smithy layer will raise an InvalidStateError during cancellation
-        self._is_sess_active.clear()
+        # Only the prompt-end block depends on the session still being live. Everything after
+        # it must run either way: a recycle interrupted above leaves the active event clear
+        # while its streams and tasks are still open.
+        if self._is_sess_active.is_set():
+            for event in self._event_builder.create_prompt_end_block():
+                await self._send_raw_event(event)
+            # allow event loops to fall out naturally
+            # otherwise, the smithy layer will raise an InvalidStateError during cancellation
+            self._is_sess_active.clear()
 
         if self._stream_response and not self._stream_response.output_stream.closed:
             await self._stream_response.output_stream.close()
@@ -2375,20 +2451,22 @@ class RealtimeSession(  # noqa: F811
         # TODO: fix this nit
         tasks: list[asyncio.Task[Any]] = []
 
-        # Cancel session recycle timer
-        if self._session_recycle_task and not self._session_recycle_task.done():
-            self._session_recycle_task.cancel()
-            try:
-                await self._session_recycle_task
-            except asyncio.CancelledError:
-                pass
-
         if self._response_task:
-            try:
-                await asyncio.wait_for(self._response_task, timeout=1.0)
-            except asyncio.TimeoutError:
-                logger.warning("shutdown of output event loop timed out-- cancelling")
-                self._response_task.cancel()
+            if not self._response_task.done():
+                try:
+                    # Shielded so the two cancellation sources stay distinguishable below:
+                    # without it, aclose() being cancelled also cancels this task, and the
+                    # check would read our own cancellation as the task's and swallow it.
+                    await asyncio.wait_for(asyncio.shield(self._response_task), timeout=1.0)
+                except asyncio.TimeoutError:
+                    logger.warning("shutdown of output event loop timed out-- cancelling")
+                    self._response_task.cancel()
+                except asyncio.CancelledError:
+                    # A recycle interrupted above may already have cancelled this task, and
+                    # awaiting it raises here even though nobody cancelled aclose(). Re-raise
+                    # only if the cancellation really is ours, so the teardown below still runs.
+                    if not self._response_task.cancelled():
+                        raise
             tasks.append(self._response_task)
 
         # must cancel the audio input task before closing the input stream
@@ -2404,6 +2482,7 @@ class RealtimeSession(  # noqa: F811
             tasks.append(self._main_atask)
 
         await asyncio.gather(*tasks, return_exceptions=True)
+        self._closed = True
         logger.debug(
             "chat context at session end", extra={"lk.pii.chat_ctx_items": self._chat_ctx.items}
         )
