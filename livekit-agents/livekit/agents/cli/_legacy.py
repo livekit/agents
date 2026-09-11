@@ -167,14 +167,6 @@ class ConsoleAudioOutput(io.AudioOutput):
         self._segment_id = 0
 
     @property
-    def audio_lock(self) -> threading.Lock:
-        return self._audio_lock
-
-    @property
-    def audio_buffer(self) -> bytearray:
-        return self._output_buf
-
-    @property
     def paused(self) -> bool:
         return self._paused_at is not None
 
@@ -267,6 +259,31 @@ class ConsoleAudioOutput(io.AudioOutput):
             self._output_buf_empty.set()
             self._playback_started_fired = False
             self._segment_id += 1
+
+    def read_into(self, outdata: np.ndarray, frames: int) -> None:
+        """Fill ``outdata`` with the next ``frames`` samples of playback. Called from the audio thread."""
+        with self._audio_lock:
+            if self.paused:
+                outdata[:] = 0
+            else:
+                bytes_needed = frames * 2
+                if len(self._output_buf) < bytes_needed:
+                    available_bytes = len(self._output_buf)
+                    if available_bytes > 0:
+                        self._maybe_mark_playback_started()
+                    outdata[: available_bytes // 2, 0] = np.frombuffer(
+                        self._output_buf,
+                        dtype=np.int16,
+                        count=available_bytes // 2,
+                    )
+                    outdata[available_bytes // 2 :, 0] = 0
+                    del self._output_buf[:available_bytes]  # TODO: optimize
+                    self._loop.call_soon_threadsafe(self.mark_output_empty)
+                else:
+                    self._maybe_mark_playback_started()
+                    chunk = self._output_buf[:bytes_needed]
+                    outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
+                    del self._output_buf[:bytes_needed]
 
     def _maybe_mark_playback_started(self) -> None:
         """Mark the playback as started if it hasn't been already. Must be called under ``audio_lock``."""
@@ -733,28 +750,7 @@ class AgentsConsole:
         self._output_delay = time.outputBufferDacTime - time.currentTime
 
         FRAME_SAMPLES = 240
-        with self._io_audio_output.audio_lock:
-            if self._io_audio_output.paused:
-                outdata[:] = 0
-            else:
-                bytes_needed = frames * 2
-                if len(self._io_audio_output.audio_buffer) < bytes_needed:
-                    available_bytes = len(self._io_audio_output.audio_buffer)
-                    if available_bytes > 0:
-                        self._io_audio_output._maybe_mark_playback_started()
-                    outdata[: available_bytes // 2, 0] = np.frombuffer(
-                        self._io_audio_output.audio_buffer,
-                        dtype=np.int16,
-                        count=available_bytes // 2,
-                    )
-                    outdata[available_bytes // 2 :, 0] = 0
-                    del self._io_audio_output.audio_buffer[:available_bytes]  # TODO: optimize
-                    self.io_loop.call_soon_threadsafe(self._io_audio_output.mark_output_empty)
-                else:
-                    self._io_audio_output._maybe_mark_playback_started()
-                    chunk = self._io_audio_output.audio_buffer[:bytes_needed]
-                    outdata[:, 0] = np.frombuffer(chunk, dtype=np.int16, count=frames)
-                    del self._io_audio_output.audio_buffer[:bytes_needed]
+        self._io_audio_output.read_into(outdata, frames)
 
         num_chunks = frames // FRAME_SAMPLES
         for i in range(num_chunks):
