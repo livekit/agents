@@ -23,9 +23,11 @@ from ...types import (
     ATTRIBUTE_TRANSCRIPTION_FINAL,
     ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
     ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+    CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS,
     TOPIC_TRANSCRIPTION,
     TimedString,
 )
+from ...utils.participant import _client_protocol
 from .. import io
 from ..transcription import find_micro_track_id
 
@@ -264,6 +266,40 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 self._forwarding_idle.set()
 
 
+def _legacy_transcription_needed(room: rtc.Room) -> bool:
+    """True while some remote participant may still rely on the deprecated
+    ``rtc.Transcription`` data packet.
+
+    ``publish_transcription`` has no destination parameter, so this is all-or-nothing for the
+    room: the packet is dropped only once every considered participant advertises
+    ``client_protocol >= CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS``, meaning it rebuilds
+    transcription events from the ``lk.transcription`` stream channel instead.
+
+    Only STANDARD participants -- user-created client SDK instances -- are considered. SIP,
+    INGRESS, AGENT (including avatar workers), CONNECTOR and BRIDGE participants never render
+    legacy transcripts, so their client protocol tells us nothing about whether the legacy
+    packet is still necessary. Counting them would also keep legacy publishing alive in every
+    telephony room for good: the Go SDK does not send a client protocol at all, so SIP and
+    INGRESS participants report 0 permanently. EGRESS participants join hidden and never
+    reach ``remote_participants``.
+    """
+    local_identity = room.local_participant.identity
+    for p in room.remote_participants.values():
+        if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
+            continue
+
+        # an out-of-repo avatar worker that joined as STANDARD rather than AGENT. Note this
+        # must not be `_is_local_proxy_participant`, which also matches the participant the
+        # output is attributed to -- for the user output that is the user themselves.
+        if p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) == local_identity:
+            continue
+
+        if _client_protocol(p) < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS:
+            return True
+
+    return False
+
+
 class _ParticipantLegacyTranscriptionOutput:
     def __init__(
         self,
@@ -273,6 +309,9 @@ class _ParticipantLegacyTranscriptionOutput:
         participant: rtc.Participant | str | None = None,
     ):
         self._room, self._is_delta_stream = room, is_delta_stream
+        # the last status written to the log, so only transitions are logged. This never
+        # takes part in the decision itself.
+        self._legacy_status_logged: bool | None = None
         self._track_id: str | None = None
         self._participant_identity: str | None = None
 
@@ -366,8 +405,28 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._flush_task:
             await self._flush_task
 
+    def _should_publish(self) -> bool:
+        needed = _legacy_transcription_needed(self._room)
+        if needed != self._legacy_status_logged:
+            self._legacy_status_logged = needed
+            logger.debug(
+                "legacy transcription publishing %s",
+                "enabled" if needed else "disabled",
+                extra={"participant": self._participant_identity},
+            )
+
+        return needed
+
     async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
         if self._participant_identity is None or self._track_id is None:
+            return
+
+        # Gate here, not in capture_text: every legacy publish carries the whole accumulated
+        # segment under a stable id, so _pushed_text/_current_id must stay warm. A legacy
+        # client that joins mid-segment then gets the complete segment on the very next
+        # publish, and a client that only ever sees the final=True packet still gets a
+        # complete, correctly-closed segment.
+        if not self._should_publish():
             return
 
         transcription = rtc.Transcription(
