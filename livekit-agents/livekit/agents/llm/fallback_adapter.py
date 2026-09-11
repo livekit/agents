@@ -197,6 +197,8 @@ class FallbackLLMStream(LLMStream):
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
+                if not check_recovery:
+                    stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
                 async for chunk in stream:
                     if should_set_current:

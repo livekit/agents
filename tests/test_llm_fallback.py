@@ -86,8 +86,9 @@ _TOOL_CHUNK = ChatChunk(
 @pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
 @pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
 @pytest.mark.parametrize("error_kind", ["timeout", "status", "nonretryable", "unexpected"])
+@pytest.mark.parametrize("child_retries", [0, 1])
 async def test_no_retry_after_output(
-    chunk: ChatChunk, with_fallback: bool, error_kind: str
+    chunk: ChatChunk, with_fallback: bool, error_kind: str, child_retries: int
 ) -> None:
     error: Exception
     if error_kind == "status":
@@ -98,7 +99,9 @@ async def test_no_retry_after_output(
         error = APITimeoutError("After output", retryable=error_kind != "nonretryable")
     primary = _RetryLLM(chunk, error)
     fallback = _RetryLLM(chunk, None)
-    adapter = FallbackAdapter([primary, fallback] if with_fallback else [primary])
+    adapter = FallbackAdapter(
+        [primary, fallback] if with_fallback else [primary], max_retry_per_llm=child_retries
+    )
     errors: list[LLMError] = []
     adapter.on("error", errors.append)
     chunks: list[ChatChunk] = []
@@ -176,12 +179,17 @@ async def test_retries_before_output(chunk: ChatChunk | None, retry_path: str) -
 
 @pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
 @pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
-async def test_retry_after_output_when_enabled(chunk: ChatChunk, with_fallback: bool) -> None:
+@pytest.mark.parametrize("child_retries", [0, 1])
+async def test_retry_after_output_when_enabled(
+    chunk: ChatChunk, with_fallback: bool, child_retries: int
+) -> None:
     error = APITimeoutError("After output")
     primary = _RetryLLM(chunk, error)
     fallback = _RetryLLM(chunk, None)
     adapter = FallbackAdapter(
-        [primary, fallback] if with_fallback else [primary], retry_on_chunk_sent=True
+        [primary, fallback] if with_fallback else [primary],
+        retry_on_chunk_sent=True,
+        max_retry_per_llm=child_retries,
     )
     errors: list[LLMError] = []
     adapter.on("error", errors.append)
@@ -194,14 +202,33 @@ async def test_retry_after_output_when_enabled(chunk: ChatChunk, with_fallback: 
 
         assert chunks == [chunk, chunk]
         assert error.retryable
-        assert len(errors) == (0 if with_fallback else 1)
+        assert len(errors) == (0 if with_fallback or child_retries else 1)
         assert all(event.recoverable for event in errors)
-        if with_fallback:
+        if child_retries:
+            assert primary.requests == 1
+            assert primary.attempts == 2
+            assert fallback.requests == 0
+        elif with_fallback:
             assert fallback.requests == 1
         else:
             assert primary.requests >= 2
     finally:
         await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
+async def test_direct_provider_retries_after_output(chunk: ChatChunk) -> None:
+    provider = _RetryLLM(chunk, APITimeoutError("After output"))
+    try:
+        async with provider.chat(
+            chat_ctx=ChatContext.empty(), conn_options=APIConnectOptions(max_retry=1)
+        ) as stream:
+            chunks = [result async for result in stream]
+        assert chunks == [chunk, chunk]
+        assert provider.requests == 1
+        assert provider.attempts == 2
+    finally:
+        await provider.aclose()
 
 
 class PrewarmableLLM(FakeLLM):
