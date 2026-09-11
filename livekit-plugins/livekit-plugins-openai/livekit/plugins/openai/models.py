@@ -109,6 +109,8 @@ NebiusChatModels = Literal[
     "google/gemma-2-2b-it",
 ]
 
+HopperChatModels = Literal["Qwen/Qwen3.6-35B-A3B"]
+
 CerebrasChatModels = Literal[
     "gpt-oss-120b",
     "zai-glm-4.7",
