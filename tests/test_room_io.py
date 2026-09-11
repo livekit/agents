@@ -879,3 +879,53 @@ async def test_legacy_transcription_never_mistakes_the_user_for_a_proxy() -> Non
     assert room.local_participant.publish_transcription.await_count == 2
 
 
+@pytest.mark.asyncio
+async def test_legacy_transcription_gate_is_dynamic_and_keeps_state_warm() -> None:
+    """A legacy client joining mid-segment gets the whole accumulated segment, which only
+    holds while the gate sits at the publish site rather than in capture_text."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _make_legacy_output(room)
+
+    await output.capture_text("hello ")
+    assert room.local_participant.publish_transcription.await_count == 0
+
+    room.remote_participants["legacy"] = _fake_remote("legacy", client_protocol=0)
+
+    await output.capture_text("world")
+    assert room.local_participant.publish_transcription.await_count == 1
+    partial = room.local_participant.publish_transcription.await_args_list[0].args[0].segments[0]
+    assert partial.text == "hello world"
+    assert partial.final is False
+
+    output.flush()
+    assert output._flush_task is not None
+    await output._flush_task
+
+    final = room.local_participant.publish_transcription.await_args_list[1].args[0].segments[0]
+    assert final.text == "hello world"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _ParticipantTranscriptionOutput(room=room, participant="agent")
+    legacy_output, _ = output._ParticipantTranscriptionOutput__outputs
+    legacy_output._track_id = "TR_legacy"
+
+    await output.capture_text("hello")
+    output.flush()
+    if legacy_output._flush_task is not None:
+        await legacy_output._flush_task
+
+    assert "".join(writer.chunks) == "hello"
+    assert room.local_participant.publish_transcription.await_count == 0
