@@ -28,6 +28,7 @@ from livekit.plugins import (
     mistralai,
     nvidia,
     openai,
+    reson8,
     sarvam,
     soniox,
     speechmatics,
@@ -66,6 +67,7 @@ STTs: list[Callable[[], stt.STT]] = [
         azure,
         aws,
         sarvam,
+        reson8,
         # rtzr,
         # TODO: only Business account allowed outside South Korea
         # clova,

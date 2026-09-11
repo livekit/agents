@@ -73,6 +73,7 @@ members = [
     "livekit-plugins-phonic",
     "livekit-plugins-protoface",
     "livekit-plugins-resemble",
+    "livekit-plugins-reson8",
     "livekit-plugins-respeecher",
     "livekit-plugins-rime",
     "livekit-plugins-rtzr",
@@ -2103,6 +2104,9 @@ protoface = [
 resemble = [
     { name = "livekit-plugins-resemble" },
 ]
+reson8 = [
+    { name = "livekit-plugins-reson8" },
+]
 respeecher = [
     { name = "livekit-plugins-respeecher" },
 ]
@@ -2234,6 +2238,7 @@ requires-dist = [
     { name = "livekit-plugins-phonic", marker = "extra == 'phonic'", editable = "livekit-plugins/livekit-plugins-phonic" },
     { name = "livekit-plugins-protoface", marker = "extra == 'protoface'", editable = "livekit-plugins/livekit-plugins-protoface" },
     { name = "livekit-plugins-resemble", marker = "extra == 'resemble'", editable = "livekit-plugins/livekit-plugins-resemble" },
+    { name = "livekit-plugins-reson8", marker = "extra == 'reson8'", editable = "livekit-plugins/livekit-plugins-reson8" },
     { name = "livekit-plugins-respeecher", marker = "extra == 'respeecher'", editable = "livekit-plugins/livekit-plugins-respeecher" },
     { name = "livekit-plugins-rime", marker = "extra == 'rime'", editable = "livekit-plugins/livekit-plugins-rime" },
     { name = "livekit-plugins-rtzr", marker = "extra == 'rtzr'", editable = "livekit-plugins/livekit-plugins-rtzr" },
@@ -2278,7 +2283,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "reson8", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -3287,6 +3292,16 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 [[package]]
 name = "livekit-plugins-resemble"
 source = { editable = "livekit-plugins/livekit-plugins-resemble" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-reson8"
+source = { editable = "livekit-plugins/livekit-plugins-reson8" }
 dependencies = [
     { name = "livekit-agents" },
 ]
