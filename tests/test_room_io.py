@@ -16,6 +16,7 @@ from livekit.agents.voice.room_io._input import (
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantLegacyTranscriptionOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -146,6 +147,50 @@ class _FakeWriter:
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
+
+
+def _fake_remote(
+    identity: str,
+    *,
+    client_protocol: int = 0,
+    kind: rtc.ParticipantKind.ValueType = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    on_behalf: str | None = None,
+) -> SimpleNamespace:
+    """A remote participant stand-in for the legacy-transcription gate.
+
+    `attributes` must be a real dict -- the gate calls `.get` on it -- and
+    `client_protocol` is read off `_info`, matching livekit-rtc's private shape.
+    """
+    attributes: dict[str, str] = {}
+    if on_behalf is not None:
+        attributes["lk.publish_on_behalf"] = on_behalf
+    return SimpleNamespace(
+        identity=identity,
+        kind=kind,
+        attributes=attributes,
+        _info=SimpleNamespace(client_protocol=client_protocol),
+    )
+
+
+def _make_legacy_output(
+    room: _FakeRoom,
+    *,
+    participant_identity: str = "agent",
+) -> _ParticipantLegacyTranscriptionOutput:
+    """A legacy sink wired up without going through `set_participant`, which would walk
+    `track_publications` that the fakes do not have."""
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant=None)
+    output._participant_identity = participant_identity
+    output._represented_by = participant_identity
+    output._track_id = "TR_legacy"
+    return output
+
+
+async def _capture_and_flush(output: _ParticipantLegacyTranscriptionOutput, text: str) -> None:
+    await output.capture_text(text)
+    output.flush()
+    if output._flush_task is not None:
+        await output._flush_task
 
 
 def _make_track_available_args(
@@ -1070,3 +1115,207 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
+
+
+# -- legacy transcription gate ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_skipped_when_all_clients_are_modern() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "a": _fake_remote("a", client_protocol=3),
+        "b": _fake_remote("b", client_protocol=3),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_published_when_a_client_is_legacy() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "modern": _fake_remote("modern", client_protocol=3),
+        "legacy": _fake_remote("legacy", client_protocol=0),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    calls = room.local_participant.publish_transcription.await_args_list
+    assert len(calls) == 2
+
+    partial = calls[0].args[0].segments[0]
+    assert partial.text == "hello"
+    assert partial.final is False
+
+    final = calls[1].args[0].segments[0]
+    assert final.text == "hello"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_treats_unknown_protocol_as_legacy() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    unknown = SimpleNamespace(
+        identity="unknown",
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        attributes={},
+    )
+    room.remote_participants = {"unknown": unknown, "mock": MagicMock()}
+    room.remote_participants["mock"].kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    room.remote_participants["mock"].attributes = {}
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_skipped_with_no_standard_participants() -> None:
+    """An empty considered set means skip: a SIP-only room has nobody who renders text."""
+    for remotes in (
+        {},
+        {"sip": _fake_remote("sip", kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP)},
+    ):
+        room = _FakeRoom()
+        room.local_participant.publish_transcription = AsyncMock()
+        room.remote_participants = dict(remotes)
+
+        await _capture_and_flush(_make_legacy_output(room), "hello")
+
+        assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+        rtc.ParticipantKind.PARTICIPANT_KIND_INGRESS,
+        rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+        rtc.ParticipantKind.PARTICIPANT_KIND_CONNECTOR,
+    ],
+)
+async def test_legacy_transcription_ignores_non_standard_kinds(kind) -> None:
+    """Only user-created client SDK instances gate the legacy packet."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "service": _fake_remote("service", client_protocol=0, kind=kind),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_published_for_legacy_standard_participant() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"user": _fake_remote("user", client_protocol=0)}
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_excludes_our_own_avatar_worker() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "avatar": _fake_remote("avatar", client_protocol=0, on_behalf="local"),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_counts_another_agents_avatar_worker() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "user": _fake_remote("user", client_protocol=3),
+        "avatar": _fake_remote("avatar", client_protocol=0, on_behalf="other-agent"),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_never_mistakes_the_user_for_a_proxy() -> None:
+    """Regression guard: the exclusion must not reuse `_is_local_proxy_participant`, which
+    also matches the participant the output is attributed to."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"test-user": _fake_remote("test-user", client_protocol=0)}
+
+    output = _make_legacy_output(room, participant_identity="test-user")
+    await _capture_and_flush(output, "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_gate_is_dynamic_and_keeps_state_warm() -> None:
+    """A legacy client joining mid-segment gets the whole accumulated segment, which only
+    holds while the gate sits at the publish site rather than in capture_text."""
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _make_legacy_output(room)
+
+    await output.capture_text("hello ")
+    assert room.local_participant.publish_transcription.await_count == 0
+
+    room.remote_participants["legacy"] = _fake_remote("legacy", client_protocol=0)
+
+    await output.capture_text("world")
+    assert room.local_participant.publish_transcription.await_count == 1
+    partial = room.local_participant.publish_transcription.await_args_list[0].args[0].segments[0]
+    assert partial.text == "hello world"
+    assert partial.final is False
+
+    output.flush()
+    assert output._flush_task is not None
+    await output._flush_task
+
+    final = room.local_participant.publish_transcription.await_args_list[1].args[0].segments[0]
+    assert final.text == "hello world"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_modern_stream_still_published_when_legacy_is_skipped() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    writer = _FakeWriter()
+    room.local_participant.stream_text = AsyncMock(return_value=writer)
+    room.remote_participants = {"modern": _fake_remote("modern", client_protocol=3)}
+
+    output = _ParticipantTranscriptionOutput(room=room, participant="agent")
+    legacy_output, _ = output._ParticipantTranscriptionOutput__outputs
+    legacy_output._track_id = "TR_legacy"
+
+    await output.capture_text("hello")
+    output.flush()
+    if legacy_output._flush_task is not None:
+        await legacy_output._flush_task
+
+    assert "".join(writer.chunks) == "hello"
+    assert room.local_participant.publish_transcription.await_count == 0
