@@ -18,9 +18,11 @@ import asyncio
 import base64
 import json
 import os
+import weakref
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Literal, TypedDict
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -28,6 +30,7 @@ from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
     APIError,
+    APIStatusError,
     APITimeoutError,
     tts,
     utils,
@@ -82,6 +85,7 @@ DEFAULT_HEADERS = {
 }
 API_AUTH_HEADER = "X-Hume-Api-Key"
 STREAM_PATH = "/v0/tts/stream/json"
+INPUT_STREAM_PATH = "/v0/tts/stream/input"
 DEFAULT_BASE_URL = "https://api.hume.ai"
 SUPPORTED_SAMPLE_RATE = 48000
 DEFAULT_VOICE = VoiceByName(name="Male English Actor", provider=VoiceProvider.hume)
@@ -103,6 +107,16 @@ class _TTSOptions:
     def http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
+    def websocket_url(self, path: str, query_params: dict[str, str]) -> str:
+        base_url = self.base_url
+        if base_url.startswith("https://"):
+            base_url = f"wss://{base_url.removeprefix('https://')}"
+        elif base_url.startswith("http://"):
+            base_url = f"ws://{base_url.removeprefix('http://')}"
+
+        query = urlencode(query_params)
+        return f"{base_url}{path}?{query}"
+
 
 class TTS(tts.TTS):
     def __init__(
@@ -117,6 +131,7 @@ class TTS(tts.TTS):
         context: str | list[Utterance] | None = None,
         instant_mode: NotGivenOr[bool] = NOT_GIVEN,
         audio_format: AudioFormat = AudioFormat.mp3,
+        streaming: bool = True,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
     ):
@@ -138,11 +153,14 @@ class TTS(tts.TTS):
             instant_mode: Whether to use instant mode. Defaults to True if voice specified,
                 False otherwise. Requires a voice to be specified when enabled.
             audio_format: Output audio format (mp3, wav, or pcm). Defaults to mp3.
+            streaming: Whether this TTS advertises native websocket input streaming to LiveKit.
+                Defaults to True. Set to False to let LiveKit's default TTS node wrap
+                `synthesize()` with a sentence-based StreamAdapter.
             base_url: Base URL for Hume AI API. Defaults to https://api.hume.ai
             http_session: Optional aiohttp ClientSession to use for requests.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=False),
+            capabilities=tts.TTSCapabilities(streaming=streaming),
             sample_rate=SUPPORTED_SAMPLE_RATE,
             num_channels=1,
         )
@@ -174,6 +192,7 @@ class TTS(tts.TTS):
             base_url=base_url,
         )
         self._session = http_session
+        self._streams = weakref.WeakSet[SynthesizeStream]()
 
     @property
     def model(self) -> str:
@@ -231,6 +250,25 @@ class TTS(tts.TTS):
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> SynthesizeStream:
+        if isinstance(self._opts.context, list):
+            raise ValueError(
+                "Hume TTS input streaming only supports context as a generation ID string. "
+                "Use synthesize() for utterance-list context."
+            )
+
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
+
+    async def aclose(self) -> None:
+        for stream in list(self._streams):
+            await stream.aclose()
+
+        self._streams.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):
@@ -302,3 +340,169 @@ class ChunkedStream(tts.ChunkedStream):
             raise APITimeoutError() from None
         except Exception as e:
             raise APIConnectionError() from e
+
+
+class SynthesizeStream(tts.SynthesizeStream):
+    def __init__(self, *, tts: TTS, conn_options: APIConnectOptions):
+        super().__init__(tts=tts, conn_options=conn_options)
+        self._tts: TTS = tts
+        self._opts = replace(tts._opts)
+
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        request_id = utils.shortuuid()
+        segment_id = utils.shortuuid()
+        output_started = False
+        input_sent_event = asyncio.Event()
+
+        output_emitter.initialize(
+            request_id=request_id,
+            sample_rate=SUPPORTED_SAMPLE_RATE,
+            num_channels=self._tts.num_channels,
+            mime_type=f"audio/{self._opts.audio_format.value}",
+            stream=True,
+        )
+
+        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            async for data in self._input_ch:
+                if isinstance(data, self._FlushSentinel):
+                    if not self._input_ended:
+                        await ws.send_str(json.dumps({"flush": True}))
+                        input_sent_event.set()
+                    continue
+
+                self._mark_started()
+                await ws.send_str(json.dumps(_input_message(text=data, opts=self._opts)))
+                input_sent_event.set()
+
+            await ws.send_str(json.dumps({"close": True}))
+            input_sent_event.set()
+
+        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal output_started
+
+            await input_sent_event.wait()
+            while True:
+                msg = await ws.receive()
+
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    break
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    raise APIConnectionError(str(ws.exception()))
+
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    if not output_started:
+                        output_emitter.start_segment(segment_id=segment_id)
+                        output_started = True
+                    output_emitter.push(msg.data)
+                    continue
+
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+
+                try:
+                    data = json.loads(msg.data)
+                except json.JSONDecodeError as e:
+                    raise APIError(f"received invalid JSON from Hume TTS: {msg.data}") from e
+
+                if data.get("type") == "error" or data.get("error"):
+                    raise APIError(message=f"Hume TTS returned error: {data}", body=data)
+
+                provider_request_id = (
+                    data.get("request_id") or data.get("snippet_id") or data.get("generation_id")
+                )
+                if provider_request_id:
+                    output_emitter._note_provider_request_id(provider_request_id)
+
+                if data.get("type") == "timestamp":
+                    continue
+
+                audio_b64 = data.get("audio")
+                if not audio_b64:
+                    continue
+
+                if not output_started:
+                    output_emitter.start_segment(segment_id=segment_id)
+                    output_started = True
+
+                output_emitter.push(base64.b64decode(audio_b64))
+                if data.get("is_last_chunk") and self._input_ended:
+                    break
+
+            if output_started:
+                output_emitter.end_segment()
+
+        try:
+            ws = await asyncio.wait_for(
+                self._tts._ensure_session().ws_connect(
+                    self._opts.websocket_url(
+                        INPUT_STREAM_PATH, _stream_input_query_params(self._opts)
+                    ),
+                    headers=DEFAULT_HEADERS,
+                ),
+                timeout=self._conn_options.timeout,
+            )
+            try:
+                tasks = [
+                    asyncio.create_task(send_task(ws)),
+                    asyncio.create_task(recv_task(ws)),
+                ]
+
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    input_sent_event.set()
+                    await utils.aio.gracefully_cancel(*tasks)
+            finally:
+                await ws.close()
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except APIError:
+            raise
+        except Exception as e:
+            raise APIConnectionError() from e
+
+
+def _stream_input_query_params(opts: _TTSOptions) -> dict[str, str]:
+    params = {
+        "api_key": opts.api_key,
+        "format_type": opts.audio_format.value,
+        "no_binary": "true",
+        "strip_headers": "true",
+    }
+
+    if opts.instant_mode is not None:
+        params["instant_mode"] = _bool_str(opts.instant_mode)
+    if opts.model_version is not None:
+        params["version"] = opts.model_version
+    if isinstance(opts.context, str):
+        params["context_generation_id"] = opts.context
+
+    return params
+
+
+def _input_message(*, text: str, opts: _TTSOptions) -> dict[str, Any]:
+    message: dict[str, Any] = {"text": text}
+
+    if opts.voice:
+        message["voice"] = opts.voice
+    if opts.description:
+        message["description"] = opts.description
+    if opts.speed:
+        message["speed"] = opts.speed
+    if opts.trailing_silence:
+        message["trailing_silence"] = opts.trailing_silence
+
+    return message
+
+
+def _bool_str(value: bool) -> str:
+    return "true" if value else "false"
