@@ -216,14 +216,15 @@ class _GeminiJsonSchema:
             self._array(schema, refs_stack)
 
     def _infer_type(self, value: Any) -> str:
-        if isinstance(value, int):
+        # bool must be tested before int: bool is a subclass of int in Python
+        if isinstance(value, bool):
+            return "boolean"
+        elif isinstance(value, int):
             return "integer"
         elif isinstance(value, float):
             return "number"
         elif isinstance(value, str):
             return "string"
-        elif isinstance(value, bool):
-            return "boolean"
         else:
             raise ValueError(f"Unsupported type in Schema: {type(value)}")
 
