@@ -118,24 +118,6 @@ class STT(stt.STT):
         )
         return SpeechStream(stt=self, conn_options=conn_options, language=effective_language)
 
-    def log_asr_models(self, asr_service: riva.client.ASRService) -> dict:
-        config_response = asr_service.stub.GetRivaSpeechRecognitionConfig(
-            riva.client.RivaSpeechRecognitionConfigRequest()
-        )
-
-        asr_models = {}
-        for model_config in config_response.model_config:
-            if model_config.parameters.get("type") == "online":
-                language_code = model_config.parameters["language_code"]
-                model = {"model": [model_config.model_name]}
-                if language_code in asr_models:
-                    asr_models[language_code].append(model)
-                else:
-                    asr_models[language_code] = [model]
-
-        asr_models = dict(sorted(asr_models.items()))
-        return asr_models
-
 
 class SpeechStream(stt.SpeechStream):
     def __init__(self, *, stt: STT, conn_options: APIConnectOptions, language: str):
