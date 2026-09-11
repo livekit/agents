@@ -26,19 +26,20 @@ import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Generic, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import jwt
-from aiohttp import web
-from google.protobuf.json_format import MessageToDict, MessageToJson
+from fastapi import FastAPI
+from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
-from livekit.protocol import agent, agent_worker, models
+from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
+from .http import _HttpRunner, _proxied_endpoints, _register_builtin_routes
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -52,9 +53,13 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_context, http_server, is_given
+from .utils import http_context, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
+
+if TYPE_CHECKING:
+    from .tunnel import Tunnel
+
 
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
@@ -248,7 +253,8 @@ class ServerOptions:
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
 
-    The HTTP server is used as a health check endpoint.
+    It serves the health check, the worker info endpoint, and any routes registered on
+    ``AgentServer.http``.
     """
 
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN
@@ -383,9 +389,45 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             False,
             False,
         )
-        self._http_server: http_server.HttpServer | None = None
+        self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
+        self._worker_load: float = 0.0
+
+        self._http_server: _HttpRunner | None = None
+        self._http_tunnel: Tunnel | None = None
+        # built here and not in run(): the @server.http decorators run at import time
+        self._http = FastAPI()
+        self._http.state.agent_server = self
 
         self._lock = asyncio.Lock()
+
+    @property
+    def http(self) -> FastAPI:
+        """HTTP routes served alongside the agent, as a FastAPI app::
+
+            @server.http.get("/token")
+            async def token() -> dict:
+                return {"ok": True}
+
+        ``GET /worker`` is reserved; ``GET /`` serves a default health check that a route
+        of your own replaces.
+        """
+        return self._http
+
+    @property
+    def http_tunnel(self) -> Tunnel | None:
+        """Experimental: serve ``http`` through LiveKit Cloud as well as locally.
+
+        Set it before ``run()``, which starts and stops it with the HTTP server::
+
+            server.http_tunnel = WebSocketTunnel()
+        """
+        return self._http_tunnel
+
+    @http_tunnel.setter
+    def http_tunnel(self, value: Tunnel | None) -> None:
+        if not self._closed:
+            raise RuntimeError("http_tunnel must be set before the server runs")
+        self._http_tunnel = value
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:
@@ -598,9 +640,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._close_future: asyncio.Future[None] | None = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
-            self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = (
-                None
-            )
+            self._inference_executor = None
             if len(_InferenceRunner.registered_runners) > 0:
                 self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
                     runners=_InferenceRunner.registered_runners,
@@ -638,39 +678,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
-            self._worker_load: float = 0.0
+            self._worker_load = 0.0
             self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             # simulations run ephemeral workers side by side; a health
             # endpoint on a fixed port would make concurrent runs collide
             if not self._simulation:
-                self._http_server = http_server.HttpServer(
-                    self._host, ServerEnvOption.getvalue(self._port, devmode)
+                _register_builtin_routes(self)
+                self._http_server = _HttpRunner(
+                    self._http,
+                    host=self._host,
+                    port=ServerEnvOption.getvalue(self._port, devmode),
                 )
-
-                async def health_check(_: Any) -> web.Response:
-                    if self._inference_executor and not self._inference_executor.is_alive():
-                        return web.Response(status=503, text="inference process not running")
-
-                    if self._connection_failed:
-                        return web.Response(status=503, text="failed to connect to livekit")
-
-                    return web.Response(text="OK")
-
-                async def worker(_: Any) -> web.Response:
-                    worker_info = agent_worker.WorkerInfo(
-                        worker_type=agent.JobType.Name(self._server_type.value),
-                        agent_name=self._agent_name,
-                        active_jobs=len(self.active_jobs),
-                        sdk_version=__version__,
-                        worker_load=self._worker_load,
-                        protocol_version=WORKER_PROTOCOL_VERSION,
-                    )
-                    body = MessageToJson(worker_info, preserving_proto_field_name=True)
-                    return web.Response(body=body, content_type="application/json")
-
-                self._http_server.app.add_routes([web.get("/", health_check)])
-                self._http_server.app.add_routes([web.get("/worker", worker)])
+            elif self._http.routes:
+                logger.warning("simulation mode does not serve server.http routes")
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
@@ -775,6 +796,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 logger.info(
                     f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
                 )
+
+                if self._http_tunnel is not None:
+                    # after the port is resolved, since every stream is piped to it
+                    endpoints = _proxied_endpoints(self._http)
+                    await self._http_tunnel.start(
+                        target_port=self._http_server.port, endpoints=endpoints
+                    )
+                    logger.info(f"HTTP tunnel serving {endpoints} through the cloud")
 
             if self._prometheus_server:
                 await self._prometheus_server.start()
@@ -1050,6 +1079,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._http_session is not None:
                 await self._http_session.close()
+
+            if self._http_tunnel is not None:
+                await self._http_tunnel.aclose()
 
             if self._http_server is not None:
                 await self._http_server.aclose()

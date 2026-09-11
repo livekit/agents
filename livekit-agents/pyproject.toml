@@ -37,6 +37,10 @@ dependencies = [
     "types-protobuf>=4",
     "psutil>=7.0",
     "aiohttp~=3.10",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    # uvicorn refuses websocket upgrades unless an implementation is installed
+    "websockets>=13",
     "typing-extensions>=4.12",
     "docstring_parser>=0.16",
     "eval-type-backport",
