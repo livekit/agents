@@ -1039,6 +1039,31 @@ async def test_a_delegated_model_is_billed_under_its_own_name(
         await model.aclose()
 
 
+@pytest.mark.parametrize(
+    "seconds", [10, 8, 0, -1, True, float("nan"), float("inf"), float("-inf"), "invalid", None]
+)
+async def test_invalid_usage_does_not_lower_or_poison_the_cumulative_watermark(
+    monkeypatch: pytest.MonkeyPatch, seconds: Any
+) -> None:
+    """Only increasing, finite duration reports can advance the cumulative watermark."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    collected: list[RealtimeModelMetrics] = []
+    session.on("metrics_collected", collected.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        for value in (10, seconds, 12, 12):
+            session._handle_event({"type": "session.usage.updated", "usage": {"seconds": value}})
+        assert [metric.session_duration for metric in collected] == [10, 2]
+        session._handle_event({"type": "session.closed", "usage": {"seconds": 12.5}})
+        assert [metric.session_duration for metric in collected] == [10, 2, 0.5]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 def _user_events(session: GPTLiveSession) -> list[tuple[str, Any]]:
     events: list[tuple[str, Any]] = []
     for name in (
