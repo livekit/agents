@@ -15,13 +15,51 @@
 """Qwen plugin for LiveKit Agents: realtime STT, TTS and LLM on Alibaba Cloud Model Studio.
 
 Importing this package registers the plugin via ``Plugin.register_plugin``.
+
+Set ``DASHSCOPE_API_KEY`` (or pass ``api_key``). Keys are region-bound: ``region="intl"``
+(default, Singapore) for keys from alibabacloud.com, ``region="cn"`` (Beijing) for keys from
+aliyun.com. Pass ``base_url`` to use a workspace-dedicated domain.
 """
 
+from .llm import LLM
+from .models import (
+    DEFAULT_LLM_MODEL,
+    DEFAULT_REGION,
+    DEFAULT_STT_MODEL,
+    DEFAULT_TTS_LANGUAGE_TYPE,
+    DEFAULT_TTS_MODEL,
+    DEFAULT_TTS_VOICE,
+    LLMModels,
+    QwenRegion,
+    STTModels,
+    TTSLanguageTypes,
+    TTSModels,
+    TTSVoices,
+)
 from .stt import STT, SpeechStream
 from .tts import TTS, SynthesizeStream
 from .version import __version__
 
-__all__ = ["STT", "SpeechStream", "TTS", "SynthesizeStream", "__version__"]
+__all__ = [
+    "STT",
+    "SpeechStream",
+    "TTS",
+    "SynthesizeStream",
+    "LLM",
+    "QwenRegion",
+    "STTModels",
+    "TTSModels",
+    "TTSVoices",
+    "TTSLanguageTypes",
+    "LLMModels",
+    "DEFAULT_REGION",
+    "DEFAULT_STT_MODEL",
+    "DEFAULT_TTS_MODEL",
+    "DEFAULT_TTS_VOICE",
+    "DEFAULT_TTS_LANGUAGE_TYPE",
+    "DEFAULT_LLM_MODEL",
+    "__version__",
+]
 
 from livekit.agents import Plugin
 
