@@ -901,6 +901,9 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self._append_audio(frame)
+
+    def _append_audio(self, frame: rtc.AudioFrame) -> None:
         # the caller's turn ends on their own audio: this much pushed since their last fragment
         if (speech := self._speech.get("user")) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
