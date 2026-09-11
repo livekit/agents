@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -158,6 +159,35 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(instructions):
             self._opts.instructions = instructions
+
+    @staticmethod
+    def with_audexum(
+        *,
+        model: str = "tts-1",
+        voice: str = "nova",
+        speed: float = 1.0,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        base_url: str = "https://audexum.com/v1",
+        client: openai.AsyncClient | None = None,
+    ) -> TTS:
+        """
+        Create a new instance of Audexum TTS.
+
+        ``api_key`` must be set to your Audexum API key, either using the argument or by setting
+        the ``AUDEXUM_API_KEY`` environmental variable.
+        """
+        audexum_api_key = api_key if is_given(api_key) else os.environ.get("AUDEXUM_API_KEY")
+        if not audexum_api_key:
+            raise ValueError("Audexum API key is required")
+
+        return TTS(
+            model=model,
+            voice=voice,
+            speed=speed,
+            api_key=audexum_api_key,
+            base_url=base_url,
+            client=client,
+        )
 
     @staticmethod
     def with_azure(
