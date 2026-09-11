@@ -84,3 +84,30 @@ async def test_rejected_handshake_does_not_leak_the_api_key() -> None:
     assert SECRET_API_KEY not in str(err)
     assert SECRET_API_KEY not in repr(err)
     assert err.__cause__ is None
+
+
+def test_public_api_is_exported() -> None:
+    from livekit.plugins import qwen
+
+    for name in (
+        "STT",
+        "SpeechStream",
+        "TTS",
+        "SynthesizeStream",
+        "QwenRegion",
+        "STTModels",
+        "TTSModels",
+        "TTSVoices",
+        "TTSLanguageTypes",
+        "LLM",
+        "LLMModels",
+        "DEFAULT_REGION",
+        "DEFAULT_STT_MODEL",
+        "DEFAULT_TTS_MODEL",
+        "DEFAULT_TTS_VOICE",
+        "DEFAULT_TTS_LANGUAGE_TYPE",
+        "DEFAULT_LLM_MODEL",
+        "__version__",
+    ):
+        assert name in qwen.__all__, name
+        assert hasattr(qwen, name), name
