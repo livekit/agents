@@ -935,6 +935,7 @@ def live_transcription_to_speech_data(
                     text=_word_text(word, use_punctuated_word=use_punctuated_word),
                     start_time=word.get("start", 0) + start_time_offset,
                     end_time=word.get("end", 0) + start_time_offset,
+                    confidence=word.get("confidence", NOT_GIVEN),
                     start_time_offset=start_time_offset,
                 )
                 for word in alt["words"]
@@ -978,6 +979,7 @@ def prerecorded_transcription_to_speech_event(
                         text=_word_text(word, use_punctuated_word=use_punctuated_word),
                         start_time=word.get("start", 0),
                         end_time=word.get("end", 0),
+                        confidence=word.get("confidence", NOT_GIVEN),
                     )
                     for word in alt["words"]
                 ],
