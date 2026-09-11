@@ -75,6 +75,7 @@ livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-vakyam = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
+livekit-plugins-vui = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
