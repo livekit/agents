@@ -164,7 +164,7 @@ async def running(
         detector = AMD(
             session,
             llm=classifier,
-            **options,
+            **{"machine_silence_threshold": 0, **options},
         )
         async with detector:
             await eventually(lambda: detector.started)

@@ -1335,6 +1335,9 @@ class AudioRecognition:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
 
+            if self._vad is None and self._session.amd is not None:
+                self._session.amd._on_user_speech_ended(now - self._last_speaking_time)
+
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
                 chat_ctx,
@@ -1352,6 +1355,8 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
+            if self._vad is None and self._session.amd is not None:
+                self._session.amd._on_user_speech_started()
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1429,7 +1434,7 @@ class AudioRecognition:
                 self._run_eou_detection(chat_ctx, trigger="vad")
 
             if self._session.amd is not None:
-                self._session.amd._on_user_speech_ended(ev.silence_duration)
+                self._session.amd._on_user_speech_ended(ev.silence_duration + ev.inference_duration)
 
     def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores

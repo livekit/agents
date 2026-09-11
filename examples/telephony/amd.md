@@ -90,6 +90,18 @@ The normal interruption path handles a person who speaks during a message.
 Interruption does not itself authorize a reply. AMD still checks the next turn.
 An uncertain prediction does not reset an established stage.
 
+Machine predictions wait for 1.5 seconds of continuous participant silence.
+This includes screening, voicemail, IVR, and unavailable results. The wait covers
+both the prediction event and permission to reply. Silence before EOT and during
+classification counts toward the threshold. A ready result does not time out
+while it waits for silence.
+
+Human and initial `uncertain` predictions use normal EOT timing. If `uncertain`
+keeps an established machine stage, the machine silence rule still applies.
+New speech cancels a pending release. The next EOT can replace the prediction,
+or rearm it if there is no new text. AMD retains the earlier transcript.
+Superseded results do not emit a prediction or authorize an old reply.
+
 ## DTMF and menus
 
 The built-in `send_dtmf_events` tool reports successful local sends to AMD.
@@ -110,7 +122,8 @@ or execute the observed menu. Extraction has a 5-second deadline and at most
 
 | Control | Default | Behavior |
 | --- | --- | --- |
-| `inference_timeout` | 1.5 seconds | Release the turn using the current stage on timeout. |
+| `inference_timeout` | 1.5 seconds | Use the current stage on timeout; its silence rule still applies. |
+| `machine_silence_threshold` | 1.5 seconds | Wait for continuous silence before a machine prediction releases the turn. Set to `0` to disable. |
 | `idle_timeout` | 10 seconds | Complete after inactivity outside voicemail. |
 | `voicemail_idle_timeout` | 60 seconds | Allow a delayed post-message menu after playback. |
 | `timeout` | 120 seconds | Fixed overall limit from the start of listening. |
@@ -118,8 +131,11 @@ or execute the observed menu. Extraction has a 5-second deadline and at most
 
 A late prediction can update the stage if no newer inference replaced it.
 It cannot change a reply that already started. Three consecutive prediction
-timeouts also complete AMD. Model errors release the turn using the current stage.
+timeouts also complete AMD after the current stage's silence requirement.
+Model errors and reused results use the same stage and silence rule.
 New speech cancels the idle timer. Stage changes do not extend the overall limit.
+The overall limit can end AMD during a silence wait. Without speech-end timing,
+the silence wait starts at EOT.
 
 Completion or context exit closes AMD requests, removes listeners and reply
 guards, and releases pending callers. The application receives the final category

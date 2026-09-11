@@ -19,7 +19,7 @@ from ...utils import EventEmitter, aio, is_given
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _inference
 from ._transcription import TurnTranscript
-from .classifier import AMDCategory, AMDPredictionEvent
+from .classifier import MACHINE_SILENCE_THRESHOLD, AMDCategory, AMDPredictionEvent
 from .events import AMDCompletedEvent, AMDMenuObservedEvent
 
 if TYPE_CHECKING:
@@ -58,8 +58,12 @@ class _Turn:
     transcript: str
     speech_duration: float
     decision: asyncio.Future[AMDPredictionEvent]
+    speech_epoch: int
+    silence_started_at: float
     dtmf_digits: str = ""
     timer: asyncio.TimerHandle | None = None
+    release_timer: asyncio.TimerHandle | None = None
+    prediction: AMDPredictionEvent | None = None
     timed_out: bool = False
     updated_turn_ids: set[int] = field(default_factory=set)
 
@@ -100,6 +104,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         timeout: Hard limit from the start of listening.
         inference_timeout: Prediction deadline per committed turn. A late result
             can update the stage, but cannot change a reply that already started.
+        machine_silence_threshold: Continuous participant silence before a machine
+            prediction releases the turn. Includes silence before and during
+            classification. Human and initial uncertain predictions do not wait.
+            Set to zero to disable the extra silence wait.
         max_uncertain_turns: Consecutive uncertain predictions before completion.
     """
 
@@ -118,6 +126,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         voicemail_idle_timeout: float = 60.0,
         timeout: float = 120.0,
         inference_timeout: float = 1.5,
+        machine_silence_threshold: float = MACHINE_SILENCE_THRESHOLD,
         max_uncertain_turns: int = 3,
     ) -> None:
         super().__init__()
@@ -126,6 +135,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             or max_uncertain_turns < 1
         ):
             raise ValueError("AMD timeouts and max_uncertain_turns must be positive")
+        if machine_silence_threshold < 0:
+            raise ValueError("machine_silence_threshold must be nonnegative")
         self._session = session
         self._owns_llm = isinstance(llm, str)
         self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
@@ -142,6 +153,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._voicemail_idle_timeout = voicemail_idle_timeout
         self._timeout = timeout
         self._inference_timeout = inference_timeout
+        self._machine_silence_threshold = machine_silence_threshold
         self._max_uncertain_turns = max_uncertain_turns
         self._session_id = uuid.uuid4().hex
         self._control_prefix = f"amd_{uuid.uuid4().hex}_"
@@ -149,6 +161,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._closed = False
         self._listening = False
         self._speaking_since: float | None = None
+        self._speech_ended_at: float | None = None
+        self._speech_epoch = 0
         self._speech_duration = 0.0
         self._category = AMDCategory.UNCERTAIN
         self._previous_turn: AMDCategory | None = None
@@ -356,17 +370,26 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _on_user_speech_started(self) -> None:
         if self.started:
+            self._speech_epoch += 1
             self._speaking_since = time.monotonic()
+            self._speech_ended_at = None
+            for turn in self._turns.values():
+                if turn.release_timer:
+                    turn.release_timer.cancel()
+                    turn.release_timer = None
             self._cancel_idle()
             if activity := self._session._activity:
                 activity._pause_authorization()
 
     def _on_user_speech_ended(self, silence_duration: float) -> None:
+        self._speech_ended_at = time.monotonic() - max(0, silence_duration)
         if self._speaking_since is not None:
-            self._speech_duration += max(
-                0, time.monotonic() - self._speaking_since - silence_duration
-            )
+            self._speech_duration += max(0, self._speech_ended_at - self._speaking_since)
         self._speaking_since = None
+        for turn in self._turns.values():
+            if turn.speech_epoch == self._speech_epoch:
+                turn.silence_started_at = self._speech_ended_at
+                self._release_prediction(turn)
 
     def _on_transcript(self, text: str) -> None:
         if self.started and self._transcript is not None:
@@ -385,12 +408,18 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self._speaking_since is not None:
             speech_duration += time.monotonic() - self._speaking_since
             self._speaking_since = time.monotonic()
+        committed_at = time.monotonic()
+        silence_started_at = self._speech_ended_at
+        if silence_started_at is None:
+            silence_started_at = committed_at - max(0, info.metrics.end_of_turn_delay or 0)
         turn = _Turn(
             self._turn_id,
-            time.monotonic(),
+            committed_at,
             info.new_transcript.strip()[-16000:],
             speech_duration,
             asyncio.get_running_loop().create_future(),
+            speech_epoch=self._speech_epoch,
+            silence_started_at=silence_started_at,
             dtmf_digits=self._pending_dtmf_digits,
         )
         self._turns[turn.turn_id] = turn
@@ -423,9 +452,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         history_ids = {entry["turn_id"] for entry in history}
         updated_turn_ids = self._updated_turn_ids & history_ids
         if not turn.transcript and not updated_turn_ids:
-            if self._pending_turn is not None and not self._pending_turn.decision.done():
+            if self._pending_turn is not None and (
+                not self._pending_turn.decision.done() or self._pending_turn.prediction is not None
+            ):
                 self._reused_turns.append(turn)
+                self._pending_turn.speech_epoch = turn.speech_epoch
+                self._pending_turn.silence_started_at = turn.silence_started_at
+                self._release_prediction(self._pending_turn)
             else:
+                self._supersede_predictions(turn)
                 self._fallback(turn, "reused")
             return
         if turn.turn_id < self._last_inference_turn_id:
@@ -433,10 +468,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         if self._classifier_task is not None:
             self._classifier_task.cancel()
+        self._supersede_predictions(turn)
         if self._pending_turn is not None:
             self._updated_turn_ids.update(self._pending_turn.updated_turn_ids)
             self._fallback(self._pending_turn, "superseded")
-            self._flush_reused_turns()
+            self._flush_reused_turns(reason="superseded")
         if self._menu_task is not None:
             self._menu_task.cancel()
         turn.updated_turn_ids = self._updated_turn_ids & history_ids
@@ -467,6 +503,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             turn,
         )
 
+    def _supersede_predictions(self, turn: _Turn) -> None:
+        for previous in self._turns.values():
+            if previous.turn_id < turn.turn_id and previous.prediction is not None:
+                self._fallback(previous, "superseded")
+
     async def _classify(self, turn: _Turn, chat_ctx: llm.ChatContext) -> None:
         assert is_given(self._llm)
         started = time.monotonic()
@@ -491,24 +532,66 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         if turn.timer:
             turn.timer.cancel()
+        self._inference_timeouts = 0
         logger.debug(
             "AMD classification",
             extra={"turn_id": turn.turn_id, "raw_category": result.category.value},
         )
-        changed = self._category != category
-        event = AMDPredictionEvent(
+        turn.prediction = AMDPredictionEvent(
             turn_id=turn.turn_id,
             category=category,
             reason="late_prediction" if turn.timed_out else "prediction",
             transcript=turn.transcript,
             speech_duration=turn.speech_duration,
             delay=time.monotonic() - turn.committed_at,
-            prev_turn_category=self._latest.category if self._latest else None,
-            prev_stage_category=self._category if changed else self._previous_stage,
-            state_changed=changed,
             inference_duration=time.monotonic() - started,
             voicemail_message_played=self._voicemail_message_played,
         )
+        self._release_prediction(turn)
+
+    def _release_prediction(self, turn: _Turn) -> None:
+        if turn.release_timer:
+            turn.release_timer.cancel()
+            turn.release_timer = None
+        event = turn.prediction
+        if self._closed or event is None:
+            return
+        if event.is_machine and self._machine_silence_threshold > 0:
+            self._cancel_idle()
+            # New speech requires another EOT before this result can be released.
+            if self._speaking_since is not None or turn.speech_epoch != self._speech_epoch:
+                return
+            remaining = turn.silence_started_at + self._machine_silence_threshold - time.monotonic()
+            if remaining > 0:
+                turn.release_timer = asyncio.get_running_loop().call_later(
+                    remaining, self._release_prediction, turn
+                )
+                return
+        turn.prediction = None
+        try:
+            self._apply_prediction(turn, event)
+        except Exception:
+            logger.exception("AMD prediction release failed")
+            self._finish("inference_error")
+
+    def _apply_prediction(self, turn: _Turn, event: AMDPredictionEvent) -> None:
+        event.delay = time.monotonic() - turn.committed_at
+        event.voicemail_message_played = self._voicemail_message_played
+        if event.reason not in {"prediction", "late_prediction"}:
+            self._emit_prediction(event)
+            self._latest = event
+            if not turn.decision.done():
+                turn.decision.set_result(event)
+            if event.reason == "inference_timeout" and self._inference_timeouts >= 3:
+                self._finish("inference_timeout")
+            else:
+                self._rearm_idle()
+            return
+        category = event.category
+        changed = self._category != category
+        event.prev_turn_category = self._latest.category if self._latest else None
+        event.prev_stage_category = self._category if changed else self._previous_stage
+        event.state_changed = changed
         self._category = category
         self._previous_turn = event.prev_turn_category
         self._previous_stage = event.prev_stage_category
@@ -520,7 +603,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._voicemail_started = False
             if activity := self._session._activity:
                 activity._cancel_preemptive_generation()
-        self._inference_timeouts = 0
         self._uncertain_turns = (
             self._uncertain_turns + 1 if category == AMDCategory.UNCERTAIN else 0
         )
@@ -538,10 +620,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if category == AMDCategory.MACHINE_IVR:
                 self._menu_task = self._spawn(self._extract_menu(turn))
 
-    def _flush_reused_turns(self) -> None:
+    def _flush_reused_turns(self, *, reason: str = "reused") -> None:
         turns, self._reused_turns = self._reused_turns, []
         for turn in turns:
-            self._fallback(turn, "reused")
+            self._fallback(turn, reason)
 
     def _emit_prediction(self, event: AMDPredictionEvent) -> None:
         self.emit("amd_prediction", event)
@@ -560,6 +642,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     def _fallback(self, turn: _Turn, reason: str) -> None:
         if turn.timer:
             turn.timer.cancel()
+        if turn.release_timer:
+            turn.release_timer.cancel()
+            turn.release_timer = None
+        turn.prediction = None
         if turn.decision.done():
             return
         event = AMDPredictionEvent(
@@ -574,10 +660,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             should_wait=self._should_wait,
             voicemail_message_played=self._voicemail_message_played,
         )
-        self._emit_prediction(event)
-        self._latest = event
-        turn.decision.set_result(event)
-        self._rearm_idle()
+        if reason == "superseded":
+            turn.decision.set_result(event)
+            return
+        turn.prediction = event
+        self._release_prediction(turn)
 
     def _on_prediction_timeout(self, turn: _Turn) -> None:
         if self._closed or turn.decision.done():
@@ -586,8 +673,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._inference_timeouts += 1
         self._fallback(turn, "inference_timeout")
         self._flush_reused_turns()
-        if self._inference_timeouts >= 3:
-            self._finish("inference_timeout")
 
     async def _extract_menu(self, turn: _Turn) -> None:
         assert is_given(self._llm)
@@ -704,7 +789,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _rearm_idle(self) -> None:
         activity = self._session._activity
-        waiting = any(not turn.decision.done() for turn in self._turns.values())
+        waiting = any(
+            not turn.decision.done() or turn.prediction is not None for turn in self._turns.values()
+        )
         if (
             not self.started
             or self._speaking_since is not None
@@ -749,6 +836,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         for turn in self._turns.values():
             if turn.timer:
                 turn.timer.cancel()
+            if turn.release_timer:
+                turn.release_timer.cancel()
+                turn.release_timer = None
+            turn.prediction = None
             if not turn.decision.done():
                 turn.decision.set_result(
                     self._latest
