@@ -1057,7 +1057,6 @@ class HammingRuntime:
 
 
 _RUNTIME: HammingRuntime | None = None
-_PENDING_RUNTIME_CLOSES: set[asyncio.Task[None]] = set()
 
 
 def configure_runtime(config: HammingConfig) -> HammingRuntime:
@@ -1343,19 +1342,6 @@ def _merge_participant_attributes(
         if isinstance(key, str):
             merged[key] = value
     return merged
-
-
-def _env_flag(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return default
 
 
 def _env_int(name: str, *, default: int) -> int:
@@ -1901,24 +1887,3 @@ def _string_or_fallback(value: object, fallback: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return fallback
-
-
-def _reset_runtime_for_tests() -> None:
-    global _RUNTIME
-    runtime = _RUNTIME
-    _RUNTIME = None
-
-    if runtime is None:
-        return
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.run(runtime.aclose())
-        return
-
-    # Hold the task: the loop only keeps a weak reference, so a discarded one can be
-    # collected before the runtime is actually closed.
-    task = loop.create_task(runtime.aclose())
-    _PENDING_RUNTIME_CLOSES.add(task)
-    task.add_done_callback(_PENDING_RUNTIME_CLOSES.discard)
