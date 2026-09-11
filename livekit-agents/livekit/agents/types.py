@@ -68,6 +68,12 @@ def recording_enabled(options: Mapping[str, object]) -> bool:
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
 
+CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS = 3
+"""Minimum ``ParticipantInfo.client_protocol`` of a client that rebuilds transcription
+events from ``lk.transcription`` text streams and ignores the deprecated ``rtc.Transcription``
+data packet. While any considered participant is below this, the legacy packet is still
+published. The value is defined by the client SDKs (``client-sdk-js`` ``src/version.ts``)."""
+
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
 The key for the timed transcripts in the audio frame userdata.
