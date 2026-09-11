@@ -1220,6 +1220,7 @@ async def test_the_rearm_budget_follows_a_delegation_into_its_next_response(
         session._handle_event(_response_event("d1", {"type": "response.created"}))
         assert session._delegated_responses["d1"].rearms == 1
         assert not session._delegated_responses["d1"].call_ids, "answered calls do not carry"
+        assert "call_1" not in session._fnc_call_to_delegation, "nor does their routing"
     finally:
         await session.aclose()
         await model.aclose()

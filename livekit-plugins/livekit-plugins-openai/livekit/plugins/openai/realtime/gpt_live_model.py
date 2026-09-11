@@ -753,6 +753,9 @@ class GPTLiveSession(
                 # the calls the replaced response still waits on are open on the backend all
                 # the same, so the new response waits on them too
                 created.call_ids |= previous.call_ids - previous.returned
+                # its answered calls are done with; nothing routes to them any more
+                for call_id in previous.call_ids & previous.returned:
+                    self._fnc_call_to_delegation.pop(call_id, None)
                 created.rearms = previous.rearms
             self._delegated_responses[d_id] = created
 
