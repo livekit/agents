@@ -23,6 +23,8 @@ EventTypes = Literal[
 ]
 
 MAX_CONCURRENT_INITIALIZATIONS = min(math.ceil(get_cpu_monitor().cpu_count()), 4)
+PROCESS_INIT_RETRY_INITIAL_DELAY = 1.0
+PROCESS_INIT_RETRY_MAX_DELAY = 30.0
 
 
 class ProcPool(utils.EventEmitter[EventTypes]):
@@ -66,7 +68,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._init_sem = asyncio.Semaphore(MAX_CONCURRENT_INITIALIZATIONS)
         self._warmed_proc_queue = asyncio.Queue[JobExecutor]()
         self._executors: list[JobExecutor] = []
-        self._spawn_tasks: set[asyncio.Task[None]] = set()
+        self._spawn_tasks: set[asyncio.Task[bool]] = set()
         self._close_tasks: set[asyncio.Task[None]] = set()
         self._monitor_tasks: set[asyncio.Task[None]] = set()
         self._started = False
@@ -74,6 +76,8 @@ class ProcPool(utils.EventEmitter[EventTypes]):
 
         self._idle_ready = asyncio.Event()
         self._jobs_waiting_for_process = 0
+        self._process_init_retry_delay = 0.0
+        self._next_idle_process_spawn_at = 0.0
 
     @property
     def processes(self) -> list[JobExecutor]:
@@ -110,6 +114,47 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         self._closed = True
         await aio.cancel_and_wait(self._main_atask)
 
+    def _spawn_process(self) -> None:
+        task = asyncio.create_task(self._proc_spawn_task())
+        self._spawn_tasks.add(task)
+        task.add_done_callback(self._on_process_spawn_done)
+
+    def _on_process_spawn_done(self, task: asyncio.Task[bool]) -> None:
+        self._spawn_tasks.discard(task)
+        if task.cancelled():
+            return
+
+        exception = task.exception()
+        if self._closed:
+            return
+
+        initialized = exception is None and task.result()
+        if initialized:
+            self._process_init_retry_delay = 0.0
+            # Keep any active deadline set by another failed task in the same batch.
+            return
+
+        now = self._loop.time()
+        started_retry_round = now >= self._next_idle_process_spawn_at
+        if started_retry_round:
+            retry_delay = min(
+                max(PROCESS_INIT_RETRY_INITIAL_DELAY, self._process_init_retry_delay * 2),
+                PROCESS_INIT_RETRY_MAX_DELAY,
+            )
+        else:
+            retry_delay = max(PROCESS_INIT_RETRY_INITIAL_DELAY, self._process_init_retry_delay)
+
+        self._process_init_retry_delay = retry_delay
+        self._next_idle_process_spawn_at = max(
+            self._next_idle_process_spawn_at,
+            now + retry_delay,
+        )
+        if started_retry_round:
+            logger.warning(
+                "backing off idle process replenishment after an initialization failure",
+                extra={"retry_delay": retry_delay},
+            )
+
     async def _acquire_proc(self, job_id: str) -> JobExecutor:
         MAX_ACQUIRE_ATTEMPTS = 3
 
@@ -119,9 +164,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
                 and len(self._spawn_tasks) < self._jobs_waiting_for_process
             ):
                 # spawn a new process if there are no idle processes
-                task = asyncio.create_task(self._proc_spawn_task())
-                self._spawn_tasks.add(task)
-                task.add_done_callback(self._spawn_tasks.discard)
+                self._spawn_process()
 
             if self._warmed_proc_queue.empty():
                 logger.warning(
@@ -199,7 +242,7 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         return self._target_idle_processes
 
     @utils.log_exceptions(logger=logger)
-    async def _proc_spawn_task(self) -> None:
+    async def _proc_spawn_task(self) -> bool:
         proc: JobExecutor
         if self._job_executor_type == JobExecutorType.THREAD:
             proc = job_thread_executor.ThreadJobExecutor(
@@ -262,11 +305,12 @@ class ProcPool(utils.EventEmitter[EventTypes]):
             self._executors.remove(proc)
             await proc.aclose()
             self.emit("process_closed", proc)
-            return
+            return False
 
         monitor_task = asyncio.create_task(self._monitor_process_task(proc))
         self._monitor_tasks.add(monitor_task)
         monitor_task.add_done_callback(self._monitor_tasks.discard)
+        return True
 
     @utils.log_exceptions(logger=logger)
     async def _monitor_process_task(self, proc: JobExecutor) -> None:
@@ -281,16 +325,20 @@ class ProcPool(utils.EventEmitter[EventTypes]):
         try:
             while not self._closed:
                 current_pending = self._warmed_proc_queue.qsize() + len(self._spawn_tasks)
-                target = max(
-                    min(self._target_idle_processes, self._default_num_idle_processes),
-                    self._jobs_waiting_for_process,
+                idle_target = min(
+                    self._target_idle_processes,
+                    self._default_num_idle_processes,
                 )
-                to_spawn = target - current_pending
+                jobs_to_spawn = max(self._jobs_waiting_for_process - current_pending, 0)
 
-                for _ in range(to_spawn):
-                    task = asyncio.create_task(self._proc_spawn_task())
-                    self._spawn_tasks.add(task)
-                    task.add_done_callback(self._spawn_tasks.discard)
+                for _ in range(jobs_to_spawn):
+                    self._spawn_process()
+
+                current_pending += jobs_to_spawn
+                if self._loop.time() >= self._next_idle_process_spawn_at:
+                    idle_to_spawn = max(idle_target - current_pending, 0)
+                    for _ in range(idle_to_spawn):
+                        self._spawn_process()
 
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
