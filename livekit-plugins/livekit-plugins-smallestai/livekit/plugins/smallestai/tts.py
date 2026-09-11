@@ -202,6 +202,8 @@ class TTS(tts.TTS):
             self._opts.speed = speed
         if is_given(sample_rate):
             self._opts.sample_rate = sample_rate
+            # keep the base class property in sync; the framework reads tts.sample_rate
+            self._sample_rate = sample_rate
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(output_format):
