@@ -21,7 +21,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents>=1.8.1", "anthropic>=0.41", "httpx"]
+dependencies = [
+    "livekit-agents>=1.8.1",
+    "anthropic>=0.41,<1",  # 1.0 switched to httpx2 and dropped temperature/top_k (#7235)
+    "httpx",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
