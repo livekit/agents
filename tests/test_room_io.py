@@ -16,6 +16,7 @@ from livekit.agents.voice.room_io._input import (
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantLegacyTranscriptionOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -125,6 +126,50 @@ class _FakeWriter:
 
     async def aclose(self, attributes: dict[str, str] | None = None) -> None:
         self.close_calls += 1
+
+
+def _fake_remote(
+    identity: str,
+    *,
+    client_protocol: int = 0,
+    kind: rtc.ParticipantKind.ValueType = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+    on_behalf: str | None = None,
+) -> SimpleNamespace:
+    """A remote participant stand-in for the legacy-transcription gate.
+
+    `attributes` must be a real dict -- the gate calls `.get` on it -- and
+    `client_protocol` is read off `_info`, matching livekit-rtc's private shape.
+    """
+    attributes: dict[str, str] = {}
+    if on_behalf is not None:
+        attributes["lk.publish_on_behalf"] = on_behalf
+    return SimpleNamespace(
+        identity=identity,
+        kind=kind,
+        attributes=attributes,
+        _info=SimpleNamespace(client_protocol=client_protocol),
+    )
+
+
+def _make_legacy_output(
+    room: _FakeRoom,
+    *,
+    participant_identity: str = "agent",
+) -> _ParticipantLegacyTranscriptionOutput:
+    """A legacy sink wired up without going through `set_participant`, which would walk
+    `track_publications` that the fakes do not have."""
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant=None)
+    output._participant_identity = participant_identity
+    output._represented_by = participant_identity
+    output._track_id = "TR_legacy"
+    return output
+
+
+async def _capture_and_flush(output: _ParticipantLegacyTranscriptionOutput, text: str) -> None:
+    await output.capture_text(text)
+    output.flush()
+    if output._flush_task is not None:
+        await output._flush_task
 
 
 def _make_track_available_args(
