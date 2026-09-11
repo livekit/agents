@@ -40,6 +40,7 @@ from ._utils import (
 
 CartesiaModels = Literal[
     "cartesia",
+    "cartesia/sonic-3.6",
     "cartesia/sonic-3.5",
     "cartesia/sonic-3",
     "cartesia/sonic-2",
@@ -48,6 +49,76 @@ CartesiaModels = Literal[
     "cartesia/sonic-3-latest",
     "cartesia/sonic-latest",
 ]
+CartesiaLanguage = Literal[
+    "en",
+    "de",
+    "es",
+    "fr",
+    "ja",
+    "pt",
+    "zh",
+    "hi",
+    "ko",
+    "it",
+    "nl",
+    "pl",
+    "ru",
+    "sv",
+    "tr",
+    "tl",
+    "bg",
+    "ro",
+    "ar",
+    "cs",
+    "el",
+    "fi",
+    "hr",
+    "ms",
+    "sk",
+    "da",
+    "ta",
+    "uk",
+    "hu",
+    "no",
+    "vi",
+    "bn",
+    "th",
+    "he",
+    "ka",
+    "id",
+    "te",
+    "gu",
+    "kn",
+    "ml",
+    "mr",
+    "pa",
+    "or",
+    "ur",
+]
+CartesiaLocale = (
+    CartesiaLanguage
+    | Literal[
+        "en-GB",
+        "en-US",
+        "en-IN",
+        "en-IE",
+        "en-ZA",
+        "en-NZ",
+        "en-SG",
+        "en-AU",
+        "hi-IN",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-FR",
+        "fr-CA",
+        "nl-NL",
+        "nl-BE",
+        "pt-PT",
+        "pt-BR",
+    ]
+)
+CartesiaNormalization = Literal["auto", "off"] | CartesiaLocale
 DeepgramModels = Literal[
     "deepgram",
     "deepgram/aura",
@@ -80,6 +151,15 @@ FishAudioModels = Literal[
 TTSModels = (
     CartesiaModels | DeepgramModels | RimeModels | InworldModels | XaiModels | FishAudioModels
 )
+
+
+def _validate_cartesia_options(
+    model: str,
+    language: NotGivenOr[str],
+    extra_kwargs: dict[str, Any],
+) -> None:
+    if model.split("/")[0] == "cartesia" and is_given(language) and "locale" in extra_kwargs:
+        raise ValueError("Cartesia TTS accepts either language or locale, not both")
 
 
 def _parse_model_string(model: str) -> tuple[str, str | None]:
@@ -143,6 +223,8 @@ def _normalize_fallback(
 
 
 class CartesiaOptions(TypedDict, total=False):
+    locale: CartesiaLocale  # sonic-3.6+; mutually exclusive with language
+    normalization: CartesiaNormalization  # sonic-3.6+
     emotion: str
     speed: Literal["slow", "normal", "fast"] | float
     volume: float
@@ -235,7 +317,7 @@ class TTS(tts.TTS):
         model: CartesiaModels,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
-        language: NotGivenOr[str] = NOT_GIVEN,
+        language: NotGivenOr[CartesiaLanguage] = NOT_GIVEN,
         encoding: NotGivenOr[TTSEncoding] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -413,6 +495,7 @@ class TTS(tts.TTS):
                 voice = parsed_voice
 
         resolved_extra_kwargs = dict(extra_kwargs) if is_given(extra_kwargs) else {}
+        _validate_cartesia_options(model, language, resolved_extra_kwargs)
         super().__init__(
             capabilities=tts.TTSCapabilities(
                 streaming=True,
@@ -600,14 +683,19 @@ class TTS(tts.TTS):
             language (str, optional): Language code for the TTS model.
             extra_kwargs (dict, optional): Extra kwargs to pass to the TTS model.
         """
-        if is_given(model):
-            self._opts.model = model
+        updated_model = model if is_given(model) else self._opts.model
+        updated_language = LanguageCode(language) if is_given(language) else self._opts.language
+        updated_extra_kwargs = self._opts.extra_kwargs.copy()
+        if is_given(extra_kwargs):
+            updated_extra_kwargs.update(extra_kwargs)
+
+        _validate_cartesia_options(updated_model, updated_language, updated_extra_kwargs)
+
+        self._opts.model = updated_model
+        self._opts.language = updated_language
+        self._opts.extra_kwargs = updated_extra_kwargs
         if is_given(voice):
             self._opts.voice = voice
-        if is_given(language):
-            self._opts.language = LanguageCode(language)
-        if is_given(extra_kwargs):
-            self._opts.extra_kwargs.update(extra_kwargs)
 
         self._capabilities.aligned_transcript = _has_aligned_transcript(
             self._opts.model, self._opts.extra_kwargs
