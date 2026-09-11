@@ -47,7 +47,7 @@ from ..log import logger
 from ..models import _supports_reasoning_effort
 from ..tools import OpenAITool
 
-ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "fast"]
 Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
