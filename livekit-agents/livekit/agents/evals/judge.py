@@ -376,6 +376,10 @@ def task_completion_judge(llm: LLM | None = None) -> _TaskCompletionJudge:
 
     Based on First Call Resolution (FCR), the key metric in call centers.
     Useful for: customer service, appointment booking, order management.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _TaskCompletionJudge(llm=llm)
 
@@ -389,6 +393,10 @@ def handoff_judge(llm: LLM | None = None) -> _HandoffJudge:
     Automatically passes if no handoffs occurred.
 
     Useful for: multi-agent systems, transfers to specialists, escalations.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _HandoffJudge(llm=llm)
 
@@ -400,6 +408,10 @@ def accuracy_judge(llm: LLM | None = None) -> _LLMJudge:
     Catches hallucinations, misquoted data, and contradictions with tool results.
 
     Useful for: healthcare, insurance, finance - where wrong information has consequences.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
@@ -420,6 +432,10 @@ def tool_use_judge(llm: LLM | None = None) -> _LLMJudge:
     Voice agents rely on function calls for lookups, bookings, transfers, etc.
 
     Useful for: any agent with tools - appointment systems, order lookups, CRM integrations.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
@@ -444,6 +460,10 @@ def safety_judge(llm: LLM | None = None) -> _LLMJudge:
     and toxic or harmful language.
 
     Useful for: regulated industries, user-facing agents where compliance and tone matter.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
@@ -465,6 +485,10 @@ def relevancy_judge(llm: LLM | None = None) -> _LLMJudge:
     on the topic, and appropriately redirects off-topic requests.
 
     Useful for: any conversational agent, scoped agents, customer service.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
@@ -485,6 +509,10 @@ def coherence_judge(llm: LLM | None = None) -> _LLMJudge:
     contradictions or confusing jumps between topics.
 
     Useful for: complex explanations, multi-turn conversations, technical support.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
@@ -505,6 +533,10 @@ def conciseness_judge(llm: LLM | None = None) -> _LLMJudge:
     verbosity, repetition, and redundant details.
 
     Useful for: voice agents, chat interfaces, any context where user time matters.
+
+    Args:
+        llm: The LLM instance to use for evaluation. If None, an LLM must be
+            provided via JudgeGroup, otherwise a ValueError is raised.
     """
     return _LLMJudge(
         llm=llm,
