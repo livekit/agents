@@ -249,6 +249,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_segment()
                     return
 
+        cancelled = False
         try:
             await socket.send("session.update", session=self._opts.session_config())
             send_task = asyncio.create_task(send(), name="qwen-tts-send")
@@ -257,5 +258,17 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(send_task, recv_task)
             finally:
                 await utils.aio.cancel_and_wait(send_task, recv_task)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await socket.close()
+            if cancelled:
+                # A barge-in lands here: LiveKit cancels the synthesis before send() ever
+                # reached session.finish, and Model Studio books a socket dropped without
+                # it as a failed request. Send the finish but do not wait for the reply:
+                # the voice pipeline awaits this stream's aclose() before it clears the
+                # playout buffer, so every millisecond spent here is the agent still
+                # talking over the user.
+                await socket.close_with_finish()
+            else:
+                await socket.close()

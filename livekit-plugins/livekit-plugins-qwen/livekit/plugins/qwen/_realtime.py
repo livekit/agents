@@ -119,6 +119,23 @@ class RealtimeSocket:
     async def close(self) -> None:
         await self._ws.close()
 
+    async def close_with_finish(self) -> None:
+        """Send ``session.finish`` if it has not gone out, then close without waiting.
+
+        For teardown paths that sit on a latency-critical wait, such as a TTS barge-in,
+        where the voice pipeline awaits the stream's ``aclose()`` before clearing the
+        playout buffer. The server books the request as finished on receiving the event;
+        waiting for its ``session.finished`` reply would only delay silencing the agent.
+        Best effort: never raises, always closes.
+        """
+        try:
+            if not self._finish_sent and not self._ws.closed:
+                await self.finish()
+        except Exception:
+            pass
+        finally:
+            await self._ws.close()
+
     async def close_gracefully(self, timeout: float = TEARDOWN_FINISH_TIMEOUT) -> None:
         """Complete the finish handshake if it never ran, then close.
 

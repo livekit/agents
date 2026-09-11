@@ -657,3 +657,25 @@ async def test_usage_is_reported_when_a_stream_closes_without_a_final(server, se
     await asyncio.wait_for(task, timeout=5)
 
     assert usage_seconds(collected) == pytest.approx(0.2, abs=1e-3)
+
+
+async def test_usage_is_reported_when_recognition_fails_after_audio(server, session) -> None:
+    # Model Studio billed the audio it received before the error, so it belongs in the
+    # usage metrics whether or not a transcript ever came back.
+    server.emit_script_after("input_audio_buffer.append", count=2)
+    server.script(error_event(type="server_error", message="upstream busy"))
+    stream = make_stt(server, session).stream(conn_options=NO_RETRY)
+    collected: list[stt.SpeechEvent] = []
+
+    async def drain() -> None:
+        async for event in stream:
+            collected.append(event)
+
+    task = asyncio.create_task(drain())
+    stream.push_frame(audio_frame(1600))
+    stream.push_frame(audio_frame(1600))
+    with pytest.raises(APIStatusError):
+        await asyncio.wait_for(task, timeout=5)
+    await stream.aclose()
+
+    assert usage_seconds(collected) == pytest.approx(0.2, abs=1e-3)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -111,3 +112,49 @@ def test_public_api_is_exported() -> None:
     ):
         assert name in qwen.__all__, name
         assert hasattr(qwen, name), name
+
+
+# --- review follow-ups (livekit/agents#7224) ----------------------------------------------
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in caplog.records
+        if r.name == "livekit.plugins.qwen" and r.levelno == logging.WARNING
+    ]
+
+
+def test_plaintext_ws_to_a_remote_host_is_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    # The API key rides in an Authorization header and the audio is unencrypted, so
+    # plaintext to anything off-host is worth a warning. It stays allowed: local proxies
+    # are a legitimate use.
+    from livekit.plugins.qwen._utils import resolve_realtime_url
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.qwen"):
+        url = resolve_realtime_url("ws://asr.internal.example:8080/api-ws/v1/realtime", "intl")
+
+    assert url == "ws://asr.internal.example:8080/api-ws/v1/realtime"
+    assert len(_warnings(caplog)) == 1
+    assert "plaintext" in _warnings(caplog)[0].getMessage()
+
+
+def test_plaintext_ws_to_loopback_is_not_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    from livekit.plugins.qwen._utils import resolve_realtime_url
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.qwen"):
+        resolve_realtime_url("ws://127.0.0.1:9/api-ws/v1/realtime", "intl")
+        resolve_realtime_url("ws://localhost:9/api-ws/v1/realtime", "intl")
+    assert _warnings(caplog) == []
+
+
+def test_wss_and_the_region_defaults_are_not_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    from livekit.plugins.qwen._utils import resolve_realtime_url
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.qwen"):
+        resolve_realtime_url(
+            "wss://ws-1.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime", "intl"
+        )
+        resolve_realtime_url(None, "intl")
+        resolve_realtime_url(None, "cn")
+    assert _warnings(caplog) == []

@@ -416,10 +416,6 @@ class SpeechStream(stt.RecognizeStream):
                 await asyncio.gather(send_task, recv_task)
             finally:
                 await utils.aio.cancel_and_wait(send_task, recv_task)
-
-            # Audio streamed after the last final (or with no final at all) on a clean
-            # end, e.g. the one-shot path.
-            report_usage()
         except asyncio.CancelledError:
             cancelled = True
             raise
@@ -433,13 +429,15 @@ class SpeechStream(stt.RecognizeStream):
                 e.retryable = False
             raise
         finally:
+            # Bill whatever was streamed since the last final, on every exit: a clean
+            # finish, a cancellation from aclose(), or a provider failure. Model Studio
+            # billed that audio whether or not a transcript came back. `reported_samples`
+            # makes this idempotent after the per-final reports. The event channel is
+            # still open here: it is closed by the done callback on `_main_task`, which
+            # cannot have run while `_run` is unwinding.
+            if not self._event_ch.closed:
+                report_usage()
             if cancelled:
-                # Bill the audio streamed since the last final. Cancellation skips the
-                # epilogue below, and a stream that never produced a final would otherwise
-                # report nothing at all. The event channel is still open here: it is closed
-                # by the done callback on `_main_task`, which cannot have run yet.
-                if not self._event_ch.closed:
-                    report_usage()
                 # aclose() is how LiveKit ends a live stream, and it lands here before
                 # send() ever reached session.finish. Model Studio books a socket dropped
                 # without the handshake as a failed request, so finish it on the way out,

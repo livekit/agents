@@ -6,6 +6,7 @@ Driven against the in-process fake Model Studio server in ``tests/fake_qwen_real
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -309,3 +310,46 @@ async def test_synthesize_sends_the_text_once(server, session) -> None:
     finally:
         await stream.aclose()
     assert server.text == "hello"
+
+
+# --- review follow-ups (livekit/agents#7224) ----------------------------------------------
+
+
+async def wait_for_text_to_arrive(server: FakeTTSServer) -> None:
+    for _ in range(300):
+        if server.events_of_type("input_text_buffer.append"):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("server never received the text")
+
+
+async def test_interrupted_synthesis_still_sends_session_finish(server, session) -> None:
+    # A barge-in cancels synthesis through aclose(). Model Studio books a socket dropped
+    # without `session.finish` as a failed request, so the finish still has to go out.
+    server.script(audio_delta(pcm(FRAME_SAMPLES)))
+    stream = make_tts(server, session).stream(conn_options=NO_RETRY)
+    stream.push_text("a long answer that the user is about to interrupt")
+    await wait_for_text_to_arrive(server)
+
+    await stream.aclose()
+
+    assert len(server.events_of_type("session.finish")) == 1
+
+
+async def test_interrupting_synthesis_does_not_wait_on_the_provider(server, session) -> None:
+    # The voice pipeline awaits the TTS stream's aclose() before it clears the playout
+    # buffer, so anything we wait on here keeps the agent audibly talking over the user.
+    # The finish is sent and the socket closed without waiting for `session.finished`,
+    # even against a server that never answers.
+    server.ignore_finish()
+    server.script(audio_delta(pcm(FRAME_SAMPLES)))
+    stream = make_tts(server, session).stream(conn_options=NO_RETRY)
+    stream.push_text("a long answer that the user is about to interrupt")
+    await wait_for_text_to_arrive(server)
+
+    started = time.monotonic()
+    await stream.aclose()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.0, f"aclose() blocked for {elapsed:.2f}s on an unresponsive provider"
+    assert len(server.events_of_type("session.finish")) == 1
