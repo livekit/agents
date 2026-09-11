@@ -1064,6 +1064,35 @@ async def test_invalid_usage_does_not_lower_or_poison_the_cumulative_watermark(
         await model.aclose()
 
 
+@pytest.mark.parametrize(
+    "seconds", [10**400, -(10**400), True, False, "12", float("nan"), float("inf")]
+)
+async def test_invalid_wire_usage_preserves_metrics_and_acknowledges_close(
+    monkeypatch: pytest.MonkeyPatch, seconds: Any
+) -> None:
+    """Malformed usage must be rejected before the event parser coerces numeric fields."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    collected: list[RealtimeModelMetrics] = []
+    session.on("metrics_collected", collected.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        for value in (seconds, 10, seconds, 12):
+            event = {"type": "session.usage.updated", "usage": {"seconds": value}}
+            original = event["usage"].copy()
+            session._handle_event(event)
+            assert event["usage"] == original
+        assert [metric.session_duration for metric in collected] == [10, 2]
+        session._handle_event({"type": "session.closed", "usage": {"seconds": seconds}})
+        assert session._session_closed_fut.done()
+        assert [metric.session_duration for metric in collected] == [10, 2]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 def _user_events(session: GPTLiveSession) -> list[tuple[str, Any]]:
     events: list[tuple[str, Any]] = []
     for name in (

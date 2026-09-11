@@ -4,8 +4,8 @@ import asyncio
 import base64
 import contextlib
 import json
-import math
 import os
+import sys
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field, replace
@@ -75,6 +75,15 @@ Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+
+
+def _valid_usage_seconds(value: object) -> bool:
+    """Accept durations representable as finite, nonnegative metric values."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 <= value <= sys.float_info.max
+    )
 
 
 class ResponsesDelegationOptions(TypedDict, total=False):
@@ -580,6 +589,12 @@ class GPTLiveSession(
         if lk_oai_debug and etype != "session.output_audio.delta":
             logger.debug("gpt-live server event", extra={"lk.pii.event": event})
 
+        if etype in ("session.usage.updated", "session.closed"):
+            usage = event.get("usage")
+            if not isinstance(usage, dict) or not _valid_usage_seconds(usage.get("seconds", 0)):
+                # OpenAI's construct() still coerces integers to floats, which can overflow.
+                event = {**event, "usage": {}}
+
         if etype == "session.started":
             self._handle_session_started(types.SessionStartedEvent.construct(**event))
         elif etype == "session.output_audio.delta":
@@ -839,12 +854,7 @@ class GPTLiveSession(
     def _handle_usage(self, usage: types.Usage) -> None:
         # reported cumulatively for the whole session, so only the delta goes to the collectors
         seconds = usage.seconds
-        if (
-            isinstance(seconds, bool)
-            or not isinstance(seconds, (int, float))
-            or not math.isfinite(seconds)
-            or seconds <= self._usage_total.seconds
-        ):
+        if not _valid_usage_seconds(seconds) or seconds <= self._usage_total.seconds:
             return
         previous, self._usage_total = self._usage_total, usage
         self.emit(
