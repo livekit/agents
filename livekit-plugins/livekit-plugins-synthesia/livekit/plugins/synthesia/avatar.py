@@ -293,10 +293,17 @@ class AvatarSession(BaseAvatarSession):
 
     def _mint_token(self, *, room: rtc.Room, lk_key: str, lk_secret: str) -> str:
         # Synthesia rejects a token whose publish-on-behalf attribute is empty,
-        # since the worker has no agent to publish the avatar's audio for. Read
-        # from the job context rather than room.local_participant: the room may
-        # not have finished connecting yet when start() runs.
-        agent_identity = get_job_context().local_participant_identity
+        # since the worker has no agent to publish the avatar's audio for. Prefer
+        # the job context over room.local_participant: inside a job, the room may
+        # not have finished connecting yet when start() runs. Standalone callers
+        # (no job context) connect the room themselves before calling start(), so
+        # room.local_participant is safe there.
+        job_ctx = get_job_context(required=False)
+        agent_identity = (
+            job_ctx.local_participant_identity
+            if job_ctx is not None
+            else room.local_participant.identity
+        )
         if not _present(agent_identity):
             raise SynthesiaError(
                 "the room's local participant has no identity; connect the room "

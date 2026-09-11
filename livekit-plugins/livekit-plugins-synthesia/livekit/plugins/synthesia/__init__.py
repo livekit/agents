@@ -14,7 +14,7 @@
 
 """Synthesia plugin for LiveKit Agents
 
-See https://docs.synthesia.io/reference/interactive-avatars for more information.
+See https://docs.livekit.io/agents/models/avatar/plugins/synthesia/ for more information.
 """
 
 from .avatar import AvatarSession

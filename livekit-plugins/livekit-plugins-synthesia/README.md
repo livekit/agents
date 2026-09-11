@@ -1,9 +1,9 @@
 # Synthesia plugin for LiveKit Agents
 
-Attach a Synthesia interactive avatar to a LiveKit voice agent. The avatar joins
+Attach a [Synthesia](https://www.synthesia.io/) interactive avatar to a LiveKit voice agent. The avatar joins
 the room and lip-syncs the agent's speech in real time.
 
-See the [Synthesia integration docs](https://docs.synthesia.io/reference/interactive-avatars) for more information.
+See the [Synthesia integration docs](https://docs.livekit.io/agents/models/avatar/plugins/synthesia/) for more information.
 
 ## Installation
 

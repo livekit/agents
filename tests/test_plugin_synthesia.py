@@ -826,7 +826,9 @@ class TestAvatarSession:
     @pytest.fixture(autouse=True)
     def job_context(self, monkeypatch):
         ctx = self._FakeJobContext()
-        monkeypatch.setattr("livekit.plugins.synthesia.avatar.get_job_context", lambda: ctx)
+        monkeypatch.setattr(
+            "livekit.plugins.synthesia.avatar.get_job_context", lambda *, required=True: ctx
+        )
         return ctx
 
     @pytest.fixture
@@ -902,6 +904,20 @@ class TestAvatarSession:
         )
         assert claims["exp"] - claims["nbf"] == int(TOKEN_TTL.total_seconds())
 
+        await session.aclose()
+
+    async def test_falls_back_to_room_identity_without_a_job_context(
+        self, api_recorder, instant_join, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "livekit.plugins.synthesia.avatar.get_job_context", lambda *, required=True: None
+        )
+        room = self._FakeRoom()
+        session = self._session()
+        await self._start(session, room)
+
+        claims = self._decode_jwt(api_recorder.requests[0].lk_token)
+        assert claims["attributes"][ATTRIBUTE_PUBLISH_ON_BEHALF] == room.local_participant.identity
         await session.aclose()
 
     @pytest.mark.parametrize("identity", ["", "   ", None])
@@ -1532,7 +1548,9 @@ class TestUsageExample:
         # start() reads the publish-on-behalf identity from the job context rather
         # than the room, since the room may not have finished connecting yet.
         job_context = type("FakeJobContext", (), {"local_participant_identity": "my-voice-agent"})()
-        monkeypatch.setattr("livekit.plugins.synthesia.avatar.get_job_context", lambda: job_context)
+        monkeypatch.setattr(
+            "livekit.plugins.synthesia.avatar.get_job_context", lambda *, required=True: job_context
+        )
 
         class _FakeBackend:
             def __init__(self, **kwargs):

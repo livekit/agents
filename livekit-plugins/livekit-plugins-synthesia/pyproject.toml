@@ -26,8 +26,8 @@ classifiers = [
 dependencies = ["livekit-agents>=1.8.1"]
 
 [project.urls]
-Documentation = "https://docs.synthesia.io"
-Website = "https://www.synthesia.io/"
+Documentation = "https://docs.livekit.io"
+Website = "https://livekit.io/"
 Source = "https://github.com/livekit/agents"
 
 [tool.hatch.version]
