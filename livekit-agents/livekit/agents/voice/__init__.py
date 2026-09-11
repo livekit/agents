@@ -3,6 +3,7 @@ from .agent import Agent, AgentTask, ModelSettings
 from .agent_session import (
     AgentSession,
     ExpressiveOptions,
+    LatencyBudgetOptions,
     NonverbalOptions,
     RecordingOptions,
     SpeechSteeringOptions,
@@ -18,6 +19,7 @@ from .events import (
     ConversationItemAddedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
+    LatencyBudgetEvent,
     MetricsCollectedEvent,
     RunContext,
     SessionUsageUpdatedEvent,
@@ -50,6 +52,7 @@ from .transcription import TranscriptSynchronizer, text_transforms
 __all__ = [
     "AgentSession",
     "ExpressiveOptions",
+    "LatencyBudgetOptions",
     "NonverbalOptions",
     "RecordingOptions",
     "SpeechSteeringOptions",
@@ -63,6 +66,7 @@ __all__ = [
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",
+    "LatencyBudgetEvent",
     "SessionUsageUpdatedEvent",
     "ConversationItemAddedEvent",
     "SpeechCreatedEvent",

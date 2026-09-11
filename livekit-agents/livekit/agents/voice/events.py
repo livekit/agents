@@ -300,6 +300,7 @@ EventTypes = Literal[
     "metrics_collected",
     "session_usage_updated",
     "speech_created",
+    "latency_budget",
     "tool_execution_updated",
     "error",
     "close",
@@ -475,6 +476,21 @@ class SpeechCreatedEvent(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class LatencyBudgetEvent(BaseModel):
+    """Emitted when an agent turn reaches a configured latency threshold."""
+
+    type: Literal["latency_budget"] = "latency_budget"
+    level: Literal["warning", "exceeded"]
+    latency: float
+    """End of user speech to first agent output, in seconds."""
+    threshold: float
+    """The threshold that selected ``level``."""
+    budget: float
+    """The configured maximum latency, in seconds."""
+    speech_id: str
+    created_at: float = Field(default_factory=time.time)
+
+
 class ToolCallStarted(BaseModel):
     """A function tool call was dispatched."""
 
@@ -594,6 +610,7 @@ AgentEvent = Annotated[
     | ConversationItemAddedEvent
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
+    | LatencyBudgetEvent
     | ToolExecutionUpdatedEvent
     | ErrorEvent
     | CloseEvent

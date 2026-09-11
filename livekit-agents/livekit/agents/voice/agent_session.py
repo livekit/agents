@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import math
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -23,7 +24,7 @@ from typing import (
 from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -66,6 +67,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    LatencyBudgetEvent,
     ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
@@ -150,6 +152,15 @@ _RECORDING_ALL_OFF: RecordingOptions = {
     "transcript": False,
     "redaction": False,
 }
+
+
+class LatencyBudgetOptions(TypedDict, total=False):
+    """Thresholds for end-of-user-speech to first-agent-output latency."""
+
+    budget: Required[float]
+    """Maximum acceptable latency in seconds. Required when configured."""
+    warning: float
+    """Optional warning threshold in seconds. Must not exceed ``budget``."""
 
 
 def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOptions:
@@ -305,6 +316,7 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     recording_options: RecordingOptions
+    latency_budget: LatencyBudgetOptions | None
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -405,6 +417,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
+        latency_budget: LatencyBudgetOptions | None = None,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -510,6 +523,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            latency_budget (LatencyBudgetOptions, optional): Emits a ``latency_budget`` event
+                when end-of-user-speech to first-agent-output latency reaches the optional
+                warning threshold or exceeds the required budget. Disabled by default.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -597,6 +613,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             recording_options=_RECORDING_ALL_OFF.copy(),
+            latency_budget=self._resolve_latency_budget(latency_budget),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -752,6 +769,50 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
         super().emit(event, arg)
+
+    @staticmethod
+    def _resolve_latency_budget(
+        options: LatencyBudgetOptions | None,
+    ) -> LatencyBudgetOptions | None:
+        if options is None:
+            return None
+        budget = options.get("budget")
+        warning = options.get("warning")
+        if budget is None or not math.isfinite(budget) or budget <= 0:
+            raise ValueError("latency_budget['budget'] must be finite and greater than zero")
+        if warning is not None and (not math.isfinite(warning) or warning <= 0 or warning > budget):
+            raise ValueError(
+                "latency_budget['warning'] must be finite, greater than zero, and no greater "
+                "than budget"
+            )
+        return LatencyBudgetOptions(**options)
+
+    def _evaluate_latency_budget(self, *, latency: float, speech_id: str) -> None:
+        options = self._opts.latency_budget
+        if options is None:
+            return
+
+        budget = options["budget"]
+        warning = options.get("warning")
+        if latency >= budget:
+            level: Literal["warning", "exceeded"] = "exceeded"
+            threshold = budget
+        elif warning is not None and latency >= warning:
+            level = "warning"
+            threshold = warning
+        else:
+            return
+
+        self.emit(
+            "latency_budget",
+            LatencyBudgetEvent(
+                level=level,
+                latency=latency,
+                threshold=threshold,
+                budget=budget,
+                speech_id=speech_id,
+            ),
+        )
 
     @property
     def userdata(self) -> Userdata_T:
