@@ -872,7 +872,9 @@ class JobContext:
 
             if (p.identity, coro) in self._participant_tasks:
                 logger.warning(
-                    f"a participant has joined before a prior participant task matching the same identity has finished: '{p.identity}'"  # noqa: E501
+                    "a participant has joined before a prior participant task matching the "
+                    "same identity has finished",
+                    extra={"lk.pii.participant_identity": p.identity},
                 )
             task_name = f"part-entry-{p.identity}-{coro.__name__}"
             task = asyncio.create_task(coro(self, p), name=task_name)
@@ -884,7 +886,8 @@ class JobContext:
                     self._participant_tasks.pop(key, None)
                 if not task.cancelled() and (exc := task.exception()) is not None:
                     logger.error(
-                        f"error in participant entrypoint {coro.__name__} for '{p.identity}'",
+                        f"error in participant entrypoint {coro.__name__}",
+                        extra={"lk.pii.participant_identity": p.identity},
                         exc_info=exc,
                     )
 
