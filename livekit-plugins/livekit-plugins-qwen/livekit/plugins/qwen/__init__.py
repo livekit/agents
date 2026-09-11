@@ -17,9 +17,10 @@
 Importing this package registers the plugin via ``Plugin.register_plugin``.
 """
 
+from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["__version__"]
+__all__ = ["STT", "SpeechStream", "__version__"]
 
 from livekit.agents import Plugin
 
