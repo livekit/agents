@@ -5,13 +5,203 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectionError
-from livekit.agents.llm import ChatContext, FallbackAdapter, LLMStream, Tool
+from livekit.agents import APIConnectionError, APIError, APIStatusError, APITimeoutError
+from livekit.agents.llm import (
+    ChatChunk,
+    ChatContext,
+    ChoiceDelta,
+    CompletionUsage,
+    FallbackAdapter,
+    FunctionToolCall,
+    LLMError,
+    LLMStream,
+    Tool,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 
 pytestmark = [pytest.mark.unit]
+
+
+class _RetryLLM(FakeLLM):
+    def __init__(
+        self,
+        chunk: ChatChunk | None,
+        error: Exception | None,
+        *,
+        success_chunk: ChatChunk | None = None,
+    ) -> None:
+        super().__init__()
+        self.chunk = chunk
+        self.error = error
+        self.success_chunk = success_chunk or chunk or _TEXT_CHUNK
+        self.requests = 0
+        self.attempts = 0
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
+    ) -> LLMStream:
+        self.requests += 1
+        return _RetryLLMStream(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options
+        )
+
+
+class _RetryLLMStream(LLMStream):
+    async def _run(self) -> None:
+        assert isinstance(self._llm, _RetryLLM)
+        self._llm.attempts += 1
+        if self._llm.attempts == 1:
+            if self._llm.chunk is not None:
+                self._event_ch.send_nowait(self._llm.chunk)
+            if self._llm.error is not None:
+                raise self._llm.error
+        else:
+            self._event_ch.send_nowait(self._llm.success_chunk)
+
+
+async def _close_retry_adapter(adapter: FallbackAdapter) -> None:
+    await asyncio.gather(
+        *(status.recovering_task for status in adapter._status if status.recovering_task)
+    )
+    await adapter.aclose()
+
+
+_TEXT_CHUNK = ChatChunk(id="text", delta=ChoiceDelta(content="The answer."))
+_TOOL_CHUNK = ChatChunk(
+    id="tool",
+    delta=ChoiceDelta(
+        tool_calls=[FunctionToolCall(call_id="call-1", name="transfer_call", arguments="{}")]
+    ),
+)
+
+
+# Based on @dtran26's diagnosis and reproducer: livekit/agents-js#2477.
+@pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
+@pytest.mark.parametrize("error_kind", ["timeout", "status", "nonretryable", "unexpected"])
+async def test_no_retry_after_output(
+    chunk: ChatChunk, with_fallback: bool, error_kind: str
+) -> None:
+    error: Exception
+    if error_kind == "status":
+        error = APIStatusError("After output", status_code=503, request_id="request-1")
+    elif error_kind == "unexpected":
+        error = ValueError("After output")
+    else:
+        error = APITimeoutError("After output", retryable=error_kind != "nonretryable")
+    primary = _RetryLLM(chunk, error)
+    fallback = _RetryLLM(chunk, None)
+    adapter = FallbackAdapter([primary, fallback] if with_fallback else [primary])
+    errors: list[LLMError] = []
+    adapter.on("error", errors.append)
+    chunks: list[ChatChunk] = []
+    try:
+        with pytest.raises(type(error)) as exc_info:
+            async with adapter.chat(
+                chat_ctx=ChatContext.empty(),
+                conn_options=APIConnectOptions(max_retry=3, retry_interval=0),
+            ) as stream:
+                async for result in stream:
+                    chunks.append(result)
+
+        assert chunks == [chunk]
+        assert primary.requests == primary.attempts == 1
+        assert fallback.requests == 0
+        assert exc_info.value is error
+        assert len(errors) == 1
+        assert errors[0].error is error
+        assert not errors[0].recoverable
+        if isinstance(error, APIError):
+            assert not error.retryable
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        None,
+        ChatChunk(id="role", delta=ChoiceDelta(role="assistant")),
+        ChatChunk(id="empty", delta=ChoiceDelta(content="")),
+        ChatChunk(
+            id="usage",
+            usage=CompletionUsage(completion_tokens=0, prompt_tokens=1, total_tokens=1),
+        ),
+    ],
+    ids=["no-output", "role", "empty-text", "usage"],
+)
+@pytest.mark.parametrize("retry_path", ["child", "fallback", "outer"])
+async def test_retries_before_output(chunk: ChatChunk | None, retry_path: str) -> None:
+    error = APITimeoutError("Before output")
+    primary = _RetryLLM(chunk, error, success_chunk=_TEXT_CHUNK)
+    fallback = _RetryLLM(_TEXT_CHUNK, None)
+    adapter = FallbackAdapter(
+        [primary, fallback] if retry_path == "fallback" else [primary],
+        max_retry_per_llm=1 if retry_path == "child" else 0,
+        retry_interval=0,
+    )
+    errors: list[LLMError] = []
+    adapter.on("error", errors.append)
+    try:
+        async with adapter.chat(
+            chat_ctx=ChatContext.empty(),
+            conn_options=APIConnectOptions(
+                max_retry=3 if retry_path == "outer" else 0, retry_interval=0
+            ),
+        ) as stream:
+            chunks = [result async for result in stream]
+
+        expected = ([chunk] if chunk is not None else []) + [_TEXT_CHUNK]
+        assert chunks == expected
+        assert error.retryable
+        if retry_path == "child":
+            assert primary.requests == 1
+            assert primary.attempts == 2
+        elif retry_path == "fallback":
+            assert fallback.requests == 1
+        else:
+            assert primary.requests >= 2
+        assert len(errors) == (1 if retry_path == "outer" else 0)
+        assert all(event.recoverable for event in errors)
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
+async def test_retry_after_output_when_enabled(chunk: ChatChunk, with_fallback: bool) -> None:
+    error = APITimeoutError("After output")
+    primary = _RetryLLM(chunk, error)
+    fallback = _RetryLLM(chunk, None)
+    adapter = FallbackAdapter(
+        [primary, fallback] if with_fallback else [primary], retry_on_chunk_sent=True
+    )
+    errors: list[LLMError] = []
+    adapter.on("error", errors.append)
+    try:
+        async with adapter.chat(
+            chat_ctx=ChatContext.empty(),
+            conn_options=APIConnectOptions(max_retry=3, retry_interval=0),
+        ) as stream:
+            chunks = [result async for result in stream]
+
+        assert chunks == [chunk, chunk]
+        assert error.retryable
+        assert len(errors) == (0 if with_fallback else 1)
+        assert all(event.recoverable for event in errors)
+        if with_fallback:
+            assert fallback.requests == 1
+        else:
+            assert primary.requests >= 2
+    finally:
+        await _close_retry_adapter(adapter)
 
 
 class PrewarmableLLM(FakeLLM):
