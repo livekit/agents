@@ -8,6 +8,17 @@ from livekit import rtc
 from ..types import ATTRIBUTE_AGENT_NAME
 
 
+def _client_protocol(participant: rtc.Participant) -> int:
+    """``ParticipantInfo.client_protocol``, or 0 when unknown (legacy client).
+
+    Read off the private ``_info`` deliberately: the client protocol is a LiveKit-internal
+    capability signal used for feature detection between participants, not part of the
+    public participant API.
+    """
+    value = getattr(getattr(participant, "_info", None), "client_protocol", 0)
+    return value if isinstance(value, int) else 0
+
+
 async def wait_for_agent(
     room: rtc.Room,
     *,
