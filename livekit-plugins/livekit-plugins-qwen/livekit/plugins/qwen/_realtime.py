@@ -43,6 +43,12 @@ DEFAULT_FINISH_TIMEOUT = 10.0
 # handshake as a failed request. Short, because this sits on the session-teardown path.
 TEARDOWN_FINISH_TIMEOUT = 2.0
 
+# Total budget for the barge-in teardown in `close_with_finish`: the voice pipeline awaits
+# the TTS stream's aclose() before it clears the playout buffer, so this is time the agent
+# keeps talking over the user if the peer has stalled. aiohttp's own close handshake would
+# otherwise wait its default 10 s.
+BARGE_IN_CLOSE_TIMEOUT = 0.5
+
 # Silence is normal before the handshake starts (the user simply isn't talking), so the
 # finish deadline can only be checked between receives.
 _POLL_INTERVAL = 0.5
@@ -119,22 +125,30 @@ class RealtimeSocket:
     async def close(self) -> None:
         await self._ws.close()
 
-    async def close_with_finish(self) -> None:
-        """Send ``session.finish`` if it has not gone out, then close without waiting.
+    async def close_with_finish(self, timeout: float = BARGE_IN_CLOSE_TIMEOUT) -> None:
+        """Send ``session.finish`` if it has not gone out, then close, all within ``timeout``.
 
         For teardown paths that sit on a latency-critical wait, such as a TTS barge-in,
         where the voice pipeline awaits the stream's ``aclose()`` before clearing the
         playout buffer. The server books the request as finished on receiving the event;
-        waiting for its ``session.finished`` reply would only delay silencing the agent.
-        Best effort: never raises, always closes.
+        waiting for its ``session.finished`` reply would only delay silencing the agent,
+        and a stalled peer must not be allowed to hold the write or the close handshake
+        open either. Best effort: never raises, always attempts the close.
         """
+        deadline = time.monotonic() + timeout
         try:
             if not self._finish_sent and not self._ws.closed:
-                await self.finish()
+                await asyncio.wait_for(self.finish(), timeout)
         except Exception:
             pass
         finally:
-            await self._ws.close()
+            # Always leave a little budget for the close itself, so a finish that ate the
+            # whole allowance still gets the transport torn down rather than leaked.
+            remaining = max(0.1, deadline - time.monotonic())
+            try:
+                await asyncio.wait_for(self._ws.close(), remaining)
+            except Exception:
+                pass
 
     async def close_gracefully(self, timeout: float = TEARDOWN_FINISH_TIMEOUT) -> None:
         """Complete the finish handshake if it never ran, then close.

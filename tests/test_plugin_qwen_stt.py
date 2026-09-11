@@ -679,3 +679,64 @@ async def test_usage_is_reported_when_recognition_fails_after_audio(server, sess
     await stream.aclose()
 
     assert usage_seconds(collected) == pytest.approx(0.2, abs=1e-3)
+
+
+async def test_audio_read_but_not_yet_sent_still_blocks_retry(server, session) -> None:
+    # A 50 ms frame is below one 100 ms chunk, so it sits in the chunker and never reaches
+    # the socket before the server hangs up. It has still left the channel and cannot be
+    # replayed, so the failure must not be retried.
+    server.close_after_script()
+    retrying = APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0)
+    stream = make_stt(server, session).stream(conn_options=retrying)
+    stream.push_frame(audio_frame(800))
+
+    with pytest.raises(APIError) as exc_info:
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    assert exc_info.value.retryable is False
+    assert server.connections == 1
+
+
+async def test_a_failed_utterance_promotes_only_the_confirmed_text(server, session) -> None:
+    # `text` is confirmed, `stash` is a tail the model may still revise. The interim shows
+    # both; a final committed on failure must carry only what was confirmed.
+    server.script(
+        speech_started(),
+        transcription_text("call Alice", stash=" tomorrow"),
+        failed_event(),
+    )
+    events = await collect(make_stt(server, session))
+
+    assert types_of(events) == [
+        "start_of_speech",
+        "interim_transcript",
+        "final_transcript",
+        "end_of_speech",
+    ]
+    assert text_of(events[1]) == "call Alice tomorrow"
+    assert text_of(events[2]) == "call Alice"
+
+
+async def test_a_failed_utterance_with_only_tentative_text_closes_without_a_final(
+    server, session
+) -> None:
+    server.script(speech_started(), transcription_text("", stash="maybe"), failed_event())
+    events = await collect(make_stt(server, session))
+    assert types_of(events) == ["start_of_speech", "interim_transcript", "end_of_speech"]
+
+
+async def test_recognize_emits_exactly_one_metric(server, session) -> None:
+    # The base class emits one STTMetrics for the whole buffer after _recognize_impl; the
+    # inner stream must not add a second, streamed one for the same request.
+    server.script(transcription_completed("One shot."))
+    stt_ = make_stt(server, session)
+    metrics: list[Any] = []
+    stt_.on("metrics_collected", metrics.append)
+
+    await stt_.recognize(audio_frame(1600), conn_options=NO_RETRY)
+
+    assert len(metrics) == 1
+    assert metrics[0].streamed is False
+    assert metrics[0].audio_duration == pytest.approx(0.1, abs=1e-3)

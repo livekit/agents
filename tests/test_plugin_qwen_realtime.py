@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,3 +161,48 @@ def test_wss_and_the_region_defaults_are_not_warned_about(caplog: pytest.LogCapt
         resolve_realtime_url(None, "intl")
         resolve_realtime_url(None, "cn")
     assert _warnings(caplog) == []
+
+
+class _FakeWS:
+    """Stand-in for aiohttp's ClientWebSocketResponse with a controllable send."""
+
+    closed = False
+
+    def __init__(self, *, stall_send: bool = False) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.close_calls = 0
+        self._stall_send = stall_send
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        if self._stall_send:
+            await asyncio.sleep(30)
+        self.sent.append(payload)
+
+    async def close(self) -> bool:
+        self.close_calls += 1
+        return True
+
+
+async def test_close_with_finish_sends_finish_then_closes() -> None:
+    from livekit.plugins.qwen._realtime import RealtimeSocket
+
+    ws = _FakeWS()
+    await RealtimeSocket(ws).close_with_finish()  # type: ignore[arg-type]
+
+    assert [p["type"] for p in ws.sent] == ["session.finish"]
+    assert ws.close_calls == 1
+
+
+async def test_close_with_finish_is_bounded_against_a_stalled_peer() -> None:
+    # The voice pipeline awaits this on a barge-in before clearing the playout buffer, so
+    # a peer that stops reading must not be able to hold it open.
+    from livekit.plugins.qwen._realtime import RealtimeSocket
+
+    ws = _FakeWS(stall_send=True)
+    started = time.monotonic()
+    await RealtimeSocket(ws).close_with_finish(timeout=0.2)  # type: ignore[arg-type]
+    elapsed = time.monotonic() - started
+
+    # Budget is 0.2 s here and the stub would stall 30 s; 2 s tolerates a loaded runner.
+    assert elapsed < 2.0, f"close_with_finish blocked for {elapsed:.2f}s"
+    assert ws.close_calls == 1, "the close must still be attempted after the finish stalls"

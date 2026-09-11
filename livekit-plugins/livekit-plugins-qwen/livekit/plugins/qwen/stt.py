@@ -279,7 +279,6 @@ class SpeechStream(stt.RecognizeStream):
                     "input_audio_buffer.append",
                     audio=base64.b64encode(frame.data.tobytes()).decode(),
                 )
-                self._audio_consumed = True
                 uncommitted = True
                 pushed_samples += frame.samples_per_channel
 
@@ -289,6 +288,10 @@ class SpeechStream(stt.RecognizeStream):
             # the end: a live session is torn down with aclose(), which cancels this task
             # before any epilogue runs.
             nonlocal reported_samples
+            if self._manual_commit:
+                # recognize() already emits one STTMetrics for the whole buffer from the
+                # base class; a second, streamed=True usage event here would double it.
+                return
             unreported = pushed_samples - reported_samples
             if unreported <= 0:
                 return
@@ -327,6 +330,10 @@ class SpeechStream(stt.RecognizeStream):
                         if self._manual_commit:
                             await commit()
                     else:
+                        # Consumed the moment it leaves the channel: a frame parked in the
+                        # chunker, or one whose send fails, is just as unreplayable as one
+                        # the server acknowledged.
+                        self._audio_consumed = True
                         await append(chunker.write(item.data.tobytes()))
                 # No tail to flush here: end_input() sends a flush sentinel before closing
                 # the channel, so the branch above has run.
@@ -337,7 +344,10 @@ class SpeechStream(stt.RecognizeStream):
 
         async def recv() -> None:
             speaking = False
-            interim = ""
+            # The confirmed prefix of the current utterance (`text`), without the `stash`
+            # tail the model may still revise. Interims show both; only this is safe to
+            # commit as a final if the utterance fails.
+            confirmed = ""
             while True:
                 msg = await socket.receive()
                 if msg.type in CLOSE_TYPES:
@@ -364,12 +374,12 @@ class SpeechStream(stt.RecognizeStream):
                 elif kind == "conversation.item.input_audio_transcription.text":
                     # `text` is the confirmed prefix, `stash` the tail the model may still
                     # revise; an interim result wants both.
-                    text = (event.get("text") or "") + (event.get("stash") or "")
+                    confirmed = event.get("text") or ""
+                    text = confirmed + (event.get("stash") or "")
                     if text:
-                        interim = text
                         self._emit_transcript(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, event)
                 elif kind == "conversation.item.input_audio_transcription.completed":
-                    interim = ""
+                    confirmed = ""
                     self._emit_transcript(
                         stt.SpeechEventType.FINAL_TRANSCRIPT, event.get("transcript") or "", event
                     )
@@ -392,18 +402,18 @@ class SpeechStream(stt.RecognizeStream):
                     if speaking:
                         # A turn is open and no `.completed` is coming. LiveKit commits a
                         # user turn on END_OF_SPEECH under turn_detection="stt", so leaving
-                        # the pair open would strand that turn. Promote whatever the model
-                        # confirmed before it gave up, then close the turn.
-                        if interim:
+                        # the pair open would strand that turn. Promote only what the
+                        # model had confirmed before it gave up, then close the turn.
+                        if confirmed:
                             self._emit_transcript(
-                                stt.SpeechEventType.FINAL_TRANSCRIPT, interim, event
+                                stt.SpeechEventType.FINAL_TRANSCRIPT, confirmed, event
                             )
                             report_usage()
                         speaking = False
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                         )
-                    interim = ""
+                    confirmed = ""
                 elif kind == "session.finished":
                     return
 

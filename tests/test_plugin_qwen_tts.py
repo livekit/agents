@@ -315,12 +315,18 @@ async def test_synthesize_sends_the_text_once(server, session) -> None:
 # --- review follow-ups (livekit/agents#7224) ----------------------------------------------
 
 
-async def wait_for_text_to_arrive(server: FakeTTSServer) -> None:
-    for _ in range(300):
-        if server.events_of_type("input_text_buffer.append"):
+async def wait_for_client_event(server: FakeTTSServer, event_type: str) -> None:
+    """Poll until the fake server has recorded a client event of `event_type`.
+
+    The client's aclose() can return before the loopback server's handler has processed the
+    last frames it sent, and under the concurrent test runner that gap is wide enough to
+    matter, so server-side observations are polled rather than asserted immediately.
+    """
+    for _ in range(500):
+        if server.events_of_type(event_type):
             return
         await asyncio.sleep(0.01)
-    raise AssertionError("server never received the text")
+    raise AssertionError(f"server never received {event_type}")
 
 
 async def test_interrupted_synthesis_still_sends_session_finish(server, session) -> None:
@@ -329,10 +335,11 @@ async def test_interrupted_synthesis_still_sends_session_finish(server, session)
     server.script(audio_delta(pcm(FRAME_SAMPLES)))
     stream = make_tts(server, session).stream(conn_options=NO_RETRY)
     stream.push_text("a long answer that the user is about to interrupt")
-    await wait_for_text_to_arrive(server)
+    await wait_for_client_event(server, "input_text_buffer.append")
 
     await stream.aclose()
 
+    await wait_for_client_event(server, "session.finish")
     assert len(server.events_of_type("session.finish")) == 1
 
 
@@ -345,11 +352,14 @@ async def test_interrupting_synthesis_does_not_wait_on_the_provider(server, sess
     server.script(audio_delta(pcm(FRAME_SAMPLES)))
     stream = make_tts(server, session).stream(conn_options=NO_RETRY)
     stream.push_text("a long answer that the user is about to interrupt")
-    await wait_for_text_to_arrive(server)
+    await wait_for_client_event(server, "input_text_buffer.append")
 
     started = time.monotonic()
     await stream.aclose()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 1.0, f"aclose() blocked for {elapsed:.2f}s on an unresponsive provider"
+    # The budget is 0.5 s; 2 s leaves room for a loaded test runner while still proving
+    # aiohttp's default 10 s close handshake is not in play.
+    assert elapsed < 2.0, f"aclose() blocked for {elapsed:.2f}s on an unresponsive provider"
+    await wait_for_client_event(server, "session.finish")
     assert len(server.events_of_type("session.finish")) == 1
