@@ -357,6 +357,60 @@ async def test_final_transcript_one_way_translation_single_target_run():
     assert sd.target_texts == ["Hola mundo."]
 
 
+# --- Endpoint marker between original and translation ----------------------
+
+
+FIN_TOKEN_FINAL: dict[str, Any] = {"text": "<fin>", "is_final": True}
+
+
+async def _run_translation_split_across_frames(gap_marker: dict[str, Any] | None):
+    """Original tokens in frame 1, translation (+ <end>) in frame 2.
+
+    `gap_marker` is appended to frame 1 to simulate an <end>/<fin> landing
+    before the translation has been produced.
+    """
+    from livekit.plugins.soniox.stt import TranslationConfig
+
+    stream = _make_stream(translation=TranslationConfig(type="one_way", target_language="es"))
+    first: list[dict[str, Any]] = [
+        _final_token("Hello world.", "en", translation_status="original")
+    ]
+    if gap_marker is not None:
+        first.append(gap_marker)
+    messages = [
+        {"tokens": first, "total_audio_proc_ms": 500},
+        {
+            "tokens": [
+                _final_token("Hola mundo.", "es", translation_status="translation"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 700,
+        },
+    ]
+    events = await _drive_recv(stream, messages, expect_events=4, timeout=2.0)
+    final = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT)
+    return final.alternatives[0]
+
+
+@pytest.mark.parametrize(
+    "gap_marker",
+    [None, END_TOKEN_FINAL, FIN_TOKEN_FINAL],
+    ids=["no-marker", "end", "fin"],
+)
+async def test_translation_keeps_source_when_endpoint_lands_in_the_gap(
+    gap_marker: dict[str, Any] | None,
+):
+    """An <end>/<fin> between the original and its translation must not drop
+    the pending source side. `send_endpoint_transcript()` used to reset
+    `final_original` whenever `final.text` was still empty."""
+    sd = await _run_translation_split_across_frames(gap_marker)
+    assert sd.text == "Hola mundo."
+    assert sd.source_languages == [LanguageCode("en")]
+    assert sd.source_texts == ["Hello world."]
+    assert sd.target_languages == [LanguageCode("es")]
+    assert sd.target_texts == ["Hola mundo."]
+
+
 # --- "none" untranslated chunk ---------------------------------------------
 
 
