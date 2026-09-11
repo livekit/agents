@@ -207,6 +207,22 @@ class TestToolContext:
         }
         assert "type" not in chat_tools[0]["function"]
 
+    def test_google_function_tool_uses_full_schema_for_text_api(self):
+        @function_tool
+        async def save_contact(fields: dict[str, str]) -> None:
+            """Save contact fields."""
+
+        ctx = ToolContext([save_contact])
+
+        text_tools = ctx.parse_function_tools("google")
+        text_fields = text_tools[0]["parameters_json_schema"]["properties"]["fields"]
+        assert text_fields["additionalProperties"] == {"type": "string"}
+
+        live_tools = ctx.parse_function_tools("google", use_parameters_json_schema=False)
+        live_fields = live_tools[0]["parameters"]["properties"]["fields"]
+        assert "parameters_json_schema" not in live_tools[0]
+        assert "additionalProperties" not in live_fields
+
     def test_update_tools_changes_equality(self):
         ctx1 = ToolContext([mock_tool_1])
         ctx2 = ToolContext([mock_tool_1])

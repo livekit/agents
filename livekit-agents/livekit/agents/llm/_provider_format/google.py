@@ -154,16 +154,20 @@ def to_fnc_ctx(
             tools.append(schema)
 
         elif isinstance(tool, llm.FunctionTool):
-            from livekit.plugins.google.utils import _GeminiJsonSchema
-
             fnc = llm.utils.build_legacy_openai_schema(tool, internally_tagged=True)
-            json_schema = _GeminiJsonSchema(fnc["parameters"]).simplify()
-
             schema = {
                 "name": fnc["name"],
                 "description": fnc["description"],
-                "parameters": json_schema or None,
             }
+            if use_parameters_json_schema:
+                schema["parameters_json_schema"] = fnc["parameters"]
+            else:
+                # Gemini Live doesn't support parameters_json_schema, use the simplified JSON Schema instead
+                # see: https://github.com/googleapis/python-genai/issues/1147
+                from livekit.plugins.google.utils import _GeminiJsonSchema
+
+                schema["parameters"] = _GeminiJsonSchema(fnc["parameters"]).simplify() or None
+
             if tool_behavior is not None:
                 schema["behavior"] = tool_behavior
             tools.append(schema)
