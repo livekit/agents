@@ -748,7 +748,13 @@ class GPTLiveSession(
             for event_id, (sent_d_id, _) in list(self._continuations_sent.items()):
                 if sent_d_id == d_id:
                     del self._continuations_sent[event_id]
-            self._delegated_responses[d_id] = _DelegatedResponse()
+            created = _DelegatedResponse()
+            if (previous := self._delegated_responses.get(d_id)) is not None:
+                # the calls the replaced response still waits on are open on the backend all
+                # the same, so the new response waits on them too
+                created.call_ids |= previous.call_ids - previous.returned
+                created.rearms = previous.rearms
+            self._delegated_responses[d_id] = created
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -823,6 +829,8 @@ class GPTLiveSession(
             if (pending := self._delegated_responses.pop(d_id, None)) is not None:
                 for call_id in pending.call_ids:
                     self._fnc_call_to_delegation.pop(call_id, None)
+                # its open calls held the barrier: release whatever waited behind them
+                self._maybe_continue_response(d_id)
 
     def _maybe_continue_response(self, delegation_id: str | None) -> None:
         # response.create runs the continuation, and only once no call in the conversation is
@@ -859,13 +867,13 @@ class GPTLiveSession(
             logger.error(
                 "gpt-live refused the same continuation repeatedly; a tool call this session "
                 "never tracked is open on the backend, giving up on it",
-                extra={"delegation_id": d_id, "call_ids": sorted(pending.call_ids)},
+                extra={"delegation_id": d_id, "lk.pii.call_ids": sorted(pending.call_ids)},
             )
             return False
         pending.rearms += 1
         logger.warning(
             "gpt-live refused a continuation while a tool call was still open; re-armed",
-            extra={"delegation_id": d_id, "call_ids": sorted(pending.call_ids)},
+            extra={"delegation_id": d_id, "lk.pii.call_ids": sorted(pending.call_ids)},
         )
         current = self._delegated_responses.get(d_id)
         if current is None:
@@ -874,6 +882,10 @@ class GPTLiveSession(
             # a newer response under the same delegation: one continuation serves both
             current.call_ids |= pending.call_ids
             current.returned |= pending.returned
+            current.rearms = max(current.rearms, pending.rearms)
+        # the refusal may arrive after the output that opened the barrier: check now rather
+        # than wait for an output that may never come
+        self._maybe_continue_response(d_id)
         return True
 
     # metrics and errors
