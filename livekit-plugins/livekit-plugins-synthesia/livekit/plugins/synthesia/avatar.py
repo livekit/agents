@@ -22,7 +22,7 @@ import os
 from typing import TypeGuard
 
 from livekit import api, rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, AgentSession
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, AgentSession, get_job_context
 from livekit.agents.types import ATTRIBUTE_PUBLISH_ON_BEHALF
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 
@@ -293,8 +293,10 @@ class AvatarSession(BaseAvatarSession):
 
     def _mint_token(self, *, room: rtc.Room, lk_key: str, lk_secret: str) -> str:
         # Synthesia rejects a token whose publish-on-behalf attribute is empty,
-        # since the worker has no agent to publish the avatar's audio for.
-        agent_identity = get_job_context().local_participant.identity
+        # since the worker has no agent to publish the avatar's audio for. Read
+        # from the job context rather than room.local_participant: the room may
+        # not have finished connecting yet when start() runs.
+        agent_identity = get_job_context().local_participant_identity
         if not _present(agent_identity):
             raise SynthesiaError(
                 "the room's local participant has no identity; connect the room "

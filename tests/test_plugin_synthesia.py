@@ -819,6 +819,16 @@ class TestAvatarSession:
             "livekit.plugins.synthesia.avatar.DataStreamAudioOutput", self._FakeAudioOutput
         )
 
+    class _FakeJobContext:
+        def __init__(self, identity="dev-agent"):
+            self.local_participant_identity = identity
+
+    @pytest.fixture(autouse=True)
+    def job_context(self, monkeypatch):
+        ctx = self._FakeJobContext()
+        monkeypatch.setattr("livekit.plugins.synthesia.avatar.get_job_context", lambda: ctx)
+        return ctx
+
     @pytest.fixture
     def api_recorder(self, monkeypatch):
         rec = self._Recorder()
@@ -871,7 +881,7 @@ class TestAvatarSession:
         payload += "=" * (-len(payload) % 4)
         return json.loads(base64.urlsafe_b64decode(payload))
 
-    async def test_token_grants_attribute_and_ttl(self, api_recorder, instant_join):
+    async def test_token_grants_attribute_and_ttl(self, api_recorder, instant_join, job_context):
         room = self._FakeRoom()
         session = self._session()
         await self._start(session, room)
@@ -886,17 +896,20 @@ class TestAvatarSession:
         assert claims["video"]["room"] == room.name
         assert claims["video"]["canPublish"] and claims["video"]["canSubscribe"]
         assert claims["video"]["canPublishData"] is True
-        assert claims["attributes"][ATTRIBUTE_PUBLISH_ON_BEHALF] == room.local_participant.identity
+        assert (
+            claims["attributes"][ATTRIBUTE_PUBLISH_ON_BEHALF]
+            == job_context.local_participant_identity
+        )
         assert claims["exp"] - claims["nbf"] == int(TOKEN_TTL.total_seconds())
 
         await session.aclose()
 
     @pytest.mark.parametrize("identity", ["", "   ", None])
     async def test_blank_local_identity_fails_before_launch(
-        self, api_recorder, instant_join, identity
+        self, api_recorder, instant_join, job_context, identity
     ):
         room = self._FakeRoom()
-        room.local_participant.identity = identity
+        job_context.local_participant_identity = identity
         session = self._session()
 
         with pytest.raises(SynthesiaError, match="local participant"):
@@ -1515,6 +1528,11 @@ class TestUsageExample:
 
         monkeypatch.setattr("livekit.agents.utils.wait_for_participant", _joined)
         monkeypatch.setattr("livekit.agents.utils.wait_for_track_publication", _joined)
+
+        # start() reads the publish-on-behalf identity from the job context rather
+        # than the room, since the room may not have finished connecting yet.
+        job_context = type("FakeJobContext", (), {"local_participant_identity": "my-voice-agent"})()
+        monkeypatch.setattr("livekit.plugins.synthesia.avatar.get_job_context", lambda: job_context)
 
         class _FakeBackend:
             def __init__(self, **kwargs):
