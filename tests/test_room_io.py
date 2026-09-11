@@ -725,3 +725,64 @@ async def test_audio_output_waits_for_active_submission_and_source_playout() -> 
 
     assert not finished.interrupted
     assert finished.playback_position == pytest.approx(frame.duration)
+
+
+# -- legacy transcription gate ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_skipped_when_all_clients_are_modern() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "a": _fake_remote("a", client_protocol=3),
+        "b": _fake_remote("b", client_protocol=3),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_published_when_a_client_is_legacy() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    room.remote_participants = {
+        "modern": _fake_remote("modern", client_protocol=3),
+        "legacy": _fake_remote("legacy", client_protocol=0),
+    }
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    calls = room.local_participant.publish_transcription.await_args_list
+    assert len(calls) == 2
+
+    partial = calls[0].args[0].segments[0]
+    assert partial.text == "hello"
+    assert partial.final is False
+
+    final = calls[1].args[0].segments[0]
+    assert final.text == "hello"
+    assert final.final is True
+    assert final.id == partial.id
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_treats_unknown_protocol_as_legacy() -> None:
+    room = _FakeRoom()
+    room.local_participant.publish_transcription = AsyncMock()
+    unknown = SimpleNamespace(
+        identity="unknown",
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        attributes={},
+    )
+    room.remote_participants = {"unknown": unknown, "mock": MagicMock()}
+    room.remote_participants["mock"].kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    room.remote_participants["mock"].attributes = {}
+
+    await _capture_and_flush(_make_legacy_output(room), "hello")
+
+    assert room.local_participant.publish_transcription.await_count == 2
+
+
