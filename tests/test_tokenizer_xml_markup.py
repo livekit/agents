@@ -7,11 +7,13 @@ used in expressive mode (Cartesia, ElevenLabs, Inworld).
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
 from livekit.agents.tokenize.blingfire import SentenceTokenizer
 from livekit.agents.tokenize.token_stream import _XML_TAG_RE
+from livekit.agents.tts._provider_format import max_input_len, sentence_tokenizer
 from livekit.agents.tts.markup_utils import extract_and_strip
 
 pytestmark = pytest.mark.unit
@@ -799,3 +801,80 @@ class TestUniversalMarkupStrip:
         assert "3 < 5" in first
         rest = s.push("is true.") + s.flush()
         assert (first + rest).replace(" ", "") == "Thevalue3<5istrue."
+
+
+# ===========================================================================
+# Fish Audio expressive batching
+# ===========================================================================
+
+
+async def _drain_now(stream: Any) -> list[str]:
+    """Tokens already emitted, without waiting for more."""
+    out: list[str] = []
+    while True:
+        try:
+            out.append((await asyncio.wait_for(stream.__anext__(), 0.01)).token)
+        except asyncio.TimeoutError:
+            return out
+
+
+class TestFishAudioExpressiveBatching:
+    """Fish is registered in ``_MAX_INPUT_LEN`` at 300 and opts into opening-sentence-
+    first batching: under expressive the first sentence of a segment is emitted on its
+    own as soon as it exists and the rest batches up to 300 chars; without expressive
+    the stream stays per sentence."""
+
+    TEXT = (
+        '<expr type="expression" label="excited"/> Oh wow, that is genuinely hilarious. '
+        '<expr type="expression" label="happy"/> You always manage to lighten the mood when '
+        "you call. "
+        '<expr type="expression" label="curious"/> So what happened with the rental car after '
+        "they lost the booking? "
+        '<expr type="expression" label="empathetic"/> That sounds like a really long night for '
+        "both of you. "
+        '<expr type="expression" label="hopeful"/> But it sounds like the convertible made up '
+        "for it in the end. "
+        '<expr type="expression" label="calm"/> Tell me the rest whenever you are ready.'
+    )
+    SENTENCES = 6
+
+    def test_registered_at_fish_ceiling(self) -> None:
+        assert max_input_len("fishaudio") == 300
+
+    @pytest.mark.asyncio
+    async def test_opening_sentence_then_batches(self) -> None:
+        tok = sentence_tokenizer("fishaudio", expressive=True)
+        tokens = await _stream_tokenize(tok, self.TEXT)
+        # the opening sentence goes alone, with its own marker
+        assert tokens[0].count("<expr") == 1 and tokens[0].endswith("genuinely hilarious."), tokens
+        # the rest batches: several sentences per request, capped at 300
+        assert 1 < len(tokens) < self.SENTENCES, tokens
+        assert tokens[1].count("<expr") >= 2, tokens[1]
+        assert all(len(t) <= 300 for t in tokens), [len(t) for t in tokens]
+        _assert_no_tag_only_sentences(tokens)
+        assert " ".join(tokens).split() == self.TEXT.split()
+
+    @pytest.mark.asyncio
+    async def test_flush_emits_the_batch_immediately(self) -> None:
+        stream = sentence_tokenizer("fishaudio", expressive=True).stream()
+        stream.push_text(self.TEXT)
+        stream.flush()
+        first = await _drain_now(stream)
+        assert first[0].count("<expr") == 1, first
+        # the batched tail is out at the flush, not held for the next sentence
+        assert first[-1].endswith("whenever you are ready."), first
+        assert " ".join(first).split() == self.TEXT.split()
+        # the next segment opens with a lone sentence again
+        stream.push_text(self.TEXT)
+        stream.end_input()
+        second = [ev.token async for ev in stream]
+        assert second[0].count("<expr") == 1, second
+        assert " ".join(second).split() == self.TEXT.split()
+        await stream.aclose()
+
+    @pytest.mark.asyncio
+    async def test_per_sentence_without_expressive(self) -> None:
+        plain = " ".join(_XML_TAG_RE.sub("", self.TEXT).split())
+        tok = sentence_tokenizer("fishaudio", expressive=False)
+        tokens = await _stream_tokenize(tok, plain)
+        assert len(tokens) == self.SENTENCES, tokens
