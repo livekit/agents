@@ -294,7 +294,7 @@ class AvatarSession(BaseAvatarSession):
     def _mint_token(self, *, room: rtc.Room, lk_key: str, lk_secret: str) -> str:
         # Synthesia rejects a token whose publish-on-behalf attribute is empty,
         # since the worker has no agent to publish the avatar's audio for.
-        agent_identity = room.local_participant.identity
+        agent_identity = get_job_context().local_participant.identity
         if not _present(agent_identity):
             raise SynthesiaError(
                 "the room's local participant has no identity; connect the room "
