@@ -20,6 +20,8 @@ import json
 import re
 from typing import TYPE_CHECKING, TypedDict
 
+from ..tokenize import blingfire
+from ..tokenize.tokenizer import SentenceStream, SentenceTokenizer, TokenData
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from ._mood import match_mood
 from .markup_utils import (
@@ -43,7 +45,6 @@ class ExpressiveTag(TypedDict):
 
 
 if TYPE_CHECKING:
-    from .. import tokenize
     from ..voice.agent_session import SpeechSteeringOptions
 
 _CARTESIA_TAGS = ["emotion", "speed", "volume", "break", "spell"]
@@ -784,10 +785,18 @@ _MAX_INPUT_LEN: dict[str, int] = {
     # well under xAI's 15,000-char request limit; sized as an expressive batch
     # target (https://docs.x.ai/developers/model-capabilities/audio/text-to-speech)
     "xai": 1000,
-    # fishaudio is deliberately absent: its markers are sentence-scoped (every
-    # sentence carries its own [very EMOTION]), so per-sentence emission loses no
-    # steering and keeps time-to-first-audio low
+    # 300 is Fish's own ceiling: it segments received text at `chunk_length`
+    # (100-300 chars), so a batch past that only gets re-split server-side. Under
+    # expressive this groups a few sentences per request so intonation carries
+    # across sentence boundaries instead of resetting at every flush.
+    "fishaudio": 300,
 }
+
+
+# Providers whose expressive batching still emits the opening sentence of each
+# segment on its own, the moment it exists: the batch target then only delays the
+# rest of the reply, never time-to-first-audio.
+_OPENING_SENTENCE_FIRST = frozenset({"fishaudio"})
 
 
 def max_input_len(provider: str) -> int | None:
@@ -795,19 +804,92 @@ def max_input_len(provider: str) -> int | None:
     return _MAX_INPUT_LEN.get(provider)
 
 
-def sentence_tokenizer(provider: str, *, expressive: bool) -> tokenize.SentenceTokenizer:
+class _OpeningSentenceFirstStream(SentenceStream):
+    """Regroup a per-sentence stream: the opening sentence of each segment passes
+    through as soon as it exists, everything after it is batched up to ``batch_len``
+    characters (a sentence that would overflow the batch starts the next one).
+
+    The wrapped ``BufferedSentenceStream`` emits synchronously, so every
+    ``push_text`` / ``flush`` / ``end_input`` regroups all it produced before
+    returning; a flush never leaves a batch waiting for more input.
+    """
+
+    def __init__(self, inner: SentenceStream, batch_len: int) -> None:
+        super().__init__()
+        self._inner = inner
+        self._batch_len = batch_len
+        self._batch = ""
+        self._segment_id = ""
+        self._opened = False  # opening sentence of the current segment already sent
+
+    def push_text(self, text: str) -> None:
+        self._inner.push_text(text)
+        self._regroup()
+
+    def flush(self) -> None:
+        self._inner.flush()
+        self._regroup()
+        self._emit_batch()
+
+    def end_input(self) -> None:
+        self._inner.end_input()
+        self._regroup()
+        self._emit_batch()
+        self._event_ch.close()
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+        self._event_ch.close()
+
+    def _regroup(self) -> None:
+        inner_ch = self._inner._event_ch
+        while not inner_ch.empty():
+            tok = inner_ch.recv_nowait()
+            if tok.segment_id != self._segment_id:
+                self._emit_batch()
+                self._segment_id, self._opened = tok.segment_id, False
+            if not self._opened:
+                self._opened = True
+                self._event_ch.send_nowait(tok)
+                continue
+            if self._batch and len(self._batch) + 1 + len(tok.token) > self._batch_len:
+                self._emit_batch()
+            self._batch = f"{self._batch} {tok.token}" if self._batch else tok.token
+            if len(self._batch) >= self._batch_len:
+                self._emit_batch()
+
+    def _emit_batch(self) -> None:
+        if self._batch:
+            self._event_ch.send_nowait(TokenData(segment_id=self._segment_id, token=self._batch))
+            self._batch = ""
+
+
+class _OpeningSentenceFirstTokenizer(blingfire.SentenceTokenizer):
+    """Per-sentence blingfire tokenizer whose stream batches after the opening sentence."""
+
+    def __init__(self, *, batch_len: int, xml_aware: bool) -> None:
+        super().__init__(xml_aware=xml_aware)
+        self._batch_len = batch_len
+
+    def stream(self, *, language: str | None = None) -> SentenceStream:
+        return _OpeningSentenceFirstStream(super().stream(language=language), self._batch_len)
+
+
+def sentence_tokenizer(provider: str, *, expressive: bool) -> SentenceTokenizer:
     """Default blingfire sentence tokenizer for a provider's streamed TTS input.
 
     The provider's hard max chunk length caps every emitted token. When ``expressive``
     is set, it also raises the *minimum* so consecutive sentences are batched up to
     that size, keeping prosody continuous across the turn; otherwise tokens emit per
     sentence (the unchanged default). Providers with no configured limit are uncapped
-    and always per-sentence.
+    and always per-sentence. Providers in ``_OPENING_SENTENCE_FIRST`` batch the same
+    way but still emit the opening sentence of each segment on its own the moment it
+    exists, so batching costs no time-to-first-audio.
     """
-    from .. import tokenize
-
     max_len = _MAX_INPUT_LEN.get(provider)
-    return tokenize.blingfire.SentenceTokenizer(
+    if expressive and max_len and provider in _OPENING_SENTENCE_FIRST:
+        return _OpeningSentenceFirstTokenizer(batch_len=max_len, xml_aware=True)
+    return blingfire.SentenceTokenizer(
         max_token_len=max_len,
         min_token_len=max_len if expressive else None,
         # markup only exists in the stream when expressive is active; xml-aware
