@@ -296,6 +296,22 @@ def test_replace_words():
     assert replaced == REPLACE_EXPECTED
 
 
+def test_replace_words_leading_punctuation():
+    replacements = {"world": "universe"}
+
+    def r(text: str) -> str:
+        return tokenize.utils.replace_words(text=text, replacements=replacements)
+
+    # words wrapped in leading punctuation must still be replaced
+    assert r("(world)") == "(universe)"
+    assert r('"world"') == '"universe"'
+    assert r("-world") == "-universe"
+    assert r("hello (world).") == "hello (universe)."
+    # trailing-only punctuation still works, and unrelated words are untouched
+    assert r("world!") == "universe!"
+    assert r("worldly") == "worldly"
+
+
 async def test_replace_words_async():
     pattern = [1, 2, 4]
     text = REPLACE_TEXT
