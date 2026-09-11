@@ -63,7 +63,10 @@ from ._utils import (
 from .log import logger
 
 KEEPALIVE_INTERVAL = 30.0
+# Reson8 answers a flush in well under 100ms when it has anything to say,
+# so this is a ceiling for the case where it has nothing and stays silent
 _FINAL_TURN_GRACE = 0.25
+_FINAL_TURN_TIMEOUT = 1.0
 _SEND_CHUNK_MS = 100
 
 
@@ -699,20 +702,13 @@ class SpeechStream(stt.RecognizeStream):
         confirms one turn while later audio is already on its way -- so a
         confirmation owed from before the flush can satisfy the wait on its own.
         Rather than hang up on that, the wait settles and then holds briefly for
-        anything further; each new turn restarts the hold. Requiring a
-        ``turn_end`` after the flush instead would stall every stream whose
-        flush had nothing left to finalise, which is why the wait is skipped
-        outright when no audio went out on this connection.
-
-        Running out of time is a lost turn, not a clean finish, so it raises.
-        The audio is already consumed from the input channel, which is why the
-        error is not retryable: another attempt has nothing left to send.
+        anything further; each new turn restarts the hold.
         """
 
         if not self._audio_sent:
             return
 
-        deadline = time.time() + self._conn_options.timeout
+        deadline = time.time() + _FINAL_TURN_TIMEOUT
 
         try:
             while True:
@@ -724,10 +720,7 @@ class SpeechStream(stt.RecognizeStream):
                 if not self._turn_ended.is_set():
                     return
         except asyncio.TimeoutError:
-            raise APITimeoutError(
-                "Reson8 did not finalise the last turn before input closed",
-                retryable=False,
-            ) from None
+            logger.debug("Reson8 sent no further turn before the input closed")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -809,12 +802,11 @@ class SpeechStream(stt.RecognizeStream):
                         return
 
                     if input_ended:
-                        if self._turn_settled.is_set():
+                        if not self._speaking:
                             return
 
-                        self._turn_settled.set()
                         raise APIConnectionError(
-                            "Reson8 closed before finalising the last turn",
+                            "Reson8 closed with a turn still open",
                             retryable=False,
                         )
 

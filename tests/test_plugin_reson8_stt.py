@@ -50,6 +50,7 @@ from livekit.plugins.reson8._utils import (
     status_error,
 )
 from livekit.plugins.reson8.stt import (
+    _FINAL_TURN_TIMEOUT,
     AudioOptions,
     BiasingOptions,
     SpeechStream,
@@ -1451,57 +1452,80 @@ async def test_end_input_waits_past_a_stale_confirmation(
     assert [e.alternatives[0].text for e in finals] == ["turn B"]
 
 
-async def test_a_close_before_the_final_turn_is_an_error(
+async def test_a_close_with_a_turn_open_is_an_error(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session).stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.push_frame(_frame())
+    stream.end_input()
+    await server.wait_for_text()
+
+    await server.send({"type": "turn_start"})
+
+    async def hang_up() -> None:
+        await asyncio.sleep(0.05)
+        assert server._ws is not None
+        await server._ws.close()
+
+    closing = asyncio.create_task(hang_up())
+
+    with pytest.raises(APIConnectionError, match="turn still open") as excinfo:
+        async with asyncio.timeout(10):
+            async for _ in stream:
+                pass
+
+    assert excinfo.value.retryable is False
+    await utils.aio.cancel_and_wait(closing)
+    await stream.aclose()
+
+
+async def test_trailing_silence_does_not_fail_the_stream(
+    reson8_server: StartServer, client_session: aiohttp.ClientSession
+) -> None:
+    server = await reson8_server()
+    stream = _stt(server.base_url, client_session, language="en").stream(conn_options=NO_RETRY)
+
+    await asyncio.wait_for(server.connected.wait(), timeout=5)
+    stream.push_frame(_frame())
+    await server.send({"type": "turn_start"})
+    await server.send({"type": "turn_end_candidate", "text": "all done"})
+    await server.send({"type": "turn_end"})
+
+    # ...and the caller keeps pushing silence after the turn closed
+    await asyncio.sleep(0.1)
+    stream.push_frame(_frame())
+    stream.end_input()
+
+    events: list[stt.SpeechEvent] = []
+    started = time.time()
+    async with asyncio.timeout(10):
+        async for event in stream:
+            events.append(event)
+
+    elapsed = time.time() - started
+    await stream.aclose()
+
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["all done"]
+    assert elapsed < _FINAL_TURN_TIMEOUT * 3
+
+
+async def test_an_unanswered_flush_closes_cleanly(
     finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
 ) -> None:
-    """
-    Losing the last turn must not look like a clean finish.
-
-    The audio was consumed from the input channel, so no retry can produce the
-    transcript; reporting success would hand the caller an empty result with
-    no way to tell it apart from silence.
-    """
-
-    base_url = await finalizing_server(answer_flush=False, hang_up=True)
+    base_url = await finalizing_server(answer_flush=False)
     stream = _stt(base_url, client_session).stream(conn_options=NO_RETRY)
 
     stream.push_frame(_frame())
     stream.end_input()
 
-    with pytest.raises(APIConnectionError, match="before finalising") as excinfo:
-        async with asyncio.timeout(10):
-            async for _ in stream:
-                pass
+    async with asyncio.timeout(10):
+        async for _ in stream:
+            pass
 
-    assert excinfo.value.retryable is False
-    await stream.aclose()
-
-
-async def test_a_finalisation_timeout_is_an_error(
-    finalizing_server: Callable[..., Awaitable[str]], client_session: aiohttp.ClientSession
-) -> None:
-    """
-    Running out of time is a lost turn, not a clean finish.
-
-    The server here accepts the flush and simply never answers, which is the
-    case a bounded wait exists for. Returning quietly would hand the caller an
-    empty result indistinguishable from silence.
-    """
-
-    base_url = await finalizing_server(answer_flush=False)
-    stream = _stt(base_url, client_session).stream(
-        conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
-    )
-
-    stream.push_frame(_frame())
-    stream.end_input()
-
-    with pytest.raises(APITimeoutError, match="finalise the last turn") as excinfo:
-        async with asyncio.timeout(10):
-            async for _ in stream:
-                pass
-
-    assert excinfo.value.retryable is False
     await stream.aclose()
 
 
