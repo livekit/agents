@@ -20,6 +20,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     stt,
@@ -112,6 +113,14 @@ def transcription_completed(transcript: str, *, language: str = "") -> dict[str,
 
 def speech_started() -> dict[str, Any]:
     return {"event_id": "srv_s", "type": "input_audio_buffer.speech_started"}
+
+
+def failed_event(message: str = "garbled frame") -> dict[str, Any]:
+    return {
+        "event_id": "srv_f",
+        "type": "conversation.item.input_audio_transcription.failed",
+        "error": {"code": "AudioDecodeFailed", "message": message},
+    }
 
 
 def error_event(**error: Any) -> dict[str, Any]:
@@ -457,11 +466,16 @@ async def test_a_request_error_is_not_retried(server, session) -> None:
     assert exc_info.value.retryable is False
 
 
-async def test_a_server_error_is_retryable(server, session) -> None:
+async def test_a_server_error_stops_being_retryable_once_audio_is_consumed(server, session) -> None:
+    # Classification itself is unchanged; `status_error_from` still calls a server error
+    # retryable (see tests/test_plugin_qwen_realtime.py). What changes is the stream: audio
+    # already pulled off the channel cannot be replayed, so a retry would transcribe
+    # silence. The error is handed to the FallbackAdapter instead.
     server.script(error_event(type="server_error", message="upstream busy"))
     with pytest.raises(APIStatusError) as exc_info:
         await drain(make_stt(server, session))
-    assert exc_info.value.retryable is True
+    assert exc_info.value.retryable is False
+    assert "upstream busy" in str(exc_info.value)
 
 
 async def test_hangup_before_finish_surfaces_as_a_connection_error(server, session) -> None:
@@ -552,3 +566,94 @@ async def test_recognize_with_no_transcript_returns_an_empty_final(server, sessi
     event = await make_stt(server, session).recognize(audio_frame(1600), conn_options=NO_RETRY)
     assert event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
     assert event.alternatives[0].text == ""
+
+
+# --- review follow-ups (livekit/agents#7224) ----------------------------------------------
+
+
+async def test_a_retryable_error_after_audio_is_not_retried(server, session) -> None:
+    # `RecognizeStream` keeps no replay buffer, so audio already pulled off `_input_ch` is
+    # gone for good. Retrying would open a fresh socket with no audio, finish cleanly, and
+    # turn a provider failure into an empty transcript. Hand the error to the
+    # FallbackAdapter instead.
+    server.script(error_event(type="server_error", message="upstream busy"))
+    retrying = APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0)
+    stream = make_stt(server, session).stream(conn_options=retrying)
+    stream.push_frame(audio_frame(1600))
+    stream.end_input()
+
+    with pytest.raises(APIError) as exc_info:
+        async for _ in stream:
+            pass
+    await stream.aclose()
+
+    assert exc_info.value.retryable is False
+    assert server.connections == 1
+
+
+async def test_a_connect_failure_before_any_audio_is_still_retried(session) -> None:
+    # The guard above must not disable retries for failures that predate any audio, which
+    # are exactly the ones a retry can fix.
+    stt_ = STT(
+        api_key="sk-test",
+        base_url="ws://127.0.0.1:1/api-ws/v1/realtime",
+        http_session=session,
+    )
+    stream = stt_.stream(
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0.0, timeout=1.0)
+    )
+    stream.push_frame(audio_frame(1600))
+    stream.end_input()
+    with pytest.raises(APIConnectionError):
+        async for _ in stream:
+            pass
+    await stream.aclose()
+    assert stream._num_retries == 2
+
+
+async def test_a_failed_utterance_closes_the_open_turn(server, session) -> None:
+    # LiveKit commits a user turn on END_OF_SPEECH when turn_detection="stt". Logging the
+    # failure and moving on would leave that turn open forever, so the plugin promotes the
+    # interim text to a final and closes the pair itself.
+    server.script(speech_started(), transcription_text("hello"), failed_event())
+    events = await collect(make_stt(server, session))
+
+    assert types_of(events) == [
+        "start_of_speech",
+        "interim_transcript",
+        "final_transcript",
+        "end_of_speech",
+    ]
+    assert text_of(events[2]) == "hello"
+
+
+async def test_a_failed_utterance_without_an_open_turn_emits_nothing(server, session) -> None:
+    # No speech_started means no turn to close, so a failure stays a log line.
+    server.script(failed_event(), transcription_completed("still here"))
+    events = await collect(make_stt(server, session))
+    assert types_of(events) == ["final_transcript"]
+    assert text_of(events[0]) == "still here"
+
+
+async def test_usage_is_reported_when_a_stream_closes_without_a_final(server, session) -> None:
+    # aclose() cancels _run before the normal epilogue. Audio streamed since the last final
+    # would otherwise never be billed, and a stream that produced no final at all would
+    # report nothing.
+    stream = make_stt(server, session).stream(conn_options=NO_RETRY)
+    collected: list[stt.SpeechEvent] = []
+
+    async def drain() -> None:
+        async for event in stream:
+            collected.append(event)
+
+    task = asyncio.create_task(drain())
+    stream.push_frame(audio_frame(1600))
+    stream.push_frame(audio_frame(1600))
+    for _ in range(200):
+        if len(server.events_of_type("input_audio_buffer.append")) >= 2:
+            break
+        await asyncio.sleep(0.02)
+    await stream.aclose()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert usage_seconds(collected) == pytest.approx(0.2, abs=1e-3)

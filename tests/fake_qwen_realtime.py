@@ -31,6 +31,7 @@ class _FakeRealtimeServer:
         self.query: dict[str, str] = {}
         self.headers: dict[str, str] = {}
         self.url: str = ""
+        self.connections = 0
         self._script: list[dict[str, Any]] = []
         self._runner: web.AppRunner | None = None
         self._close_after_script = False
@@ -85,6 +86,7 @@ class _FakeRealtimeServer:
     async def _handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        self.connections += 1
         self.query = dict(request.query)
         self.headers = dict(request.headers)
         await ws.send_json({"event_id": "srv_0", "type": "session.created", "session": {}})

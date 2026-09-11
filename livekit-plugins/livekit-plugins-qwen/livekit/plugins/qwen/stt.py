@@ -37,6 +37,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     LanguageCode,
     stt,
     utils,
@@ -223,6 +224,10 @@ class SpeechStream(stt.RecognizeStream):
         # recognize() asks for it: that path calls end_input(), which is the one place
         # LiveKit ever flushes an STT stream. Live streams always run with server VAD.
         self._manual_commit = manual_commit
+        # Frames are pulled straight off `_input_ch`, which keeps no replay buffer, so
+        # once any audio has been consumed a retry can no longer see it. Tracked across
+        # attempts, not per attempt: the audio is gone for the rest of the stream.
+        self._audio_consumed = False
 
     def _session_config(self) -> dict[str, Any]:
         transcription: dict[str, Any] = {}
@@ -274,6 +279,7 @@ class SpeechStream(stt.RecognizeStream):
                     "input_audio_buffer.append",
                     audio=base64.b64encode(frame.data.tobytes()).decode(),
                 )
+                self._audio_consumed = True
                 uncommitted = True
                 pushed_samples += frame.samples_per_channel
 
@@ -331,6 +337,7 @@ class SpeechStream(stt.RecognizeStream):
 
         async def recv() -> None:
             speaking = False
+            interim = ""
             while True:
                 msg = await socket.receive()
                 if msg.type in CLOSE_TYPES:
@@ -359,8 +366,10 @@ class SpeechStream(stt.RecognizeStream):
                     # revise; an interim result wants both.
                     text = (event.get("text") or "") + (event.get("stash") or "")
                     if text:
+                        interim = text
                         self._emit_transcript(stt.SpeechEventType.INTERIM_TRANSCRIPT, text, event)
                 elif kind == "conversation.item.input_audio_transcription.completed":
+                    interim = ""
                     self._emit_transcript(
                         stt.SpeechEventType.FINAL_TRANSCRIPT, event.get("transcript") or "", event
                     )
@@ -374,12 +383,27 @@ class SpeechStream(stt.RecognizeStream):
                         )
                 elif kind == "conversation.item.input_audio_transcription.failed":
                     # Per-utterance failure. Raising here would drop the socket and send the
-                    # FallbackAdapter to the next provider over one bad segment; LiveKit
-                    # falls back to the interim text.
+                    # FallbackAdapter to the next provider over one bad segment, so the
+                    # socket stays open for the next utterance.
                     logger.warning(
                         "qwen asr failed to transcribe an utterance; keeping the stream open",
                         extra={"lk.pii.data": event},
                     )
+                    if speaking:
+                        # A turn is open and no `.completed` is coming. LiveKit commits a
+                        # user turn on END_OF_SPEECH under turn_detection="stt", so leaving
+                        # the pair open would strand that turn. Promote whatever the model
+                        # confirmed before it gave up, then close the turn.
+                        if interim:
+                            self._emit_transcript(
+                                stt.SpeechEventType.FINAL_TRANSCRIPT, interim, event
+                            )
+                            report_usage()
+                        speaking = False
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+                        )
+                    interim = ""
                 elif kind == "session.finished":
                     return
 
@@ -399,8 +423,23 @@ class SpeechStream(stt.RecognizeStream):
         except asyncio.CancelledError:
             cancelled = True
             raise
+        except APIError as e:
+            # `RecognizeStream` reruns `_run` on a retryable error but replays no audio, so
+            # a retry would open a fresh socket, see an empty channel, finish cleanly and
+            # report an empty transcript instead of the failure. Once audio is gone the
+            # error belongs to the FallbackAdapter, so clear the retry flag in place and
+            # keep the provider's own error, which says far more than a wrapper would.
+            if self._audio_consumed:
+                e.retryable = False
+            raise
         finally:
             if cancelled:
+                # Bill the audio streamed since the last final. Cancellation skips the
+                # epilogue below, and a stream that never produced a final would otherwise
+                # report nothing at all. The event channel is still open here: it is closed
+                # by the done callback on `_main_task`, which cannot have run yet.
+                if not self._event_ch.closed:
+                    report_usage()
                 # aclose() is how LiveKit ends a live stream, and it lands here before
                 # send() ever reached session.finish. Model Studio books a socket dropped
                 # without the handshake as a failed request, so finish it on the way out,
