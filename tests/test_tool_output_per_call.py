@@ -35,6 +35,32 @@ class ToolAgent(Agent):
         return self._behavior()
 
 
+class ReceivingAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You are the receiving agent.")
+        self.entered = asyncio.Event()
+
+    async def on_enter(self) -> None:
+        self.entered.set()
+        await self.session.generate_reply(instructions="receiver_greeting")
+
+
+class ParallelHandoffAgent(Agent):
+    def __init__(self, receiver: ReceivingAgent) -> None:
+        super().__init__(instructions="You are the routing agent.")
+        self._receiver = receiver
+
+    @function_tool
+    async def transfer(self) -> Agent:
+        """Transfer the conversation to the receiving agent."""
+        return self._receiver
+
+    @function_tool
+    async def lookup(self) -> str:
+        """Look up the account before transfer."""
+        return "lookup complete"
+
+
 async def _run(behavior: Callable[[], Any]) -> tuple[Agent, AgentSession, FunctionCallOutput]:
     """Run one turn whose single tool call is answered, and return that answer."""
     actions = FakeActions()
@@ -104,3 +130,49 @@ async def test_bare_handoff_answers_the_call_and_asks_for_no_reply() -> None:
     assert session.current_agent is not agent, "the handoff must be applied"
     assert output.output == ""
     assert not output.reply_required
+
+
+@pytest.mark.parametrize(
+    "tool_names",
+    [("lookup", "transfer"), ("transfer", "lookup")],
+    ids=["handoff_last", "handoff_first"],
+)
+async def test_parallel_tool_reply_does_not_race_agent_handoff(
+    tool_names: tuple[str, str],
+) -> None:
+    """A sibling tool result must not make the old agent reply after a handoff."""
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Transfer and look up the account.")
+    actions.add_llm(
+        content="",
+        tool_calls=[
+            FunctionToolCall(name=name, arguments="{}", call_id=f"{name}-1") for name in tool_names
+        ],
+    )
+    actions.add_llm(content="old agent reply", input="lookup complete")
+    actions.add_tts(0.5, input="old agent reply")
+    actions.add_llm(content="receiver reply", input="receiver_greeting")
+    actions.add_tts(0.5, input="receiver reply")
+
+    session = create_session(actions)
+    receiver = ReceivingAgent()
+    routing_agent = ParallelHandoffAgent(receiver)
+    await asyncio.wait_for(run_session(session, routing_agent), timeout=SESSION_TIMEOUT)
+
+    assert receiver.entered.is_set(), "the receiving agent must run on_enter"
+    assistant_text = [
+        item.text_content
+        for item in session.history.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+    assert "receiver reply" in assistant_text
+    assert "old agent reply" not in assistant_text
+
+    for label, items in (
+        ("routing agent chat_ctx", routing_agent.chat_ctx.items),
+        ("session history", session.history.items),
+    ):
+        calls = [item for item in items if item.type == "function_call"]
+        outputs = [item for item in items if item.type == "function_call_output"]
+        assert {call.call_id for call in calls} == {"transfer-1", "lookup-1"}, label
+        assert {output.call_id for output in outputs} == {"transfer-1", "lookup-1"}, label
