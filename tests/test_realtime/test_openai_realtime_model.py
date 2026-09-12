@@ -4,7 +4,7 @@ import asyncio
 import logging
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
@@ -517,3 +517,121 @@ def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -
     assert session._response_created_futures == {"response_create_1": fut}
     # still reported down the ordinary path
     assert captured["recoverable"] is True
+
+
+async def test_interrupt_includes_response_id_from_current_generation() -> None:
+    # interrupt() must specify response_id when available so concurrent responses are not a no-op (#5564)
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _ResponseGeneration,
+    )
+
+    sent: list[object] = []
+    session = RealtimeModel(api_key="fake").session()
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    session.interrupt()
+    assert len(sent) == 0
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id == "resp_123"
+
+    gen_no_id = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id=None,
+    )
+    session._current_generation = gen_no_id
+    session.interrupt()
+    assert len(sent) == 2
+    assert isinstance(sent[1], ResponseCancelEvent)
+    assert sent[1].response_id is None
+
+    await session.aclose()
+
+
+async def test_interrupt_omits_response_id_for_legacy_azure() -> None:
+    # Legacy Azure API (with api_version) beta schema does not support response_id in response.cancel
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _normalize_azure_client_event,
+        _ResponseGeneration,
+    )
+
+    # Test _normalize_azure_client_event strips response_id from response.cancel
+    event: dict[str, Any] = {"type": "response.cancel", "response_id": "resp_123"}
+    _normalize_azure_client_event(event)
+    assert "response_id" not in event
+
+    # Test RealtimeSession.interrupt() omits response_id for legacy Azure
+    sent: list[object] = []
+    session = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        api_version="2024-10-01-preview",
+    ).session()
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id is None
+
+    await session.aclose()
+
+
+async def test_interrupt_omits_response_id_for_xai() -> None:
+    # xAI Realtime API v1 uses legacy bare cancellation event
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _ResponseGeneration,
+    )
+
+    sent: list[object] = []
+    session = RealtimeModel(api_key="fake").session()
+    session._realtime_model._provider_label = "xAI Realtime API"
+    session._realtime_model._supports_targeted_cancellation = False
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id is None
+
+    await session.aclose()
