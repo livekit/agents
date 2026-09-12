@@ -29,8 +29,8 @@ async def test_wait_for_playout_unblocks_immediately_on_interruption() -> None:
     assert elapsed < 1.0
     assert elapsed < INTERRUPTION_TIMEOUT
     assert handle.interrupted is True
-    # Verify that done_fut is still pending while wait_for_playout already completed
-    assert handle.done() is False
+    assert handle.done() is True
+    assert handle.exception() is None
 
     # Cleanup timer handle
     handle._mark_done()
@@ -40,7 +40,8 @@ async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> 
     handle = SpeechHandle.create(allow_interruptions=True)
     handle.interrupt()
     assert handle.interrupted is True
-    assert handle.done() is False
+    assert handle.done() is True
+    assert handle.exception() is None
 
     start = time.perf_counter()
     await asyncio.wait_for(handle.wait_for_playout(), timeout=1.0)
@@ -52,6 +53,13 @@ async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> 
 
 async def test_await_handle_unblocks_immediately_on_interruption() -> None:
     handle = SpeechHandle.create(allow_interruptions=True)
+    callback_called = False
+
+    def _on_done(h: SpeechHandle) -> None:
+        nonlocal callback_called
+        callback_called = True
+
+    handle.add_done_callback(_on_done)
 
     async def _await_handle() -> SpeechHandle:
         return await handle
@@ -59,6 +67,7 @@ async def test_await_handle_unblocks_immediately_on_interruption() -> None:
     waiter_task = asyncio.create_task(_await_handle())
     await asyncio.sleep(0.01)
     assert not waiter_task.done()
+    assert not callback_called
 
     start = time.perf_counter()
     handle.interrupt()
@@ -70,7 +79,9 @@ async def test_await_handle_unblocks_immediately_on_interruption() -> None:
     assert elapsed < INTERRUPTION_TIMEOUT
     assert result is handle
     assert handle.interrupted is True
-    assert handle.done() is False
+    assert handle.done() is True
+    assert handle.exception() is None
+    assert callback_called is True
 
     handle._mark_done()
 
@@ -85,3 +96,22 @@ async def test_wait_for_playout_unblocks_on_done() -> None:
     await asyncio.wait_for(waiter_task, timeout=1.0)
     assert handle.done() is True
     assert handle.interrupted is False
+
+
+async def test_wait_for_generation_unblocks_on_interruption() -> None:
+    handle = SpeechHandle.create(allow_interruptions=True)
+    handle._authorize_generation()
+
+    waiter_task = asyncio.create_task(handle._wait_for_generation())
+    await asyncio.sleep(0.01)
+    assert not waiter_task.done()
+
+    start = time.perf_counter()
+    handle.interrupt()
+
+    await asyncio.wait_for(waiter_task, timeout=1.0)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0
+    assert elapsed < INTERRUPTION_TIMEOUT
+
+    handle._mark_done()

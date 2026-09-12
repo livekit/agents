@@ -72,8 +72,12 @@ class SpeechHandle:
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
+        self._done_callbacks_called = False
 
         def _on_done(_: asyncio.Future[None]) -> None:
+            if self._done_callbacks_called:
+                return
+            self._done_callbacks_called = True
             for cb in list(self._done_callbacks):
                 try:
                     cb(self)
@@ -81,6 +85,7 @@ class SpeechHandle:
                     logger.warning(f"error in done_callback: {cb}", exc_info=e)
 
         self._done_fut.add_done_callback(_on_done)
+        self._interrupt_fut.add_done_callback(_on_done)
         self._maybe_run_final_output: Any = None  # kept private
         self._error: BaseException | None = None
 
@@ -178,7 +183,7 @@ class SpeechHandle:
         return self._chat_items
 
     def done(self) -> bool:
-        return self._done_fut.done()
+        return self._done_fut.done() or self.interrupted
 
     def exception(self) -> BaseException | None:
         """Return the error that caused this speech to fail, if any.
@@ -193,7 +198,7 @@ class SpeechHandle:
         Returns:
             BaseException | None: The error the generation failed with, or None.
         """
-        if not self._done_fut.done():
+        if not self.done():
             raise asyncio.InvalidStateError("SpeechHandle is not done yet")
 
         return self._error
@@ -342,7 +347,14 @@ class SpeechHandle:
         if not self._generations:
             raise RuntimeError("cannot use wait_for_generation: no active generation is running.")
 
-        await asyncio.shield(self._generations[step_idx])
+        if self.interrupted or self._interrupt_fut.done():
+            return
+
+        gen_fut = asyncio.shield(self._generations[step_idx])
+        await asyncio.wait(
+            {gen_fut, self._interrupt_fut},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
     async def _wait_for_scheduled(self) -> None:
         await asyncio.shield(self._scheduled_fut)
