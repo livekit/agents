@@ -23,6 +23,12 @@ class InputDetails:
 DEFAULT_INPUT_DETAILS = InputDetails(modality="audio")
 
 
+InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
+"""Why a speech was interrupted, for the ``agent_turn`` trace: the user started talking over
+it (``audio_activity``), a committed user turn preempted it (``user_turn``), or code did
+(``programmatic``: ``session.interrupt()``, a tool, teardown)."""
+
+
 class SpeechHandle:
     SPEECH_PRIORITY_LOW = 0
     """Priority for messages that should be played after all other messages in the queue"""
@@ -54,6 +60,7 @@ class SpeechHandle:
         self._agent_turn_context: otel_context.Context | None = None
         self._scheduled_at: float | None = None
         self._authorized_at: float | None = None
+        self._interrupt_source: InterruptionSource | None = None  # first interrupt's cause
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
@@ -185,8 +192,15 @@ class SpeechHandle:
 
         return self._error
 
-    def interrupt(self, *, force: bool = False) -> SpeechHandle:
+    def interrupt(
+        self, *, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> SpeechHandle:
         """Interrupt the current speech generation.
+
+        Args:
+            force: Interrupt even if this speech disallows interruptions.
+            source: Why, for the ``agent_turn`` trace (see ``InterruptionSource``). The first
+                interruption's cause is the one recorded.
 
         Raises:
             RuntimeError: If this speech handle is still running and does not allow
@@ -202,6 +216,7 @@ class SpeechHandle:
         if not force and not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._interrupt_source = source  # first interrupt only: later calls return above
         self._cancel()
         return self
 

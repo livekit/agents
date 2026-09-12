@@ -58,6 +58,13 @@ ATTR_JOB_ENTRYPOINT_LATENCY = "lk.job.entrypoint_latency"
 ATTR_JOB_DISPATCH_LATENCY = "lk.job.dispatch_latency"
 """Seconds from the availability request to the entrypoint running: the whole chain."""
 
+# keyterm detection (keyterm_detection span): counts only, the terms themselves are the
+# customer's vocabulary and travel as lk.pii.keyterms in the session report
+ATTR_KEYTERMS_COUNT = "lk.keyterms.count"
+"""Keyterms in effect after the pass (static + confirmed)."""
+ATTR_KEYTERMS_ADDED = "lk.keyterms.added"
+ATTR_KEYTERMS_REMOVED = "lk.keyterms.removed"
+
 # room connect / room io
 ATTR_ROOM_AUTO_SUBSCRIBE = "lk.room.auto_subscribe"
 ATTR_ROOM_E2EE = "lk.room.e2ee"
@@ -409,6 +416,21 @@ ATTR_AMD_REASON = "lk.amd.reason"
 ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
 ATTR_AMD_DELAY = "lk.amd.delay"
 ATTR_AMD_TRANSCRIPT = "lk.pii.amd.transcript"
+
+# Interruptions (agent_turn)
+ATTR_INTERRUPTION_SOURCE = "lk.interruption.source"
+"""What interrupted the speech: ``audio_activity`` (barge-in), ``user_turn`` (a committed
+turn preempting the reply), or ``programmatic`` (session.interrupt(), a tool, teardown)."""
+ATTR_PLAYOUT_POSITION = "lk.playout.position"
+"""Seconds of audio that had actually played when the speech was interrupted."""
+
+# Agent handoff (update_agent span)
+ATTR_PREVIOUS_AGENT_LABEL = "lk.previous_agent_label"
+
+# Fallback adapters (the attempt span)
+ATTR_FALLBACK_LABEL = "lk.fallback.label"
+"""Label of the provider that served the request."""
+ATTR_FALLBACK_INDEX = "lk.fallback.index"
 
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"

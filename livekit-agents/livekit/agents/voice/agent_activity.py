@@ -97,7 +97,7 @@ from .generation import (
     update_expressive_instructions,
     update_instructions,
 )
-from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, SpeechHandle
+from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
 from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
 from .turn import (
     EndpointingOptions,
@@ -236,6 +236,18 @@ def _record_user_turn_stages(span: trace.Span, user_metrics: llm.MetricsReport) 
         attrs[trace_types.ATTR_ON_USER_TURN_COMPLETED_DELAY] = v
     if attrs:
         span.set_attributes(attrs)
+
+
+def _record_interruption(speech_handle: SpeechHandle) -> None:
+    """Name what interrupted the speech on its agent_turn span.
+
+    Module-level: tests drive the reply tasks with stand-in activities."""
+    if not speech_handle.interrupted or speech_handle._agent_turn_context is None:
+        return
+    span = trace.get_current_span(context=speech_handle._agent_turn_context)
+    span.set_attribute(
+        trace_types.ATTR_INTERRUPTION_SOURCE, speech_handle._interrupt_source or "programmatic"
+    )
 
 
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
@@ -1405,12 +1417,19 @@ class AgentActivity(RecognitionHooks):
             self._scheduling_task(), name="_scheduling_task"
         )
 
-    async def resume(self, *, reuse_resources: _ReusableResources | None = None) -> None:
+    async def resume(
+        self,
+        *,
+        reuse_resources: _ReusableResources | None = None,
+        trace_context: otel_context.Context | None = None,
+    ) -> None:
         # `resume` must only be called by AgentSession
 
         async with self._lock:
+            # not made current: _start_session spawns the tasks that live for the session
             span = tracer.start_span(
                 "resume_agent_activity",
+                context=trace_context,
                 attributes={trace_types.ATTR_AGENT_LABEL: self.agent.label},
             )
             try:
@@ -1786,19 +1805,24 @@ class AgentActivity(RecognitionHooks):
     def _resume_authorization(self) -> None:
         self._authorization_allowed.set()
 
-    def _interrupt_background_speeches(self, force: bool = False) -> list[SpeechHandle]:
+    def _interrupt_background_speeches(
+        self, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
         for speech in self._background_speeches:
             if force or speech.allow_interruptions:
-                interrupted_speeches.append(speech.interrupt(force=force))
+                interrupted_speeches.append(speech.interrupt(force=force, source=source))
 
         return interrupted_speeches
 
-    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
+    def interrupt(
+        self, *, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> asyncio.Future[None]:
         """Interrupt the current speech generation and any queued speeches.
 
         A queued speech that disallows interruptions keeps playing, along with the ones
-        behind it, unless ``force`` is set.
+        behind it, unless ``force`` is set. ``source`` names the cause on the speeches'
+        ``agent_turn`` spans.
 
         Returns:
             An asyncio.Future that completes when the interruption is fully processed
@@ -1812,10 +1836,10 @@ class AgentActivity(RecognitionHooks):
 
         future = asyncio.Future[None]()
 
-        interrupted_speeches = self._interrupt_background_speeches(force=force)
+        interrupted_speeches = self._interrupt_background_speeches(force=force, source=source)
 
         if self._current_speech is not None:
-            self._current_speech.interrupt(force=force)
+            self._current_speech.interrupt(force=force, source=source)
             interrupted_speeches.append(self._current_speech)
 
         if self._rt_session is not None:
@@ -1824,7 +1848,7 @@ class AgentActivity(RecognitionHooks):
         # _speech_q is a heap, so its list order is not the order it pops in
         for _, _, speech in sorted(self._speech_q, key=lambda item: (item[0], item[1])):
             try:
-                speech.interrupt(force=force)
+                speech.interrupt(force=force, source=source)
             except RuntimeError:
                 # the speeches behind this one are going to play, so stopping
                 # here keeps the conversation contiguous
@@ -2122,7 +2146,8 @@ class AgentActivity(RecognitionHooks):
             return
 
         try:
-            self.interrupt()  # input_speech_started is also interrupting on the serverside realtime session  # noqa: E501
+            # the server's own speech detection: a barge-in, like the VAD path
+            self.interrupt(source="audio_activity")
         except RuntimeError:
             # only out of sync when the server cancelled its own response, with client-side turn
             # taking an uninterruptible speech is expected
@@ -2274,7 +2299,7 @@ class AgentActivity(RecognitionHooks):
                 if self._rt_session is not None:
                     self._rt_session.interrupt()
 
-                self._current_speech.interrupt()
+                self._current_speech.interrupt(source="audio_activity")
         elif self._current_speech is None or not self._current_speech.interrupted:
             self._interruption_detected = False
 
@@ -2676,7 +2701,7 @@ class AgentActivity(RecognitionHooks):
                 return
             await self._cancel_speech_pause(self._cancel_speech_pause_task)
 
-            await current_speech.interrupt()
+            await current_speech.interrupt(source="user_turn")
 
             if self._rt_session is not None:
                 self._rt_session.interrupt()
@@ -2790,7 +2815,7 @@ class AgentActivity(RecognitionHooks):
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
             # await the interrupt to make sure user message is added to the chat context before the new task starts
-            await speech_handle.interrupt()
+            await speech_handle.interrupt(source="user_turn")
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
@@ -3061,6 +3086,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            _record_interruption(speech_handle)
             await utils.aio.cancel_and_wait(*authorization_tasks)
             return
 
@@ -3180,6 +3206,7 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        _record_interruption(speech_handle)
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*all_tasks)
 
@@ -3199,6 +3226,12 @@ class AgentActivity(RecognitionHooks):
                 audio_out is not None
                 and audio_output.captured_playout_segments > audio_out.captured_segments_before
             )
+            if played_own_frame:
+                # wait_for_playout returns the previous segment's event when this speech
+                # never reached the output
+                current_span.set_attribute(
+                    trace_types.ATTR_PLAYOUT_POSITION, playback_ev.playback_position
+                )
             if (
                 audio_out is not None
                 and played_own_frame
@@ -3533,6 +3566,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            _record_interruption(speech_handle)
             await utils.aio.cancel_and_wait(*tasks, wait_for_scheduled)
             return
 
@@ -3557,6 +3591,7 @@ class AgentActivity(RecognitionHooks):
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            _record_interruption(speech_handle)
             await utils.aio.cancel_and_wait(*tasks, *authorization_tasks)
             return
 
@@ -3737,6 +3772,12 @@ class AgentActivity(RecognitionHooks):
                 self._session._unanswered_user_metrics = None
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        _record_interruption(speech_handle)
+        if speech_handle.interrupted and segment_outputs:
+            current_span.set_attribute(
+                trace_types.ATTR_PLAYOUT_POSITION,
+                sum(out.playback_position for out in segment_outputs),
+            )
 
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
         if speech_handle.interrupted:
@@ -4208,6 +4249,7 @@ class AgentActivity(RecognitionHooks):
             for tee in tees:
                 await tee.aclose()
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
+            _record_interruption(speech_handle)
             return  # TODO(theomonnom): remove the message from the serverside history
 
         started_speaking_at: float | None = None
@@ -4380,6 +4422,7 @@ class AgentActivity(RecognitionHooks):
             self._rt_session.interrupt()
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
+        _record_interruption(speech_handle)
         current_span.set_attribute(
             trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
             json.dumps([fnc.model_dump(exclude={"type", "created_at"}) for fnc in function_calls]),
@@ -4858,7 +4901,8 @@ class AgentActivity(RecognitionHooks):
             and not self._paused_speech.handle.interrupted
             and self._paused_speech.handle.allow_interruptions
         ):
-            self._paused_speech.handle.interrupt()
+            # a final transcript or a committed turn ended the pause
+            self._paused_speech.handle.interrupt(source="user_turn")
             # ensure the generation is done — but only if a generation
             # was actually started; a paused speech that was never
             # authorized won't have an active generation future.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
@@ -1836,18 +1837,40 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
+            # one span for the handoff: the old agent's drain/pause and on_exit, then the new
+            # one's start/resume and on_enter nest under it. It is made current only around
+            # calls that spawn no long-lived tasks, and passed explicitly to the ones that do
+            handoff_span: trace.Span | None = None
+            handoff_ctx: otel_context.Context | None = None
+            if self._activity is not None and self._next_activity is not None:
+                handoff_span = tracer.start_span(
+                    "update_agent",
+                    attributes={
+                        trace_types.ATTR_PREVIOUS_AGENT_LABEL: self._activity.agent.label,
+                        trace_types.ATTR_AGENT_LABEL: self._next_activity.agent.label,
+                    },
+                )
+                handoff_ctx = trace.set_span_in_context(handoff_span)
+            under_handoff = (
+                tracer.use_span(handoff_span, end_on_exit=False)
+                if handoff_span is not None
+                else contextlib.nullcontext()
+            )
+
             reuse_resources: _ReusableResources | None = None
             try:
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
-                        reuse_resources = await activity.drain(new_activity=self._next_activity)
-                        await activity.aclose()
+                        with under_handoff:
+                            reuse_resources = await activity.drain(new_activity=self._next_activity)
+                            await activity.aclose()
                     elif previous_activity == "pause":
-                        reuse_resources = await activity.pause(
-                            blocked_tasks=blocked_tasks or [],
-                            new_activity=self._next_activity,
-                        )
+                        with under_handoff:
+                            reuse_resources = await activity.pause(
+                                blocked_tasks=blocked_tasks or [],
+                                new_activity=self._next_activity,
+                            )
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
@@ -1884,14 +1907,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 if new_activity == "start":
                     await self._activity.start(
                         reuse_resources=reuse_resources,
-                        trace_context=self._session_start_context,
+                        trace_context=(
+                            handoff_ctx if handoff_ctx is not None else self._session_start_context
+                        ),
                     )
                 elif new_activity == "resume":
-                    await self._activity.resume(reuse_resources=reuse_resources)
-            except BaseException:
+                    await self._activity.resume(
+                        reuse_resources=reuse_resources, trace_context=handoff_ctx
+                    )
+            except BaseException as e:
+                if handoff_span is not None and isinstance(e, Exception):
+                    trace_utils.record_exception(handoff_span, e)
                 if reuse_resources is not None:
                     await reuse_resources.cleanup()
                 raise
+            finally:
+                if handoff_span is not None:
+                    handoff_span.end()
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
