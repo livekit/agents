@@ -1044,6 +1044,48 @@ def strip_all_markup(text: str) -> str:
     return split_all_markup(text)[0]
 
 
+_SSML_BREAK_RE = re.compile(r"<\s*/?\s*break\b[^>]*\/?>", re.IGNORECASE)
+_SSML_WRAPPING_RE = re.compile(
+    r"<\s*(?P<tag>phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|p|s|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_STANDALONE_RE = re.compile(
+    r"<\s*/?\s*(?:speak|p|s|mark)\b[^>]*\/?>",
+    re.IGNORECASE,
+)
+
+
+def strip_chat_markup(text: str) -> str:
+    """Strip expressive markup and SSML tags before storing text in chat context.
+
+    Preserves word boundaries when removing <break> tags, unwraps common SSML tags
+    (such as <phoneme>, <prosody>, <say-as>, <emphasis>) while keeping their inner text,
+    and strips provider-specific expressive markup tags.
+    """
+    if "<" not in text:
+        return text
+
+    # Replace break tags with a space to preserve word boundaries
+    text = _SSML_BREAK_RE.sub(" ", text)
+
+    # Unwrap SSML wrapping tags to keep inner text
+    while True:
+        unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
+        if unwrapped == text:
+            break
+        text = unwrapped
+
+    # Remove standalone / framing tags
+    text = _SSML_STANDALONE_RE.sub(" ", text)
+
+    # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
+    text = strip_all_markup(text)
+
+    # Collapse any introduced horizontal whitespace runs
+    text = re.sub(r"[^\S\r\n]+", " ", text)
+    return text.strip()
+
+
 def strip_expr_markup(text: str) -> str:
     """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
 

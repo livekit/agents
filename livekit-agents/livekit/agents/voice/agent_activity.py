@@ -42,7 +42,7 @@ from ..telemetry import (
     utils as trace_utils,
 )
 from ..tokenize.basic import split_words
-from ..tts._provider_format import strip_all_markup
+from ..tts._provider_format import strip_chat_markup
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
@@ -3327,7 +3327,7 @@ class AgentActivity(RecognitionHooks):
                 _record_user_turn_stages(current_span, _previous_user_metrics)
 
         if forwarded_text and add_to_chat_ctx:
-            clean_text = strip_all_markup(forwarded_text).strip()
+            clean_text = strip_chat_markup(forwarded_text)
             if clean_text:
                 msg = self._agent._chat_ctx.add_message(
                     role="assistant",

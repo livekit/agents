@@ -44,5 +44,23 @@ async def test_say_strips_break_tags_from_chat_ctx() -> None:
 
         messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
         assert len(messages) == 2
+
+        # Break tag without surrounding whitespace preserves word boundary
+        handle4 = session.say('Hello<break time="1s"/>world')
+        await handle4.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 3
+        assert messages[2].text_content == "Hello world"
+
+        # SSML tags like phoneme, prosody, and say-as unwrapped
+        handle5 = session.say(
+            '<speak><prosody rate="fast"><phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato</phoneme></prosody></speak>'
+        )
+        await handle5.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 4
+        assert messages[3].text_content == "tomato"
     finally:
         await session.aclose()
