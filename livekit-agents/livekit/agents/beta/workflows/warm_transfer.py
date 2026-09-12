@@ -250,7 +250,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         except Exception:
             logger.exception("could not dial human agent")
-            err = WarmTransferError("could not dial human agent", code=WarmTransferFailure.DIAL_FAILED)
+            err = WarmTransferError(
+                "could not dial human agent", code=WarmTransferFailure.DIAL_FAILED
+            )
             self._set_result(err)
             return
 
