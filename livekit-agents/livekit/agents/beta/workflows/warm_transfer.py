@@ -145,6 +145,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_sess: AgentSession | None = None
         self._human_agent_failed_fut: asyncio.Future[None] = asyncio.Future()
         self._human_agent_identity = "human-agent-sip"
+        self._destination_disconnect_reason: rtc.DisconnectReason.ValueType | None = None
+        self._destination_call_status: str | None = None
+        self._human_agent_participant_disconnected_cb: Any | None = None
 
         self._setup_origination(
             sip_call_to=sip_call_to,
@@ -207,9 +210,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
         self._sip_headers = sip_headers if is_given(sip_headers) else {}
         self._dtmf = dtmf if is_given(dtmf) else None
-        self._destination_disconnect_reason: rtc.DisconnectReason.ValueType | None = None
-        self._destination_call_status: str | None = None
-        self._human_agent_participant_disconnected_cb: Any | None = None
 
     @staticmethod
     def _format_conversation_history(chat_ctx: NotGivenOr[llm.ChatContext]) -> str:
@@ -248,10 +248,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._human_agent_sess = dial_human_agent_task.result()
             # let the human speak first
 
-        except Exception as e:
+        except Exception:
             logger.exception("could not dial human agent")
             err = WarmTransferError("could not dial human agent", code=WarmTransferFailure.DIAL_FAILED)
-            err.__cause__ = e
             self._set_result(err)
             return
 

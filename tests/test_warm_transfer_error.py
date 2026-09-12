@@ -109,3 +109,24 @@ def test_human_agent_room_close_without_destination_left() -> None:
     assert result.code == WarmTransferFailure.ROOM_CLOSED
     assert result.disconnect_reason == rtc.DisconnectReason.SERVER_SHUTDOWN
     assert "room closed: SERVER_SHUTDOWN" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_twilio_connector_warm_transfer_initializes_destination_state() -> None:
+    from livekit.agents.beta.workflows.warm_transfer import TwilioConnectorWarmTransferTask
+
+    task = TwilioConnectorWarmTransferTask(
+        phone_number="+1234567890",
+        twilio_from_number="+1098765432",
+        twilio_account_sid="AC123",
+        twilio_auth_token="secret",
+    )
+    try:
+        assert hasattr(task, "_destination_disconnect_reason")
+        assert task._destination_disconnect_reason is None
+        assert hasattr(task, "_destination_call_status")
+        assert task._destination_call_status is None
+        assert hasattr(task, "_human_agent_participant_disconnected_cb")
+        assert task._human_agent_participant_disconnected_cb is None
+    finally:
+        await task._background_audio._audio_mixer.aclose()
