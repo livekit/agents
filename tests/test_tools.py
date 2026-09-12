@@ -336,6 +336,125 @@ def test_end_call_tool_ignore_on_enter_flag():
     assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
 
 
+class _FakeEndCallSession:
+    """Minimal session surface for EndCallTool._delayed_session_shutdown."""
+
+    def __init__(self) -> None:
+        self.shutdown_calls: list[bool] = []
+        self._handlers: dict[str, list[Any]] = {}
+
+    def once(self, event: str, callback: Any = None) -> Any:
+        if callback is None:
+
+            def decorator(cb: Any) -> Any:
+                self._handlers.setdefault(event, []).append(cb)
+                return cb
+
+            return decorator
+
+        self._handlers.setdefault(event, []).append(callback)
+        return callback
+
+    def off(self, event: str, callback: Any) -> None:
+        handlers = self._handlers.get(event)
+        if handlers and callback in handlers:
+            handlers.remove(callback)
+
+    def emit(self, event: str, ev: Any) -> None:
+        for callback in list(self._handlers.get(event, [])):
+            callback(ev)
+
+    def shutdown(self, *, drain: bool = True) -> None:
+        self.shutdown_calls.append(drain)
+
+
+@pytest.mark.asyncio
+async def test_delayed_session_shutdown_times_out_when_speech_handle_hangs() -> None:
+    """speech_created fired but playout never finishes must still shut down (#5096)."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call as end_call_mod
+    from livekit.agents.voice.events import SpeechCreatedEvent
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    tool = EndCallTool(delete_room=False)
+    session = _FakeEndCallSession()
+    ctx = SimpleNamespace(session=session)
+
+    task = asyncio.create_task(tool._delayed_session_shutdown(ctx))
+    await asyncio.sleep(0)
+
+    hanging = SpeechHandle.create()
+    session.emit(
+        "speech_created",
+        SpeechCreatedEvent(
+            user_initiated=False,
+            source="generate_reply",
+            speech_handle=hanging,
+        ),
+    )
+
+    # Without a timeout on `await speech_handle`, this never returns — even under
+    # virtual time, because no timer is scheduled for a bare Future.
+    await asyncio.wait_for(task, timeout=end_call_mod.TOOL_REPLY_TIMEOUT + 1.0)
+    assert session.shutdown_calls == [False]
+    assert hanging.interrupted
+
+
+@pytest.mark.asyncio
+async def test_delayed_session_shutdown_times_out_when_speech_created_never_fires() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.beta.tools import end_call as end_call_mod
+
+    tool = EndCallTool(delete_room=False)
+    session = _FakeEndCallSession()
+    ctx = SimpleNamespace(session=session)
+
+    await asyncio.wait_for(
+        tool._delayed_session_shutdown(ctx),
+        timeout=end_call_mod.TOOL_REPLY_TIMEOUT + 1.0,
+    )
+    assert session.shutdown_calls == [False]
+
+
+@pytest.mark.asyncio
+async def test_delayed_session_shutdown_waits_for_completed_speech_handle() -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    from livekit.agents.beta import EndCallTool
+    from livekit.agents.voice.events import SpeechCreatedEvent
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    tool = EndCallTool(delete_room=False)
+    session = _FakeEndCallSession()
+    ctx = SimpleNamespace(session=session)
+
+    task = asyncio.create_task(tool._delayed_session_shutdown(ctx))
+    await asyncio.sleep(0)
+
+    handle = SpeechHandle.create()
+    session.emit(
+        "speech_created",
+        SpeechCreatedEvent(
+            user_initiated=False,
+            source="generate_reply",
+            speech_handle=handle,
+        ),
+    )
+    await asyncio.sleep(0)
+    assert session.shutdown_calls == []
+
+    handle._mark_done()
+    await asyncio.wait_for(task, timeout=1.0)
+    assert session.shutdown_calls == [True]
+
+
 class TestToolExecution:
     def test_function_arguments_to_pydantic_model(self):
         schema1 = function_arguments_to_pydantic_model(mock_tool_1)
