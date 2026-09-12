@@ -128,8 +128,11 @@ class _Speech:
 #   response.created ─► response.output_item.done ×N (function calls) ─► response.completed
 #
 # A response completes with its calls unanswered. Each result is queued with response.item.create,
-# and response.create runs the next response, the continuation, once every call has one; a partial
-# batch is rejected. The voice model speaks the continuation's text on its own.
+# and response.create runs the next response, the continuation, once every call has one. The
+# service checks the whole conversation, not one response: a response.create while any call of any
+# delegation is still open is refused with function_call_outputs_required, so the continuation
+# waits for the last open call wherever it is. The voice model speaks the continuation's text on
+# its own.
 @dataclass
 class _DelegatedResponse:
     """The current response of one delegation, and the tool calls it waits on."""
@@ -137,6 +140,16 @@ class _DelegatedResponse:
     call_ids: set[str] = field(default_factory=set)
     returned: set[str] = field(default_factory=set)
     completed: bool = False
+    rearms: int = 0
+    """How often the service refused this response's continuation and it was re-armed."""
+
+
+# the service's refusal of a response.create sent while a call was open
+_CONTINUATION_REFUSED = "function_call_outputs_required"
+
+# a refusal with every tracked call answered means a call this session never saw (dropped for
+# missing fields, or from before a reconnect); re-arming forever would refuse forever
+_MAX_CONTINUATION_REARMS = 3
 
 
 @dataclass
@@ -293,6 +306,9 @@ class GPTLiveSession(
         # since the framework hands a result back by call id alone
         self._delegated_responses: dict[str | None, _DelegatedResponse] = {}
         self._fnc_call_to_delegation: dict[str, str | None] = {}
+        # continuations sent and not yet started, by response.create event id: the delegation
+        # and the response continued, to re-arm one the service refuses
+        self._continuations_sent: dict[str, tuple[str | None, _DelegatedResponse]] = {}
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -439,6 +455,7 @@ class GPTLiveSession(
         self._speech.clear()
         self._delegated_responses.clear()
         self._fnc_call_to_delegation.clear()
+        self._continuations_sent.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -727,7 +744,20 @@ class GPTLiveSession(
         d_id = envelope.delegation_id
 
         if event.type == "response.created":
-            self._delegated_responses[d_id] = _DelegatedResponse()
+            # the continuation this delegation was waiting on, if any, has started
+            for event_id, (sent_d_id, _) in list(self._continuations_sent.items()):
+                if sent_d_id == d_id:
+                    del self._continuations_sent[event_id]
+            created = _DelegatedResponse()
+            if (previous := self._delegated_responses.get(d_id)) is not None:
+                # the calls the replaced response still waits on are open on the backend all
+                # the same, so the new response waits on them too
+                created.call_ids |= previous.call_ids - previous.returned
+                # its answered calls are done with; nothing routes to them any more
+                for call_id in previous.call_ids & previous.returned:
+                    self._fnc_call_to_delegation.pop(call_id, None)
+                created.rearms = previous.rearms
+            self._delegated_responses[d_id] = created
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -802,19 +832,64 @@ class GPTLiveSession(
             if (pending := self._delegated_responses.pop(d_id, None)) is not None:
                 for call_id in pending.call_ids:
                     self._fnc_call_to_delegation.pop(call_id, None)
+                # its open calls held the barrier: release whatever waited behind them
+                self._maybe_continue_response(d_id)
 
     def _maybe_continue_response(self, delegation_id: str | None) -> None:
-        # response.create runs the continuation, and only once the response has finished asking
-        # and every call it made has its answer; a partial batch is rejected
-        pending = self._delegated_responses.get(delegation_id)
-        if pending is None or not pending.completed or not pending.call_ids <= pending.returned:
-            return
-        del self._delegated_responses[delegation_id]
-        if not pending.call_ids:
-            return
-        for call_id in pending.call_ids:
-            self._fnc_call_to_delegation.pop(call_id, None)
-        self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
+        # response.create runs the continuation, and only once no call in the conversation is
+        # open: the service refuses a partial batch, and it counts every delegation's calls, so a
+        # fast response's continuation waits for a slow one's tool. Then every response that has
+        # finished asking continues, oldest first.
+        for pending in self._delegated_responses.values():
+            if not pending.call_ids <= pending.returned:
+                return
+        ready = [(d_id, p) for d_id, p in self._delegated_responses.items() if p.completed]
+        for d_id, pending in ready:
+            del self._delegated_responses[d_id]
+            for call_id in pending.call_ids:
+                self._fnc_call_to_delegation.pop(call_id, None)
+            if not pending.call_ids:
+                continue  # answered in text: nothing to continue
+            event_id = utils.shortuuid("response_create_")
+            self._continuations_sent[event_id] = (d_id, pending)
+            self.send_event(types.ResponseCreateEvent(event_id=event_id))
+
+    def _rearm_refused_continuation(self, error: types.ErrorBody) -> bool:
+        """Put a response whose continuation the service refused back behind the barrier.
+
+        The refusal says a call is still open; the next output to land sends the continuation
+        again. Bounded: a call this session never tracked would be refused forever.
+        """
+        if error.code != _CONTINUATION_REFUSED or not error.client_event_id:
+            return False
+        sent = self._continuations_sent.pop(error.client_event_id, None)
+        if sent is None:
+            return False
+        d_id, pending = sent
+        if pending.rearms >= _MAX_CONTINUATION_REARMS:
+            logger.error(
+                "gpt-live refused the same continuation repeatedly; a tool call this session "
+                "never tracked is open on the backend, giving up on it",
+                extra={"delegation_id": d_id, "lk.pii.call_ids": sorted(pending.call_ids)},
+            )
+            return False
+        pending.rearms += 1
+        logger.warning(
+            "gpt-live refused a continuation while a tool call was still open; re-armed",
+            extra={"delegation_id": d_id, "lk.pii.call_ids": sorted(pending.call_ids)},
+        )
+        current = self._delegated_responses.get(d_id)
+        if current is None:
+            self._delegated_responses[d_id] = pending
+        else:
+            # a newer response under the same delegation: one continuation serves both
+            current.call_ids |= pending.call_ids
+            current.returned |= pending.returned
+            current.rearms = max(current.rearms, pending.rearms)
+        # the refusal may arrive after the output that opened the barrier: check now rather
+        # than wait for an output that may never come
+        self._maybe_continue_response(d_id)
+        return True
 
     # metrics and errors
 
@@ -861,6 +936,8 @@ class GPTLiveSession(
         )
 
     def _handle_error(self, error: types.ErrorBody) -> None:
+        if self._rearm_refused_continuation(error):
+            return
         logger.error(
             "gpt-live returned an error",
             extra={"lk.pii.error": error.model_dump(exclude_none=True)},

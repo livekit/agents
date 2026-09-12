@@ -987,6 +987,281 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
         await model.aclose()
 
 
+def _error(client_event_id: str, code: str = "function_call_outputs_required") -> dict[str, Any]:
+    return {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "code": code,
+            "message": "Submit the pending function call outputs before response.create.",
+            "client_event_id": client_event_id,
+        },
+    }
+
+
+async def _answered(session: GPTLiveSession, call_id: str) -> None:
+    await session._append_items(
+        [llm.FunctionCallOutput(call_id=call_id, name="_get_weather", output="ok", is_error=False)]
+    )
+    await asyncio.sleep(0.05)
+
+
+async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The service refuses response.create while any delegation's call is open, so a response
+    whose own calls are answered waits for the others; then each continues, oldest first."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("slow")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _function_call_done("fast")))
+        session._handle_event(_response_event("d2", _completed("resp_2")))
+
+        await _answered(session, "fast")
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+        assert set(session._delegated_responses) == {"d1", "d2"}
+
+        await _answered(session, "slow")
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+            "response.create",
+        ]
+        assert not session._delegated_responses and not session._fnc_call_to_delegation
+        assert len(session._continuations_sent) == 2
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        assert not session._continuations_sent
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_text_only_response_neither_blocks_nor_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _completed("resp_2")))
+        await _answered(session, "call_1")
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
+        assert not session._delegated_responses
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_refused_continuation_is_rearmed_and_sent_with_the_next_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    errors: list[Any] = []
+    session.on("error", errors.append)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        await _answered(session, "call_1")
+        [sent] = [e for e in ws.sent if e["type"] == "response.create"]
+
+        # a call the barrier had not seen is tracked now, and the service refuses
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _function_call_done("late")))
+        session._handle_event(_error(sent["event_id"]))
+        assert not errors
+        assert session._delegated_responses["d1"].rearms == 1
+
+        session._handle_event(_response_event("d2", _completed("resp_2")))
+        await _answered(session, "late")
+        assert len([e for e in ws.sent if e["type"] == "response.create"]) == 3
+        assert not session._delegated_responses
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_failed_blocker_releases_the_continuations_behind_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that fails with its call unanswered no longer holds the barrier."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("ready")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _function_call_done("open")))
+        await _answered(session, "ready")
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+
+        session._handle_event(
+            _response_event("d2", {"type": "response.failed", "response": {"id": "resp_2"}})
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
+        assert not session._delegated_responses and not session._fnc_call_to_delegation
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_refusal_arriving_after_the_last_output_is_retried_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sends and receives are concurrent: the output that opens the barrier can land before
+    the refusal of a continuation sent just earlier. The re-arm checks the barrier itself."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        await _answered(session, "call_1")
+        [sent] = [e for e in ws.sent if e["type"] == "response.create"]
+
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _function_call_done("late")))
+        session._handle_event(_response_event("d2", _completed("resp_2")))
+        await _answered(session, "late")  # d2 continues; d1's refusal is still in transit
+        assert len([e for e in ws.sent if e["type"] == "response.create"]) == 2
+
+        session._handle_event(_error(sent["event_id"]))
+        await asyncio.sleep(0.05)
+        continuations = [e for e in ws.sent if e["type"] == "response.create"]
+        assert len(continuations) == 3
+        assert continuations[-1]["event_id"] != sent["event_id"]
+        assert "d1" not in session._delegated_responses
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_new_response_under_a_delegation_inherits_its_open_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """response.created replaces the delegation's entry; the replaced response's open calls
+    are still open on the backend, so the new response waits on them."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("slow")))
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("fast")))
+        session._handle_event(_response_event("d1", _completed("resp_2")))
+        await _answered(session, "fast")
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+        await _answered(session, "slow")
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert not session._delegated_responses and not session._fnc_call_to_delegation
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_the_rearm_budget_follows_a_delegation_into_its_next_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A re-armed response replaced by a newer one under the same delegation hands its count
+    over, so a delegation that keeps opening responses is still bounded."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        await _answered(session, "call_1")
+        [sent] = [e for e in ws.sent if e["type"] == "response.create"]
+        # another delegation's open call holds the barrier, so the re-arm cannot resend
+        session._handle_event(_response_event("d2", {"type": "response.created"}))
+        session._handle_event(_response_event("d2", _function_call_done("open")))
+        session._handle_event(_error(sent["event_id"]))
+        assert session._delegated_responses["d1"].rearms == 1
+
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        assert session._delegated_responses["d1"].rearms == 1
+        assert not session._delegated_responses["d1"].call_ids, "answered calls do not carry"
+        assert "call_1" not in session._fnc_call_to_delegation, "nor does their routing"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_continuation_refused_repeatedly_is_given_up_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call the session never tracked keeps the service refusing: after the re-arm budget the
+    refusal is reported like any other error."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    errors: list[Any] = []
+    session.on("error", errors.append)
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("d1", _completed("resp_1")))
+        await _answered(session, "call_1")
+        for n in range(gpt_live_model._MAX_CONTINUATION_REARMS + 1):
+            [event_id] = [
+                eid for eid, (d_id, _) in session._continuations_sent.items() if d_id == "d1"
+            ]
+            session._handle_event(_error(event_id))
+            if n < gpt_live_model._MAX_CONTINUATION_REARMS:
+                assert not errors
+                session._handle_event(_response_event("d2", {"type": "response.created"}))
+                session._handle_event(_response_event("d2", _function_call_done(f"c{n}")))
+                session._handle_event(_response_event("d2", _completed(f"resp_{n}")))
+                await _answered(session, f"c{n}")
+        assert len(errors) == 1
+        assert "d1" not in session._delegated_responses
+        assert [e for e in ws.sent if e["type"] == "error"] == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "reason",
     ["close_requested", "expired", "content", "remote_hangup", "connection_lost", None],
