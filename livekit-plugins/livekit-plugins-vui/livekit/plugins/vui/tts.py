@@ -175,8 +175,17 @@ class TTS(tts.TTS):
         )
         text = prompt_transcript(path)
         if not text:
-            from vui.inference import asr  # openai-whisper: `vui-tts[server]`
-
+            # Transcribing the reference needs openai-whisper, which is part of
+            # the `vui-tts[server]` extra, not of this plugin's dependencies.
+            try:
+                from vui.inference import asr
+            except ImportError as e:
+                raise ValueError(
+                    f"{path}: no transcript found. Put the exact transcript in a sibling "
+                    f"{path.with_suffix('.txt').name}, bake a prompt .safetensors with Vui's "
+                    "scripts/build_prompts.py, or install `vui-tts[server]` for automatic "
+                    "transcription."
+                ) from e
             text = asr(wav_16k)
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         enc = QwenCodecEncoder.from_pretrained().to(dev).float().eval()
@@ -231,6 +240,11 @@ class TTS(tts.TTS):
     async def _render(self, text: str, output_emitter: tts.AudioEmitter, *, rewind: bool) -> None:
         """Render ``text`` on the worker thread, pushing PCM into ``output_emitter``.
 
+        The caller must hold ``self._lock``: the engine has one conversation
+        row, so a request owns it from its first sentence to its rewind — a
+        ``ChunkedStream`` for one call, a ``SynthesizeStream`` for its whole
+        life — and other requests queue behind it rather than interleave.
+
         With ``rewind`` the KV cache goes back to the end of the voice prompt
         afterwards (one-shot synthesis); without it the sentence stays in
         context so the next one is conditioned on it (streaming input).
@@ -241,24 +255,22 @@ class TTS(tts.TTS):
         def on_pcm(pcm: bytes) -> None:
             loop.call_soon_threadsafe(output_emitter.push, pcm)
 
-        async with self._lock:
-            fut = loop.run_in_executor(
-                self._executor, self._render_blocking, text, cancel, on_pcm, rewind
-            )
-            try:
-                await asyncio.shield(fut)
-            except asyncio.CancelledError:
-                cancel.set()
-                await fut
-                raise
+        fut = loop.run_in_executor(
+            self._executor, self._render_blocking, text, cancel, on_pcm, rewind
+        )
+        try:
+            await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            cancel.set()
+            await fut
+            raise
 
     async def _rewind(self) -> None:
-        """Rewind the row to the voice prompt (on the worker thread)."""
+        """Rewind the row to the voice prompt (on the worker thread; caller holds the lock)."""
         if self._row is None:
             return
         loop = asyncio.get_running_loop()
-        async with self._lock:
-            await loop.run_in_executor(self._executor, self._row.rewind)
+        await loop.run_in_executor(self._executor, self._row.rewind)
 
     def prewarm(self) -> None:
         """Load the checkpoint and the voice prompt ahead of the first request."""
@@ -292,7 +304,8 @@ class ChunkedStream(tts.ChunkedStream):
             num_channels=NUM_CHANNELS,
             mime_type="audio/pcm",
         )
-        await self._tts._render(self._input_text, output_emitter, rewind=True)
+        async with self._tts._lock:
+            await self._tts._render(self._input_text, output_emitter, rewind=True)
         output_emitter.flush()
 
 
@@ -328,21 +341,30 @@ class SynthesizeStream(tts.SynthesizeStream):
             sent_stream.end_input()
 
         async def _render_task() -> None:
-            segment_open = False
+            # Own the row from the first sentence to the end of the stream:
+            # every sentence builds on the previous ones, so no other request
+            # may render (or rewind) in between. The lock is taken at the
+            # first sentence, not at construction, so a stream still waiting
+            # for text doesn't block one-shot calls.
+            held = False
             try:
                 async for ev in sent_stream:
                     sentence = ev.token.strip()
                     if not sentence:
                         continue
-                    if not segment_open:
+                    if not held:
+                        await self._tts._lock.acquire()
+                        held = True
                         output_emitter.start_segment(segment_id=utils.shortuuid())
-                        segment_open = True
-                    self._mark_started()
+                        self._mark_started()
                     await self._tts._render(sentence, output_emitter, rewind=False)
             finally:
-                if segment_open:
-                    output_emitter.end_segment()
-                await self._tts._rewind()
+                if held:
+                    try:
+                        output_emitter.end_segment()
+                        await self._tts._rewind()
+                    finally:
+                        self._tts._lock.release()
 
         tasks = [
             asyncio.create_task(_input_task()),
