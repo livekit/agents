@@ -268,4 +268,3 @@ async def test_agent_tts_text_transforms_resolution_in_session() -> None:
         assert activity.tts_text_transforms == ["filter_emoji"]
     finally:
         await session.aclose()
-
