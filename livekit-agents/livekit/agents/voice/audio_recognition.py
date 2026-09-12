@@ -1467,6 +1467,17 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
+                # Start a missing prediction if the silence threshold was never
+                # crossed during INFERENCE_DONE events (can happen when the VAD
+                # min_silence_duration equals the detector minimum due to the
+                # pre-increment event ordering in the VAD loop).
+                if (
+                    self._turn_detector_stream is not None
+                    and self._turn_detector_prediction_fut is None
+                ):
+                    self._turn_detector_prediction_fut = (
+                        self._turn_detector_stream.predict()
+                    )
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 
