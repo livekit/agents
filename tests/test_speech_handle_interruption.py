@@ -30,10 +30,13 @@ async def test_wait_for_playout_unblocks_immediately_on_interruption() -> None:
     assert elapsed < INTERRUPTION_TIMEOUT
     assert handle.interrupted is True
     assert handle.done() is False
-    assert handle.exception() is None
+    with pytest.raises(asyncio.InvalidStateError):
+        handle.exception()
 
     # Cleanup timer handle
     handle._mark_done()
+    assert handle.done() is True
+    assert handle.exception() is None
 
 
 async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> None:
@@ -41,7 +44,8 @@ async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> 
     handle.interrupt()
     assert handle.interrupted is True
     assert handle.done() is False
-    assert handle.exception() is None
+    with pytest.raises(asyncio.InvalidStateError):
+        handle.exception()
 
     start = time.perf_counter()
     await asyncio.wait_for(handle.wait_for_playout(), timeout=1.0)
@@ -49,6 +53,8 @@ async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> 
 
     assert elapsed < 0.1
     handle._mark_done()
+    assert handle.done() is True
+    assert handle.exception() is None
 
 
 async def test_await_handle_unblocks_immediately_on_interruption() -> None:
@@ -80,12 +86,14 @@ async def test_await_handle_unblocks_immediately_on_interruption() -> None:
     assert result is handle
     assert handle.interrupted is True
     assert handle.done() is False
-    assert handle.exception() is None
+    with pytest.raises(asyncio.InvalidStateError):
+        handle.exception()
     assert callback_called is False  # callbacks are tied to actual _done_fut finalization
 
     handle._mark_done()
     await asyncio.sleep(0)
     assert handle.done() is True
+    assert handle.exception() is None
     assert callback_called is True
 
 

@@ -72,6 +72,7 @@ class SpeechHandle:
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
+        self._interrupt_callbacks: set[Callable[[], None]] = set()
 
         def _on_done(_: asyncio.Future[None]) -> None:
             for cb in list(self._done_callbacks):
@@ -193,7 +194,7 @@ class SpeechHandle:
         Returns:
             BaseException | None: The error the generation failed with, or None.
         """
-        if not self.done() and not self.interrupted:
+        if not self.done():
             raise asyncio.InvalidStateError("SpeechHandle is not done yet")
 
         return self._error
@@ -259,10 +260,7 @@ class SpeechHandle:
             )
 
         if self.interrupted or self._interrupt_fut.done():
-            curr = asyncio.current_task()
-            running_tasks = [t for t in self._tasks if not t.done() and t is not curr]
-            if running_tasks:
-                await asyncio.wait(running_tasks)
+            await asyncio.sleep(0)
 
     def __await__(self) -> Generator[None, None, SpeechHandle]:
         async def _await_impl() -> SpeechHandle:
@@ -298,6 +296,12 @@ class SpeechHandle:
         if not self._interrupt_fut.done():
             self._interrupt_fut.set_result(None)
 
+            for cb in list(self._interrupt_callbacks):
+                try:
+                    cb()
+                except Exception as e:
+                    logger.warning(f"error in interrupt callback: {cb}", exc_info=e)
+
             def _on_timeout() -> None:
                 logger.error(
                     "speech not done in time after interruption, cancelling the speech arbitrarily.",
@@ -312,6 +316,12 @@ class SpeechHandle:
             )
 
         return self
+
+    def _add_interrupt_callback(self, callback: Callable[[], Any]) -> None:
+        self._interrupt_callbacks.add(callback)
+
+    def _remove_interrupt_callback(self, callback: Callable[[], Any]) -> None:
+        self._interrupt_callbacks.discard(callback)
 
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
