@@ -12,6 +12,8 @@ pip install livekit-plugins-vui
 
 Python 3.12. Weights (`vui-nano-1.1`, ~1.2 GB) and the shipped voice prompts download from Hugging Face on first use; call `tts.prewarm()` to do that ahead of the first request.
 
+On CUDA, install a [flash-attn](https://github.com/Dao-AILab/flash-attention) wheel matching your torch/CUDA for full speed (~10× realtime on a 5090); without it the engine uses PyTorch's SDPA fallback — same output, ~2.7× realtime. Apple Silicon uses MLX and needs nothing extra.
+
 ## Usage
 
 ```python
