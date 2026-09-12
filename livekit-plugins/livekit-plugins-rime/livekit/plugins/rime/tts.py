@@ -293,13 +293,10 @@ class TTS(tts.TTS):
                 model,
                 allow_custom_endpoint=allow_custom_endpoint,
             )
-            model_is_explicit = resolved_model != MODEL_CODA
         elif is_given(model):
             resolved_model = model
-            model_is_explicit = True
         else:
             resolved_model = MODEL_CODA
-            model_is_explicit = False
 
         _check_time_scale_factor_supported(resolved_model, time_scale_factor)
         if (
@@ -330,9 +327,7 @@ class TTS(tts.TTS):
         self._allow_custom_endpoint = allow_custom_endpoint
 
         if not is_given(speaker):
-            if not model_is_explicit:
-                speaker = "astra"
-            elif is_mist_model(resolved_model):
+            if is_mist_model(resolved_model):
                 speaker = DefaultMistVoice
             elif resolved_model == MODEL_CODA:
                 speaker = DefaultCodaVoice
@@ -416,12 +411,10 @@ class TTS(tts.TTS):
             "speaker": self._opts.speaker,
             "modelId": self._opts.model,
             "audioFormat": "pcm",
+            "samplingRate": self.sample_rate,
             "segment": self._segment,
             **_model_params(self._opts),
         }
-        requested_sample_rate = self._opts.sample_rate
-        if is_given(requested_sample_rate):
-            params["samplingRate"] = requested_sample_rate
         encoded = {
             k: ("true" if v else "false") if isinstance(v, bool) else v for k, v in params.items()
         }

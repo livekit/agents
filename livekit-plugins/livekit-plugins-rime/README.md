@@ -27,7 +27,7 @@ from livekit.plugins import rime
 
 tts = rime.TTS(
     websocket_url="wss://api.rime.ai/coda/ws",
-    speaker="astra",
+    speaker="lyra",
     api_key=os.environ["RIME_API_KEY"],
 )
 ```
@@ -55,10 +55,15 @@ The `websocket_protocol` option accepts `binary` or `json`. It defaults to `bina
 `rime.v1.binary` subprotocol and protobuf binary frames. Set `websocket_protocol="json"` to use the
 `rime.v1.json` subprotocol and canonical proto3 JSON text frames.
 
-The speaker defaults to `astra` for Coda and `cove` for Mist. The plugin uses
+The speaker defaults to `lyra` for Coda and `cove` for Mist across all transports. This also
+applies when the model is omitted and defaults to Coda. An explicit speaker is preserved.
+The plugin uses
 `livekit.agents.tokenize.blingfire.SentenceTokenizer` by default and configures it to emit one
 complete sentence at a time. Pass `tokenizer` to select another LiveKit sentence tokenizer. A
 custom tokenizer must emit complete sentence units that are safe for Rime text normalization.
+
+The plugin sends the resolved sample rate in every HTTP, WS3, and WebSocket v1 request so it
+matches the audio emitter's rate. Pass `sample_rate` to override the model default.
 
 The public WebSocket v1 endpoint currently supports Coda. The future Mist route will use
 `/mist/ws`, not `/mistv3/ws`.

@@ -104,18 +104,40 @@ def test_model_capabilities(
     assert supports_reduce_latency(model) is expected_reduce_latency
 
 
-def test_model_and_speaker_defaults() -> None:
-    from livekit.plugins.rime import TTS
+@pytest.mark.parametrize(
+    ("options", "expected_model", "expected_speaker"),
+    [
+        pytest.param({}, "coda", "lyra", id="http-default"),
+        pytest.param({"model": "coda"}, "coda", "lyra", id="http-coda"),
+        pytest.param({"use_websocket": True}, "coda", "lyra", id="ws3-default"),
+        pytest.param({"use_websocket": True, "model": "coda"}, "coda", "lyra", id="ws3-coda"),
+        pytest.param(
+            {"websocket_url": "wss://api.rime.ai/coda/ws"}, "coda", "lyra", id="v1-default"
+        ),
+        pytest.param(
+            {"websocket_url": "wss://api.rime.ai/ws", "model": "coda"},
+            "coda",
+            "lyra",
+            id="v1-dedicated",
+        ),
+        pytest.param({"model": "mistv3"}, "mistv3", "cove", id="http-mist"),
+        pytest.param({"use_websocket": True, "model": "mistv3"}, "mistv3", "cove", id="ws3-mist"),
+        pytest.param(
+            {"websocket_url": "wss://api.rime.ai/mist/ws"}, "mistv3", "cove", id="v1-mist"
+        ),
+    ],
+)
+@pytest.mark.parametrize("speaker", [None, "custom-voice"], ids=["default", "explicit"])
+def test_model_and_speaker_defaults(
+    options: dict[str, Any], expected_model: str, expected_speaker: str, speaker: str | None
+) -> None:
+    if speaker is not None:
+        options = {**options, "speaker": speaker}
+    tts = TTS(api_key="test-key", **options)
 
-    default_tts = TTS(api_key="test-key")
-    explicit_coda_tts = TTS(api_key="test-key", model="coda")
-
-    assert default_tts.model == "coda"
-    assert default_tts._opts.speaker == "astra"
-    assert default_tts.sample_rate == 24000
-    assert explicit_coda_tts.model == "coda"
-    assert explicit_coda_tts._opts.speaker == "lyra"
-    assert explicit_coda_tts.sample_rate == 24000
+    assert tts.model == expected_model
+    assert tts._opts.speaker == (speaker if speaker is not None else expected_speaker)
+    assert tts.sample_rate == 24000
 
 
 def test_coda_request_controls() -> None:
@@ -165,7 +187,7 @@ def test_sample_rate_uses_model_service_default(model: str, expected_sample_rate
     tts = TTS(api_key="test-key", model=model, use_websocket=True)
 
     assert tts.sample_rate == expected_sample_rate
-    assert "samplingRate" not in parse_qs(urlparse(tts._ws_url()).query)
+    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == [str(expected_sample_rate)]
 
 
 def test_explicit_sample_rate_is_sent_and_preserved_across_model_updates() -> None:
@@ -189,11 +211,11 @@ def test_sample_rate_tracks_service_default_across_model_updates() -> None:
 
     tts.update_options(model="mistv2")
     assert tts.sample_rate == 22050
-    assert "samplingRate" not in parse_qs(urlparse(tts._ws_url()).query)
+    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["22050"]
 
     tts.update_options(model="mistv3")
     assert tts.sample_rate == 24000
-    assert "samplingRate" not in parse_qs(urlparse(tts._ws_url()).query)
+    assert parse_qs(urlparse(tts._ws_url()).query)["samplingRate"] == ["24000"]
 
 
 async def test_chunked_stream_sends_default_mistv2_sample_rate() -> None:
@@ -728,11 +750,11 @@ async def test_ws3_errors_do_not_expose_provider_or_transport_data(
 async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -> None:
     from livekit.plugins.rime import TTS
 
-    request_models: list[str] = []
+    request_options: list[tuple[str, str | None]] = []
     coda_closed = asyncio.Event()
 
     async def websocket(request: web.Request) -> web.WebSocketResponse:
-        request_models.append(request.query["modelId"])
+        request_options.append((request.query["modelId"], request.query.get("samplingRate")))
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for message in ws:
@@ -798,7 +820,7 @@ async def test_ws3_stream_keeps_options_after_parent_update(stream_count: int) -
     finally:
         await runner.cleanup()
 
-    assert sorted(request_models) == ["coda"] * stream_count + ["mistv2"]
+    assert sorted(request_options) == [("coda", "24000")] * stream_count + [("mistv2", "22050")]
     assert {event.frame.sample_rate for event in coda_events} == {24000}
     assert {event.frame.sample_rate for event in mist_events} == {22050}
     assert [metric.metadata.model_name for metric in metrics] == ["coda"] * stream_count + [
@@ -1127,7 +1149,7 @@ async def test_v1_streams_audio_before_end_and_maps_supported_start_options(
     ]
     start = server.requests[0]["start"]
     assert start == {
-        "speaker": "astra",
+        "speaker": "lyra",
         "language": "eng",
         "text": "",
         "audioParameters": {
@@ -1549,7 +1571,7 @@ async def test_v1_stream_snapshots_options() -> None:
         await stream.aclose()
         await tts.aclose()
 
-    assert server.requests[0]["start"]["speaker"] == "astra"
+    assert server.requests[0]["start"]["speaker"] == "lyra"
 
 
 async def test_v1_stream_snapshots_websocket_url() -> None:
