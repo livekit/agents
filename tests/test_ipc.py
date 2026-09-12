@@ -610,6 +610,79 @@ async def test_job_graceful_shutdown():
     assert start_args.shutdown_counter.value == 1
 
 
+def _create_thread_proc(
+    *,
+    close_timeout: float,
+    job_entrypoint_fnc: Callable[[JobContext], object] = _job_entrypoint,
+) -> tuple[ipc.job_thread_executor.ThreadJobExecutor, _StartArgs]:
+    # the runner is a thread of the test process, so the mp primitives of _StartArgs are plain
+    # in-process synchronization here
+    start_args = _new_start_args(mp.get_context("spawn"))
+    loop = asyncio.get_running_loop()
+    proc = ipc.job_thread_executor.ThreadJobExecutor(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=job_entrypoint_fnc,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        inference_executor=None,
+        initialize_timeout=20.0,
+        close_timeout=close_timeout,
+        session_end_timeout=300.0,
+        ping_interval=2.5,
+        high_ping_threshold=1.0,
+        http_proxy=None,
+        loop=loop,
+    )
+    proc.user_arguments = start_args
+    return proc, start_args
+
+
+async def test_thread_shutdown_no_job():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    await proc.start()
+    await proc.initialize()
+    # bounded: a thread runner can't be killed, so a regression here would otherwise hang
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0, "shutdown_cb isn't called when there is no job"
+
+
+async def test_thread_shutdown_no_job_join_before_ack_is_read():
+    """Regression test: an idle thread runner acks the ShutdownRequest, sends ShuttingDown
+    and exits at once. When the loop is busy at that moment, the join is observed before those
+    two messages are read, and aclose() used to cancel their only reader: the ack was reported
+    missing after close_timeout, and the wait for ShuttingDown never returned."""
+    proc, start_args = _create_thread_proc(close_timeout=2.0)
+    await proc.start()
+    await proc.initialize()
+
+    close_task = asyncio.create_task(proc.aclose())
+    await asyncio.sleep(0)  # aclose() has sent the ShutdownRequest and awaits the ack
+    time.sleep(0.5)  # block the loop while the runner acks, sends ShuttingDown and exits
+
+    started_at = time.monotonic()
+    await asyncio.wait_for(close_task, timeout=5.0)
+    assert time.monotonic() - started_at < 1.0, "aclose() waited for an ack that was sent"
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 0
+
+
+async def test_thread_job_graceful_shutdown():
+    proc, start_args = _create_thread_proc(close_timeout=10.0)
+    start_args.shutdown_simulate_work_time = 0.3
+    await proc.start()
+    await proc.initialize()
+
+    fake_job = _generate_fake_job()
+    await proc.launch_job(fake_job)
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert start_args.shutdown_counter.value == 1
+
+
 def test_log_queue_drains_before_stop():
     """All log records must be received by the listener even when stop() is
     called right after the sender closes its end.  This reproduces a race where
