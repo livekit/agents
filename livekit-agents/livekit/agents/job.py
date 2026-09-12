@@ -41,6 +41,7 @@ from .observability import Tagger
 from .telemetry import (
     _upload_session_report,
     otel_metrics,
+    rpc as rpc_tracing,
     session_context,
     trace_types,
     utils as telemetry_utils,
@@ -719,6 +720,7 @@ class JobContext:
                         ),
                     }
                 )
+            rpc_tracing.install(self._room.local_participant)
             self._on_connect()
 
             # Always registered: the callback ignores participants without the

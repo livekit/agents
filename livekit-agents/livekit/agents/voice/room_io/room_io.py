@@ -10,7 +10,7 @@ from livekit import api, rtc
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
-from ...telemetry import trace_types, tracer, utils as telemetry_utils
+from ...telemetry import rpc as rpc_tracing, trace_types, tracer, utils as telemetry_utils
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -422,8 +422,12 @@ class RoomIO:
             "connection_state_changed",
             {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
         )
-        if self._room.isconnected() and not self._room_connected_fut.done():
-            self._room_connected_fut.set_result(None)
+        if self._room.isconnected():
+            # on every connect and reconnect; install is idempotent (one interceptor
+            # instance, deduped by the SDK), so JobContext.connect() installing too is fine
+            rpc_tracing.install(self._room.local_participant)
+            if not self._room_connected_fut.done():
+                self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
