@@ -32,6 +32,7 @@ from livekit.agents.telemetry import session_context, set_tracer_provider, trace
 from livekit.protocol import agent as agent_proto
 
 from .fake_session import FakeActions, create_session, run_session
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -375,6 +376,8 @@ async def test_sip_participant_attributes_copied_with_only_the_number_tagged(
     assert "lk.sip.unrelated" not in attrs
     [linked] = [e for e in root.events if e.name == "participant_linked"]
     assert (linked.attributes or {})[trace_types.ATTR_PARTICIPANT_KIND] == "PARTICIPANT_KIND_SIP"
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
 # -- startup spans are never current --
@@ -505,3 +508,5 @@ async def test_session_lifecycle_spans_and_events(span_exporter: InMemorySpanExp
     assert any(new == "speaking" for _, new in transitions)
     user_states = [e for e in root.events if e.name == "user_state_changed"]
     assert any((e.attributes or {})[trace_types.ATTR_NEW_STATE] == "speaking" for e in user_states)
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())

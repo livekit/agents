@@ -21,6 +21,7 @@ from livekit.agents.llm import FunctionToolCall
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 
 from .fake_session import FakeActions, create_session, run_session
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -107,6 +108,8 @@ async def test_tool_call_is_one_agent_turn(span_exporter: InMemorySpanExporter) 
     for child in (tool, tts, speaking):
         assert child.end_time is not None and turn.end_time is not None
         assert turn.start_time <= child.start_time and child.end_time <= turn.end_time
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
 async def test_plain_reply_is_one_generation(span_exporter: InMemorySpanExporter) -> None:
@@ -126,6 +129,8 @@ async def test_plain_reply_is_one_generation(span_exporter: InMemorySpanExporter
     assert attrs[trace_types.ATTR_AGENT_TURN_ID] == f"{attrs[trace_types.ATTR_SPEECH_ID]}_1"
     assert len([e for e in turn.events if e.name == "generation"]) == 1
     assert trace_types.ATTR_AGENT_PARENT_TURN_ID not in attrs
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
 def test_discarded_preemptive_generation_hands_its_turn_to_the_successor(

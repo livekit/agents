@@ -24,6 +24,7 @@ from .fake_io import FakeAudioInput
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_session import FakeActions, create_session, run_session
 from .fake_stt import FakeSTT
+from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -85,6 +86,8 @@ async def test_barge_in_records_source_and_playout_position(
     for turn in _spans(span_exporter, "agent_turn"):
         if turn is not interrupted[0]:
             assert trace_types.ATTR_INTERRUPTION_SOURCE not in (turn.attributes or {})
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
 # -- agent handoff --
@@ -166,6 +169,8 @@ async def test_update_agent_span_groups_the_handoff(span_exporter: InMemorySpanE
         if s.parent is not None and s.parent.span_id == session_start.context.span_id
     ]
     assert len(initial) == 1
+    # the whole tree, not just the edges this test names (tests/trace_schema.py)
+    assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
 # -- fallback adapter events --
