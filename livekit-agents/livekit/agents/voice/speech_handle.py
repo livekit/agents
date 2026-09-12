@@ -137,6 +137,10 @@ class SpeechHandle:
         interruption requests until re-enabled. If the handle is already
         interrupted, clearing interruptions is not allowed.
 
+        While one or more ``hold_interruptions()`` holders are active, assignments
+        update the value restored after the final release; the effective
+        interruption state stays False until then.
+
         Args:
             value (bool): True to allow interruptions, False to disallow.
 
@@ -147,6 +151,11 @@ class SpeechHandle:
             raise RuntimeError(
                 "Cannot set allow_interruptions to False, the SpeechHandle is already interrupted"
             )
+
+        if self._interruption_holds > 0:
+            # Keep the hold effective; remember what to restore on final release.
+            self._interruption_holds_restore = value
+            return
 
         self._allow_interruptions = value
 
@@ -172,6 +181,25 @@ class SpeechHandle:
             # a forced interrupt lands regardless of the hold, and leaves nothing to restore
             with contextlib.suppress(RuntimeError):
                 self.allow_interruptions = self._interruption_holds_restore
+
+    @contextlib.contextmanager
+    def hold_interruptions(self) -> Generator[SpeechHandle, None, None]:
+        """Temporarily disallow interruptions on this speech (counted, restoring).
+
+        Nested or overlapping holders compose: the first holder remembers the previous
+        ``allow_interruptions`` value and the last release restores it. Assignments to
+        ``allow_interruptions`` during a hold update that restored value; the effective
+        state stays False until the final release.
+        ``interrupt(force=True)`` still cuts through a hold.
+
+        Yields:
+            SpeechHandle: this handle.
+        """
+        self._hold_interruptions()
+        try:
+            yield self
+        finally:
+            self._release_interruptions()
 
     @property
     def chat_items(self) -> list[llm.ChatItem]:
