@@ -4,7 +4,8 @@ import asyncio
 import contextlib
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import quoteattr
 
 from livekit import api, rtc
@@ -30,6 +31,32 @@ from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
     from ...voice.turn import TurnDetectionMode
+
+
+class WarmTransferFailure(str, Enum):
+    DIAL_FAILED = "dial_failed"
+    DESTINATION_LEFT = "destination_left"
+    DECLINED = "declined"
+    VOICEMAIL = "voicemail"
+    ROOM_CLOSED = "room_closed"
+    CALLER_LEFT = "caller_left"
+
+
+class WarmTransferError(ToolError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: WarmTransferFailure,
+        disconnect_reason: rtc.DisconnectReason.ValueType | None = None,
+        call_status: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.disconnect_reason = disconnect_reason
+        self.call_status = call_status
+        self.reason = reason
 
 
 @dataclass
@@ -180,6 +207,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         )
         self._sip_headers = sip_headers if is_given(sip_headers) else {}
         self._dtmf = dtmf if is_given(dtmf) else None
+        self._destination_disconnect_reason: rtc.DisconnectReason.ValueType | None = None
+        self._destination_call_status: str | None = None
+        self._human_agent_participant_disconnected_cb: Any | None = None
 
     @staticmethod
     def _format_conversation_history(chat_ctx: NotGivenOr[llm.ChatContext]) -> str:
@@ -218,9 +248,11 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             self._human_agent_sess = dial_human_agent_task.result()
             # let the human speak first
 
-        except Exception:
+        except Exception as e:
             logger.exception("could not dial human agent")
-            self._set_result(ToolError("could not dial human agent"))
+            err = WarmTransferError("could not dial human agent", code=WarmTransferFailure.DIAL_FAILED)
+            err.__cause__ = e
+            self._set_result(err)
             return
 
         finally:
@@ -245,12 +277,23 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         Args:
             reason: A short explanation of why the human agent declined to connect to the caller
         """
-        self._set_result(ToolError(f"human agent declined to connect: {reason}"))
+        self._set_result(
+            WarmTransferError(
+                f"human agent declined to connect: {reason}",
+                code=WarmTransferFailure.DECLINED,
+                reason=reason,
+            )
+        )
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def voicemail_detected(self) -> None:
         """Called when the call reaches voicemail. Use this tool AFTER you hear the voicemail greeting"""
-        self._set_result(ToolError("voicemail detected"))
+        self._set_result(
+            WarmTransferError(
+                "voicemail detected",
+                code=WarmTransferFailure.VOICEMAIL,
+            )
+        )
 
     def _on_human_agent_room_close(self, reason: rtc.DisconnectReason.ValueType) -> None:
         logger.debug(
@@ -260,7 +303,24 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         with contextlib.suppress(asyncio.InvalidStateError):
             self._human_agent_failed_fut.set_result(None)
 
-        self._set_result(ToolError(f"room closed: {rtc.DisconnectReason.Name(reason)}"))
+        if self._destination_disconnect_reason is not None:
+            self._set_result(
+                WarmTransferError(
+                    f"destination left: {rtc.DisconnectReason.Name(self._destination_disconnect_reason)}",
+                    code=WarmTransferFailure.DESTINATION_LEFT,
+                    disconnect_reason=self._destination_disconnect_reason,
+                    call_status=self._destination_call_status,
+                )
+            )
+        else:
+            self._set_result(
+                WarmTransferError(
+                    f"room closed: {rtc.DisconnectReason.Name(reason)}",
+                    code=WarmTransferFailure.ROOM_CLOSED,
+                    disconnect_reason=reason,
+                    call_status=self._destination_call_status,
+                )
+            )
 
     def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.kind not in DEFAULT_PARTICIPANT_KINDS:
@@ -320,6 +380,16 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         # if human agent hung up for whatever reason, we'd resume the caller conversation
         room.on("disconnected", self._on_human_agent_room_close)
+
+        def _on_human_agent_participant_disconnected(
+            participant: rtc.RemoteParticipant,
+        ) -> None:
+            if participant.identity == self._human_agent_identity:
+                self._destination_disconnect_reason = participant.disconnect_reason
+                self._destination_call_status = participant.attributes.get("sip.callStatus")
+
+        self._human_agent_participant_disconnected_cb = _on_human_agent_participant_disconnected
+        room.on("participant_disconnected", _on_human_agent_participant_disconnected)
 
         human_agent_sess: AgentSession = AgentSession(
             vad=self.session.vad or NOT_GIVEN,
@@ -392,15 +462,27 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         human_agent_room = self._human_agent_sess.room_io.room
         # we no longer care about the human agent session. it's supposed to be over
         human_agent_room.off("disconnected", self._on_human_agent_room_close)
+        if self._human_agent_participant_disconnected_cb is not None:
+            human_agent_room.off(
+                "participant_disconnected", self._human_agent_participant_disconnected_cb
+            )
 
         logger.debug(f"moving {self._human_agent_identity} to caller room {self._caller_room.name}")
-        await job_ctx.api.room.move_participant(
-            api.MoveParticipantRequest(
-                room=human_agent_room.name,
-                identity=self._human_agent_identity,
-                destination_room=self._caller_room.name,
+        try:
+            await job_ctx.api.room.move_participant(
+                api.MoveParticipantRequest(
+                    room=human_agent_room.name,
+                    identity=self._human_agent_identity,
+                    destination_room=self._caller_room.name,
+                )
             )
-        )
+        except Exception:
+            human_agent_room.on("disconnected", self._on_human_agent_room_close)
+            if self._human_agent_participant_disconnected_cb is not None:
+                human_agent_room.on(
+                    "participant_disconnected", self._human_agent_participant_disconnected_cb
+                )
+            raise
 
     def _set_io_enabled(self, enabled: bool) -> None:
         input = self.session.input
