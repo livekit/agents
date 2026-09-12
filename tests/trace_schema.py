@@ -8,7 +8,8 @@ names the one edge it cares about. This module writes the rules down once:
 * :data:`MAY_OUTLIVE_PARENT`: the few child/parent edges where the child is allowed to end
   after its parent, each with the reason. Everything else must sit inside its parent.
 * :func:`check_trace`: applies those rules plus the per-turn invariants (one ``agent_turn``
-  per speech, generation events matching ``lk.generation_count``) and returns the violations.
+  per speech, its own generation events matching ``lk.generation_count``) and returns the
+  violations.
 
 It reads spans from an in-memory exporter (the fake-session tests) or from an OTLP JSON export
 downloaded from LiveKit Cloud, so the same rules check a unit test and a real run::
@@ -80,19 +81,24 @@ SPAN_PARENTS: dict[str, frozenset[str | None]] = {
         "agent_speaking": {"agent_turn"},
         "realtime_inference": {"agent_turn"},
         "realtime_metrics": {"realtime_inference", "agent_turn"},
-        # -- model requests: under the node that made them, or the feature that owns them
+        # -- model requests: under the node that made them, or the feature that owns them.
+        # An adapter's request span stands in for the provider's; each attempt (`*_request_run`)
+        # opens the wrapped stream, whose own request span nests inside it:
+        #   llm_fallback_adapter → llm_request_run → llm_request → llm_request_run
+        #   tts_fallback_adapter → tts_request_run → tts_stream_adapter → tts_request_run → …
         "llm_request": {
             "llm_node",
-            "llm_fallback_adapter",
+            "llm_request_run",
             "keyterm_detection",
             "judge_evaluation",
             "amd",
         },
-        "llm_fallback_adapter": {"llm_node", "keyterm_detection"},
+        "llm_fallback_adapter": {"llm_node", "keyterm_detection", "judge_evaluation", "amd"},
         "llm_request_run": {"llm_request", "llm_fallback_adapter"},
-        "tts_request": {"tts_node", "tts_fallback_adapter"},
+        "tts_request": {"tts_node", "tts_request_run"},
         "tts_fallback_adapter": {"tts_node"},
-        "tts_request_run": {"tts_request", "tts_fallback_adapter"},
+        "tts_stream_adapter": {"tts_node", "tts_request_run"},
+        "tts_request_run": {"tts_request", "tts_fallback_adapter", "tts_stream_adapter"},
         # -- session-scoped features
         "keyterm_detection": {"agent_turn", "agent_session"},
         "amd": {"agent_session"},
@@ -130,6 +136,12 @@ each is a known property of the code, and a viewer draws them poking out of the 
 
 
 @dataclass
+class EventRecord:
+    name: str
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class SpanRecord:
     """The part of a span the rules look at, from either source."""
 
@@ -140,7 +152,7 @@ class SpanRecord:
     start_ns: int
     end_ns: int
     attributes: dict[str, Any] = field(default_factory=dict)
-    events: list[str] = field(default_factory=list)
+    events: list[EventRecord] = field(default_factory=list)
 
 
 def from_readable_spans(spans: Iterable[Any]) -> list[SpanRecord]:
@@ -157,7 +169,7 @@ def from_readable_spans(spans: Iterable[Any]) -> list[SpanRecord]:
                 start_ns=int(s.start_time or 0),
                 end_ns=int(s.end_time or 0),
                 attributes=dict(s.attributes or {}),
-                events=[e.name for e in s.events],
+                events=[EventRecord(e.name, dict(e.attributes or {})) for e in s.events],
             )
         )
     return out
@@ -177,6 +189,10 @@ def _otlp_value(value: Mapping[str, Any]) -> Any:
     return value
 
 
+def _otlp_attributes(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {a["key"]: _otlp_value(a["value"]) for a in item.get("attributes", [])}
+
+
 def from_otlp_json(document: Mapping[str, Any] | str | Path) -> list[SpanRecord]:
     """Records from an OTLP/JSON export (``resourceSpans`` → ``scopeSpans`` → ``spans``)."""
     if not isinstance(document, Mapping):
@@ -193,10 +209,10 @@ def from_otlp_json(document: Mapping[str, Any] | str | Path) -> list[SpanRecord]
                         trace_id=s["traceId"],
                         start_ns=int(s["startTimeUnixNano"]),
                         end_ns=int(s["endTimeUnixNano"]),
-                        attributes={
-                            a["key"]: _otlp_value(a["value"]) for a in s.get("attributes", [])
-                        },
-                        events=[e["name"] for e in s.get("events", [])],
+                        attributes=_otlp_attributes(s),
+                        events=[
+                            EventRecord(e["name"], _otlp_attributes(e)) for e in s.get("events", [])
+                        ],
                     )
                 )
     return out
@@ -255,17 +271,33 @@ def check_trace(
     # one agent_turn per speech handle, and its generations accounted for
     speech_turns: dict[str, list[SpanRecord]] = defaultdict(list)
     for s in spans:
-        if s.name == "agent_turn":
-            speech_id = s.attributes.get("lk.speech_id")
-            if speech_id:
-                speech_turns[str(speech_id)].append(s)
-            generations = s.events.count("generation")
-            count = s.attributes.get("lk.generation_count")
-            if count is not None and int(count) != generations:
-                violations.append(
-                    f"agent_turn {speech_id}: lk.generation_count={count} but "
-                    f"{generations} generation events"
-                )
+        if s.name != "agent_turn":
+            continue
+        speech_id = str(s.attributes.get("lk.speech_id") or "")
+        if not speech_id:
+            violations.append("agent_turn: no lk.speech_id")
+            continue
+        speech_turns[speech_id].append(s)
+        # a preemptive attempt discarded for this speech left its generations on the span too;
+        # the count is the finishing speech's own steps
+        own_generations = sum(
+            1
+            for e in s.events
+            if e.name == "generation"
+            and str(e.attributes.get("lk.generation_id", f"{speech_id}_")).startswith(
+                f"{speech_id}_"
+            )
+        )
+        count = s.attributes.get("lk.generation_count")
+        try:
+            count_ok = count is not None and int(count) == own_generations
+        except (TypeError, ValueError):
+            count_ok = False
+        if not count_ok:
+            violations.append(
+                f"agent_turn {speech_id}: lk.generation_count={count!r} but "
+                f"{own_generations} of its own generation events"
+            )
     for speech_id, turns in speech_turns.items():
         if len(turns) > 1:
             violations.append(

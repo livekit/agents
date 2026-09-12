@@ -19,6 +19,7 @@ from .trace_schema import (
     ANY,
     MAY_OUTLIVE_PARENT,
     SPAN_PARENTS,
+    EventRecord,
     SpanRecord,
     assert_trace_well_formed,
     check_trace,
@@ -51,7 +52,7 @@ def _span(
     end: float,
     **attributes: object,
 ) -> SpanRecord:
-    events = attributes.pop("events", [])
+    events: list[str | EventRecord] = attributes.pop("events", [])  # type: ignore[assignment]
     return SpanRecord(
         name=name,
         span_id=span_id,
@@ -60,7 +61,7 @@ def _span(
         start_ns=int(start * 1e9),
         end_ns=int(end * 1e9),
         attributes=dict(attributes),
-        events=list(events),  # type: ignore[arg-type]
+        events=[e if isinstance(e, EventRecord) else EventRecord(e) for e in events],
     )
 
 
@@ -167,7 +168,28 @@ def test_turn_invariants_are_checked() -> None:
 
     spans = _sound_trace()
     spans[6].attributes["lk.generation_count"] = 3
-    assert any("lk.generation_count=3 but 2 generation events" in v for v in check_trace(spans))
+    assert any("lk.generation_count=3 but 2 of its own" in v for v in check_trace(spans))
+
+    # a turn without its identity or its count is malformed, not exempt
+    spans = _sound_trace()
+    del spans[6].attributes["lk.speech_id"]
+    assert "agent_turn: no lk.speech_id" in check_trace(spans)
+    spans = _sound_trace()
+    del spans[6].attributes["lk.generation_count"]
+    assert any("lk.generation_count=None" in v for v in check_trace(spans))
+    spans = _sound_trace()
+    spans[6].attributes["lk.generation_count"] = "two"
+    assert any("lk.generation_count='two'" in v for v in check_trace(spans))
+
+    # a discarded preemptive attempt's generation sits on the span but is not the speech's own
+    spans = _sound_trace()
+    spans[6].events = [
+        EventRecord("generation", {"lk.generation_id": "speech_0_1"}),
+        EventRecord("preemptive_generation_discarded", {"lk.speech_id": "speech_0"}),
+        EventRecord("generation", {"lk.generation_id": "speech_1_1"}),
+        EventRecord("generation", {"lk.generation_id": "speech_1_2"}),
+    ]
+    assert check_trace(spans) == []
 
     spans = _sound_trace()
     del spans[3].attributes["lk.eou.outcome"]
@@ -181,7 +203,7 @@ def test_turn_invariants_are_checked() -> None:
 def test_otlp_json_and_readable_spans_agree(span_exporter: InMemorySpanExporter) -> None:
     with tracer.start_as_current_span("agent_session") as root:
         with tracer.start_as_current_span("user_turn", attributes={"lk.speech_id": "x"}) as turn:
-            turn.add_event("generation")
+            turn.add_event("generation", {"lk.generation_id": "x_1"})
     readable = from_readable_spans(span_exporter.get_finished_spans())
 
     def hex_id(value: int, width: int) -> str:
@@ -204,7 +226,16 @@ def test_otlp_json_and_readable_spans_agree(span_exporter: InMemorySpanExporter)
                                     {"key": k, "value": {"stringValue": str(v)}}
                                     for k, v in s.attributes.items()
                                 ],
-                                "events": [{"name": e} for e in s.events],
+                                "events": [
+                                    {
+                                        "name": e.name,
+                                        "attributes": [
+                                            {"key": k, "value": {"stringValue": str(v)}}
+                                            for k, v in e.attributes.items()
+                                        ],
+                                    }
+                                    for e in s.events
+                                ],
                             }
                             for s in readable
                         ]
@@ -232,3 +263,59 @@ async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExpor
         run_session(session, Agent(instructions="t"), drain_delay=1.0), timeout=60
     )
     assert_trace_well_formed(span_exporter.get_finished_spans())
+
+
+async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:
+    """Each fallback or stream adapter attempt opens the wrapped stream inside its
+    ``*_request_run``, so the provider's request span nests under the attempt."""
+    from livekit.agents import APIConnectOptions
+    from livekit.agents.llm import ChatContext, FallbackAdapter as LLMFallbackAdapter
+    from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter, StreamAdapter
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+    from .fake_tts import FakeTTS
+
+    llm = LLMFallbackAdapter(
+        [
+            FakeLLM(
+                fake_responses=[
+                    FakeLLMResponse(input="hi", content="hello", ttft=0.01, duration=0.02)
+                ]
+            )
+        ],
+        max_retry_per_llm=0,
+    )
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    plain = TTSFallbackAdapter([FakeTTS(fake_audio_duration=0.1)], max_retry_per_tts=0)
+    stacked = TTSFallbackAdapter(
+        [StreamAdapter(tts=FakeTTS(fake_audio_duration=0.1))], max_retry_per_tts=0
+    )
+    stream_only = StreamAdapter(tts=FakeTTS(fake_audio_duration=0.1))
+
+    with tracer.start_as_current_span("agent_session"):
+        with tracer.start_as_current_span(
+            "agent_turn", attributes={"lk.speech_id": "sp", "lk.generation_count": 1}
+        ) as turn:
+            turn.add_event("generation", {"lk.generation_id": "sp_1"})
+            with tracer.start_as_current_span("llm_node"):
+                stream = llm.chat(chat_ctx=chat_ctx)
+                _ = [c async for c in stream]
+                await stream.aclose()
+            with tracer.start_as_current_span("tts_node"):
+                chunked = plain.synthesize("hello world.")
+                _ = [a async for a in chunked]
+                await chunked.aclose()
+                for tts in (plain, stacked, stream_only):
+                    synth = tts.stream(conn_options=APIConnectOptions(max_retry=0))
+                    synth.push_text("hello world.")
+                    synth.end_input()
+                    _ = [a async for a in synth]
+                    await synth.aclose()
+    for model in (llm, plain, stacked, stream_only):
+        await model.aclose()
+
+    spans = span_exporter.get_finished_spans()
+    names = {s.name for s in spans}
+    assert {"llm_fallback_adapter", "tts_fallback_adapter", "tts_stream_adapter"} <= names
+    assert_trace_well_formed(spans)
