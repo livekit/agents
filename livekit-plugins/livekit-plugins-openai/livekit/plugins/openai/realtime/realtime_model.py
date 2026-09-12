@@ -264,6 +264,7 @@ class _ResponseGeneration:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    response_id: str | None = None
 
     def _close(self) -> None:
         for msg in self.messages.values():
@@ -1750,7 +1751,18 @@ class RealtimeSession(
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
-        self.send_event(ResponseCancelEvent(type="response.cancel"))
+        if (
+            isinstance(self._current_generation, _ResponseGeneration)
+            and self._current_generation.response_id
+        ):
+            self.send_event(
+                ResponseCancelEvent(
+                    type="response.cancel",
+                    response_id=self._current_generation.response_id,
+                )
+            )
+        else:
+            self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
         self,
@@ -1890,6 +1902,7 @@ class RealtimeSession(
             messages={},
             _created_timestamp=time.time(),
             _done_fut=asyncio.Future(),
+            response_id=event.response.id,
         )
 
         generation_ev = llm.GenerationCreatedEvent(
