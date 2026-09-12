@@ -4107,20 +4107,26 @@ class AgentActivity(RecognitionHooks):
                     ori_tools = self._rt_session.tools.flatten()
                     await self._rt_session.update_tools(turn_tools)
 
-            generate_reply_fut = self._rt_session.generate_reply(
-                instructions=instructions or NOT_GIVEN,
-                tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
-                tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
-            )
-            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
-            if speech_handle.interrupted:
-                # cancel the pending generation; the plugin emits response.cancel
-                if not generate_reply_fut.done():
-                    generate_reply_fut.cancel()
-                else:
-                    # the response already landed, cancelling the future no longer reaches it
-                    self._rt_session.interrupt()
-                return
+            speech_handle._add_interrupt_callback(self._rt_session.interrupt)
+            try:
+                generate_reply_fut = self._rt_session.generate_reply(
+                    instructions=instructions or NOT_GIVEN,
+                    tool_choice=(
+                        model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN
+                    ),
+                    tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
+                )
+                await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+                if speech_handle.interrupted:
+                    # cancel the pending generation; the plugin emits response.cancel
+                    if not generate_reply_fut.done():
+                        generate_reply_fut.cancel()
+                    else:
+                        # the response already landed, cancelling the future no longer reaches it
+                        self._rt_session.interrupt()
+                    return
+            finally:
+                speech_handle._remove_interrupt_callback(self._rt_session.interrupt)
 
             try:
                 generation_ev = await generate_reply_fut
