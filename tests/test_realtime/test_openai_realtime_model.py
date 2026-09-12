@@ -604,4 +604,3 @@ async def test_interrupt_omits_response_id_for_legacy_azure() -> None:
     assert sent[0].response_id is None
 
     await session.aclose()
-

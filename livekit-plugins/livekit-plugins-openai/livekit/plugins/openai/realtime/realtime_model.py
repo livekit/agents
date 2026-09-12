@@ -1754,7 +1754,10 @@ class RealtimeSession(
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
-        is_legacy_azure = self._opts.is_azure and self._opts.api_version is not None
+        is_legacy_azure = (
+            getattr(self._opts, "is_azure", False)
+            and getattr(self._opts, "api_version", None) is not None
+        )
         if (
             isinstance(self._current_generation, _ResponseGeneration)
             and self._current_generation.response_id
@@ -1894,7 +1897,11 @@ class RealtimeSession(
             # interrupted or timed out before the server created it: cancel by id and mark it
             # discarded so its trailing events are skipped, instead of surfacing it
             self._discarded_event_ids.discard(client_event_id)
-            if self._opts.is_azure and self._opts.api_version is not None:
+            is_legacy_azure = (
+                getattr(self._opts, "is_azure", False)
+                and getattr(self._opts, "api_version", None) is not None
+            )
+            if is_legacy_azure:
                 self.send_event(ResponseCancelEvent(type="response.cancel"))
             else:
                 self.send_event(
