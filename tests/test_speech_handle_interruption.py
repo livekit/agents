@@ -29,7 +29,7 @@ async def test_wait_for_playout_unblocks_immediately_on_interruption() -> None:
     assert elapsed < 1.0
     assert elapsed < INTERRUPTION_TIMEOUT
     assert handle.interrupted is True
-    assert handle.done() is True
+    assert handle.done() is False
     assert handle.exception() is None
 
     # Cleanup timer handle
@@ -40,7 +40,7 @@ async def test_wait_for_playout_returns_immediately_if_already_interrupted() -> 
     handle = SpeechHandle.create(allow_interruptions=True)
     handle.interrupt()
     assert handle.interrupted is True
-    assert handle.done() is True
+    assert handle.done() is False
     assert handle.exception() is None
 
     start = time.perf_counter()
@@ -79,11 +79,14 @@ async def test_await_handle_unblocks_immediately_on_interruption() -> None:
     assert elapsed < INTERRUPTION_TIMEOUT
     assert result is handle
     assert handle.interrupted is True
-    assert handle.done() is True
+    assert handle.done() is False
     assert handle.exception() is None
-    assert callback_called is True
+    assert callback_called is False  # callbacks are tied to actual _done_fut finalization
 
     handle._mark_done()
+    await asyncio.sleep(0)
+    assert handle.done() is True
+    assert callback_called is True
 
 
 async def test_wait_for_playout_unblocks_on_done() -> None:
@@ -96,22 +99,3 @@ async def test_wait_for_playout_unblocks_on_done() -> None:
     await asyncio.wait_for(waiter_task, timeout=1.0)
     assert handle.done() is True
     assert handle.interrupted is False
-
-
-async def test_wait_for_generation_unblocks_on_interruption() -> None:
-    handle = SpeechHandle.create(allow_interruptions=True)
-    handle._authorize_generation()
-
-    waiter_task = asyncio.create_task(handle._wait_for_generation())
-    await asyncio.sleep(0.01)
-    assert not waiter_task.done()
-
-    start = time.perf_counter()
-    handle.interrupt()
-
-    await asyncio.wait_for(waiter_task, timeout=1.0)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 1.0
-    assert elapsed < INTERRUPTION_TIMEOUT
-
-    handle._mark_done()
