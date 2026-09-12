@@ -1475,9 +1475,7 @@ class AudioRecognition:
                     self._turn_detector_stream is not None
                     and self._turn_detector_prediction_fut is None
                 ):
-                    self._turn_detector_prediction_fut = (
-                        self._turn_detector_stream.predict()
-                    )
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 

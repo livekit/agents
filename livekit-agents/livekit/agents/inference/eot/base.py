@@ -69,9 +69,7 @@ class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]])
         super().__init__()
         self._opts = opts
         self._min_silence_duration = (
-            min_silence_duration
-            if min_silence_duration is not None
-            else opts.min_silence_duration
+            min_silence_duration if min_silence_duration is not None else opts.min_silence_duration
         )
 
     @property
