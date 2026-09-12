@@ -81,7 +81,5 @@ def test_strip_chat_markup_structural_ssml_boundaries() -> None:
 
 def test_strip_chat_markup_incomplete_ssml_tags() -> None:
     """Incomplete SSML tags from interruptions should be stripped."""
-    assert strip_chat_markup(
-        '<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato'
-    ) == "tomato"
+    assert strip_chat_markup('<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato') == "tomato"
     assert strip_chat_markup('<prosody rate="fast">hello') == "hello"
