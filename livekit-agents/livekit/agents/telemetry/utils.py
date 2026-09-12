@@ -54,6 +54,17 @@ def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
     return job_ctx is not None and job_ctx._redaction_enabled
 
 
+def participant_attributes(participant: Any) -> dict[str, Any]:
+    """Span attributes identifying a room participant (identity is tagged ``lk.pii``)."""
+    from livekit import rtc
+
+    return {
+        trace_types.ATTR_PARTICIPANT_ID: participant.sid,
+        trace_types.ATTR_PARTICIPANT_IDENTITY: participant.identity,
+        trace_types.ATTR_PARTICIPANT_KIND: rtc.ParticipantKind.Name(participant.kind),
+    }
+
+
 def record_exception(
     span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
 ) -> None:

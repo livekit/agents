@@ -51,6 +51,13 @@ class TestUserTurnStartPersistence:
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
+        audio_recognition._eou_wait_span = None
+        audio_recognition._eou_wait_started_at_ns = None
+        audio_recognition._eou_wait_rearms = 0
+        audio_recognition._eou_wait_floor_ns = None
+        audio_recognition._eou_wait_not_committed = 0
+        audio_recognition._user_turn_resumes = 0
+        audio_recognition._eou_detection_span = None
         audio_recognition._user_turn_committed = False
         # disable EOU detection from EOS branch — we're testing VAD state, not EOT
         audio_recognition._vad_base_turn_detection = False
@@ -68,6 +75,7 @@ class TestUserTurnStartPersistence:
         # collaborators
         audio_recognition._hooks = MagicMock()
         audio_recognition._session = MagicMock()
+        audio_recognition._session._root_span_context = None
         audio_recognition._session.amd = None
         audio_recognition._session._room_io = None
         audio_recognition._session.options.transcription_timeout = None

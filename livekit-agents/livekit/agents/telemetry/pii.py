@@ -165,6 +165,31 @@ class _PIIFilteringSpanProcessor(SpanProcessor):
         return True
 
 
+def redact(span: ReadableSpan) -> ReadableSpan:
+    """A snapshot of ``span`` with PII stripped, whatever ``on_end`` stashed for restore.
+
+    For a span that ended before its job decided on redaction (the gate held it): the
+    processor saw redaction off at the time, so the attributes may be intact or stashed."""
+    events = _filter_events(span.events)
+    status = span.status
+    if status.status_code is StatusCode.ERROR and status.description:
+        status = Status(StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE)
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=filter_attributes(span.attributes),
+        events=events if events is not None else span.events,
+        links=span.links,
+        kind=span.kind,
+        status=status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
 def restore_pii(span: ReadableSpan) -> ReadableSpan:
     """The span as it was before PII was stripped for third-party exporters.
 
