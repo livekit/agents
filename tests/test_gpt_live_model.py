@@ -6,6 +6,8 @@ import contextlib
 import json
 import logging
 import time
+import wave
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,7 +16,7 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm, utils, vad
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
@@ -25,6 +27,60 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 from livekit.plugins.openai.tools import WebSearch
 
 pytestmark = pytest.mark.unit
+
+
+_NATIVE_INPUT_VAD = gpt_live_model.inference.VAD
+
+
+class _FakeInputVADStream:
+    """Deterministic speech probabilities for the square waves in these protocol tests."""
+
+    def __init__(self) -> None:
+        self.events = utils.aio.Chan[vad.VADEvent]()
+        self.frames: list[rtc.AudioFrame] = []
+        self.closed = False
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self.frames.append(frame)
+        samples = np.asarray(frame.data, dtype=np.float32) / 32768
+        probability = 0.9 if np.max(np.abs(samples), initial=0) > 0.01 else 0.0
+        self.events.send_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.INFERENCE_DONE,
+                samples_index=0,
+                timestamp=0,
+                speech_duration=0,
+                silence_duration=0,
+                probability=probability,
+                frames=[frame],
+            )
+        )
+
+    def __aiter__(self):
+        return self.events.__aiter__()
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self.events.close()
+
+
+@pytest.fixture(autouse=True)
+def _fake_input_vad(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        gpt_live_model.inference,
+        "VAD",
+        lambda **kwargs: SimpleNamespace(stream=_FakeInputVADStream),
+    )
+
+
+async def _wait_for_input_detection(session: GPTLiveSession, *, pending_ms: float = 0) -> None:
+    """Wait for queued inference without relying on fixed scheduling delays."""
+
+    async def wait() -> None:
+        while session._input_vad_ms + pending_ms + 1e-6 < session._input_audio_ms:
+            await asyncio.sleep(0.001)
+
+    await asyncio.wait_for(wait(), timeout=5)
 
 
 class _FakeWS:
@@ -1097,7 +1153,7 @@ async def test_fragments_are_forwarded_and_mirrored_as_growing_messages(
 
 
 async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.MonkeyPatch) -> None:
-    """There are no turn events: the caller's fragments accumulate, and a second of their audio
+    """There are no turn events: the caller's fragments accumulate, and a second of silent input audio
     pushed with no new fragment ends the turn."""
     _connect_hook(monkeypatch)
 
@@ -1125,9 +1181,11 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
         for _ in range(frames - 1):
             session.push_audio(_silence(100))
+        await _wait_for_input_detection(session)
         assert len(events) == 3  # quiet, but not yet for the whole pause
 
         session.push_audio(_silence(100))
+        await _wait_for_input_detection(session)
         assert [name for name, _ in events[-2:]] == [
             "input_audio_transcription_completed",
             "input_speech_stopped",
@@ -1137,6 +1195,301 @@ async def test_the_callers_turn_ends_on_their_own_audio(monkeypatch: pytest.Monk
         assert (final.transcript, final.is_final) == (" What is the", True)
         assert final.item_id == interim.item_id
         assert final.turn_started_at == interim.turn_started_at
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("quiet_frames_before_speech", [0, 5])
+async def test_continuing_input_speech_resets_the_user_turn_silence(
+    monkeypatch: pytest.MonkeyPatch, quiet_frames_before_speech: int
+) -> None:
+    """Transcript delivery can pause while input speech continues."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", events.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "Keep listening.", 100))
+        for _ in range(quiet_frames_before_speech):
+            session.push_audio(_pcm(0.0))
+        for _ in range(15):
+            session.push_audio(_pcm(0.2))
+        await _wait_for_input_detection(session)
+        assert not [event for event in events if event.is_final]
+
+        frames = int(gpt_live_model._MIN_SILENCE_MS // 100)
+        for _ in range(frames - 1):
+            session.push_audio(_pcm(0.0))
+        await _wait_for_input_detection(session)
+        assert not [event for event in events if event.is_final]
+        session.push_audio(_pcm(0.0))
+        await _wait_for_input_detection(session)
+        assert [event.transcript for event in events if event.is_final] == ["Keep listening."]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("noise_rms", [0.002, 0.02])
+@pytest.mark.parametrize("sample_rate", [24000, 48000])
+async def test_native_input_vad_finalizes_a_turn_during_microphone_noise(
+    monkeypatch: pytest.MonkeyPatch, noise_rms: float, sample_rate: int
+) -> None:
+    """Exercise the bundled speech model with nonzero noise, not the protocol stub."""
+    monkeypatch.setattr(gpt_live_model.inference, "VAD", _NATIVE_INPUT_VAD)
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    stream = task = None
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "Hello.", 0))
+        rng = np.random.default_rng(42)
+        for _ in range(20):
+            samples = np.clip(
+                rng.normal(0, noise_rms * 32768, sample_rate // 10), -32768, 32767
+            ).astype(np.int16)
+            session.push_audio(rtc.AudioFrame(samples.tobytes(), sample_rate, 1, len(samples)))
+        stream, task = session._input_vad, session._input_vad_task
+        await _wait_for_input_detection(session, pending_ms=32)
+        assert [
+            ev.transcript
+            for name, ev in events
+            if name == "input_audio_transcription_completed" and ev.is_final
+        ] == ["Hello."]
+        assert [name for name, _ in events].count("input_speech_stopped") == 1
+    finally:
+        await session.aclose()
+        await model.aclose()
+    assert task is not None and task.done()
+    assert stream is not None and stream._task.done() and stream._metrics_task.done()
+
+
+@pytest.mark.parametrize("mute", [False, True])
+async def test_native_input_vad_keeps_real_speech_open_until_pause_or_mute(
+    monkeypatch: pytest.MonkeyPatch, mute: bool
+) -> None:
+    monkeypatch.setattr(gpt_live_model.inference, "VAD", _NATIVE_INPUT_VAD)
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    with wave.open(
+        str(Path(__file__).parent / "test_realtime/weather_question.wav"), "rb"
+    ) as audio:
+        audio_bytes = audio.readframes(audio.getnframes())
+    chunk_bytes = 2400 * 2
+    frames = [
+        rtc.AudioFrame(chunk, 24000, 1, len(chunk) // 2)
+        for offset in range(0, len(audio_bytes), chunk_bytes)
+        if (chunk := audio_bytes[offset : offset + chunk_bytes])
+    ]
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        started = False
+        for frame in frames * 3:
+            session.push_audio(frame)
+            await _wait_for_input_detection(session, pending_ms=32)
+            if session._input_speaking and not started:
+                session._handle_event(_transcript("user", "What is the weather?", 0))
+                started = True
+        assert started
+        assert not [event for name, event in events if name == "input_speech_stopped"]
+        if mute:
+            session.mute_input()
+            for frame in frames * 2:
+                session.push_audio(frame)
+        else:
+            for _ in range(20):
+                session.push_audio(_pcm(0))
+        await _wait_for_input_detection(session, pending_ms=32)
+        assert [name for name, _ in events].count("input_speech_stopped") == 1
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("sample_rate", [24000, 48000])
+async def test_muted_input_closes_a_turn_and_unmute_restores_speech_detection(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_rate: int,
+) -> None:
+    def frame(level: float, duration_ms: int = 100) -> rtc.AudioFrame:
+        samples = np.full(sample_rate * duration_ms // 1000, int(level * 32767), dtype=np.int16)
+        return rtc.AudioFrame(samples.tobytes(), sample_rate, 1, len(samples))
+
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "Before mute.", 0))
+        session.push_audio(frame(0.2, duration_ms=60))
+        session.mute_input()
+        stream = session._input_vad
+        pre_mute_frames = len(stream.frames)
+        for _ in range(10):
+            session.push_audio(frame(0.2))
+        await _wait_for_input_detection(session)
+        assert [
+            ev.transcript
+            for name, ev in events
+            if name == "input_audio_transcription_completed" and ev.is_final
+        ] == ["Before mute."]
+        assert stream is not None
+        assert all(not np.any(frame.data) for frame in stream.frames[pre_mute_frames:])
+        mute_index = next(
+            i for i, ev in enumerate(ws.sent) if ev["type"] == "session.input_audio.mute"
+        )
+        assert all(ev["type"] == "session.input_audio.append" for ev in ws.sent[1:mute_index])
+        assert (
+            sum(len(base64.b64decode(ev["audio"])) for ev in ws.sent[1:mute_index])
+            == 24000 * 60 // 1000 * 2
+        )
+
+        session.push_audio(frame(0.2, duration_ms=40))
+        session.unmute_input()
+        session._handle_event({"type": "session.input_audio.muted"})  # delayed ack
+        session._handle_event(_transcript("user", "After unmute.", 1000))
+        for _ in range(15):
+            session.push_audio(frame(0.2))
+        await _wait_for_input_detection(session)
+        assert "user" in session._speech
+        for _ in range(10):
+            session.push_audio(frame(0.0))
+        await _wait_for_input_detection(session)
+        assert [name for name, _ in events].count("input_speech_stopped") == 2
+        types_sent = [ev["type"] for ev in ws.sent]
+        unmute_index = types_sent.index("session.input_audio.unmute")
+        assert len(base64.b64decode(ws.sent[unmute_index - 1]["audio"])) == 24000 * 40 // 1000 * 2
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_reconnect_settles_old_input_detection_and_replays_mute_before_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    old_stream = old_task = new_stream = new_task = None
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+        session.mute_input()
+        session.push_audio(_pcm(0.2))
+        await _wait_for_input_detection(session)
+        old_stream, old_task = session._input_vad, session._input_vad_task
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await session._session_started_fut
+        assert old_stream.closed and old_task.done()
+        session._handle_event(_transcript("user", "New connection.", 0))
+        for _ in range(8):
+            session.push_audio(_pcm(0.2))
+        await _wait_for_input_detection(session)
+        new_stream, new_task = session._input_vad, session._input_vad_task
+        assert new_stream is not old_stream
+        assert [event["type"] for event in sockets[1].sent[:3]] == [
+            "session.start",
+            "session.input_audio.mute",
+            "session.input_audio.append",
+        ]
+        assert all(not np.any(frame.data) for frame in new_stream.frames)
+        assert "user" not in session._speech
+    finally:
+        for ws in sockets:
+            ws.emit({"type": "session.closed", "usage": {"seconds": 0}})
+        await session.aclose()
+        await model.aclose()
+    assert new_stream.closed and new_task.done()
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_closing_with_input_in_flight_settles_the_native_detector(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    monkeypatch.setattr(gpt_live_model.inference, "VAD", _NATIVE_INPUT_VAD)
+    ws = _LifecycleWS()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    close = None
+    try:
+        await session._update_session()
+        await asyncio.wait_for(ws.started.wait(), timeout=1)
+        await session._session_started_fut
+        audio = _pcm(0.2)
+        session.push_audio(rtc.AudioFrame(audio.data, 48000, 1, audio.samples_per_channel))
+        stream, task = session._input_vad, session._input_vad_task
+        close = asyncio.create_task(session.aclose())
+        await asyncio.wait_for(ws.close_requested.wait(), timeout=1)
+        if cancel:
+            close.cancel()
+        else:
+            ws.emit({"type": "session.closed", "usage": {"seconds": 0}})
+        await asyncio.wait_for(close, timeout=1)
+        assert task.done() and stream._task.done() and stream._metrics_task.done()
+        session.push_audio(_pcm(0.2))
+        session.mute_input()
+        session.unmute_input()
+        assert session._input_vad is None
+    finally:
+        if close is not None:
+            close.cancel()
+            await asyncio.gather(close, return_exceptions=True)
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_pending_input_detection_cannot_finalize_a_newer_fragment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    events = _user_events(session)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_transcript("user", "First", 0))
+        for _ in range(10):
+            session.push_audio(_pcm(0))
+        session._handle_event(_transcript("user", " fragment.", 200))
+        await _wait_for_input_detection(session)
+        assert "user" in session._speech
+        assert not [ev for name, ev in events if name == "input_speech_stopped"]
+        for _ in range(8):
+            session.push_audio(_pcm(0))
+        await _wait_for_input_detection(session)
+        assert [
+            ev.transcript
+            for name, ev in events
+            if name == "input_audio_transcription_completed" and ev.is_final
+        ] == ["First fragment."]
     finally:
         await session.aclose()
         await model.aclose()
