@@ -604,3 +604,33 @@ async def test_interrupt_omits_response_id_for_legacy_azure() -> None:
     assert sent[0].response_id is None
 
     await session.aclose()
+
+
+async def test_interrupt_omits_response_id_for_xai() -> None:
+    # xAI Realtime API v1 uses legacy bare cancellation event
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _ResponseGeneration,
+    )
+
+    sent: list[object] = []
+    session = RealtimeModel(api_key="fake").session()
+    session._realtime_model._provider_label = "xAI Realtime API"
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id is None
+
+    await session.aclose()

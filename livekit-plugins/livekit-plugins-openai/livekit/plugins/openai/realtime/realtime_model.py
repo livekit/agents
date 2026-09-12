@@ -1751,17 +1751,31 @@ class RealtimeSession(
     def has_active_generation(self) -> bool:
         return self._current_generation is not None or len(self._response_created_futures) > 0
 
+    @property
+    def _supports_targeted_cancellation(self) -> bool:
+        """Whether this session's provider supports response.cancel with response_id.
+
+        Only OpenAI Realtime API (including non-legacy Azure) supports targeted
+        cancellation with response_id. Legacy Azure Realtime (with api_version)
+        and subclasses such as xAI Realtime API use the bare response.cancel schema.
+        """
+        if (
+            getattr(self._opts, "is_azure", False)
+            and getattr(self._opts, "api_version", None) is not None
+        ):
+            return False
+        model = getattr(self, "_realtime_model", None)
+        if model is not None and getattr(model, "_provider_label", None) != "OpenAI Realtime API":
+            return False
+        return True
+
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
-        is_legacy_azure = (
-            getattr(self._opts, "is_azure", False)
-            and getattr(self._opts, "api_version", None) is not None
-        )
         if (
             isinstance(self._current_generation, _ResponseGeneration)
             and self._current_generation.response_id
-            and not is_legacy_azure
+            and self._supports_targeted_cancellation
         ):
             self.send_event(
                 ResponseCancelEvent(
@@ -1897,16 +1911,12 @@ class RealtimeSession(
             # interrupted or timed out before the server created it: cancel by id and mark it
             # discarded so its trailing events are skipped, instead of surfacing it
             self._discarded_event_ids.discard(client_event_id)
-            is_legacy_azure = (
-                getattr(self._opts, "is_azure", False)
-                and getattr(self._opts, "api_version", None) is not None
-            )
-            if is_legacy_azure:
-                self.send_event(ResponseCancelEvent(type="response.cancel"))
-            else:
+            if self._supports_targeted_cancellation:
                 self.send_event(
                     ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
                 )
+            else:
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
             self._current_generation = _DiscardedGeneration()
             logger.warning("discarding response that arrived after it was timed out or interrupted")
             return
