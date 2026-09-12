@@ -208,14 +208,17 @@ def _normalize_azure_client_event(event: dict[str, Any]) -> None:
     """In-place normalization of client event dicts for legacy Azure compatibility.
 
     The legacy Azure Realtime API uses "text" for assistant content parts,
-    while the newer OpenAI API uses "output_text".
+    while the newer OpenAI API uses "output_text". Additionally, the legacy
+    Azure beta response.cancel schema does not support response_id.
     """
     item = event.get("item")
-    if item is None:
-        return
-    for content_part in item.get("content", ()):
-        if content_part.get("type") == "output_text":
-            content_part["type"] = "text"
+    if item is not None:
+        for content_part in item.get("content", ()):
+            if content_part.get("type") == "output_text":
+                content_part["type"] = "text"
+
+    if event.get("type") == "response.cancel":
+        event.pop("response_id", None)
 
 
 @dataclass
@@ -1751,9 +1754,11 @@ class RealtimeSession(
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
+        is_legacy_azure = self._opts.is_azure and self._opts.api_version is not None
         if (
             isinstance(self._current_generation, _ResponseGeneration)
             and self._current_generation.response_id
+            and not is_legacy_azure
         ):
             self.send_event(
                 ResponseCancelEvent(
@@ -1889,9 +1894,12 @@ class RealtimeSession(
             # interrupted or timed out before the server created it: cancel by id and mark it
             # discarded so its trailing events are skipped, instead of surfacing it
             self._discarded_event_ids.discard(client_event_id)
-            self.send_event(
-                ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
-            )
+            if self._opts.is_azure and self._opts.api_version is not None:
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
+            else:
+                self.send_event(
+                    ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
+                )
             self._current_generation = _DiscardedGeneration()
             logger.warning("discarding response that arrived after it was timed out or interrupted")
             return

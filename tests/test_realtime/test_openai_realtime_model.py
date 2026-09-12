@@ -4,7 +4,7 @@ import asyncio
 import logging
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
@@ -561,6 +561,47 @@ async def test_interrupt_includes_response_id_from_current_generation() -> None:
     assert len(sent) == 2
     assert isinstance(sent[1], ResponseCancelEvent)
     assert sent[1].response_id is None
+
+    await session.aclose()
+
+
+async def test_interrupt_omits_response_id_for_legacy_azure() -> None:
+    # Legacy Azure API (with api_version) beta schema does not support response_id in response.cancel
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _normalize_azure_client_event,
+        _ResponseGeneration,
+    )
+
+    # Test _normalize_azure_client_event strips response_id from response.cancel
+    event: dict[str, Any] = {"type": "response.cancel", "response_id": "resp_123"}
+    _normalize_azure_client_event(event)
+    assert "response_id" not in event
+
+    # Test RealtimeSession.interrupt() omits response_id for legacy Azure
+    sent: list[object] = []
+    session = RealtimeModel.with_azure(
+        azure_deployment="dep",
+        api_key="fake",
+        base_url="https://example.com/openai",
+        api_version="2024-10-01-preview",
+    ).session()
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id is None
 
     await session.aclose()
 
