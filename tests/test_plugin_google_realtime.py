@@ -9,6 +9,8 @@ from typing import Any
 
 import pytest
 from google.genai import types
+from google.genai._api_client import BaseApiClient
+from google.genai.client import AsyncClient
 
 from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.api_proto import ClientEvents
@@ -16,6 +18,55 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+class _DisarmedAsyncClient(AsyncClient):
+    def __del__(self) -> None:
+        pass
+
+
+class _DisarmedBaseApiClient(BaseApiClient):
+    def __del__(self) -> None:
+        try:
+            if not self._http_options.httpx_client:
+                self.close()
+        except Exception:
+            pass
+
+
+def _disarm_client(session: RealtimeSession) -> None:
+    client = session._client
+    if hasattr(client, "aio"):
+        client.aio.__class__ = _DisarmedAsyncClient
+        if hasattr(client.aio, "_api_client"):
+            client.aio._api_client.__class__ = _DisarmedBaseApiClient
+    if hasattr(client, "_api_client"):
+        client._api_client.__class__ = _DisarmedBaseApiClient
+
+
+# Disarm finalizers on classes as well to prevent aclose() tasks scheduling on active event loops
+AsyncClient.__del__ = lambda self: None  # type: ignore[assignment]
+
+
+def _safe_base_api_client_del(self: BaseApiClient) -> None:
+    try:
+        if not self._http_options.httpx_client:
+            self.close()
+    except Exception:
+        pass
+
+
+BaseApiClient.__del__ = _safe_base_api_client_del  # type: ignore[assignment]
+
+_orig_session_init = RealtimeSession.__init__
+
+
+def _session_init(self: RealtimeSession, *args: Any, **kwargs: Any) -> None:
+    _orig_session_init(self, *args, **kwargs)
+    _disarm_client(self)
+
+
+RealtimeSession.__init__ = _session_init  # type: ignore[assignment]
 
 
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
@@ -66,6 +117,7 @@ async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Realti
     """
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     session = RealtimeModel().session()
+    _disarm_client(session)
     # cancel the connect loop before the event loop ever schedules it, so no
     # websocket connection is attempted
     session._msg_ch.close()
@@ -73,7 +125,15 @@ async def _make_session(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Realti
     try:
         yield session
     finally:
+        _disarm_client(session)
         await session.aclose()
+        gc.collect()
+        if pending := [
+            task
+            for task in asyncio.all_tasks()
+            if not task.done() and _is_genai_client_teardown(task)
+        ]:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 @asynccontextmanager
@@ -82,12 +142,21 @@ async def _make_configured_session(
 ) -> AsyncIterator[RealtimeSession]:
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     session = RealtimeModel(**options).session()  # type: ignore[arg-type]
+    _disarm_client(session)
     session._msg_ch.close()
     await utils.aio.cancel_and_wait(session._main_atask)
     try:
         yield session
     finally:
+        _disarm_client(session)
         await session.aclose()
+        gc.collect()
+        if pending := [
+            task
+            for task in asyncio.all_tasks()
+            if not task.done() and _is_genai_client_teardown(task)
+        ]:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 def _audio_content(**kwargs: object) -> types.LiveServerContent:

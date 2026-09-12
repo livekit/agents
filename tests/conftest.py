@@ -57,19 +57,36 @@ _CATEGORY_HINT = (
 )
 
 
+def _parameterized_categories() -> frozenset[str]:
+    block = re.search(r"(?ms)^markers\s*=\s*\[(.*?)^\s*\]", _PYPROJECT.read_text(encoding="utf-8"))
+    names = re.findall(r'^\s*"(\w+)\(', block.group(1), re.MULTILINE) if block else []
+    return frozenset(names)
+
+
+PARAMETERIZED_CATEGORIES = _parameterized_categories()
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     _add_realtime_option(parser)
     group = parser.getgroup("categories", "test category selection")
     for category in CATEGORIES:
-        group.addoption(
-            f"--{category}",
-            nargs="?",
-            const=True,
-            default=None,
-            metavar="PROVIDER",
-            help=f"select only `{category}` tests; optionally narrow to a single "
-            f"provider/target (e.g. --{category} <name>). Repeatable categories are unioned.",
-        )
+        if category in PARAMETERIZED_CATEGORIES:
+            group.addoption(
+                f"--{category}",
+                nargs="?",
+                const=True,
+                default=None,
+                metavar="PROVIDER",
+                help=f"select only `{category}` tests; optionally narrow to a single "
+                f"provider/target (e.g. --{category} <name>). Repeatable categories are unioned.",
+            )
+        else:
+            group.addoption(
+                f"--{category}",
+                action="store_true",
+                default=None,
+                help=f"select only `{category}` tests.",
+            )
     group.addoption(
         "--list-categories",
         action="store_true",
@@ -198,7 +215,7 @@ def _selected_categories(config: pytest.Config) -> dict[str, object]:
     selected: dict[str, object] = {}
     for category in CATEGORIES:
         value = config.getoption(f"--{category}")
-        if value is not None:
+        if value is not None and value is not False:
             selected[category] = value
     return selected
 
@@ -307,6 +324,11 @@ def _is_ignorable_task(task) -> bool:
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True
+        if coro_name.endswith(".aclose"):
+            frame = getattr(coro, "cr_frame", None)
+            module = frame.f_globals.get("__name__", "") if frame else ""
+            if module.startswith("google.genai"):
+                return True
         mod = getattr(coro, "__module__", "")
         if "pytest" in mod or "pytest_asyncio" in mod:
             return True
