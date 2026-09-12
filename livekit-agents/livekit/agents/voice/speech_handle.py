@@ -36,7 +36,6 @@ class SpeechHandle:
         self._id = speech_id
         self._allow_interruptions = allow_interruptions
         self._interruption_holds = 0
-        self._interruption_holds_restore = allow_interruptions
         self._input_details = input_details
 
         self._interrupt_fut = asyncio.Future[None]()
@@ -111,7 +110,17 @@ class SpeechHandle:
 
     @property
     def allow_interruptions(self) -> bool:
-        return self._allow_interruptions
+        """Whether this speech may be interrupted right now.
+
+        The **effective** state: the value last assigned, unless one or more
+        `hold_interruptions()` holders are active, in which case it is False for as long
+        as they are.
+
+        A hold and an assignment are kept separately, so neither can lose the other: an
+        assignment made during a hold cannot defeat the hold, and the last release cannot
+        discard an assignment made while it was held.
+        """
+        return self._allow_interruptions and self._interruption_holds == 0
 
     @allow_interruptions.setter
     def allow_interruptions(self, value: bool) -> None:
@@ -120,6 +129,9 @@ class SpeechHandle:
         When set to False, the SpeechHandle will no longer accept any incoming
         interruption requests until re-enabled. If the handle is already
         interrupted, clearing interruptions is not allowed.
+
+        Assigning while a `hold_interruptions()` holder is active records the value
+        without lifting the hold; it takes effect when the last holder releases.
 
         Args:
             value (bool): True to allow interruptions, False to disallow.
@@ -134,28 +146,90 @@ class SpeechHandle:
 
         self._allow_interruptions = value
 
+    @property
+    def interruptions_held(self) -> bool:
+        """Whether a `hold_interruptions()` holder is keeping this speech uninterruptible.
+
+        Narrower than `not allow_interruptions`, which is also True for a speech simply
+        created or configured uninterruptible.
+        """
+        return self._interruption_holds > 0
+
     def _hold_interruptions(self) -> None:
         """Disallow interruptions until every hold taken here is released.
 
         Counted rather than set, because the holders of one speech are not serialised
         against each other: the inline tasks awaited from a turn's parallel tool calls run
         one at a time, and a hold released between them would let the user turns of one
-        task's sub-conversation interrupt the speech the rest are still anchored to. An
-        interrupted handle can no longer disallow interruptions, so those tasks could then
-        never run. The first holder owns the value the last one restores.
+        task's sub-conversation interrupt the speech the rest are still anchored to.
+
+        The count lives beside the assigned `allow_interruptions` value rather than
+        overwriting it. Overwriting it meant an assignment during a hold silently defeated
+        the hold -- `allow_interruptions = True` under a held speech made it interruptible
+        again -- and meant the last release overwrote whatever had been assigned since.
         """
-        if self._interruption_holds == 0:
-            self._interruption_holds_restore = self._allow_interruptions
-            self.allow_interruptions = False
+        if self.interrupted:
+            raise RuntimeError("Cannot hold interruptions, the SpeechHandle is already interrupted")
 
         self._interruption_holds += 1
 
     def _release_interruptions(self) -> None:
-        self._interruption_holds -= 1
-        if self._interruption_holds == 0:
-            # a forced interrupt lands regardless of the hold, and leaves nothing to restore
-            with contextlib.suppress(RuntimeError):
-                self.allow_interruptions = self._interruption_holds_restore
+        # Clamped rather than asserted: this runs from a `finally`, where raising would
+        # replace whatever exception is already unwinding.
+        if self._interruption_holds > 0:
+            self._interruption_holds -= 1
+
+    @contextlib.contextmanager
+    def hold_interruptions(self) -> Generator[SpeechHandle, None, None]:
+        """Keep this speech uninterruptible for the duration of the block.
+
+        Counted, and independent of `allow_interruptions`: overlapping holders compose,
+        and the speech becomes interruptible again only once the last one releases.
+
+        Written for wording that has to arrive whole -- a consent question, a regulatory
+        disclosure, a handover announcement -- on a session whose realtime model does
+        server-side turn detection, where `allow_interruptions=False` is dropped with a
+        warning per `say()` and refused outright per session.
+
+        `interrupt(force=True)` still lands, so a hold survives ordinary barge-in without
+        making the speech impossible to stop.
+
+        **What a hold does not do**, in the order it bites:
+
+        1. *It protects LiveKit-side playout, not a provider's own generation.* `say()`
+           speaks through the TTS plugin when there is one, and that audio is LiveKit's
+           to protect. With no TTS and a realtime model whose
+           `capabilities.supports_say` is True, the provider generates the audio and
+           cancels it itself when its own turn detection fires -- a hold cannot reach
+           that, so a held speech on that path can still end mid-sentence. Attach a TTS
+           model for wording that has to arrive whole.
+        2. *The caller is not heard while it plays.* Their audio is replaced with silence
+           on the paths feeding the STT and the realtime model, unless the session opts
+           out with
+           `turn_handling=TurnHandlingOptions(interruption={"discard_audio_if_uninterruptible": False})`.
+           Barge-in is not merely ignored by default; it is discarded.
+        3. *A user turn completing during a hold generates no reply for that turn.* A hold
+           is for wording, not for a question whose answer is expected mid-sentence.
+
+        Example:
+            ```python
+            handle = session.say("Before we go on, do I have your consent?")
+            with handle.hold_interruptions():
+                await handle.wait_for_playout()
+            ```
+
+        Yields:
+            SpeechHandle: this handle, so the block may be written as
+                `with handle.hold_interruptions() as speech:`.
+
+        Raises:
+            RuntimeError: If the speech has already been interrupted.
+        """
+        self._hold_interruptions()
+        try:
+            yield self
+        finally:
+            self._release_interruptions()
 
     @property
     def chat_items(self) -> list[llm.ChatItem]:
@@ -196,7 +270,7 @@ class SpeechHandle:
             # already cancelled or finished: nothing to interrupt, and protection is moot
             return self
 
-        if not force and not self._allow_interruptions:
+        if not force and not self.allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
         self._cancel()

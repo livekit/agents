@@ -82,3 +82,42 @@ def test_input_speech_started_interrupts_interruptible_speech() -> None:
 
     assert handle.interrupted is True
     activity._rt_session.interrupt.assert_called_once()
+
+
+def test_input_speech_started_keeps_a_held_speech(caplog: pytest.LogCaptureFixture) -> None:
+    # the point of a hold: server-side turn detection stays on, the model still reports user
+    # speech, and the speech someone deliberately held keeps playing through it. No
+    # response.cancel is sent, because AgentActivity.interrupt() raises before reaching it.
+    activity = _activity(server_turn_detection=True)
+    handle = SpeechHandle.create(allow_interruptions=True)
+    activity._current_speech = handle
+    activity._rt_session = MagicMock()
+
+    with handle.hold_interruptions():
+        with caplog.at_level(logging.DEBUG, logger="livekit.agents"):
+            activity._on_input_speech_started(llm.InputSpeechStartedEvent())
+
+        assert handle.interrupted is False
+        activity._rt_session.interrupt.assert_not_called()
+
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("held" in record.message for record in caplog.records)
+    handle._mark_done()
+
+
+def test_input_speech_started_still_reports_an_unheld_uninterruptible_speech(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # the loud log is narrowed, not removed. A speech that refuses interruption *without*
+    # anyone holding it is the desync the log was added for -- the server cancelled its own
+    # response while this speech still believed it could not be interrupted.
+    activity = _activity(server_turn_detection=True)
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        handle = _speech_started(activity, allow_interruptions=False)
+
+    assert handle.interrupted is False
+    assert [record for record in caplog.records if record.levelno >= logging.ERROR], (
+        "an uninterruptible speech nobody held is still reported loudly"
+    )
+    handle._mark_done()
