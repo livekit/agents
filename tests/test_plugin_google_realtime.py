@@ -44,19 +44,19 @@ def _disarm_client(session: RealtimeSession) -> None:
         client._api_client.__class__ = _DisarmedBaseApiClient
 
 
-# Disarm finalizers on classes as well to prevent aclose() tasks scheduling on active event loops
-AsyncClient.__del__ = lambda self: None  # type: ignore[assignment]
+@pytest.fixture(autouse=True)
+def _disarm_genai_finalizers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(AsyncClient, "__del__", lambda self: None)
 
+    def _safe_base_api_client_del(self: BaseApiClient) -> None:
+        try:
+            if not self._http_options.httpx_client:
+                self.close()
+        except Exception:
+            pass
 
-def _safe_base_api_client_del(self: BaseApiClient) -> None:
-    try:
-        if not self._http_options.httpx_client:
-            self.close()
-    except Exception:
-        pass
+    monkeypatch.setattr(BaseApiClient, "__del__", _safe_base_api_client_del)
 
-
-BaseApiClient.__del__ = _safe_base_api_client_del  # type: ignore[assignment]
 
 _orig_session_init = RealtimeSession.__init__
 

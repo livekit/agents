@@ -324,11 +324,6 @@ def _is_ignorable_task(task) -> bool:
         coro_name = getattr(coro, "__qualname__", "") or type(coro).__name__
         if "async_generator_athrow" in coro_name:
             return True
-        if coro_name.endswith(".aclose"):
-            frame = getattr(coro, "cr_frame", None)
-            module = frame.f_globals.get("__name__", "") if frame else ""
-            if module.startswith("google.genai"):
-                return True
         mod = getattr(coro, "__module__", "")
         if "pytest" in mod or "pytest_asyncio" in mod:
             return True
