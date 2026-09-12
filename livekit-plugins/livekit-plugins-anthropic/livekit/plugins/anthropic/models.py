@@ -14,4 +14,13 @@ ChatModels = Literal[
     "claude-opus-4-20250514",
     "claude-opus-4-1-20250805",
     "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-4-7",
+    "claude-sonnet-4-8",
+    "claude-sonnet-5",
+    "claude-haiku-4-6",
+    "claude-haiku-4-7",
+    "claude-haiku-5",
 ]

@@ -114,3 +114,106 @@ class TestAnthropicStreamRetry:
 
         assert calls == 2
         assert response.usage is not None
+
+
+class TestModelDisablesPrefill:
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-haiku-4-6",
+            "claude-fable-4-6",
+            "claude-sonnet-4-7",
+            "claude-opus-4-7",
+            "claude-sonnet-4-8",
+            "claude-opus-4-8",
+            "claude-sonnet-4-9",
+            "claude-opus-4-9",
+            "claude-sonnet-5",
+            "claude-opus-5",
+            "claude-haiku-5",
+            "claude-fable-5",
+            "claude-sonnet-5-1",
+            "claude-sonnet-4-6-20260101",
+        ],
+    )
+    def test_disables_prefill_newer_models(self, model: str) -> None:
+        from livekit.plugins.anthropic.llm import _model_disables_prefill
+
+        assert _model_disables_prefill(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-3-5-sonnet-20240620",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229",
+            "claude-3-haiku-20240307",
+            "claude-3-5-haiku-20241022",
+            "claude-3-7-sonnet-20250219",
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-opus-4-1-20250805",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "gpt-4o",
+        ],
+    )
+    def test_allows_prefill_older_models(self, model: str) -> None:
+        from livekit.plugins.anthropic.llm import _model_disables_prefill
+
+        assert _model_disables_prefill(model) is False
+
+
+class TestAnthropicChatContextFormatting:
+    def test_trailing_assistant_injects_dummy_user_message(self) -> None:
+        ctx = llm.ChatContext.empty()
+        ctx.add_message(role="user", content="Hello")
+        ctx.add_message(role="assistant", content="Hi there")
+
+        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+        assert len(messages) == 3
+        assert messages[-1] == {"role": "user", "content": [{"text": ".", "type": "text"}]}
+
+    def test_trailing_assistant_with_tool_use_skips_dummy_user_message(self) -> None:
+        ctx = llm.ChatContext.empty()
+        ctx.add_message(role="user", content="Check weather")
+        ctx.insert(
+            llm.FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}')
+        )
+
+        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+        assert len(messages) == 2
+        assert messages[-1]["role"] == "assistant"
+        assert any(
+            isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"]
+        )
+
+    def test_trailing_assistant_with_text_and_tool_use_skips_dummy_user_message(self) -> None:
+        ctx = llm.ChatContext.empty()
+        ctx.add_message(role="user", content="Check weather")
+        ctx.add_message(role="assistant", content="Looking up...")
+        ctx.insert(
+            llm.FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}')
+        )
+
+        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+        assert len(messages) == 2
+        assert messages[-1]["role"] == "assistant"
+        assert any(
+            isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"]
+        )
+
+    def test_trailing_assistant_inject_false_skips_dummy_user_message(self) -> None:
+        ctx = llm.ChatContext.empty()
+        ctx.add_message(role="user", content="Hello")
+        ctx.add_message(role="assistant", content="Hi there")
+
+        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=False)
+
+        assert len(messages) == 2
+        assert messages[-1]["role"] == "assistant"

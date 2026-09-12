@@ -92,7 +92,9 @@ def convert_mid_conversation_instructions(
     return llm.ChatContext(items)
 
 
-def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
+def group_tool_calls(
+    chat_ctx: llm.ChatContext, *, allow_unresolved_tail: bool = False
+) -> list[_ChatItemGroup]:
     """Group chat items (messages, function calls, and function outputs)
     into coherent groups based on their item IDs and call IDs.
 
@@ -143,11 +145,20 @@ def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
 
         call_id_to_group[tool_output.call_id].add(tool_output)
 
-    # validate that each group and remove invalid tool calls and tool outputs
-    for group in item_groups.values():
+    # validate each group and remove invalid tool calls and tool outputs
+    groups = list(item_groups.values())
+    for i, group in enumerate(groups):
+        # Trailing tool calls in the last group without outputs are unresolved/pending
+        if (
+            allow_unresolved_tail
+            and i == len(groups) - 1
+            and group.tool_calls
+            and not group.tool_outputs
+        ):
+            continue
         group.remove_invalid_tool_calls()
 
-    return list(item_groups.values())
+    return groups
 
 
 @dataclass

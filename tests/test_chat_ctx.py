@@ -229,6 +229,82 @@ def test_mistralai_format_can_skip_trailing_user_message_injection():
     assert messages == [{"type": "message.output", "role": "assistant", "content": "Hi there"}]
 
 
+def test_anthropic_format_trailing_assistant_injects_dummy_user_message():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hello")
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+    assert len(messages) == 3
+    assert messages[-1] == {"role": "user", "content": [{"text": ".", "type": "text"}]}
+
+
+def test_anthropic_format_trailing_assistant_disabled_prefill_flag_false():
+    from livekit.agents import ChatContext
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Hello")
+    chat_ctx.add_message(role="assistant", content="Hi there")
+
+    messages, _ = chat_ctx.to_provider_format(
+        format="anthropic", inject_trailing_user_message=False
+    )
+
+    assert len(messages) == 2
+    assert messages[-1]["role"] == "assistant"
+
+
+def test_anthropic_format_trailing_assistant_with_tool_use_skips_dummy_user_message():
+    from livekit.agents import ChatContext
+    from livekit.agents.llm import FunctionCall
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Lookup weather")
+    chat_ctx.insert(FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}'))
+
+    messages, _ = chat_ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+    assert len(messages) == 2
+    assert messages[-1]["role"] == "assistant"
+    assert any(isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"])
+
+
+def test_anthropic_format_trailing_assistant_with_text_and_tool_use_skips_dummy_user_message():
+    from livekit.agents import ChatContext
+    from livekit.agents.llm import FunctionCall
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Lookup weather")
+    chat_ctx.add_message(role="assistant", content="Let me check...")
+    chat_ctx.insert(FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}'))
+
+    messages, _ = chat_ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+    assert len(messages) == 2
+    assert messages[-1]["role"] == "assistant"
+    assert any(isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"])
+
+
+def test_anthropic_format_resolved_tool_call_skips_dummy_user_message():
+    from livekit.agents import ChatContext
+    from livekit.agents.llm import FunctionCall, FunctionCallOutput
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="Lookup weather")
+    chat_ctx.insert(FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}'))
+    chat_ctx.insert(
+        FunctionCallOutput(call_id="call_1", name="get_weather", output="Sunny 72F", is_error=False)
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
+
+    assert len(messages) == 3
+    assert messages[-1]["role"] == "user"
+
+
 @skip_if_no_credentials()
 async def test_summarize():
     from livekit.agents import ChatContext
