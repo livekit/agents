@@ -987,6 +987,79 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
         await model.aclose()
 
 
+@pytest.mark.parametrize("status", ["missing", None, "incomplete", "in_progress", "failed"])
+async def test_noncompleted_backend_calls_are_not_dispatched(
+    monkeypatch: pytest.MonkeyPatch, status: str | None
+) -> None:
+    """An output_item.done event does not imply that its function call completed."""
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    calls: list[llm.FunctionCall] = []
+    session.on("function_call", calls.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
+        event = _function_call_done("call_1")
+        if status == "missing":
+            del event["item"]["status"]
+        else:
+            event["item"]["status"] = status
+        session._handle_event(_response_event("item_d1", event))
+        assert not calls
+        assert not session._delegated_responses["item_d1"].call_ids
+        assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
+
+        # A later completed event for the same call must still be dispatched.
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        assert [call.call_id for call in calls] == ["call_1"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_duplicate_backend_calls_do_not_repeat_dispatch_or_block_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duplicate must not run the tool twice or change the response's result barrier."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    calls: list[llm.FunctionCall] = []
+    session.on("function_call", calls.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
+        for call_id in ("call_a", "call_a", "call_b", "call_b"):
+            session._handle_event(_response_event("item_d1", _function_call_done(call_id)))
+        assert [call.call_id for call in calls] == ["call_a", "call_b"]
+        assert (
+            len([item for item in session._history.items if isinstance(item, llm.FunctionCall)])
+            == 2
+        )
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_a", output="one", is_error=False)]
+        )
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        await asyncio.sleep(0.05)
+        assert not [event for event in ws.sent if event["type"] == "response.create"]
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_b", output="two", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert len([event for event in ws.sent if event["type"] == "response.create"]) == 1
+
+        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
+        session._handle_event(_response_event("item_d1", _function_call_done("call_c")))
+        assert [call.call_id for call in calls] == ["call_a", "call_b", "call_c"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "reason",
     ["close_requested", "expired", "content", "remote_hangup", "connection_lost", None],

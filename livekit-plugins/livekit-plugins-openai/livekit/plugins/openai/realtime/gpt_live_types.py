@@ -260,10 +260,11 @@ class ResponseSnapshot(BaseModel):
 
 
 class OutputItem(BaseModel):
-    """Only a completed function-call item carries all of name, call id and arguments."""
+    """Fields needed to dispatch a completed backend function call."""
 
     id: str | None = None
     type: str | None = None
+    status: str | None = None
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
