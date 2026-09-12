@@ -144,10 +144,14 @@ def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
         call_id_to_group[tool_output.call_id].add(tool_output)
 
     # validate that each group and remove invalid tool calls and tool outputs
-    for group in item_groups.values():
+    groups = list(item_groups.values())
+    for i, group in enumerate(groups):
+        # Trailing tool calls in the last group without outputs are unresolved/pending
+        if i == len(groups) - 1 and group.tool_calls and not group.tool_outputs:
+            continue
         group.remove_invalid_tool_calls()
 
-    return list(item_groups.values())
+    return groups
 
 
 @dataclass
