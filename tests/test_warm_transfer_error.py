@@ -65,7 +65,8 @@ async def test_voicemail_detected_creates_structured_error() -> None:
     assert str(result) == "voicemail detected"
 
 
-def test_human_agent_room_close_with_destination_left() -> None:
+@pytest.mark.asyncio
+async def test_human_agent_room_close_with_destination_left() -> None:
     task = object.__new__(WarmTransferTask)
     task._human_agent_sess = None
     task._hold_audio_handle = None
@@ -89,7 +90,8 @@ def test_human_agent_room_close_with_destination_left() -> None:
     assert "destination left: USER_UNAVAILABLE" in str(result)
 
 
-def test_human_agent_room_close_without_destination_left() -> None:
+@pytest.mark.asyncio
+async def test_human_agent_room_close_without_destination_left() -> None:
     task = object.__new__(WarmTransferTask)
     task._human_agent_sess = None
     task._hold_audio_handle = None
