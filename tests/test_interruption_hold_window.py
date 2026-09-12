@@ -33,6 +33,10 @@ def _make_recognition(
     recognition._stt_aligned_transcript = False
     recognition._hooks = MagicMock()
     recognition._hooks.interruption_by_audio_activity_enabled = False
+    recognition._user_silence_ev = asyncio.Event()
+    recognition._user_silence_ev.set()
+    recognition._vad_generation = 0
+    recognition._tasks = set()
     recognition._process_stt_event = MagicMock()  # type: ignore[method-assign]
     return recognition
 

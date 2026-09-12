@@ -61,6 +61,7 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
+    AgentBackchannelOpportunityEvent,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -73,7 +74,6 @@ from .events import (
     UserInputTranscribedEvent,
     UserTranscriptionTimeoutEvent,
     UserTurnExceededEvent,
-    _AgentBackchannelOpportunityEvent,
 )
 from .generation import (
     ToolExecutionOutput,
@@ -2327,6 +2327,32 @@ class AgentActivity(RecognitionHooks):
         else:
             self._user_silence_event.set()
 
+    def on_vad_reset(self) -> None:
+        """Close active user-speech bookkeeping without marking STT EOS.
+
+        This is used when the VAD is being swapped out or disabled while the
+        user is still speaking. The cleanup needs to reconcile the active turn
+        state, but it must not flip the STT EOS flag that gates interruption
+        handling later in the turn.
+        """
+        if self._audio_recognition:
+            self._audio_recognition._on_end_of_speech(
+                ended_at=time.time(),
+                user_speaking_span=self._session._user_speaking_span,
+                interruption=self._interruption_detected
+                if self._interruption_detection_enabled
+                else NOT_GIVEN,
+            )
+
+        self._session._update_user_state(
+            "listening",
+            last_speaking_time=time.time(),
+        )
+        self._user_silence_event.set()
+
+        if self._paused_speech:
+            self._start_false_interruption_timer(self._paused_speech.timeout)
+
     def on_backchannel_confirmed(self) -> None:
         # clear the buffered backchannel audio so it can't prefix the next committed turn
         if (
@@ -2474,10 +2500,18 @@ class AgentActivity(RecognitionHooks):
         if (host := self._session._session_host) is not None:
             host._on_eot_prediction(ev)
 
-    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None:
-        # TODO: consume the backchannel opportunity internally (e.g. trigger a
-        # backchannel phrase). Kept internal for now — not surfaced as a public event.
-        pass
+    def on_agent_backchannel_opportunity(self, ev: AgentBackchannelOpportunityEvent) -> None:
+        self._session.emit("agent_backchannel_opportunity", ev)
+        self._create_speech_task(
+            self._agent_backchannel_opportunity_task(ev),
+            name="AgentActivity.on_backchannel_opportunity",
+        )
+
+    @utils.log_exceptions(logger=logger)
+    async def _agent_backchannel_opportunity_task(
+        self, ev: AgentBackchannelOpportunityEvent
+    ) -> None:
+        await self._agent.on_backchannel_opportunity(ev)
 
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool:
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
