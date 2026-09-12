@@ -33,7 +33,7 @@ def to_chat_ctx(
     content: list[dict[str, Any]] = []
 
     chat_items: list[llm.ChatItem] = []
-    for group in group_tool_calls(chat_ctx):
+    for group in group_tool_calls(chat_ctx, allow_unresolved_tail=True):
         chat_items.extend(group.flatten())
 
     for msg in chat_items:
