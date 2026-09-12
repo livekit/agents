@@ -545,6 +545,11 @@ class RealtimeSession(llm.RealtimeSession):
         # ids of chat ctx items queued but not yet sent, so a handle does not claim them
         self._unsent_item_ids: set[str] = set()
 
+        # a tool call ends the turn, but the server can keep streaming audio that belongs
+        # to it. those frames must not open a generation for a turn that is already over.
+        # cleared by the events that end that turn or begin the next one.
+        self._turn_ended_by_tool_call = False
+
         self._in_user_activity = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
@@ -1305,6 +1310,7 @@ class RealtimeSession(llm.RealtimeSession):
 
     def _start_new_generation(self) -> None:
         self._rejected_tool_calls = 0
+        self._turn_ended_by_tool_call = False
         if self._current_generation and not self._current_generation._done:
             logger.warning("starting new generation while another is active. Finalizing previous.")
             self._mark_current_generation_done()
@@ -1443,6 +1449,7 @@ class RealtimeSession(llm.RealtimeSession):
             self._handle_input_speech_started()
 
         if server_content.turn_complete:
+            self._turn_ended_by_tool_call = False
             self._mark_current_generation_done()
 
     def _mark_current_generation_done(self) -> None:
@@ -1558,6 +1565,7 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+        self._turn_ended_by_tool_call = True
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(
@@ -1688,7 +1696,8 @@ class RealtimeSession(llm.RealtimeSession):
             return True
 
         if (sc := resp.server_content) and (
-            sc.model_turn
+            # audio can trail a turn a tool call already ended; it belongs to that turn
+            (sc.model_turn and not self._turn_ended_by_tool_call)
             or (
                 sc.output_transcription and sc.output_transcription and sc.output_transcription.text
             )
