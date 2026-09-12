@@ -233,6 +233,13 @@ module = "mistralai.*"
 follow_imports = "skip"
 ignore_missing_imports = true
 
+# vui-tts (the Vui plugin's engine) and torchcodec: analysed as opaque —
+# torchcodec re-exports its decoders without declaring them.
+[[tool.mypy.overrides]]
+module = ["vui", "vui.*", "torchcodec", "torchcodec.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
 [[tool.mypy.overrides]]
 module = "speechmatics.*"
 follow_untyped_imports = true

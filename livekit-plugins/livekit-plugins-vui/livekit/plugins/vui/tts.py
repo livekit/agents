@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +98,10 @@ class TTS(tts.TTS):
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vui-tts")
         self._lock = asyncio.Lock()
         self._sentence_tokenizer = tokenize.basic.SentenceTokenizer()
+        # Live streams, closed by aclose() so a render in flight is cancelled
+        # before the engine is released.
+        self._streams: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._closed = False
 
     @property
     def model(self) -> str:
@@ -279,15 +284,36 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        return SynthesizeStream(tts=self, conn_options=conn_options)
+        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        self._streams.add(stream)
+        return stream
 
     async def aclose(self) -> None:
-        self._executor.shutdown(wait=False)
+        """Cancel live streams, wait for the worker, and release the engine.
+
+        Idempotent. Closing a stream cancels its render (the decode loop exits
+        at the next frame), so the worker is idle before the row is closed and
+        the model/codec allocations are dropped; the executor shutdown waits
+        for the thread off the event loop.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        for stream in list(self._streams):
+            await stream.aclose()
+        self._streams.clear()
+        loop = asyncio.get_running_loop()
+        row, self._row, self._engine = self._row, None, None
+        if row is not None:
+            await loop.run_in_executor(self._executor, row.close)
+        await asyncio.to_thread(self._executor.shutdown, True)
 
 
 class ChunkedStream(tts.ChunkedStream):
