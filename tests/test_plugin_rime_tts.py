@@ -1211,6 +1211,57 @@ async def test_v1_supports_each_rime_audio_format_with_each_protocol(
     assert server.protocols == [f"rime.v1.{websocket_protocol}"]
 
 
+@pytest.mark.parametrize("websocket_protocol", ["binary", "json"])
+@pytest.mark.parametrize(
+    ("sample_rate", "expected_sample_rate"),
+    [(None, 24000), (8000, 8000), (24000, 24000)],
+    ids=["model-default", "8khz", "24khz"],
+)
+async def test_v1_pcmu_preserves_sample_rate_and_samples_after_parent_update(
+    websocket_protocol: str, sample_rate: int | None, expected_sample_rate: int
+) -> None:
+    encoded_audio = bytes([0xFF, 0x7F, 0x80, 0x00]) * 600
+    expected_pcm = np.tile(np.array([0, 0, 32124, -32124], dtype="<i2"), 600).tobytes()
+    options = {"sample_rate": sample_rate} if sample_rate is not None else {}
+    updated_sample_rate = 8000 if expected_sample_rate == 24000 else 24000
+
+    async with _RimeV1Server(audio=encoded_audio) as server:
+        tts = _v1_tts(
+            server, websocket_protocol=websocket_protocol, audio_format="audio/pcmu", **options
+        )
+        assert tts.sample_rate == expected_sample_rate
+        old_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+        try:
+            tts.update_options(audio_format="audio/pcmu", sample_rate=updated_sample_rate)
+            new_stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2))
+            try:
+                for stream, rate in [
+                    (old_stream, expected_sample_rate),
+                    (new_stream, updated_sample_rate),
+                ]:
+                    stream.push_text("hello")
+                    stream.end_input()
+                    events = await _collect(stream)
+                    assert events[-1].is_final
+                    assert {event.frame.sample_rate for event in events} == {rate}
+                    assert {event.frame.num_channels for event in events} == {1}
+                    assert b"".join(bytes(event.frame.data) for event in events) == expected_pcm
+                    assert sum(event.frame.duration for event in events) == pytest.approx(
+                        len(encoded_audio) / rate
+                    )
+            finally:
+                await new_stream.aclose()
+        finally:
+            await old_stream.aclose()
+            await tts.aclose()
+
+    starts = [request["start"] for request in server.requests if "start" in request]
+    assert [start["audioParameters"] for start in starts] == [
+        {"audioFormat": "audio/pcmu", "samplingRate": rate}
+        for rate in [expected_sample_rate, updated_sample_rate]
+    ]
+
+
 async def test_v1_maps_mist_options_without_a_second_stream_implementation() -> None:
     async with _RimeV1Server() as server:
         tts = _v1_tts(

@@ -119,6 +119,8 @@ _MULAW_TABLE = _build_mulaw_table()
 def _decode_audio(audio_format: RimeAudioFormat, data: bytes) -> bytes:
     if audio_format != "audio/pcmu":
         return data
+    # Rime v1 encodes PCMU at the requested sample rate, including 24 kHz.
+    # Decode one byte to one PCM sample; the emitter keeps that rate.
     pcm = _MULAW_TABLE[np.frombuffer(data, dtype=np.uint8)]
     return pcm.astype("<i2").tobytes()
 

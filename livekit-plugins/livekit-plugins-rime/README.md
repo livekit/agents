@@ -81,6 +81,19 @@ all canonical formats from the Rime interface:
 Both WebSocket protocols support every format. The binary protocol sends the encoded audio bytes
 directly. The JSON protocol sends the same bytes as base64 text.
 
+PCMU uses the selected sample rate. Choosing `audio/pcmu` keeps the model default, which is
+24,000 Hz for Coda. The plugin decodes PCMU to 16-bit PCM at the same rate. To request 8,000 Hz,
+set `sample_rate` explicitly:
+
+```python
+tts = rime.TTS(
+    websocket_url="wss://api.rime.ai/coda/ws",
+    audio_format="audio/pcmu",
+    sample_rate=8000,
+    api_key=os.environ["RIME_API_KEY"],
+)
+```
+
 The v1 interface uses `time_scale_factor` for speed control. The deprecated `speed_alpha` option
 applies only to the older Rime interfaces.
 
