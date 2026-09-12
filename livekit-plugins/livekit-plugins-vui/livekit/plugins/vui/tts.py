@@ -101,6 +101,7 @@ class TTS(tts.TTS):
         # Live streams, closed by aclose() so a render in flight is cancelled
         # before the engine is released.
         self._streams: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._close_lock = asyncio.Lock()
         self._closed = False
 
     @property
@@ -298,22 +299,27 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         """Cancel live streams, wait for the worker, and release the engine.
 
-        Idempotent. Closing a stream cancels its render (the decode loop exits
-        at the next frame), so the worker is idle before the row is closed and
-        the model/codec allocations are dropped; the executor shutdown waits
-        for the thread off the event loop.
+        Idempotent, and safe to retry after a cancellation: every step is
+        idempotent and `_closed` is only set once all of them have completed,
+        so a call cancelled part-way leaves the next call to finish the job.
+        Closing a stream cancels its render (the decode loop exits at the next
+        frame), so the worker is idle before the row is closed and the
+        model/codec allocations are dropped; the executor shutdown waits for
+        the thread off the event loop.
         """
-        if self._closed:
-            return
-        self._closed = True
-        for stream in list(self._streams):
-            await stream.aclose()
-        self._streams.clear()
-        loop = asyncio.get_running_loop()
-        row, self._row, self._engine = self._row, None, None
-        if row is not None:
-            await loop.run_in_executor(self._executor, row.close)
-        await asyncio.to_thread(self._executor.shutdown, True)
+        async with self._close_lock:
+            if self._closed:
+                return
+            for stream in list(self._streams):
+                await stream.aclose()
+            self._streams.clear()
+            if self._row is not None:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(self._executor, self._row.close)
+                self._row = None
+                self._engine = None
+            await asyncio.to_thread(self._executor.shutdown, True)
+            self._closed = True
 
 
 class ChunkedStream(tts.ChunkedStream):
