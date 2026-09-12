@@ -923,10 +923,10 @@ async def test_session_resumption_config_included_when_explicitly_configured_wit
         await session.aclose()
 
 
-async def test_empty_session_resumption_config_is_omitted(
+async def test_empty_session_resumption_config_is_included(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty SessionResumptionConfig() must not be sent — Gemini rejects it."""
+    """An explicit SessionResumptionConfig() must be passed to opt in to resumption updates."""
     from google.genai.live import AsyncLive
 
     passed_configs: list[types.LiveConnectConfig] = []
@@ -944,6 +944,8 @@ async def test_empty_session_resumption_config_is_omitted(
         while session._active_session is None:
             await asyncio.sleep(0.01)
         assert len(passed_configs) == 1
-        assert passed_configs[0].session_resumption is None
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle is None
+        assert passed_configs[0].session_resumption.transparent is None
     finally:
         await session.aclose()

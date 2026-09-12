@@ -1293,13 +1293,14 @@ class RealtimeSession(llm.RealtimeSession):
                     transparent=(
                         self._opts.session_resumption.transparent
                         if is_given(self._opts.session_resumption)
+                        and self._opts.session_resumption is not None
                         else None
                     ),
                 )
                 if self._session_resumption_handle is not None
                 or (
                     is_given(self._opts.session_resumption)
-                    and self._opts.session_resumption.transparent is not None
+                    and self._opts.session_resumption is not None
                 )
                 else None
             ),
