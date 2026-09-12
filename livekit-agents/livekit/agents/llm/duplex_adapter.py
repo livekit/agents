@@ -192,6 +192,10 @@ class _Burst:
     audio_ch: aio.Chan[rtc.AudioFrame]
     audio_start_ms: int
     """Where on the adapter's audio clock the burst opened."""
+    audio_end_ms: int
+    """Last audio clock this burst covers, frozen when it closes."""
+    carries_message: bool = True
+    """False for a function-call generation that never spoke."""
     anchor_ms: int | None = None
     """Span clock minus audio clock, fixed by the first fragment: the sound that opened the gate
     and the oldest unclaimed fragment describe the same moment."""
@@ -307,6 +311,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self._duplex = duplex
         self._gate = gate
         self._burst: _Burst | None = None
+        self._last_burst: _Burst | None = None
         self._audio_timeout = audio_timeout
         # the adapter's clock: output audio heard so far, which arrives at playback pace
         self._audio_ms = 0
@@ -382,17 +387,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             if not burst.audio_ch.closed:
                 burst.audio_ch.send_nowait(f.frame)
             self._audio_ms += round(f.frame.duration * 1000)
-
-            # the first fragment anchors the span clock to the audio clock; a later one is due when
-            # the audio reaches its span, and one this burst never reaches waits for the next
-            while self._fragments:
-                fragment = self._fragments[0]
-                if fragment.start_ms is not None:
-                    if burst.anchor_ms is None:
-                        burst.anchor_ms = fragment.start_ms - burst.audio_start_ms
-                    if fragment.start_ms - burst.anchor_ms > self._audio_ms + _ATTACH_LEAD_MS:
-                        break
-                burst.attach(self._fragments.popleft())
+            burst.audio_end_ms = self._audio_ms
+            self._drain_fragments()
             return
 
         self._audio_ms += round(f.frame.duration * 1000)
@@ -418,6 +414,8 @@ class _DuplexRealtimeSession(RealtimeSession):
             text_ch=aio.Chan(),
             audio_ch=aio.Chan(),
             audio_start_ms=self._audio_ms,
+            audio_end_ms=self._audio_ms,
+            carries_message=message,
         )
         ev = GenerationCreatedEvent(
             message_stream=burst.message_ch,
@@ -444,29 +442,83 @@ class _DuplexRealtimeSession(RealtimeSession):
             )
         return burst
 
+    def _attach_due(self, burst: _Burst) -> bool:
+        """Attach queued fragments whose sound this burst has already reached.
+
+        Returns True if any fragment was attached.
+        """
+        if not burst.carries_message:
+            return False
+
+        attached = False
+        heard_ms = self._audio_ms if burst is self._burst else burst.audio_end_ms
+        while self._fragments:
+            fragment = self._fragments[0]
+            if fragment.start_ms is not None:
+                if burst.anchor_ms is None:
+                    # a closed burst has no offset yet: only claim a span that sits on the
+                    # audio it already forwarded, so the next utterance is not stolen
+                    if burst is not self._burst and not (
+                        burst.audio_start_ms - _ATTACH_LEAD_MS
+                        <= fragment.start_ms
+                        <= burst.audio_end_ms
+                    ):
+                        break
+                    burst.anchor_ms = fragment.start_ms - burst.audio_start_ms
+                if fragment.start_ms - burst.anchor_ms > heard_ms + _ATTACH_LEAD_MS:
+                    break
+            elif burst is not self._burst and self._burst is not None:
+                break
+            burst.attach(self._fragments.popleft())
+            attached = True
+        return attached
+
+    def _record_burst(self, burst: _Burst) -> None:
+        if not burst.transcript:
+            return
+        existing = self._chat_ctx.get_by_id(burst.id)
+        if isinstance(existing, ChatMessage):
+            existing.content = [burst.transcript]
+            return
+        # under the id and time the framework will use for it, so a context update matches
+        self._chat_ctx.insert(
+            ChatMessage(
+                id=burst.id,
+                role="assistant",
+                content=[burst.transcript],
+                created_at=burst.opened_at,
+            )
+        )
+
+    def _drain_fragments(self) -> None:
+        if self._last_burst is not None:
+            # a first fragment may still establish this burst's offset from a span that sits
+            # on the audio it forwarded, including after the next burst has already opened
+            if self._attach_due(self._last_burst):
+                self._record_burst(self._last_burst)
+        if self._burst is not None:
+            self._attach_due(self._burst)
+
     def _close_burst(self) -> None:
+        if self._burst is not None:
+            self._burst.audio_end_ms = self._audio_ms
+            self._drain_fragments()
         burst, self._burst = self._burst, None
         # the gate never stays open past the burst it opened, so the next one opens on sound again
         self._gate.deactivate()
         if burst is not None:
             burst.close()
-            if burst.transcript:
-                # under the id and time the framework will use for it, so a context update matches
-                self._chat_ctx.insert(
-                    ChatMessage(
-                        id=burst.id,
-                        role="assistant",
-                        content=[burst.transcript],
-                        created_at=burst.opened_at,
-                    )
-                )
+            if burst.carries_message:
+                self._record_burst(burst)
+                self._last_burst = burst
         self._waiting_since_ms = self._audio_ms
 
     def _on_transcript_delta(self, ev: DuplexOutputTranscriptDelta) -> None:
-        # attached on the next frame, since the sound is what places the words
+        # attached as soon as the sound that carries the words is already on a burst
         if not self._fragments:
             self._waiting_since_ms = self._audio_ms
         self._fragments.append(ev)
+        self._drain_fragments()
 
     def _on_input_transcription(self, ev: InputTranscriptionCompleted) -> None:
         if ev.is_final:
@@ -498,6 +550,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         # describe, or the reply it was asked for
         self._fragments.clear()
         self._close_burst()
+        self._last_burst = None
         self._fail_pending_reply("the session reconnected before the model replied")
         self.emit("session_reconnected", ev)
 
