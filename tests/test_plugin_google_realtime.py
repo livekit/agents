@@ -939,9 +939,7 @@ async def test_empty_session_resumption_config_is_omitted(
 
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     monkeypatch.setattr(AsyncLive, "connect", _connect)
-    session = RealtimeModel(
-        session_resumption=types.SessionResumptionConfig()
-    ).session()
+    session = RealtimeModel(session_resumption=types.SessionResumptionConfig()).session()
     try:
         while session._active_session is None:
             await asyncio.sleep(0.01)
