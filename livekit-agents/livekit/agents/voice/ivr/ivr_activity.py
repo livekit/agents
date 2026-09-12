@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -132,26 +133,41 @@ class TfidfLoopDetector:
             self._transcribed_chunks = self._transcribed_chunks[-self._window_size :]
 
     def check_loop_detection(self) -> bool:
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore
-            from sklearn.metrics.pairwise import cosine_similarity  # type: ignore
-        except ImportError:
-            logger.warning(
-                "TfidfLoopDetector: sklearn is not installed; loop detection is disabled. Please install the 'scikit-learn' package to enable loop detection."
-            )
-            return False
-
-        vectorizer = TfidfVectorizer()
-
         # Need at least two chunks to compute similarity against the last chunk
         if len(self._transcribed_chunks) < 2:
             return False
 
-        # NOTE: currently this is O(n^2) in the number of chunks, let's figure out a more efficient
-        # way if this become a bottleneck later.
-        doc_matrix = vectorizer.fit_transform(self._transcribed_chunks)
-        doc_similarity = cosine_similarity(doc_matrix)
-        last_chunk_similarity = doc_similarity[-1][:-1]
+        token_pattern = re.compile(r"(?u)\b\w\w+\b")
+        doc_tokens = [token_pattern.findall(chunk.lower()) for chunk in self._transcribed_chunks]
+
+        vocab: dict[str, int] = {}
+        for tokens in doc_tokens:
+            for token in tokens:
+                if token not in vocab:
+                    vocab[token] = len(vocab)
+
+        if not vocab:
+            return False
+
+        num_docs = len(self._transcribed_chunks)
+        vocab_size = len(vocab)
+
+        tf = np.zeros((num_docs, vocab_size), dtype=np.float64)
+        for i, tokens in enumerate(doc_tokens):
+            for token in tokens:
+                tf[i, vocab[token]] += 1.0
+
+        df = (tf > 0).sum(axis=0)
+        idf = np.log((1.0 + num_docs) / (1.0 + df)) + 1.0
+        tfidf = tf * idf
+
+        norms = np.linalg.norm(tfidf, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        tfidf_norm = tfidf / norms
+
+        last_chunk = tfidf_norm[-1]
+        prev_chunks = tfidf_norm[:-1]
+        last_chunk_similarity = prev_chunks @ last_chunk
 
         if (
             last_chunk_similarity.size > 0
