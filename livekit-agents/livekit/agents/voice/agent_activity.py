@@ -42,6 +42,7 @@ from ..telemetry import (
     utils as trace_utils,
 )
 from ..tokenize.basic import split_words
+from ..tts._provider_format import strip_all_markup
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils.misc import is_given
 from ._utils import _set_participant_attributes
@@ -3326,15 +3327,17 @@ class AgentActivity(RecognitionHooks):
                 _record_user_turn_stages(current_span, _previous_user_metrics)
 
         if forwarded_text and add_to_chat_ctx:
-            msg = self._agent._chat_ctx.add_message(
-                role="assistant",
-                content=forwarded_text,
-                interrupted=speech_handle.interrupted,
-                created_at=started_speaking_at if started_speaking_at is not None else time.time(),
-                metrics=assistant_metrics,
-            )
-            speech_handle._item_added([msg])
-            self._session._conversation_item_added(msg)
+            clean_text = strip_all_markup(forwarded_text).strip()
+            if clean_text:
+                msg = self._agent._chat_ctx.add_message(
+                    role="assistant",
+                    content=clean_text,
+                    interrupted=speech_handle.interrupted,
+                    created_at=started_speaking_at if started_speaking_at is not None else time.time(),
+                    metrics=assistant_metrics,
+                )
+                speech_handle._item_added([msg])
+                self._session._conversation_item_added(msg)
 
         if self._session.agent_state == "speaking":
             self._session._update_agent_state(

@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import pytest
+
+from livekit.agents import Agent, AgentSession
+from tests.fake_llm import FakeLLM
+from tests.fake_tts import FakeTTS
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.mark.asyncio
+async def test_say_strips_break_tags_from_chat_ctx() -> None:
+    agent = Agent(instructions="test", llm=FakeLLM(), tts=FakeTTS(fake_audio_duration=0.01))
+    session = AgentSession(
+        vad=None,
+        turn_handling={"turn_detection": None},
+    )
+    await session.start(agent)
+    try:
+        # Standard self-closing break tag
+        handle = session.say('Hello <break time="1s"/> world!')
+        await handle.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 1
+        assert messages[0].text_content == "Hello world!"
+        assert "<break" not in messages[0].text_content
+
+        # Multiple and enclosing break tags
+        handle2 = session.say(
+            '<break time="500ms"/> Good morning! <break time="1s"/> How can I help? </break>'
+        )
+        await handle2.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 2
+        assert messages[1].text_content == "Good morning! How can I help?"
+        assert "<break" not in messages[1].text_content
+
+        # Message with only a break tag does not leave an empty message
+        handle3 = session.say('<break time="1s"/>')
+        await handle3.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 2
+    finally:
+        await session.aclose()
