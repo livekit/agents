@@ -1044,6 +1044,70 @@ def strip_all_markup(text: str) -> str:
     return split_all_markup(text)[0]
 
 
+_SSML_BREAK_RE = re.compile(r"<\s*/?\s*break\b[^>]*\/?>", re.IGNORECASE)
+_SSML_STRUCTURAL_RE = re.compile(
+    r"<\s*(?P<tag>p|s)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_TAG_PATTERN = (
+    r"phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio|"
+    r"[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+"
+)
+_SSML_WRAPPING_RE = re.compile(
+    rf"<\s*(?P<tag>{_SSML_TAG_PATTERN})\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_STANDALONE_RE = re.compile(
+    rf"<\s*/?\s*(?:speak|p|s|mark|{_SSML_TAG_PATTERN})\b[^>]*\/?>",
+    re.IGNORECASE,
+)
+_SSML_INCOMPLETE_RE = re.compile(
+    rf"<\s*(?:p|s|{_SSML_TAG_PATTERN})\b[^>]*>",
+    re.IGNORECASE,
+)
+
+
+def strip_chat_markup(text: str) -> str:
+    """Strip expressive markup and SSML tags before storing text in chat context.
+
+    Preserves word boundaries when removing <break> tags, unwraps common SSML tags
+    (such as <phoneme>, <prosody>, <say-as>, <emphasis>) while keeping their inner text,
+    and strips provider-specific expressive markup tags.
+    """
+    if "<" not in text:
+        return text.strip()
+
+    # Replace break tags with a space to preserve word boundaries
+    text = _SSML_BREAK_RE.sub(" ", text)
+
+    # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+    while True:
+        replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
+        if replaced == text:
+            break
+        text = replaced
+
+    # Unwrap inline SSML wrapping tags to keep inner text
+    while True:
+        unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
+        if unwrapped == text:
+            break
+        text = unwrapped
+
+    # Remove standalone / framing tags
+    text = _SSML_STANDALONE_RE.sub(" ", text)
+
+    # Strip incomplete (unmatched) opening SSML tags left by interruptions
+    text = _SSML_INCOMPLETE_RE.sub("", text)
+
+    # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
+    text = strip_all_markup(text)
+
+    # Collapse any introduced horizontal whitespace runs
+    text = re.sub(r"[^\S\r\n]+", " ", text)
+    return text.strip()
+
+
 def strip_expr_markup(text: str) -> str:
     """Strip only the ``<expr/>`` dialect, leaving all other markup untouched.
 
