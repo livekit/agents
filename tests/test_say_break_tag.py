@@ -83,3 +83,28 @@ def test_strip_chat_markup_incomplete_ssml_tags() -> None:
     """Incomplete SSML tags from interruptions should be stripped."""
     assert strip_chat_markup('<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato') == "tomato"
     assert strip_chat_markup('<prosody rate="fast">hello') == "hello"
+
+
+def test_strip_chat_markup_provider_specific_ssml() -> None:
+    """Provider-specific SSML (e.g. Amazon Polly, Azure) should be unwrapped or stripped."""
+    assert (
+        strip_chat_markup('<amazon:effect name="drc">Breaking news</amazon:effect>')
+        == "Breaking news"
+    )
+    assert (
+        strip_chat_markup(
+            '<amazon:domain name="news"><amazon:effect name="drc">Breaking news</amazon:effect></amazon:domain>'
+        )
+        == "Breaking news"
+    )
+    assert (
+        strip_chat_markup(
+            'Normal speech <amazon:breath duration="medium" volume="default"/> continues.'
+        )
+        == "Normal speech continues."
+    )
+    assert (
+        strip_chat_markup('<mstts:express-as style="cheerful">Have a nice day!</mstts:express-as>')
+        == "Have a nice day!"
+    )
+    assert strip_chat_markup('<amazon:effect name="drc">Interrupted') == "Interrupted"

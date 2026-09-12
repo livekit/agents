@@ -1049,16 +1049,20 @@ _SSML_STRUCTURAL_RE = re.compile(
     r"<\s*(?P<tag>p|s)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
 )
+_SSML_TAG_PATTERN = (
+    r"phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio|"
+    r"[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+"
+)
 _SSML_WRAPPING_RE = re.compile(
-    r"<\s*(?P<tag>phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    rf"<\s*(?P<tag>{_SSML_TAG_PATTERN})\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _SSML_STANDALONE_RE = re.compile(
-    r"<\s*/?\s*(?:speak|p|s|mark)\b[^>]*\/?>",
+    rf"<\s*/?\s*(?:speak|p|s|mark|{_SSML_TAG_PATTERN})\b[^>]*\/?>",
     re.IGNORECASE,
 )
 _SSML_INCOMPLETE_RE = re.compile(
-    r"<\s*(?:phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|p|s|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>",
+    rf"<\s*(?:p|s|{_SSML_TAG_PATTERN})\b[^>]*>",
     re.IGNORECASE,
 )
 
