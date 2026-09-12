@@ -17,6 +17,7 @@ class TestAudioRecognitionAclose:
 
         # Initialize required attributes manually
         audio_recognition._session = MagicMock()
+        audio_recognition._session._root_span_context = None
         audio_recognition._hooks = MagicMock()
         audio_recognition._closing = asyncio.Event()
         audio_recognition._tasks = set()

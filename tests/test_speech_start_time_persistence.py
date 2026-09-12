@@ -75,6 +75,7 @@ class TestUserTurnStartPersistence:
         # collaborators
         audio_recognition._hooks = MagicMock()
         audio_recognition._session = MagicMock()
+        audio_recognition._session._root_span_context = None
         audio_recognition._session.amd = None
         audio_recognition._session._room_io = None
         audio_recognition._session.options.transcription_timeout = None

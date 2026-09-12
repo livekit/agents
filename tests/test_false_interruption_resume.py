@@ -44,6 +44,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     """AudioRecognition wired to drive one real eou bounce against ``hooks``."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._hooks = hooks
     ar._stt = None  # realtime model, no STT
     ar._audio_transcript = ""

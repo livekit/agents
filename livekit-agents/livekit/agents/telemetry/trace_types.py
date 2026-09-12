@@ -32,6 +32,56 @@ ATTR_DEPLOYMENT_ID = "lk.deployment_id"
 ATTR_ROOM_NAME = "lk.pii.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
+# join keys shared with the server, SIP, and client traces
+ATTR_ROOM_SID = "lk.room_sid"
+ATTR_DISPATCH_ID = "lk.dispatch_id"
+ATTR_WORKER_ID = "lk.job.worker_id"
+ATTR_JOB_AGENT_ID = "lk.job.agent_id"
+ATTR_SIP_PREFIX = "lk.sip."
+"""Prefix under which a linked SIP participant's ``sip.*`` attributes are copied (call id,
+trunk id and number, rule id, hostname, status, headers)."""
+ATTR_SIP_PHONE_NUMBER = "lk.pii.sip.phoneNumber"
+"""The end user's phone number (``sip.phoneNumber``), the one SIP attribute that is PII."""
+
+# job dispatch timeline (job_entrypoint and job_dispatch spans). The stage instants are
+# timestamped events (job_received, job_accepted, job_assigned, process_assigned,
+# entrypoint_started); these attributes are the seconds between adjacent stages, so the
+# chain reads off the span without timestamp arithmetic. They sum to the dispatch latency.
+ATTR_JOB_ACCEPT_LATENCY = "lk.job.accept_latency"
+"""Seconds from the availability request to the worker's accept (the request handler)."""
+ATTR_JOB_ASSIGNMENT_LATENCY = "lk.job.assignment_latency"
+"""Seconds from the accept to the server's assignment (a server round trip)."""
+ATTR_JOB_LAUNCH_LATENCY = "lk.job.launch_latency"
+"""Seconds from the assignment to a process taking the job (pool acquisition)."""
+ATTR_JOB_ENTRYPOINT_LATENCY = "lk.job.entrypoint_latency"
+"""Seconds from the process taking the job to the user entrypoint running in it."""
+ATTR_JOB_DISPATCH_LATENCY = "lk.job.dispatch_latency"
+"""Seconds from the availability request to the entrypoint running: the whole chain."""
+
+# room connect / room io
+ATTR_ROOM_AUTO_SUBSCRIBE = "lk.room.auto_subscribe"
+ATTR_ROOM_E2EE = "lk.room.e2ee"
+ATTR_ROOM_REMOTE_PARTICIPANT_COUNT = "lk.room.remote_participant_count"
+ATTR_ROOM_IO_PARTICIPANT_FILTER = "lk.room_io.participant_filter"
+"""Whether RoomIO waited for a specific participant identity (true) or the first eligible one."""
+ATTR_TRACK_SID = "lk.track_sid"
+ATTR_TRACK_SOURCE = "lk.track_source"
+ATTR_FIRST_FRAME_DELAY = "lk.first_frame_delay"
+"""Seconds from linking the participant to the first media frame received from them."""
+ATTR_PRE_CONNECT_AUDIO_DURATION = "lk.pre_connect_audio.duration"
+ATTR_CONNECTION_STATE = "lk.connection_state"
+ATTR_DISCONNECT_REASON = "lk.disconnect_reason"
+ATTR_OLD_STATE = "lk.old_state"
+ATTR_NEW_STATE = "lk.new_state"
+
+# session close / job shutdown
+ATTR_CLOSE_REASON = "lk.close_reason"
+ATTR_CLOSE_DRAIN = "lk.close.drain"
+ATTR_SHUTDOWN_REASON = "lk.shutdown.reason"
+"""The string passed to ``JobContext.shutdown(reason=...)``; developer-authored, like a log line."""
+ATTR_SHUTDOWN_USER_INITIATED = "lk.shutdown.user_initiated"
+ATTR_CALLBACK_NAME = "lk.callback.name"
+
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
 ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"

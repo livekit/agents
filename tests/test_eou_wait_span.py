@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -63,6 +64,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ``with_detector`` wires the streaming turn-detector mocks (for ``eou_detection``)."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._session._room_io = None  # keep participant attributes off the user_turn span
     ar._session.amd = None
     ar._session.options.transcription_timeout = None
@@ -251,6 +253,27 @@ async def test_resumed_speech_ends_wait_at_speech_start(
     # the turn counts the waits the user cut short
     [user_turn] = _spans(span_exporter, "user_turn")
     assert (user_turn.attributes or {})[trace_types.ATTR_EOU_RESUME_COUNT] == 1
+
+
+async def test_user_turn_is_pinned_to_the_session_root(span_exporter: InMemorySpanExporter) -> None:
+    """A turn committed from a late STT final while session_close is current must still sit
+    directly under agent_session, not under the close span."""
+    ar = _make_recognition(min_delay=0.01)
+    root = tracer.start_span("agent_session")
+    ar._session._root_span_context = trace.set_span_in_context(root)
+    with tracer.start_as_current_span("session_close") as close:
+        ar._last_speaking_time = time.time()
+        ar._run_eou_detection(llm.ChatContext(), trigger="stt")
+        await _await_bounce(ar)
+    ar._end_user_turn_span()
+    root.end()
+
+    [turn] = _spans(span_exporter, "user_turn")
+    assert turn.parent is not None
+    assert turn.parent.span_id == root.get_span_context().span_id
+    assert turn.parent.span_id != close.get_span_context().span_id
+    [wait] = _spans(span_exporter, "eou_wait")
+    assert wait.parent is not None and wait.parent.span_id == turn.context.span_id
 
 
 async def test_teardown_drops_an_open_wait(span_exporter: InMemorySpanExporter) -> None:
