@@ -220,3 +220,68 @@ async def test_synthesize_stream_with_wav_codec_strips_riff_header_if_present():
     total_samples = sum(ev.frame.samples_per_channel for ev in events)
     expected_samples = (len(wav_bytes) - 44) // 2
     assert total_samples == expected_samples
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_with_wav_codec_handles_extended_chunks():
+    """Verify SynthesizeStream locates the data chunk even with metadata/extended chunks."""
+    import struct
+
+    sarvam_tts = TTS(
+        api_key="test-api-key",
+        speech_sample_rate=SAMPLE_RATE,
+        output_audio_codec="wav",
+    )
+
+    raw_pcm = _generate_raw_pcm(duration_ms=100, sample_rate=SAMPLE_RATE)
+    fmt_chunk = struct.pack("<4sIHHIIHH", b"fmt ", 16, 1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16)
+    junk_payload = b"HelloMetadata\x00"
+    junk_chunk = struct.pack("<4sI", b"JUNK", len(junk_payload)) + junk_payload
+    data_header = struct.pack("<4sI", b"data", len(raw_pcm))
+    body = fmt_chunk + junk_chunk + data_header + raw_pcm
+    riff_header = struct.pack("<4sI4s", b"RIFF", 4 + len(body), b"WAVE")
+    wav_bytes = riff_header + body
+
+    b64_audio = base64.b64encode(wav_bytes).decode("ascii")
+    stream = sarvam_tts.stream()
+
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="test-sarvam-tts-stream-extended", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="test-req-stream-extended",
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        mime_type="audio/pcm",
+        stream=True,
+    )
+    emitter.start_segment(segment_id="seg-3")
+
+    events: list[tts.SynthesizedAudio] = []
+
+    async def collect():
+        async for ev in dst_ch:
+            events.append(ev)
+            if ev.is_final:
+                return
+
+    collect_task = asyncio.create_task(collect())
+
+    msg = {
+        "type": "audio",
+        "data": {
+            "audio": b64_audio,
+        },
+    }
+    success = await stream._handle_audio_message(msg, emitter)
+    assert success is True
+
+    emitter.end_segment()
+    emitter.end_input()
+    await emitter.join()
+    await collect_task
+
+    assert len(events) > 0
+    assert events[-1].is_final
+    total_samples = sum(ev.frame.samples_per_channel for ev in events)
+    expected_samples = len(raw_pcm) // 2
+    assert total_samples == expected_samples

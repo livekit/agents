@@ -26,6 +26,7 @@ import enum
 import json
 import os
 import platform
+import struct
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -155,6 +156,28 @@ def _decode_telephony(codec: str, data: bytes) -> bytes:
         raise ValueError(f"_decode_telephony does not support codec: {codec}")
     pcm = table[np.frombuffer(data, dtype=np.uint8)]
     return pcm.astype("<i2").tobytes()
+
+
+def _extract_wav_pcm(audio_bytes: bytes) -> bytes:
+    """If audio_bytes starts with a RIFF/WAVE container, extract the raw PCM data.
+
+    Parses the RIFF chunk structure to locate the 'data' chunk instead of
+    assuming a fixed 44-byte header, handling metadata or extended format chunks.
+    """
+    if len(audio_bytes) < 12 or not audio_bytes.startswith(b"RIFF") or audio_bytes[8:12] != b"WAVE":
+        return audio_bytes
+
+    pos = 12
+    while pos + 8 <= len(audio_bytes):
+        chunk_id = audio_bytes[pos : pos + 4]
+        chunk_size = struct.unpack("<I", audio_bytes[pos + 4 : pos + 8])[0]
+        pos += 8
+        if chunk_id == b"data":
+            end = pos + chunk_size
+            return audio_bytes[pos:end] if end <= len(audio_bytes) else audio_bytes[pos:]
+        pos += chunk_size + (chunk_size % 2)
+
+    return audio_bytes[44:] if len(audio_bytes) >= 44 else audio_bytes
 
 
 # Supported languages in BCP-47 format
@@ -1348,12 +1371,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
-            if (
-                self._opts.output_audio_codec == "wav"
-                and audio_bytes.startswith(b"RIFF")
-                and len(audio_bytes) >= 44
-            ):
-                audio_bytes = audio_bytes[44:]
+            if self._opts.output_audio_codec == "wav":
+                audio_bytes = _extract_wav_pcm(audio_bytes)
             if self._opts.output_audio_codec in _TELEPHONY_CODECS:
                 audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
             output_emitter.push(audio_bytes)
