@@ -1297,7 +1297,10 @@ class RealtimeSession(llm.RealtimeSession):
                     ),
                 )
                 if self._session_resumption_handle is not None
-                or is_given(self._opts.session_resumption)
+                or (
+                    is_given(self._opts.session_resumption)
+                    and self._opts.session_resumption.transparent is not None
+                )
                 else None
             ),
         )

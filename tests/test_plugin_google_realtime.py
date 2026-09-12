@@ -922,3 +922,30 @@ async def test_session_resumption_config_included_when_explicitly_configured_wit
     finally:
         await session.aclose()
 
+
+async def test_empty_session_resumption_config_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty SessionResumptionConfig() must not be sent — Gemini rejects it."""
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        session_resumption=types.SessionResumptionConfig()
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is None
+    finally:
+        await session.aclose()
