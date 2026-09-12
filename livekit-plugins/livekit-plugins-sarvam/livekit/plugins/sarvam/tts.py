@@ -86,7 +86,7 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
 
 _CODEC_TO_MIME: dict[str, str] = {
     "mp3": "audio/mp3",
-    "wav": "audio/wav",
+    "wav": "audio/pcm",
     "opus": "audio/opus",
     "flac": "audio/flac",
     "aac": "audio/aac",
