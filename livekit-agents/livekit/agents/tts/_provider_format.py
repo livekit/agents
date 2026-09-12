@@ -1045,12 +1045,20 @@ def strip_all_markup(text: str) -> str:
 
 
 _SSML_BREAK_RE = re.compile(r"<\s*/?\s*break\b[^>]*\/?>", re.IGNORECASE)
+_SSML_STRUCTURAL_RE = re.compile(
+    r"<\s*(?P<tag>p|s)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
 _SSML_WRAPPING_RE = re.compile(
-    r"<\s*(?P<tag>phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|p|s|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    r"<\s*(?P<tag>phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _SSML_STANDALONE_RE = re.compile(
     r"<\s*/?\s*(?:speak|p|s|mark)\b[^>]*\/?>",
+    re.IGNORECASE,
+)
+_SSML_INCOMPLETE_RE = re.compile(
+    r"<\s*(?:phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|p|s|w|audio|mstts:[a-zA-Z0-9_-]+)\b[^>]*>",
     re.IGNORECASE,
 )
 
@@ -1063,12 +1071,19 @@ def strip_chat_markup(text: str) -> str:
     and strips provider-specific expressive markup tags.
     """
     if "<" not in text:
-        return text
+        return text.strip()
 
     # Replace break tags with a space to preserve word boundaries
     text = _SSML_BREAK_RE.sub(" ", text)
 
-    # Unwrap SSML wrapping tags to keep inner text
+    # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+    while True:
+        replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
+        if replaced == text:
+            break
+        text = replaced
+
+    # Unwrap inline SSML wrapping tags to keep inner text
     while True:
         unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
         if unwrapped == text:
@@ -1077,6 +1092,9 @@ def strip_chat_markup(text: str) -> str:
 
     # Remove standalone / framing tags
     text = _SSML_STANDALONE_RE.sub(" ", text)
+
+    # Strip incomplete (unmatched) opening SSML tags left by interruptions
+    text = _SSML_INCOMPLETE_RE.sub("", text)
 
     # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
     text = strip_all_markup(text)

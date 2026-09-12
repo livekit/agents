@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.tts._provider_format import strip_chat_markup
 from tests.fake_llm import FakeLLM
 from tests.fake_tts import FakeTTS
 
@@ -64,3 +65,23 @@ async def test_say_strips_break_tags_from_chat_ctx() -> None:
         assert messages[3].text_content == "tomato"
     finally:
         await session.aclose()
+
+
+def test_strip_chat_markup_whitespace_only() -> None:
+    """Whitespace-only text should return empty string."""
+    assert strip_chat_markup("  ") == ""
+    assert strip_chat_markup("   \t  ") == ""
+
+
+def test_strip_chat_markup_structural_ssml_boundaries() -> None:
+    """Adjacent <p> and <s> blocks should preserve word boundaries."""
+    assert strip_chat_markup("<p>Hello</p><p>world</p>") == "Hello world"
+    assert strip_chat_markup("<s>First.</s><s>Second.</s>") == "First. Second."
+
+
+def test_strip_chat_markup_incomplete_ssml_tags() -> None:
+    """Incomplete SSML tags from interruptions should be stripped."""
+    assert strip_chat_markup(
+        '<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato'
+    ) == "tomato"
+    assert strip_chat_markup('<prosody rate="fast">hello') == "hello"
