@@ -617,6 +617,7 @@ async def test_interrupt_omits_response_id_for_xai() -> None:
     sent: list[object] = []
     session = RealtimeModel(api_key="fake").session()
     session._realtime_model._provider_label = "xAI Realtime API"
+    session._realtime_model._supports_targeted_cancellation = False
     session.send_event = lambda ev: sent.append(ev)  # type: ignore
 
     gen = _ResponseGeneration(

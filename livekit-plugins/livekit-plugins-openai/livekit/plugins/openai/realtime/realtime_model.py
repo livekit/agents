@@ -550,6 +550,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
         self._provider_label = "OpenAI Realtime API"
+        self._supports_targeted_cancellation: bool = not (is_azure and api_version is not None)
 
     @property
     def model(self) -> str:
@@ -1755,18 +1756,23 @@ class RealtimeSession(
     def _supports_targeted_cancellation(self) -> bool:
         """Whether this session's provider supports response.cancel with response_id.
 
-        Only OpenAI Realtime API (including non-legacy Azure) supports targeted
-        cancellation with response_id. Legacy Azure Realtime (with api_version)
-        and subclasses such as xAI Realtime API use the bare response.cancel schema.
+        Only OpenAI Realtime API (including non-legacy Azure and LiveKit Inference
+        OpenAI routes) supports targeted cancellation with response_id. Legacy
+        Azure Realtime (with api_version) and subclasses such as xAI Realtime API
+        use the bare response.cancel schema.
         """
         if (
             getattr(self._opts, "is_azure", False)
             and getattr(self._opts, "api_version", None) is not None
         ):
             return False
-        model = getattr(self, "_realtime_model", None)
-        if model is not None and getattr(model, "_provider_label", None) != "OpenAI Realtime API":
+        if hasattr(self, "_xai_model"):
             return False
+        model = getattr(self, "_realtime_model", None)
+        if model is not None:
+            if getattr(model, "_provider_label", None) == "xAI Realtime API":
+                return False
+            return getattr(model, "_supports_targeted_cancellation", True)
         return True
 
     def interrupt(self) -> None:
