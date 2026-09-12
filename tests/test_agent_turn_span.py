@@ -165,3 +165,42 @@ def test_discarded_preemptive_generation_hands_its_turn_to_the_successor(
     # nothing to hand over: a plain successor is untouched
     _continue_discarded_turn(None, reply)
     _continue_discarded_turn(reply, reply)
+
+
+def test_llm_failure_stored_on_the_handle_fails_the_turn(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """The pipeline stores an LLM failure on the handle and marks it done without one; the
+    turn must still end as failed."""
+    from opentelemetry.trace import StatusCode
+
+    from livekit.agents.voice.agent_activity import _agent_turn
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    handle = SpeechHandle.create(allow_interruptions=True)
+    with _agent_turn(handle, root_context=None, agent_label="a"):
+        handle._error = RuntimeError("llm down")
+    handle._mark_done()
+
+    [turn] = _spans(span_exporter, "agent_turn")
+    assert turn.status.status_code == StatusCode.ERROR
+    assert [e.name for e in turn.events if e.name == "exception"] == ["exception"]
+
+
+def test_turn_duration_metric_is_recorded_when_the_span_is_sampled_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from livekit.agents.telemetry import otel_metrics
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    record = MagicMock()
+    monkeypatch.setattr(otel_metrics, "record_invoke_agent_duration", record)
+    handle = SpeechHandle.create(allow_interruptions=True)
+    handle._agent_turn_span = trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT)
+    handle._agent_turn_started_at = 1.0
+    handle._agent_turn_agent_name = "a"
+    handle._mark_done()
+    record.assert_called_once()
+    assert record.call_args.kwargs == {"agent_name": "a"}

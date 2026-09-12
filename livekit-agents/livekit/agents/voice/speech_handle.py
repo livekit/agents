@@ -355,7 +355,8 @@ class SpeechHandle:
             if error is not None:
                 self._error = error
             self._done_fut.set_result(None)
-        self._end_agent_turn(error)
+        # a pipeline LLM failure is stored on the handle before the tasks finish
+        self._end_agent_turn(error if error is not None else self._error)
 
         if self._generations:
             self._mark_generation_done()
@@ -399,17 +400,20 @@ class SpeechHandle:
     def _end_agent_turn(self, error: BaseException | None) -> None:
         """Close the speech's ``agent_turn`` span: the speech is done, whatever step it was on."""
         span, self._agent_turn_span = self._agent_turn_span, None
-        if span is None or not span.is_recording():
+        if span is None:
             return
         from ..telemetry import otel_metrics, utils as trace_utils
 
-        if isinstance(error, Exception):
-            trace_utils.record_exception(span, error)
+        # the duration metric does not depend on the span being sampled in
         if self._agent_turn_started_at is not None and self._agent_turn_agent_name is not None:
             otel_metrics.record_invoke_agent_duration(
                 time.perf_counter() - self._agent_turn_started_at,
                 agent_name=self._agent_turn_agent_name,
             )
+        if not span.is_recording():
+            return
+        if isinstance(error, Exception):
+            trace_utils.record_exception(span, error)
         span.end()
 
     def _mark_scheduled(self) -> None:
