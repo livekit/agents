@@ -1287,8 +1287,22 @@ class RealtimeSession(llm.RealtimeSession):
             tools=tools_config,
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
-            session_resumption=types.SessionResumptionConfig(
-                handle=self._session_resumption_handle
+            session_resumption=(
+                types.SessionResumptionConfig(
+                    handle=self._session_resumption_handle,
+                    transparent=(
+                        self._opts.session_resumption.transparent
+                        if is_given(self._opts.session_resumption)
+                        and self._opts.session_resumption is not None
+                        else None
+                    ),
+                )
+                if self._session_resumption_handle is not None
+                or (
+                    is_given(self._opts.session_resumption)
+                    and self._opts.session_resumption is not None
+                )
+                else None
             ),
         )
 

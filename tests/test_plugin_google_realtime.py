@@ -836,3 +836,116 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         assert session._unsent_item_ids == set()
     finally:
         await session.aclose()
+
+
+async def test_session_resumption_config_omitted_when_handle_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SessionResumptionConfig must not be passed with handle=None on initial connect (issue #5102)."""
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is None
+    finally:
+        await session.aclose()
+
+
+async def test_session_resumption_config_included_when_handle_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SessionResumptionConfig must be passed when a resumption handle is present."""
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        session_resumption=types.SessionResumptionConfig(handle="handle-123")
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle == "handle-123"
+    finally:
+        await session.aclose()
+
+
+async def test_session_resumption_config_included_when_explicitly_configured_without_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SessionResumptionConfig must be passed when caller explicitly enables resumption even without handle."""
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        session_resumption=types.SessionResumptionConfig(transparent=True)
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle is None
+        assert passed_configs[0].session_resumption.transparent is True
+    finally:
+        await session.aclose()
+
+
+async def test_empty_session_resumption_config_is_included(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit SessionResumptionConfig() must be passed to opt in to resumption updates."""
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(session_resumption=types.SessionResumptionConfig()).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle is None
+        assert passed_configs[0].session_resumption.transparent is None
+    finally:
+        await session.aclose()
