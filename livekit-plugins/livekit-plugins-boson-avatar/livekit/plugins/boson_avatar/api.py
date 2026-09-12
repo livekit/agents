@@ -52,6 +52,14 @@ class AvatarSessionInfo:
     avatar_identity: str
 
 
+class AvatarSessionStartError(BosonAvatarException):
+    """Session creation failed after the provider allocated a session."""
+
+    def __init__(self, message: str, *, session_info: AvatarSessionInfo) -> None:
+        super().__init__(message)
+        self.session_info = session_info
+
+
 @dataclass(frozen=True)
 class AvatarInfo:
     """Avatar that the authenticated Boson project may render."""
@@ -165,27 +173,36 @@ class BosonAvatarAPI:
             and returned_identity == avatar_identity
         )
         if not response_valid:
-            # A protocol-invalid response can still represent an allocated
-            # provider session. Compensate whenever it gives us a usable ID.
-            if isinstance(session_id, str) and session_id:
-                try:
-                    await self.end_session(session_id)
-                except Exception as exc:  # noqa: BLE001 - compensation is best-effort
-                    logger.warning(
-                        "failed to compensate boson avatar session after invalid response",
-                        extra={
-                            "error_type": type(exc).__name__,
-                            "lk.pii.session_id": session_id,
-                        },
-                    )
             if not isinstance(session_id, str) or not session_id:
                 raise BosonAvatarException("Boson Avatar API response is missing a session id")
             if returned_identity != avatar_identity:
-                raise BosonAvatarException(
+                error_message = (
                     "Boson Avatar API returned a participant identity that does not match "
                     "the request"
                 )
-            raise BosonAvatarException("Boson Avatar API returned an invalid active session")
+            else:
+                error_message = "Boson Avatar API returned an invalid active session"
+
+            # A protocol-invalid response can still represent an allocated
+            # provider session. Compensate whenever it gives us a usable ID.
+            session_info = AvatarSessionInfo(
+                id=session_id,
+                avatar_identity=(
+                    returned_identity if isinstance(returned_identity, str) else avatar_identity
+                ),
+            )
+            try:
+                await self.end_session(session_id)
+            except Exception as exc:  # noqa: BLE001 - caller can retry compensation by ID
+                logger.warning(
+                    "failed to compensate boson avatar session after invalid response",
+                    extra={
+                        "error_type": type(exc).__name__,
+                        "lk.pii.session_id": session_id,
+                    },
+                )
+                raise AvatarSessionStartError(error_message, session_info=session_info) from None
+            raise BosonAvatarException(error_message)
 
         assert isinstance(session_id, str)
         assert isinstance(returned_identity, str)
@@ -350,6 +367,7 @@ def _validate_api_url(value: str) -> str:
 
 
 def _is_loopback_host(hostname: str) -> bool:
+    hostname = hostname.lower()
     if hostname == "localhost" or hostname.endswith(".localhost"):
         return True
     try:
