@@ -1472,7 +1472,8 @@ class AudioRecognition:
                 # min_silence_duration equals the detector minimum due to the
                 # pre-increment event ordering in the VAD loop).
                 if (
-                    self._turn_detector_stream is not None
+                    vad_speech_started
+                    and self._turn_detector_stream is not None
                     and self._turn_detector_prediction_fut is None
                 ):
                     self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
