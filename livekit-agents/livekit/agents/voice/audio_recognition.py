@@ -878,6 +878,18 @@ class AudioRecognition:
                 self._tasks.add(task)
                 self._stt_pipeline = None
 
+    @property
+    def _turn_detector_min_silence_duration(self) -> float:
+        if self._turn_detector is not None:
+            val = getattr(self._turn_detector, "min_silence_duration", None)
+            if val is not None:
+                return float(val)
+        if self._turn_detector_stream is not None:
+            val = getattr(self._turn_detector_stream, "min_silence_duration", None)
+            if val is not None:
+                return float(val)
+        return MIN_SILENCE_DURATION_MS / 1000
+
     def _check_vad_silence_requirement(
         self,
         detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
@@ -891,7 +903,12 @@ class AudioRecognition:
             return
         if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
-        required = (MIN_SILENCE_DURATION_MS + 50) / 1000
+        detector_min_silence = getattr(detector, "min_silence_duration", None)
+        required = (
+            float(detector_min_silence)
+            if detector_min_silence is not None
+            else MIN_SILENCE_DURATION_MS / 1000
+        )
         if current < required:
             raise ValueError(
                 f"vad min_silence_duration={current}s is too low for the TurnDetector. "
@@ -1419,7 +1436,10 @@ class AudioRecognition:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
 
-            if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
+            if (
+                ev.raw_accumulated_silence >= self._turn_detector_min_silence_duration
+                and self._speaking
+            ):
                 if (
                     self._turn_detector_stream is not None
                     and self._turn_detector_prediction_fut is None
@@ -1447,6 +1467,16 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
+                # Start a missing prediction if the silence threshold was never
+                # crossed during INFERENCE_DONE events (can happen when the VAD
+                # min_silence_duration equals the detector minimum due to the
+                # pre-increment event ordering in the VAD loop).
+                if (
+                    vad_speech_started
+                    and self._turn_detector_stream is not None
+                    and self._turn_detector_prediction_fut is None
+                ):
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 
