@@ -239,3 +239,33 @@ async def test_update_options_vad_check_is_atomic() -> None:
         assert agent.vad is old_vad
     finally:
         await session.aclose()
+
+
+def test_agent_tts_text_transforms_init_and_update() -> None:
+    agent = Agent(instructions="test", tts_text_transforms=["filter_emoji"])
+    assert agent.tts_text_transforms == ["filter_emoji"]
+
+    agent.update_options(tts_text_transforms=["filter_markdown"])
+    assert agent.tts_text_transforms == ["filter_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_agent_tts_text_transforms_resolution_in_session() -> None:
+    agent = Agent(instructions="test", llm=FakeLLM(), tts=FakeTTS())
+    session = AgentSession(
+        turn_handling={"turn_detection": None},
+        tts_text_transforms=["filter_markdown"],
+    )
+    await session.start(agent)
+    try:
+        activity = session._activity
+        assert activity is not None
+        # Falls back to session options when unset on agent
+        assert activity.tts_text_transforms == ["filter_markdown"]
+
+        # Updating agent overrides session options
+        agent.update_options(tts_text_transforms=["filter_emoji"])
+        assert activity.tts_text_transforms == ["filter_emoji"]
+    finally:
+        await session.aclose()
+

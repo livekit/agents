@@ -6,7 +6,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -111,6 +111,7 @@ from .turn import (
 if TYPE_CHECKING:
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
+    from .transcription.text_transforms import TextTransforms
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -721,6 +722,12 @@ class AgentActivity(RecognitionHooks):
         )
 
         return use_aligned_transcript is True
+
+    @property
+    def tts_text_transforms(self) -> Sequence[TextTransforms] | None:
+        if is_given(self._agent.tts_text_transforms):
+            return self._agent.tts_text_transforms
+        return self._session.options.tts_text_transforms
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -3208,7 +3215,7 @@ class AgentActivity(RecognitionHooks):
                     node=self._agent.tts_node,
                     input=audio_source,
                     model_settings=model_settings,
-                    text_transforms=self._session.options.tts_text_transforms,
+                    text_transforms=self.tts_text_transforms,
                     model=self.tts.model if self.tts else None,
                     provider=self.tts.provider if self.tts else None,
                 )
@@ -3548,7 +3555,7 @@ class AgentActivity(RecognitionHooks):
                         node=self._agent.tts_node,
                         input=tts_text,
                         model_settings=model_settings,
-                        text_transforms=self._session.options.tts_text_transforms,
+                        text_transforms=self.tts_text_transforms,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )
@@ -4355,7 +4362,7 @@ class AgentActivity(RecognitionHooks):
                         node=self._agent.tts_node,
                         input=tts_text_input,
                         model_settings=model_settings,
-                        text_transforms=self._session.options.tts_text_transforms,
+                        text_transforms=self.tts_text_transforms,
                         model=self.tts.model if self.tts else None,
                         provider=self.tts.provider if self.tts else None,
                     )
