@@ -356,6 +356,26 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
+class _HealthySignallingChan(aio.Chan[SpeechEvent]):
+    """Event channel that clears the retry budget the moment an event is published.
+
+    The reset has to happen in the producer's own turn. `send_nowait` only wakes the
+    metrics consumer, it does not run it, so an attempt that publishes an event and
+    then raises in the same event-loop turn would reach the terminal branch of
+    `RecognizeStream._main_task` with the budget still exhausted. Signalling here
+    also ties the reset to the attempt that produced the event, rather than to
+    whenever a consumer happens to drain it.
+    """
+
+    def __init__(self, stream: RecognizeStream) -> None:
+        super().__init__()
+        self._stream = stream
+
+    def send_nowait(self, value: SpeechEvent) -> None:
+        self._stream._num_retries = 0
+        super().send_nowait(value)
+
+
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
@@ -380,7 +400,7 @@ class RecognizeStream(ABC):
         self._stt = stt
         self._conn_options = conn_options
         self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
-        self._event_ch = aio.Chan[SpeechEvent]()
+        self._event_ch = _HealthySignallingChan(self)
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -538,9 +558,6 @@ class RecognizeStream(ABC):
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
-            elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                # reset the retry count after a successful recognition
-                self._num_retries = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
         """Push audio to be recognized"""
