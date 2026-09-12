@@ -836,3 +836,70 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         assert session._unsent_item_ids == set()
     finally:
         await session.aclose()
+
+
+async def test_generate_reply_appends_a_turn_when_the_context_is_mutable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini needs the context to end on a user turn, so a placeholder one triggers the reply."""
+    async with _make_connected_session(monkeypatch) as session:
+        assert session._realtime_model.capabilities.mutable_chat_context
+        fut = session.generate_reply(instructions="say hi")
+
+        contents = [m for m in await _drain_sent(session) if isinstance(m, types.LiveClientContent)]
+        assert len(contents) == 1
+        assert contents[0].turn_complete is True
+        assert [(p.text, c.role) for c in contents[0].turns or [] for p in c.parts or []] == [
+            ("say hi", "model"),
+            (".", "user"),
+        ]
+        fut.cancel()
+
+
+async def test_generate_reply_uses_realtime_text_when_the_context_is_immutable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session that owns its history rejects client turns; realtime text starts the turn.
+
+    Refusing generate_reply outright left these models with no way to open an
+    agent-initiated turn -- greetings, handoffs and post-tool prompts all go through it.
+    """
+    async with _make_configured_session(
+        monkeypatch, model="gemini-3.1-flash-live-preview"
+    ) as session:
+        assert not session._realtime_model.capabilities.mutable_chat_context
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = object()  # type: ignore[assignment]
+        try:
+            fut = session.generate_reply(instructions="say hi")
+            assert not fut.done(), "the reply is no longer refused up front"
+
+            sent = await _drain_sent(session)
+            assert not [m for m in sent if isinstance(m, types.LiveClientContent)]
+            inputs = [m for m in sent if isinstance(m, types.LiveClientRealtimeInput)]
+            assert [m.text for m in inputs] == ["say hi"]
+            fut.cancel()
+        finally:
+            session._active_session = None
+
+
+async def test_generate_reply_without_instructions_nudges_an_immutable_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`instructions` is often absent, so fall back to the same "." nudge the other path uses."""
+    async with _make_configured_session(
+        monkeypatch, model="gemini-3.1-flash-live-preview"
+    ) as session:
+        session._msg_ch = utils.aio.Chan[ClientEvents]()
+        session._active_session = object()  # type: ignore[assignment]
+        try:
+            fut = session.generate_reply()
+            inputs = [
+                m
+                for m in await _drain_sent(session)
+                if isinstance(m, types.LiveClientRealtimeInput)
+            ]
+            assert [m.text for m in inputs] == ["."]
+            fut.cancel()
+        finally:
+            session._active_session = None
