@@ -27,7 +27,7 @@ import pytest
 from livekit import rtc
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
-from livekit.plugins.boson_avatar.api import AvatarSessionInfo
+from livekit.plugins.boson_avatar.api import AvatarSessionInfo, AvatarSessionStartError
 from livekit.plugins.boson_avatar.avatar import SAMPLE_RATE, AvatarSession
 from livekit.plugins.boson_avatar.errors import BosonAvatarException
 
@@ -354,6 +354,51 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             await avatar.aclose()
 
         api_client.end_session.assert_awaited_once_with("provider-session-1")
+        base_close.assert_awaited_once()
+        self.assertIsNone(avatar.session_id)
+
+    async def test_invalid_start_response_retains_session_for_cleanup_retry(self) -> None:
+        session_info = AvatarSessionInfo("provider-session-1", "avatar-1")
+        api_client = SimpleNamespace(
+            start_session=AsyncMock(
+                side_effect=AvatarSessionStartError(
+                    "invalid active session", session_info=session_info
+                )
+            ),
+            end_session=AsyncMock(side_effect=[RuntimeError("delete failed"), None]),
+        )
+
+        with (
+            patch(
+                "livekit.plugins.boson_avatar.avatar.BosonAvatarAPI",
+                return_value=api_client,
+            ),
+            patch(
+                "livekit.plugins.boson_avatar.avatar.get_job_context",
+                return_value=None,
+            ),
+            patch.object(BaseAvatarSession, "start", new=AsyncMock()),
+            patch.object(BaseAvatarSession, "aclose", new=AsyncMock()) as base_close,
+            self.assertLogs("livekit.plugins.boson_avatar", level="WARNING"),
+        ):
+            avatar = AvatarSession(
+                avatar_id="asset-1",
+                api_key="boson-key",
+                avatar_participant_identity="avatar-1",
+            )
+            with self.assertRaises(AvatarSessionStartError):
+                await avatar.start(
+                    _AgentSession(),  # type: ignore[arg-type]
+                    _Room(),  # type: ignore[arg-type]
+                    livekit_url="wss://tenant.livekit.cloud",
+                    livekit_api_key="livekit-key",
+                    livekit_api_secret="livekit-secret-with-enough-entropy",
+                )
+            self.assertEqual(avatar.session_id, "provider-session-1")
+            await avatar.aclose()
+
+        self.assertEqual(api_client.end_session.await_count, 2)
+        api_client.end_session.assert_awaited_with("provider-session-1")
         base_close.assert_awaited_once()
         self.assertIsNone(avatar.session_id)
 

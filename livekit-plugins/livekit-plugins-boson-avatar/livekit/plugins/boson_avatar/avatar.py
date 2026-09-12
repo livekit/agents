@@ -34,7 +34,7 @@ from livekit.agents import (
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import AvatarSessionInfo, BosonAvatarAPI
+from .api import AvatarSessionInfo, AvatarSessionStartError, BosonAvatarAPI
 from .errors import BosonAvatarException
 from .log import logger
 
@@ -303,6 +303,8 @@ class AvatarSession(BaseAvatarSession[Any]):
             if session_info is None and create_task is not None:
                 try:
                     session_info = await create_task
+                except AvatarSessionStartError as exc:
+                    session_info = exc.session_info
                 except Exception:
                     session_info = None
             if session_info is not None:

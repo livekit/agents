@@ -25,7 +25,12 @@ import pytest
 from typing_extensions import Self
 
 from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
-from livekit.plugins.boson_avatar.api import AvatarInfo, BosonAvatarAPI
+from livekit.plugins.boson_avatar.api import (
+    AvatarInfo,
+    AvatarSessionInfo,
+    AvatarSessionStartError,
+    BosonAvatarAPI,
+)
 from livekit.plugins.boson_avatar.errors import BosonAvatarException
 
 pytestmark = pytest.mark.unit
@@ -361,7 +366,7 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
 
         with (
             self.assertLogs("livekit.plugins.boson_avatar", level="WARNING") as logs,
-            self.assertRaises(BosonAvatarException),
+            self.assertRaises(AvatarSessionStartError) as raised,
         ):
             await client.start_session(
                 avatar_id="asset-1",
@@ -372,6 +377,10 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
                 publisher_identity="voice-1",
             )
 
+        self.assertEqual(
+            raised.exception.session_info,
+            AvatarSessionInfo("avatar-session-1", "wrong-avatar"),
+        )
         record = logs.records[0]
         self.assertIsNone(record.exc_info)
         self.assertEqual(record.error_type, "APIConnectionError")
@@ -489,6 +498,8 @@ class BosonAvatarAPITest(unittest.IsolatedAsyncioTestCase):
         for api_url in (
             "http://localhost:8400/v1/",
             "http://worker.localhost:8400/v1/",
+            "http://LOCALHOST:8400/v1/",
+            "http://Worker.LOCALHOST:8400/v1/",
             "http://127.0.0.1:8400/v1/",
             "http://[::1]:8400/v1/",
         ):
