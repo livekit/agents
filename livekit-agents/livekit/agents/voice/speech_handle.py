@@ -385,9 +385,8 @@ class SpeechHandle:
         self, carry: tuple[trace.Span, float | None, str | None], *, discarded: SpeechHandle
     ) -> None:
         """Adopt the ``agent_turn`` taken from ``discarded`` (see ``_take_agent_turn``)."""
+        # adopted even when sampled out: the duration metric still needs the start time
         span, started_at, agent_name = carry
-        if not span.is_recording():
-            return
         span.add_event(
             "preemptive_generation_discarded", {trace_types.ATTR_SPEECH_ID: discarded.id}
         )

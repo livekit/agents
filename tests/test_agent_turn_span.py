@@ -204,3 +204,22 @@ def test_turn_duration_metric_is_recorded_when_the_span_is_sampled_out(
     handle._mark_done()
     record.assert_called_once()
     assert record.call_args.kwargs == {"agent_name": "a"}
+
+
+def test_sampled_out_turn_is_still_handed_to_the_successor() -> None:
+    """The successor adopts a non-recording turn too, so the duration metric keeps the
+    discarded attempt's start time."""
+    from livekit.agents.voice.agent_activity import _continue_discarded_turn
+    from livekit.agents.voice.speech_handle import SpeechHandle
+
+    attempt = SpeechHandle.create(allow_interruptions=True)
+    attempt._agent_turn_span = trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT)
+    attempt._agent_turn_started_at = 1.0
+    attempt._agent_turn_agent_name = "a"
+
+    reply = SpeechHandle.create(allow_interruptions=True)
+    _continue_discarded_turn(attempt, reply)
+    assert attempt._agent_turn_span is None
+    assert reply._agent_turn_span is not None
+    assert reply._agent_turn_started_at == 1.0
+    assert reply._agent_turn_agent_name == "a"
