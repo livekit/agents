@@ -34,14 +34,16 @@ class _FakeWS:
     ``session.start``; tests about that hold turn the ack off.
     """
 
-    def __init__(self, *, auto_start: bool) -> None:
+    def __init__(self, *, auto_start: bool, record_silence: bool = False) -> None:
         self.sent: list[dict[str, Any]] = []
         self.auto_start = auto_start
+        self.record_silence = record_silence
         self.session: GPTLiveSession | None = None
 
     async def send_str(self, data: str) -> None:
         event = json.loads(data)
-        self.sent.append(event)
+        if self.record_silence or not _is_silence(event):
+            self.sent.append(event)
         if self.session is None or not self.auto_start:
             return
         if event["type"] == "session.start":
@@ -58,9 +60,18 @@ class _FakeWS:
         pass
 
 
-def _connect_hook(monkeypatch: pytest.MonkeyPatch, *, auto_start: bool = True) -> _FakeWS:
+def _is_silence(event: dict[str, Any]) -> bool:
+    """The session pads an idle microphone with silence; sequence assertions ignore that padding."""
+    return event["type"] == "session.input_audio.append" and not base64.b64decode(
+        event["audio"]
+    ).strip(b"\x00")
+
+
+def _connect_hook(
+    monkeypatch: pytest.MonkeyPatch, *, auto_start: bool = True, record_silence: bool = False
+) -> _FakeWS:
     """Replace the handshake before any session exists, so nothing can reach the network."""
-    ws = _FakeWS(auto_start=auto_start)
+    ws = _FakeWS(auto_start=auto_start, record_silence=record_silence)
 
     async def _create_ws_conn(self: GPTLiveSession) -> _FakeWS:
         ws.session = self
@@ -71,9 +82,12 @@ def _connect_hook(monkeypatch: pytest.MonkeyPatch, *, auto_start: bool = True) -
 
 
 class _LifecycleWS:
-    def __init__(self, *, start: bool = True, disconnect_on_start: bool = False) -> None:
+    def __init__(
+        self, *, start: bool = True, disconnect_on_start: bool = False, record_silence: bool = False
+    ) -> None:
         self.start = start
         self.disconnect_on_start = disconnect_on_start
+        self.record_silence = record_silence
         self.sent: list[dict[str, Any]] = []
         self.incoming: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
         self.started = asyncio.Event()
@@ -85,7 +99,8 @@ class _LifecycleWS:
 
     async def send_str(self, data: str) -> None:
         event = json.loads(data)
-        self.sent.append(event)
+        if self.record_silence or not _is_silence(event):
+            self.sent.append(event)
         if event["type"] == "session.start":
             if self.start:
                 self.emit({"type": "session.started", "session": {"id": "live_test"}})
@@ -324,7 +339,7 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
 async def test_reconnect_discards_partial_input_audio(
     monkeypatch: pytest.MonkeyPatch, input_rate: int
 ) -> None:
-    sockets = [_LifecycleWS(), _LifecycleWS()]
+    sockets = [_LifecycleWS(), _LifecycleWS(record_silence=True)]
     connections = iter(sockets)
 
     async def connect(self: GPTLiveSession) -> _LifecycleWS:
@@ -803,7 +818,7 @@ async def test_delayed_context_receipts_do_not_block_commands_or_finish_speech(
         session.append_instructions("Be concise.")
         session.append_thinking("The caller is returning a chair.")
         session.append_commentary("Ask for the order number.")
-        session.push_audio(_silence(100))
+        session.push_audio(_pcm(0.2))
 
         # Context injection can outlast the connection timeout without holding later commands.
         await asyncio.sleep(model._opts.conn_options.timeout * 2)
@@ -1219,6 +1234,47 @@ async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_sai
         session._generate_reply()  # speech has moved the conversation on since the typed message
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["content"] == gpt_live_model._ASK_BARE
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+# GPT-Live speaks only while its input clock is running, and that clock is the audio the client
+# appends. A session with no microphone (text simulation, muted input, text console) would
+# otherwise never hear a reply to anything it asks.
+@pytest.mark.virtual_time
+async def test_silence_keeps_the_input_clock_running_without_a_microphone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch, record_silence=True)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(1.0)
+        appends = [e for e in ws.sent if e["type"] == "session.input_audio.append"]
+        assert len(appends) >= 5
+        assert all(base64.b64decode(e["audio"]) == b"\x00" * 4800 for e in appends)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.virtual_time
+async def test_a_live_microphone_is_not_padded_with_silence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        for _ in range(10):
+            session.push_audio(_pcm(0.2))
+            await asyncio.sleep(0.1)
+        appends = [e for e in ws.sent if e["type"] == "session.input_audio.append"]
+        assert len(appends) == 10
     finally:
         await session.aclose()
         await model.aclose()

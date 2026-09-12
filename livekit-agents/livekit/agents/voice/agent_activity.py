@@ -420,14 +420,6 @@ class AgentActivity(RecognitionHooks):
             )
             self._session._warned_realtime_audio_redaction = True
 
-        # a duplex model has no text modality, and the adapter resolves each reply from the audio
-        # the model produces; without audio a text simulation would only time out on turn one
-        if self._text_only and isinstance(self.llm, llm.DuplexRealtimeAdapter):
-            raise RuntimeError(
-                "a DuplexModel speaks only through audio, so it cannot run under a text "
-                "simulation; run `lk agent simulate audio` instead"
-            )
-
         if self._rt_turn_detection_enabled and not self.allow_interruptions:
             raise ValueError(
                 "the RealtimeModel uses a server-side turn detection, "

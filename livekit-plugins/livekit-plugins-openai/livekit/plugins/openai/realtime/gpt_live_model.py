@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import math
 import os
 import time
 from collections.abc import AsyncIterable
@@ -38,6 +39,16 @@ DEFAULT_MODEL = "gpt-live-1"
 DEFAULT_VOICE = "marin"
 DEFAULT_BACKEND_MODEL = "gpt-5.6-luna"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+# the model speaks only while its input clock runs, and that clock is the audio the client appends:
+# a session with no microphone keeps it running with silence
+_INPUT_IDLE_S = 0.2
+_SILENCE_100MS = rtc.AudioFrame(
+    data=b"\x00" * (SAMPLE_RATE // 10 * 2),
+    sample_rate=SAMPLE_RATE,
+    num_channels=NUM_CHANNELS,
+    samples_per_channel=SAMPLE_RATE // 10,
+)
 
 # the service also caps startup history at 8192 tokens and an append at 500; there is no tokenizer
 # here, so those two are the service's to enforce
@@ -302,6 +313,10 @@ class GPTLiveSession(
         )
 
         self._main_atask = asyncio.create_task(self._main_task(), name="GPTLiveSession._main")
+        self._last_audio_at = -math.inf
+        self._silence_atask = asyncio.create_task(
+            self._silence_task(), name="GPTLiveSession._silence"
+        )
 
     # outbound
 
@@ -901,6 +916,21 @@ class GPTLiveSession(
         return self._tools.copy()
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
+        self._last_audio_at = asyncio.get_running_loop().time()
+        self._append_audio(frame)
+
+    async def _silence_task(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(_INPUT_IDLE_S / 2)
+            started = self._session_started_fut
+            if not started.done() or started.cancelled():
+                continue
+            if loop.time() - self._last_audio_at < _INPUT_IDLE_S:
+                continue
+            self._append_audio(_SILENCE_100MS)
+
+    def _append_audio(self, frame: rtc.AudioFrame) -> None:
         # the caller's turn ends on their own audio: this much pushed since their last fragment
         if (speech := self._speech.get("user")) is not None:
             speech.quiet_ms += round(frame.duration * 1000)
@@ -961,6 +991,7 @@ class GPTLiveSession(
 
     async def aclose(self) -> None:
         await super().aclose()
+        await utils.aio.cancel_and_wait(self._silence_atask)
         if not self._session_started_fut.done():
             self._session_started_fut.cancel()
         self._msg_ch.close()

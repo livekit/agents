@@ -934,25 +934,3 @@ async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> N
     assert [e.recoverable for e in errors] == [False]
     assert isinstance(errors[0].error, _Boom)
     assert errors[0].label == fake.duplex_model.label
-
-
-# a duplex model has no text modality: it hears and speaks only audio, and the adapter resolves a
-# reply from the sound the model produces. under a text simulation there is no audio, so the
-# session refuses to start rather than time out on the first turn
-
-
-async def test_a_duplex_model_refuses_a_text_simulation(monkeypatch: pytest.MonkeyPatch) -> None:
-    from livekit.agents.voice import Agent, AgentSession
-
-    monkeypatch.setattr(AgentSession, "_text_only", property(lambda self: True))
-    session = AgentSession(llm=_FakeDuplexModel())
-    with pytest.raises(RuntimeError, match="text simulation"):
-        await session.start(Agent(instructions="hi"))
-
-
-async def test_a_duplex_model_starts_outside_a_text_simulation() -> None:
-    from livekit.agents.voice import Agent, AgentSession
-
-    session = AgentSession(llm=_FakeDuplexModel())
-    await session.start(Agent(instructions="hi"))
-    await session.aclose()
