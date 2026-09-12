@@ -86,7 +86,7 @@ ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
 
 _CODEC_TO_MIME: dict[str, str] = {
     "mp3": "audio/mp3",
-    "wav": "audio/pcm",
+    "wav": "audio/wav",
     "opus": "audio/opus",
     "flac": "audio/flac",
     "aac": "audio/aac",
@@ -985,6 +985,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._client_request_id = request_id
         self._server_request_id = None
         mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
+        if self._opts.output_audio_codec == "wav":
+            # Sarvam WebSocket streaming sends headerless raw PCM chunks for "wav"
+            mime_type = "audio/pcm"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
@@ -1345,6 +1348,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
+            if (
+                self._opts.output_audio_codec == "wav"
+                and audio_bytes.startswith(b"RIFF")
+                and len(audio_bytes) >= 44
+            ):
+                audio_bytes = audio_bytes[44:]
             if self._opts.output_audio_codec in _TELEPHONY_CODECS:
                 audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
             output_emitter.push(audio_bytes)
