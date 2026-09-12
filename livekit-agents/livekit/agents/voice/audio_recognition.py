@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import time
 from collections import deque
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -75,6 +76,10 @@ class _EndOfTurnInfo:
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
+    user_turn_span: trace.Span | None = None
+    """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
+    ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
+    user_turn_span_adopted: bool = False
 
 
 def _compute_end_of_turn_metrics(
@@ -330,6 +335,16 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._user_turn_start: float | None = None
+        # eou_wait: one span per user turn, from the last speech anchor to the turn decision
+        self._eou_wait_span: trace.Span | None = None
+        self._eou_wait_started_at_ns: int | None = None
+        self._eou_wait_rearms: int = 0
+        self._eou_wait_not_committed: int = 0
+        # eou_wait spans this user turn went through that ended with the user resuming
+        self._user_turn_resumes: int = 0
+        # latest timestamp recorded inside the wait; the span must not end before it
+        self._eou_wait_floor_ns: int | None = None
+        self._eou_detection_span: trace.Span | None = None
         self._stt_request_ids: list[str] = []
         self._closing = asyncio.Event()
         self.__stt_context: BaseModel | None = None
@@ -379,6 +394,8 @@ class AudioRecognition:
                         if not self._end_of_turn_task.done():
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
+                    # the pending decision is abandoned with the mode; the user turn stays open
+                    self._end_eou_wait_span("dropped")
                     self._user_turn_committed = False
                     if self._turn_detector_stream is not None:
                         self._turn_detector_stream.cancel_inference()
@@ -1349,6 +1366,7 @@ class AudioRecognition:
             # otherwise fall back to message arrival time.
             if self._speech_start_time is None:
                 self._speech_start_time = ev.speech_start_time or time.time()
+            self._end_eou_wait_span("user_resumed", end_time=ev.speech_start_time or now)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
@@ -1369,6 +1387,7 @@ class AudioRecognition:
                 self._vad_speech_started = True
 
             self._cancel_transcription_timeout()
+            self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
                 self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
@@ -1510,7 +1529,18 @@ class AudioRecognition:
             speech_start_time: float | None = None,
         ) -> None:
             endpointing_delay = self._endpointing.min_delay
-            user_turn_span = self._ensure_user_turn_span()
+            # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
+            # anchor known, so the eou_wait child back-dated to last_speaking_time fits inside
+            anchors = [t for t in (speech_start_time, last_speaking_time) if t is not None]
+            user_turn_span = self._ensure_user_turn_span(
+                start_time=min(anchors) if anchors else None
+            )
+            eou_wait_span = self._ensure_eou_wait_span(
+                user_turn_span,
+                trigger=trigger,
+                last_speaking_time=last_speaking_time,
+                endpointing_delay=endpointing_delay,
+            )
 
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
@@ -1520,9 +1550,13 @@ class AudioRecognition:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
+                    # ended explicitly: _end_eou_wait_span closes it early if the user resumes
                     with (
-                        tracer.use_span(user_turn_span),
-                        tracer.start_as_current_span("eou_detection") as eou_detection_span,
+                        tracer.use_span(eou_wait_span),
+                        tracer.start_as_current_span(
+                            "eou_detection", end_on_exit=False
+                        ) as eou_detection_span,
+                        self._track_eou_detection_span(eou_detection_span),
                     ):
                         from_cache = False
                         prediction_event: TurnDetectionEvent | None = None
@@ -1676,6 +1710,9 @@ class AudioRecognition:
                                 prediction_event.detection_delay,
                             )
 
+            if eou_wait_span.is_recording():  # the wait may have ended with resumed speech
+                eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
+
             extra_sleep = endpointing_delay
             if last_speaking_time:
                 extra_sleep += last_speaking_time - time.time()
@@ -1702,15 +1739,15 @@ class AudioRecognition:
                 last_final_transcript_time=last_final_transcript_time,
                 now=time.time(),
             )
-            committed = self._hooks.on_end_of_turn(
-                _EndOfTurnInfo(
-                    skip_reply=skip_reply,
-                    new_transcript=self._audio_transcript,
-                    transcript_confidence=confidence_avg,
-                    metrics=metrics,
-                    backchannel_over_agent=self._turn_backchannel_over_agent,
-                )
+            end_of_turn = _EndOfTurnInfo(
+                skip_reply=skip_reply,
+                new_transcript=self._audio_transcript,
+                transcript_confidence=confidence_avg,
+                metrics=metrics,
+                backchannel_over_agent=self._turn_backchannel_over_agent,
+                user_turn_span=user_turn_span,
             )
+            committed = self._hooks.on_end_of_turn(end_of_turn)
             if committed:
                 logger.debug(
                     "user turn committed",
@@ -1736,7 +1773,10 @@ class AudioRecognition:
                     user_turn_span.set_attribute(
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
-                user_turn_span.end()
+                self._end_eou_wait_span("committed")
+                self._stamp_user_turn_resumes(user_turn_span)
+                if not end_of_turn.user_turn_span_adopted:
+                    user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
                 self._stt_request_ids = []
@@ -1757,6 +1797,9 @@ class AudioRecognition:
                     self._turn_detector_stream.flush(reason="turn committed")
                     self._turn_detector_prediction_fut = None
                     self._turn_detector_flushed = True
+
+            elif eou_wait_span.is_recording():
+                self._eou_wait_not_committed += 1
 
             # reset turn-scoped barge-in state once per logical turn (commit or drop)
             self._turn_backchannel_over_agent = False
@@ -1957,7 +2000,124 @@ class AudioRecognition:
         return self._user_turn_span
 
     def _end_user_turn_span(self) -> None:
+        # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
+        self._end_eou_wait_span("dropped")
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
+            self._stamp_user_turn_resumes(self._user_turn_span)
             self._user_turn_span.end()
         self._user_turn_span = None
         self._user_turn_start = None
+
+    def _stamp_user_turn_resumes(self, user_turn_span: trace.Span) -> None:
+        resumes, self._user_turn_resumes = self._user_turn_resumes, 0
+        if resumes and user_turn_span.is_recording():
+            user_turn_span.set_attribute(trace_types.ATTR_EOU_RESUME_COUNT, resumes)
+
+    def _ensure_eou_wait_span(
+        self,
+        user_turn_span: trace.Span,
+        *,
+        trigger: str,
+        last_speaking_time: float | None,
+        endpointing_delay: float,
+    ) -> trace.Span:
+        """The turn's ``eou_wait`` span, created on the first end-of-turn trigger and back-dated
+        to ``last_speaking_time``. Later triggers for the same turn (a late STT final, another
+        VAD end of speech) re-arm the wait as an event rather than start a new span."""
+        span = self._eou_wait_span
+        if span is not None and span.is_recording():
+            self._eou_wait_rearms += 1
+            self._eou_wait_floor_ns = time.time_ns()
+            span.add_event(
+                "rearmed",
+                {trace_types.ATTR_EOU_SOURCE: trigger},
+                timestamp=self._eou_wait_floor_ns,
+            )
+            span.set_attributes(
+                {
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    # the delay in force now; a prediction may raise it later
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                }
+            )
+            return span
+
+        now = time.time()
+        started_at = min(last_speaking_time, now) if last_speaking_time is not None else now
+        # lk.eou.wait_duration is computed from this same value, so it equals the span's length
+        started_at_ns = int(started_at * 1_000_000_000)
+        with tracer.use_span(user_turn_span):
+            span = tracer.start_span(
+                "eou_wait",
+                start_time=started_at_ns,
+                attributes={
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                },
+            )
+        self._eou_wait_span = span
+        self._eou_wait_started_at_ns = started_at_ns
+        self._eou_wait_rearms = 0
+        self._eou_wait_not_committed = 0
+        self._eou_wait_floor_ns = None
+        return span
+
+    @contextlib.contextmanager
+    def _track_eou_detection_span(self, span: trace.Span) -> Iterator[None]:
+        """Own the ``eou_detection`` span's end so the wait can close it early."""
+        self._eou_detection_span = span
+        try:
+            yield
+        finally:
+            if self._eou_detection_span is span:
+                self._eou_detection_span = None
+            if span.is_recording():
+                self._eou_wait_floor_ns = time.time_ns()
+                span.end(end_time=self._eou_wait_floor_ns)
+
+    def _end_eou_wait_span(self, outcome: str, *, end_time: float | None = None) -> None:
+        span, self._eou_wait_span = self._eou_wait_span, None
+        started_at_ns, self._eou_wait_started_at_ns = self._eou_wait_started_at_ns, None
+        rearms, self._eou_wait_rearms = self._eou_wait_rearms, 0
+        not_committed, self._eou_wait_not_committed = self._eou_wait_not_committed, 0
+        if span is None or not span.is_recording():
+            return
+
+        requested_ns = int((end_time if end_time is not None else time.time()) * 1_000_000_000)
+        ended_at_ns = requested_ns
+        if started_at_ns is not None:
+            # resumed speech can carry a VAD timestamp from before the anchor; never negative
+            ended_at_ns = max(ended_at_ns, started_at_ns)
+
+        detection, self._eou_detection_span = self._eou_detection_span, None
+        if detection is not None and detection.is_recording():
+            # the detector is still running: end it first so the child stays inside the parent
+            self._eou_wait_floor_ns = time.time_ns()
+            detection.add_event(
+                "superseded",
+                {trace_types.ATTR_EOU_OUTCOME: outcome},
+                timestamp=self._eou_wait_floor_ns,
+            )
+            detection.end(end_time=self._eou_wait_floor_ns)
+        floor_ns, self._eou_wait_floor_ns = self._eou_wait_floor_ns, None
+        if floor_ns is not None:
+            # VAD reports a resume after the fact: never end before what the span contains
+            ended_at_ns = max(ended_at_ns, floor_ns)
+        if outcome == "user_resumed":
+            span.add_event("user_resumed", timestamp=max(requested_ns, started_at_ns or 0))
+        span.set_attributes(
+            {
+                trace_types.ATTR_EOU_OUTCOME: outcome,
+                # same integers as the span bounds, so the attribute equals the span's length
+                trace_types.ATTR_EOU_WAIT_DURATION: (
+                    (ended_at_ns - started_at_ns) / 1_000_000_000
+                    if started_at_ns is not None
+                    else 0.0
+                ),
+                trace_types.ATTR_EOU_REARM_COUNT: rearms,
+                trace_types.ATTR_EOU_NOT_COMMITTED_COUNT: not_committed,
+            }
+        )
+        span.end(end_time=ended_at_ns)
+        if outcome == "user_resumed":
+            self._user_turn_resumes += 1

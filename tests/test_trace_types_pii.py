@@ -163,6 +163,14 @@ SAFE_KEYS = frozenset(
         "gen_ai.client.token.usage",
         "gen_ai.execute_tool.duration",
         "gen_ai.invoke_agent.duration",
+        # eou_wait / speech scheduling (timings and enums)
+        "lk.eou.outcome",
+        "lk.eou.wait_duration",
+        "lk.eou.rearm_count",
+        "lk.eou.not_committed_count",
+        "lk.eou.resume_count",
+        "lk.on_user_turn_completed_delay",
+        "lk.speech.queue_wait",
         # event loop blocking (timings, task name, source-location stack; no values)
         "lk.blocking.duration",
         "lk.blocking.threshold",

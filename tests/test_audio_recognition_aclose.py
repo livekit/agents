@@ -34,6 +34,13 @@ class TestAudioRecognitionAclose:
         audio_recognition._AudioRecognition__stt_context = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
+        audio_recognition._eou_wait_span = None
+        audio_recognition._eou_wait_started_at_ns = None
+        audio_recognition._eou_wait_rearms = 0
+        audio_recognition._eou_wait_floor_ns = None
+        audio_recognition._eou_wait_not_committed = 0
+        audio_recognition._user_turn_resumes = 0
+        audio_recognition._eou_detection_span = None
         audio_recognition._transcription_timeout_handle = None
 
         return audio_recognition

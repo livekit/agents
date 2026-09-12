@@ -214,6 +214,42 @@ class _PausedSpeechInfo:
     timeout: float
 
 
+def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
+    """End the ``user_turn`` span the activity adopted from recognition (see ``_EndOfTurnInfo``).
+
+    Module-level: tests drive the reply tasks with stand-in activities."""
+    if info.user_turn_span_adopted and info.user_turn_span is not None:
+        if info.user_turn_span.is_recording():
+            info.user_turn_span.end()
+        info.user_turn_span_adopted = False
+
+
+def _record_user_turn_stages(span: trace.Span, user_metrics: llm.MetricsReport) -> None:
+    """The stages between the user stopping and the reply starting, next to lk.e2e_latency on
+    the reply's agent_turn: a per-turn breakdown readable off one span."""
+    attrs: dict[str, float] = {}
+    if (v := user_metrics.get("end_of_turn_delay")) is not None:
+        attrs[trace_types.ATTR_END_OF_TURN_DELAY] = v
+    if (v := user_metrics.get("transcription_delay")) is not None:
+        attrs[trace_types.ATTR_TRANSCRIPTION_DELAY] = v
+    if (v := user_metrics.get("on_user_turn_completed_delay")) is not None:
+        attrs[trace_types.ATTR_ON_USER_TURN_COMPLETED_DELAY] = v
+    if attrs:
+        span.set_attributes(attrs)
+
+
+def _record_queue_wait(speech_handle: SpeechHandle) -> None:
+    """Stamp how long the speech sat in the queue on its agent_turn span.
+
+    Module-level: tests drive the reply tasks with stand-in activities."""
+    if (
+        queue_wait := speech_handle._queue_wait()
+    ) is None or speech_handle._agent_turn_context is None:
+        return  # no agent_turn span yet: never fall back to whatever span is current
+    span = trace.get_current_span(context=speech_handle._agent_turn_context)
+    span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
+
+
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
@@ -2549,6 +2585,8 @@ class AgentActivity(RecognitionHooks):
             self._cancel_false_interruption_timer()
 
         old_task = self._user_turn_completed_atask
+        # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
+        info.user_turn_span_adopted = info.user_turn_span is not None
         self._user_turn_completed_atask = self._create_speech_task(
             self._user_turn_completed_task(old_task, info),
             name="AgentActivity._user_turn_completed_task",
@@ -2557,6 +2595,14 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
+        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
+    ) -> None:
+        try:
+            await self._user_turn_completed_impl(old_task, info)
+        finally:
+            _end_user_turn_span(info)
+
+    async def _user_turn_completed_impl(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
         if old_task is not None:
@@ -2639,15 +2685,32 @@ class AgentActivity(RecognitionHooks):
         # Agent.chat_ctx
         temp_mutable_chat_ctx = self._agent.chat_ctx.copy()
         start_time = time.perf_counter()
-        try:
-            await self._agent.on_user_turn_completed(
-                temp_mutable_chat_ctx, new_message=user_message
-            )
-        except StopResponse:
-            return  # ignore this turn
-        except Exception:
-            logger.exception("error occurred during on_user_turn_completed")
-            return
+        # user code that gates the reply; without a span a slow hook is an unexplained gap
+        with tracer.start_as_current_span(
+            "on_user_turn_completed",
+            context=(
+                trace.set_span_in_context(info.user_turn_span)
+                if info.user_turn_span_adopted and info.user_turn_span is not None
+                else self._session._root_span_context
+            ),
+            attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
+        ) as hook_span:
+            try:
+                await self._agent.on_user_turn_completed(
+                    temp_mutable_chat_ctx, new_message=user_message
+                )
+            except StopResponse:
+                hook_span.add_event("stop_response")
+                return  # ignore this turn
+            except Exception as e:
+                # the message may quote the transcript: honour the session's redaction too
+                trace_utils.record_exception(
+                    hook_span,
+                    e,
+                    redacted=self._session._redaction_enabled or trace_utils.redaction_enabled(),
+                )
+                logger.exception("error occurred during on_user_turn_completed")
+                return
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
@@ -2983,6 +3046,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3155,6 +3219,7 @@ class AgentActivity(RecognitionHooks):
                 e2e_latency = started_speaking_at - _previous_user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                _record_user_turn_stages(current_span, _previous_user_metrics)
 
         if forwarded_text and add_to_chat_ctx:
             msg = self._agent._chat_ctx.add_message(
@@ -3477,6 +3542,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
@@ -3654,6 +3720,7 @@ class AgentActivity(RecognitionHooks):
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
                 assistant_metrics["e2e_latency"] = e2e_latency
                 current_span.set_attribute(trace_types.ATTR_E2E_LATENCY, e2e_latency)
+                _record_user_turn_stages(current_span, user_metrics)
 
             if self._session._unanswered_user_metrics is user_metrics:
                 self._session._unanswered_user_metrics = None
@@ -3878,6 +3945,7 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.allow_interruptions and not self._rt_overlapping_speech_enabled:
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
+        # the queue wait is recorded by _realtime_generation_task, which owns the agent_turn span
         if speech_handle.interrupted:
             await utils.aio.cancel_and_wait(*authorization_tasks)
             return
@@ -4119,6 +4187,7 @@ class AgentActivity(RecognitionHooks):
             authorization_tasks.append(asyncio.ensure_future(self._user_silence_event.wait()))
         await speech_handle.wait_if_not_interrupted(authorization_tasks)
         speech_handle._clear_authorization()
+        _record_queue_wait(speech_handle)
 
         if speech_handle.interrupted:
             # nothing was played, but the response may still be generating server-side

@@ -83,6 +83,11 @@ def _make_recognition(
     # only reached by the stt-mode END_OF_SPEECH / START_OF_SPEECH branches
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
     ar._vad_stream = None
