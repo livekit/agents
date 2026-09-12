@@ -536,6 +536,96 @@ async def test_a_fragment_that_lags_its_audio_anchors_at_the_bursts_onset(duplex
     assert first.start_time == pytest.approx(0.0)
 
 
+async def test_a_fragment_that_lags_past_the_last_frame_still_joins_the_burst(duplex) -> None:
+    """The last audible frame is enough: a later transcript must not wait for another one."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    await _settle()
+    first_id = session._burst.id if session._burst is not None else None
+    fake.say("Hello there.", start_ms=9000, end_ms=9400)
+    fake.audio_ch.close()
+    await _settle()
+
+    first = session.chat_ctx.get_by_id(first_id) if first_id is not None else None
+    assert first is not None and first.text_content == "Hello there."
+    assert (await asyncio.wait_for(_read(generations[0]), timeout=1))[1] == "Hello there."
+
+
+@pytest.mark.parametrize("when", ["before_close", "in_gap", "after_next"])
+async def test_a_delayed_transcript_keeps_its_original_audio(when: str) -> None:
+    """A fragment describing audio already heard stays on that utterance, even after it closes."""
+    session = llm.DuplexRealtimeAdapter(_FakeDuplexModel(), gate=lambda: FixedGate(0.001)).session()
+    assert isinstance(session, _DuplexRealtimeSession)
+    try:
+        session._on_audio_frame(llm.DuplexAudioFrame(_frame(0.3), start_ms=0))
+        assert session._burst is not None
+        first_id = session._burst.id
+        if when != "before_close":
+            session._close_burst()
+        if when == "after_next":
+            session._on_audio_frame(llm.DuplexAudioFrame(_frame(0.3), start_ms=1000))
+            assert session._burst is not None
+        session._on_transcript_delta(
+            llm.DuplexOutputTranscriptDelta("First utterance.", start_ms=0, end_ms=100)
+        )
+        if when == "before_close":
+            session._close_burst()
+        else:
+            if when == "in_gap":
+                session._on_audio_frame(llm.DuplexAudioFrame(_frame(0.3), start_ms=1000))
+            assert session._burst is not None
+            assert session._burst.transcript == "", "old text was attached to the next burst"
+        first = session.chat_ctx.get_by_id(first_id)
+        assert first is not None and first.text_content == "First utterance."
+    finally:
+        await session.aclose()
+
+
+async def test_a_fragment_that_arrives_after_the_burst_closes_does_not_join_the_next(
+    duplex,
+) -> None:
+    """Late text for a finished utterance must not become the next burst's first fragment."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 1
+    first_id = generations[0].response_id
+
+    fake.say("First utterance.", start_ms=2000, end_ms=2300)
+    fake.push(0.3, count=3)
+    await _settle()
+
+    first = session.chat_ctx.get_by_id(first_id)
+    assert first is not None and first.text_content == "First utterance."
+    assert session._burst is not None
+    assert session._burst.transcript == ""
+
+
+async def test_a_leading_fragment_after_an_untranscribed_burst_still_waits(duplex) -> None:
+    """Text whose span is already past a closed burst is the next utterance, not a backchannel."""
+    fake, session, generations = duplex
+    fake.push(0.001, count=20)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    assert len(generations) == 1
+    first_id = generations[0].response_id
+
+    start_ms = session._audio_ms  # the next utterance starts on the audio that follows the gap
+    fake.say(" Sure.", start_ms=start_ms, end_ms=start_ms + 200)
+    fake.push(0.3, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    first = session.chat_ctx.get_by_id(first_id)
+    assert first is None
+    assert len(generations) == 2
+    assert (await asyncio.wait_for(_read(generations[1]), timeout=1))[1] == " Sure."
+
+
 async def test_a_fragment_is_attached_when_the_audio_reaches_it(duplex) -> None:
     """The model's words run ahead of its voice; a span the sound has not reached yet waits, even
     across a pause in the transcript, and joins this burst if the gate rides the pause out."""
