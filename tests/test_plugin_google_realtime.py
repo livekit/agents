@@ -221,6 +221,28 @@ async def test_tool_call_is_delivered_without_written_call_text(
         assert await _drain_generation(generations[0]) == ("", 0, ["getWeather"])
 
 
+async def test_tool_call_with_turn_complete_is_delivered_before_generation_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A combined terminal content/tool-call response must not close the call channel early."""
+    async with _make_session(monkeypatch) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+        session._start_new_generation()
+
+        # _recv_task defers completion for server content when the same response also
+        # contains a tool call. Reproduce that dispatch order here so the tool call can
+        # still be delivered through the open channel.
+        session._handle_server_content(
+            types.LiveServerContent(turn_complete=True),
+            defer_completion=True,
+        )
+        session._handle_tool_calls(_tool_call(call_id="fc-combined"))
+
+        assert len(generations) == 1
+        assert await _drain_generation(generations[0]) == ("", 0, ["lookup"])
+
+
 async def test_transcript_keeps_model_text_in_text_modality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
