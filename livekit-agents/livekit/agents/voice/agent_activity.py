@@ -6,7 +6,7 @@ import contextvars
 import heapq
 import json
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -245,9 +245,72 @@ def _record_interruption(speech_handle: SpeechHandle) -> None:
     if not speech_handle.interrupted or speech_handle._agent_turn_context is None:
         return
     span = trace.get_current_span(context=speech_handle._agent_turn_context)
+    if not span.is_recording():
+        return
     span.set_attribute(
         trace_types.ATTR_INTERRUPTION_SOURCE, speech_handle._interrupt_source or "programmatic"
     )
+
+
+@contextlib.contextmanager
+def _agent_turn(
+    speech_handle: SpeechHandle,
+    *,
+    root_context: otel_context.Context | None,
+    agent_label: str,
+) -> Iterator[trace.Span]:
+    """The speech's ``agent_turn`` span, made current for one generation.
+
+    One speech handle is one agent turn, however many LLM steps it takes: the follow-up
+    generation after a tool call runs in a new task but continues the open span instead of
+    opening a second turn. Each generation is a ``generation`` event on the span, whose
+    ``lk.generation_id`` names the latest one and ``lk.generation_count`` how many there were.
+    The span ends with the speech (``SpeechHandle._mark_done``), not with the step.
+
+    Module-level for the same reason as ``_record_queue_wait``."""
+    span = speech_handle._agent_turn_span
+    if span is None:
+        span = tracer.start_span(
+            "agent_turn",
+            context=root_context,
+            attributes={trace_types.ATTR_SPEECH_ID: speech_handle.id},
+        )
+        # an agent turn is the convention's `invoke_agent`: the framework running the agent
+        # in-process, with the inference and tool spans nested underneath
+        gen_ai_telemetry.set_agent_attributes(
+            span,
+            operation=trace_types.GenAIOperationName.INVOKE_AGENT,
+            agent_name=agent_label,
+        )
+        speech_handle._agent_turn_span = span
+        speech_handle._agent_turn_context = trace.set_span_in_context(span)
+        speech_handle._agent_turn_started_at = time.perf_counter()
+        speech_handle._agent_turn_agent_name = agent_label
+
+    generation_attrs: dict[str, Any] = {
+        trace_types.ATTR_AGENT_TURN_ID: speech_handle._generation_id
+    }
+    if parent_id := speech_handle._parent_generation_id:
+        generation_attrs[trace_types.ATTR_AGENT_PARENT_TURN_ID] = parent_id
+    span.add_event("generation", generation_attrs)
+    span.set_attributes(
+        {
+            trace_types.ATTR_AGENT_TURN_ID: speech_handle._generation_id,
+            trace_types.ATTR_GENERATION_COUNT: speech_handle._num_steps,
+        }
+    )
+    with tracer.use_span(span, end_on_exit=False):
+        yield span
+
+
+def _continue_discarded_turn(discarded: SpeechHandle | None, successor: SpeechHandle) -> None:
+    """A preemptive generation discarded for ``successor`` (a newer attempt, or the real reply
+    after the transcript changed) hands its open ``agent_turn`` over, so one turn shows the
+    wasted generation and the one that answered. Module-level like ``_record_queue_wait``."""
+    if discarded is None or discarded is successor:
+        return
+    if (carry := discarded._take_agent_turn()) is not None:
+        successor._continue_agent_turn(carry, discarded=discarded)
 
 
 def _record_queue_wait(speech_handle: SpeechHandle) -> None:
@@ -259,7 +322,8 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
     ) is None or speech_handle._agent_turn_context is None:
         return  # no agent_turn span yet: never fall back to whatever span is current
     span = trace.get_current_span(context=speech_handle._agent_turn_context)
-    span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
+    if span.is_recording():
+        span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
 
 
 # NOTE: AgentActivity isn't exposed to the public API
@@ -2504,6 +2568,13 @@ class AgentActivity(RecognitionHooks):
         ):
             return
 
+        # a newer attempt supersedes the current one; if one is created below it continues the
+        # discarded attempt's agent_turn (the cancelled speech only ends once the loop runs)
+        discarded = (
+            self._preemptive_generation.speech_handle
+            if self._preemptive_generation is not None
+            else None
+        )
         self._cancel_preemptive_generation()
 
         if (
@@ -2531,6 +2602,7 @@ class AgentActivity(RecognitionHooks):
             schedule_speech=False,
             input_details=InputDetails(modality="audio"),
         )
+        _continue_discarded_turn(discarded, speech_handle)
 
         self._preemptive_generation = _PreemptiveGeneration(
             speech_handle=speech_handle,
@@ -2768,6 +2840,7 @@ class AgentActivity(RecognitionHooks):
             return
 
         speech_handle: SpeechHandle | None = None
+        discarded_preemptive: SpeechHandle | None = None
         if preemptive := self._preemptive_generation:
             # make sure the on_user_turn_completed didn't change some request parameters
             # otherwise invalidate the preemptive generation
@@ -2797,6 +2870,7 @@ class AgentActivity(RecognitionHooks):
                     "preemptive generation invalidated after `on_user_turn_completed` because "
                     "the transcript, chat context, tools, or tool choice changed",
                 )
+                discarded_preemptive = preemptive.speech_handle
                 preemptive.speech_handle._cancel()
 
             self._preemptive_generation = None
@@ -2809,6 +2883,8 @@ class AgentActivity(RecognitionHooks):
                 chat_ctx=temp_mutable_chat_ctx,
                 input_details=InputDetails(modality="audio"),
             )
+            # the invalidated preemptive attempt answered this same turn: one agent_turn
+            _continue_discarded_turn(discarded_preemptive, speech_handle)
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
@@ -3024,35 +3100,19 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         _previous_user_metrics: llm.MetricsReport | None = None,
     ) -> None:
-        with tracer.start_as_current_span(
-            "agent_turn", context=self._session._root_span_context
-        ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
-            if parent_id := speech_handle._parent_generation_id:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            # an agent turn is the convention's `invoke_agent`: the framework running the
-            # agent in-process, with the inference and tool spans nested underneath
-            gen_ai_telemetry.set_agent_attributes(
-                current_span,
-                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
-                agent_name=self._agent.label,
+        with _agent_turn(
+            speech_handle,
+            root_context=self._session._root_span_context,
+            agent_label=self._agent.label,
+        ):
+            await self._tts_task_impl(
+                speech_handle=speech_handle,
+                text=text,
+                audio=audio,
+                add_to_chat_ctx=add_to_chat_ctx,
+                model_settings=model_settings,
+                _previous_user_metrics=_previous_user_metrics,
             )
-            speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.perf_counter()
-
-            try:
-                await self._tts_task_impl(
-                    speech_handle=speech_handle,
-                    text=text,
-                    audio=audio,
-                    add_to_chat_ctx=add_to_chat_ctx,
-                    model_settings=model_settings,
-                    _previous_user_metrics=_previous_user_metrics,
-                )
-            finally:
-                otel_metrics.record_invoke_agent_duration(
-                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
-                )
 
     async def _tts_task_impl(
         self,
@@ -3328,36 +3388,20 @@ class AgentActivity(RecognitionHooks):
         instructions: str | Instructions | None = None,
         _previous_user_metrics: llm.MetricsReport | None = None,
     ) -> None:
-        with tracer.start_as_current_span(
-            "agent_turn", context=self._session._root_span_context
-        ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
-            if parent_id := speech_handle._parent_generation_id:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            # an agent turn is the convention's `invoke_agent`: the framework running the
-            # agent in-process, with the inference and tool spans nested underneath
-            gen_ai_telemetry.set_agent_attributes(
-                current_span,
-                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
-                agent_name=self._agent.label,
+        with _agent_turn(
+            speech_handle,
+            root_context=self._session._root_span_context,
+            agent_label=self._agent.label,
+        ):
+            await self._pipeline_reply_task_impl(
+                speech_handle=speech_handle,
+                chat_ctx=chat_ctx,
+                tools=tools,
+                model_settings=model_settings,
+                new_message=new_message,
+                instructions=instructions,
+                _previous_user_metrics=_previous_user_metrics,
             )
-            speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.perf_counter()
-
-            try:
-                await self._pipeline_reply_task_impl(
-                    speech_handle=speech_handle,
-                    chat_ctx=chat_ctx,
-                    tools=tools,
-                    model_settings=model_settings,
-                    new_message=new_message,
-                    instructions=instructions,
-                    _previous_user_metrics=_previous_user_metrics,
-                )
-            finally:
-                otel_metrics.record_invoke_agent_duration(
-                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
-                )
 
     async def _pipeline_reply_task_impl(
         self,
@@ -4120,22 +4164,11 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
     ) -> None:
-        with tracer.start_as_current_span(
-            "agent_turn", context=self._session._root_span_context
-        ) as current_span:
-            current_span.set_attribute(trace_types.ATTR_AGENT_TURN_ID, speech_handle._generation_id)
-            if parent_id := speech_handle._parent_generation_id:
-                current_span.set_attribute(trace_types.ATTR_AGENT_PARENT_TURN_ID, parent_id)
-            # an agent turn is the convention's `invoke_agent`: the framework running the
-            # agent in-process, with the inference and tool spans nested underneath
-            gen_ai_telemetry.set_agent_attributes(
-                current_span,
-                operation=trace_types.GenAIOperationName.INVOKE_AGENT,
-                agent_name=self._agent.label,
-            )
-            speech_handle._agent_turn_context = otel_context.get_current()
-            turn_started_at = time.perf_counter()
-
+        with _agent_turn(
+            speech_handle,
+            root_context=self._session._root_span_context,
+            agent_label=self._agent.label,
+        ):
             inference_span = tracer.start_span("realtime_inference")
             try:
                 await self._realtime_generation_task_impl(
@@ -4147,9 +4180,6 @@ class AgentActivity(RecognitionHooks):
                 )
             finally:
                 inference_span.end()
-                otel_metrics.record_invoke_agent_duration(
-                    time.perf_counter() - turn_started_at, agent_name=self._agent.label
-                )
 
     async def _realtime_generation_task_impl(
         self,

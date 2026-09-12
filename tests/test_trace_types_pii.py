@@ -62,6 +62,7 @@ SAFE_KEYS = frozenset(
         "lk.deployment_id",
         "lk.session_options",
         "lk.generation_id",
+        "lk.generation_count",
         "lk.parent_generation_id",
         "lk.interrupted",
         # llm node (tool *names* / schemas, not payloads)
