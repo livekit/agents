@@ -75,6 +75,7 @@ livekit-plugins-ultravox = { workspace = true }
 livekit-plugins-upliftai = { workspace = true }
 livekit-plugins-vakyam = { workspace = true }
 livekit-plugins-gradium = { workspace = true }
+livekit-plugins-vui = { workspace = true }
 livekit-plugins-xai = { workspace = true }
 livekit-plugins-phonic = { workspace = true }
 livekit-plugins-did = { workspace = true }
@@ -231,6 +232,13 @@ ignore_missing_imports = true
 module = "mistralai.*"
 follow_imports = "skip"
 ignore_missing_imports = true
+
+# vui-tts (the Vui plugin's engine) and torchcodec: analysed as opaque —
+# torchcodec re-exports its decoders without declaring them.
+[[tool.mypy.overrides]]
+module = ["vui", "vui.*", "torchcodec", "torchcodec.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = "speechmatics.*"
