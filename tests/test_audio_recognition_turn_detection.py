@@ -674,6 +674,19 @@ class TestVadMinSilenceRequirement:
 
         ar._check_vad_silence_requirement()  # must not raise
 
+    def test_custom_detector_min_silence_duration(self) -> None:
+        ar = _make_recognition_for_validation()
+        ar._vad = _FakeVad(min_silence_duration=0.08)
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        detector.min_silence_duration = 0.05
+        ar._turn_detector = detector
+
+        ar._check_vad_silence_requirement()  # 0.08 >= 0.05 must not raise
+
+        ar._vad = _FakeVad(min_silence_duration=0.03)
+        with pytest.raises(ValueError, match="min_silence_duration"):
+            ar._check_vad_silence_requirement()
+
     def test_non_audio_detector_skips(self) -> None:
         ar = _make_recognition_for_validation()
         ar._vad = _FakeVad(min_silence_duration=0.05)

@@ -891,7 +891,12 @@ class AudioRecognition:
             return
         if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
-        required = (MIN_SILENCE_DURATION_MS + 50) / 1000
+        detector_min_silence = getattr(detector, "min_silence_duration", None)
+        required = (
+            detector_min_silence
+            if detector_min_silence is not None
+            else MIN_SILENCE_DURATION_MS / 1000
+        )
         if current < required:
             raise ValueError(
                 f"vad min_silence_duration={current}s is too low for the TurnDetector. "

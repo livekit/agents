@@ -41,6 +41,7 @@ DEFAULT_PREDICTION_TIMEOUT = 1.0
 class TurnDetectorOptions:
     sample_rate: int
     thresholds: ThresholdOptions
+    min_silence_duration: float = MIN_SILENCE_DURATION_MS / 1000
 
 
 @runtime_checkable
@@ -59,9 +60,23 @@ class _StreamingTurnDetectionTransport(Protocol):
 
 
 class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
-    def __init__(self, *, opts: TurnDetectorOptions) -> None:
+    def __init__(
+        self,
+        *,
+        opts: TurnDetectorOptions,
+        min_silence_duration: float | None = None,
+    ) -> None:
         super().__init__()
         self._opts = opts
+        self._min_silence_duration = (
+            min_silence_duration
+            if min_silence_duration is not None
+            else opts.min_silence_duration
+        )
+
+    @property
+    def min_silence_duration(self) -> float:
+        return self._min_silence_duration
 
     @property
     def model(self) -> TurnDetectorModels:
@@ -143,6 +158,10 @@ class _BaseStreamingTurnDetectorStream:
     @property
     def provider(self) -> str:
         return self._detector.provider
+
+    @property
+    def min_silence_duration(self) -> float:
+        return self._detector.min_silence_duration
 
     @property
     def is_fallback(self) -> bool:
