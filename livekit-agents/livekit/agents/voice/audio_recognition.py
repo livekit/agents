@@ -880,14 +880,17 @@ class AudioRecognition:
 
     @property
     def _turn_detector_min_silence_duration(self) -> float:
+        val: float | None = None
         if self._turn_detector is not None:
-            val = getattr(self._turn_detector, "min_silence_duration", None)
-            if val is not None:
-                return float(val)
-        if self._turn_detector_stream is not None:
-            val = getattr(self._turn_detector_stream, "min_silence_duration", None)
-            if val is not None:
-                return float(val)
+            raw_val = getattr(self._turn_detector, "min_silence_duration", None)
+            if raw_val is not None:
+                val = float(raw_val)
+        elif self._turn_detector_stream is not None:
+            raw_val = getattr(self._turn_detector_stream, "min_silence_duration", None)
+            if raw_val is not None:
+                val = float(raw_val)
+        if val is not None and val > 0:
+            return val
         return MIN_SILENCE_DURATION_MS / 1000
 
     def _check_vad_silence_requirement(
@@ -904,11 +907,13 @@ class AudioRecognition:
         if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
         detector_min_silence = getattr(detector, "min_silence_duration", None)
-        required = (
-            float(detector_min_silence)
-            if detector_min_silence is not None
-            else MIN_SILENCE_DURATION_MS / 1000
-        )
+        if detector_min_silence is not None:
+            silence_val = float(detector_min_silence)
+            if silence_val <= 0:
+                raise ValueError("min_silence_duration must be positive")
+            required = silence_val
+        else:
+            required = MIN_SILENCE_DURATION_MS / 1000
         if current < required:
             raise ValueError(
                 f"vad min_silence_duration={current}s is too low for the TurnDetector. "
@@ -1437,7 +1442,8 @@ class AudioRecognition:
                     self._turn_detector_prediction_fut = None
 
             if (
-                ev.raw_accumulated_silence >= self._turn_detector_min_silence_duration
+                ev.raw_accumulated_silence > 0
+                and ev.raw_accumulated_silence >= self._turn_detector_min_silence_duration
                 and self._speaking
             ):
                 if (

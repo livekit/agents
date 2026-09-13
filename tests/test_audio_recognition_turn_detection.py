@@ -745,3 +745,43 @@ class TestVadMinSilenceRequirement:
         # At or above 0.05: should trigger prediction
         await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.05))
         mock_stream.predict.assert_called_once()
+
+    async def test_on_vad_event_requires_positive_raw_accumulated_silence(self) -> None:
+        ar = _make_recognition_for_validation()
+        ar._hooks = MagicMock()
+        ar._user_silence_ev = asyncio.Event()
+        ar._speaking = True
+        ar._turn_detector_prediction_fut = None
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.predict.return_value = asyncio.Future()
+        mock_stream.min_silence_duration = 0.05
+        ar._turn_detector_stream = mock_stream
+
+        # Zero raw accumulated silence must not trigger prediction
+        await ar._on_vad_event(_inference_done(raw_speech=0.0, raw_silence=0.0))
+        mock_stream.predict.assert_not_called()
+
+    def test_reject_non_positive_silence_thresholds(self) -> None:
+        from livekit.agents.inference.eot import TurnDetector
+        from livekit.agents.inference.eot.base import ThresholdOptions, TurnDetectorOptions
+
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            TurnDetector(min_silence_duration=0)
+
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            TurnDetector(min_silence_duration=-0.5)
+
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            TurnDetectorOptions(
+                sample_rate=16000,
+                thresholds=ThresholdOptions("turn-detector-v1-mini", 0.5, 0.5),
+                min_silence_duration=0,
+            )
+
+        ar = _make_recognition_for_validation()
+        ar._vad = _FakeVad(min_silence_duration=0.5)
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        detector.min_silence_duration = 0
+        ar._turn_detector = detector
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            ar._check_vad_silence_requirement()

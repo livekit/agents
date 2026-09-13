@@ -43,6 +43,10 @@ class TurnDetectorOptions:
     thresholds: ThresholdOptions
     min_silence_duration: float = MIN_SILENCE_DURATION_MS / 1000
 
+    def __post_init__(self) -> None:
+        if self.min_silence_duration <= 0:
+            raise ValueError("min_silence_duration must be positive")
+
 
 @runtime_checkable
 class _StreamingTurnDetectionTransport(Protocol):
@@ -71,6 +75,8 @@ class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]])
         self._min_silence_duration = (
             min_silence_duration if min_silence_duration is not None else opts.min_silence_duration
         )
+        if self._min_silence_duration <= 0:
+            raise ValueError("min_silence_duration must be positive")
 
     @property
     def min_silence_duration(self) -> float:

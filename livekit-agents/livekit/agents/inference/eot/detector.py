@@ -110,6 +110,9 @@ class TurnDetector(_BaseStreamingTurnDetector):
                     conn_options=conn_options,
                 )
 
+        if min_silence_duration <= 0:
+            raise ValueError("min_silence_duration must be positive")
+
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             thresholds=ThresholdOptions(resolved_model, unlikely_threshold, backchannel_threshold),
