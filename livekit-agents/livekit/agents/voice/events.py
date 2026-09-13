@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from enum import Enum, unique
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
@@ -66,6 +66,11 @@ class RunContext(Generic[Userdata_T]):
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
+        # Alternate delivery for framework-managed backends (e.g. duplex delegation).
+        # Execution, registration, cancellation and terminal events still belong to the executor.
+        self._reply_handler: Callable[[Any, bool, bool], Awaitable[None]] | None = None
+        self._hold_result = False
+        self._is_relevant: Callable[[], bool] | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
@@ -175,6 +180,7 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -188,6 +194,8 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Quiet backend context for managed client delegation. Requires a
+                backend reply handler; ordinary turn-based tools reject this option.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -196,6 +204,31 @@ class RunContext(Generic[Userdata_T]):
 
         # events carry the raw message, before the LLM-facing template wraps it
         raw_message = message if isinstance(message, str) else str(message)
+
+        if self._reply_handler is not None:
+            update_id = f"{self.function_call.call_id}_update_{len(self._updates)}"
+            self._updates.append(
+                self._make_update_pair(raw_message, call_id_suffix=f"_update_{len(self._updates)}")
+            )
+            self._session._tool_execution_updated(
+                ToolExecutionUpdatedEvent(
+                    update=ToolCallUpdated(
+                        id=update_id, call_id=self.function_call.call_id, message=raw_message
+                    )
+                )
+            )
+            await self._reply_handler(message, False, silent)
+            if (
+                not self._hold_result
+                and self._first_update_fut is not None
+                and not self._first_update_fut.done()
+            ):
+                self._first_update_fut.set_result(None)
+                self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            return
+
+        if silent:
+            raise ValueError("silent updates require a backend reply handler")
 
         if isinstance(message, str):
             if template is None:
