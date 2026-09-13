@@ -1104,7 +1104,12 @@ def _is_ssml_enabled(text: str, tts: Any = None, ssml: bool | None = None) -> bo
         if getattr(opts, "ssml", False):
             return True
     provider = getattr(tts, "provider", "")
-    if provider in ("azure", "cartesia"):
+    if isinstance(provider, str):
+        p_lower = provider.lower().strip()
+        if "azure" in p_lower or "cartesia" in p_lower:
+            return True
+    mod = getattr(tts.__class__, "__module__", "").lower()
+    if ".azure." in mod or ".cartesia." in mod:
         return True
     if getattr(getattr(tts, "capabilities", None), "ssml", False):
         return True

@@ -154,3 +154,16 @@ def test_strip_chat_markup_provider_specific_ssml() -> None:
         == "Have a nice day!"
     )
     assert strip_chat_markup('<amazon:effect name="drc">Interrupted') == "Interrupted"
+
+
+def test_strip_chat_markup_azure_provider_normalization() -> None:
+    """Verify provider 'Azure TTS' enables SSML unwrapping for structural tags like <p>."""
+
+    class FakeAzureTTS:
+        @property
+        def provider(self) -> str:
+            return "Azure TTS"
+
+    azure_tts = FakeAzureTTS()
+    text = "<p>Hello</p><p>world</p>"
+    assert strip_chat_markup(text, tts=azure_tts) == "Hello world"
