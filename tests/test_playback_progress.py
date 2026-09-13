@@ -35,7 +35,9 @@ class _FakeSource:
         self.queued_duration = 0.0
 
     async def wait_for_playout(self) -> None:
-        self.queued_duration = 0.0
+        # Waiting must not itself play queued audio, especially during an interruption.
+        while self.queued_duration:
+            await asyncio.sleep(0)
 
 
 def _frame(seconds: float) -> rtc.AudioFrame:
@@ -92,6 +94,8 @@ async def test_uninterrupted_playback_is_reported_once() -> None:
         assert h.progress == []  # nothing to report while playback is continuous
 
         h.sink.flush()
+        await h.settle()
+        h.source.queued_duration = 0.0
         for _ in range(50):
             await asyncio.sleep(0)
 
@@ -99,6 +103,33 @@ async def test_uninterrupted_playback_is_reported_once() -> None:
     ev = h.progress[0]
     assert ev.offset == 0.0
     assert ev.duration == pytest.approx(0.3)
+
+
+async def test_full_initial_packet_reaches_the_source_without_a_flush() -> None:
+    async with _Harness() as h:
+        await h.push(0.1)
+
+        assert h.source.queued_duration == pytest.approx(0.1)
+        assert h.sink._source_pushed_duration == pytest.approx(0.1)
+        assert h.sink._dry_at == pytest.approx(h.now + 0.1)
+
+
+@pytest.mark.parametrize("packet_seconds", [0.02, 0.1])
+async def test_interruption_resets_startup_framing(packet_seconds: float) -> None:
+    async with _Harness() as h:
+        await h.push(0.1)
+        await h.push(0.01)  # leave a partial frame to discard
+        h.sink.flush()
+        h.sink.clear_buffer()
+        assert h.sink._flush_task is not None
+        await h.sink._flush_task
+        assert h.source.queued_duration == 0.0
+
+        await h.push(packet_seconds)
+
+        assert h.source.queued_duration == pytest.approx(packet_seconds)
+        assert h.sink._source_pushed_duration == pytest.approx(packet_seconds)
+        assert h.sink._dry_at == pytest.approx(h.now + packet_seconds)
 
 
 async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
@@ -123,8 +154,8 @@ async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
 async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -> None:
     """A segment whose flush trails its own playout still sits where it played."""
     async with _Harness() as h:
-        # 60ms is the progressive ramp, 20ms then 40ms, so the byte stream holds nothing back
-        await h.push(0.06)
+        # Two complete 50ms frames leave nothing buffered when the source drains.
+        await h.push(0.1)
         played, dry_at = h.sink._source_pushed_duration, h.sink._dry_at
         assert dry_at is not None
 
@@ -197,6 +228,8 @@ async def test_a_pause_and_resume_report_two_runs_around_the_hole() -> None:
 
         h.now += 1.0  # the resumed audio plays out
         h.sink.flush()
+        await h.settle()
+        h.source.queued_duration = 0.0
         for _ in range(50):
             await asyncio.sleep(0)
 
@@ -274,6 +307,8 @@ async def test_offsets_restart_with_each_segment() -> None:
             h.source.queued_duration = 0.5
             await h.push(0.2)
             h.sink.flush()
+            await h.settle()
+            h.source.queued_duration = 0.0
             for _ in range(50):
                 await asyncio.sleep(0)
             h.now += 1.0

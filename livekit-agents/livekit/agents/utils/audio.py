@@ -70,14 +70,15 @@ class AudioByteStream:
 
     * **Fixed** (``progressive=False``, the default): every emitted frame is
       exactly ``samples_per_channel`` samples long.
-    * **Progressive** (``progressive=True``): the *first* emitted frame is only
-      20 ms of audio.  Each subsequent frame doubles in size until
-      ``samples_per_channel`` is reached.  This minimises time-to-first-audio
-      while giving the pipeline a brief warm-up before reaching full frame
-      sizes.
+    * **Progressive** (``progressive=True``): if a full target frame is already
+      buffered before the first emission, start at the target size. Otherwise,
+      start with up to 20 ms of audio and double each subsequent frame until
+      ``samples_per_channel`` is reached. This minimises time-to-first-audio
+      for small fragments without unnecessarily retaining already available
+      target-sized frames at startup.
 
     Example with ``sample_rate=16000, samples_per_channel=3200`` (200 ms) and
-    ``progressive=True``::
+    ``progressive=True``, when starting with small fragments::
 
         Frame 1:  320 samples  ( 20 ms)
         Frame 2:  640 samples  ( 40 ms)
@@ -103,9 +104,10 @@ class AudioByteStream:
             num_channels: Number of audio channels.
             samples_per_channel: Target samples per channel in each emitted frame.
                 Defaults to ``sample_rate // 10`` (100 ms).
-            progressive: When *True*, start with a small 20 ms frame and double
+            progressive: When *True*, start with a frame of up to 20 ms and double
                 the frame size on each subsequent emission until
-                ``samples_per_channel`` is reached.
+                ``samples_per_channel`` is reached. Skip this ramp if a full target
+                frame is already buffered before the first emission.
         """
         self._sample_rate = sample_rate
         self._num_channels = num_channels
@@ -146,6 +148,13 @@ class AudioByteStream:
         fixed-size audio frames ready for processing or transmission.
         """
         self._buf.extend(data)
+
+        # Skip startup warm-up when a complete target frame is already available.
+        if (
+            self._current_bytes_per_frame == self._initial_bytes_per_frame
+            and len(self._buf) >= self._target_bytes_per_frame
+        ):
+            self._current_bytes_per_frame = self._target_bytes_per_frame
 
         frames = []
         while len(self._buf) >= self._current_bytes_per_frame:
@@ -208,9 +217,9 @@ class AudioByteStream:
     def clear(self) -> None:
         """Discard all buffered data and reset progressive frame sizing.
 
-        After clearing, the next :meth:`push` will start from the initial
-        (small) frame size again, ensuring low latency on the first frame
-        after an interruption.
+        After clearing, the next :meth:`push` chooses its startup size again:
+        a target-sized frame if already available, or a small initial frame
+        for low latency after an interruption.
         """
         self._buf.clear()
         self._current_bytes_per_frame = self._initial_bytes_per_frame
