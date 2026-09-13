@@ -4047,12 +4047,23 @@ class AgentActivity(RecognitionHooks):
             return
 
         if text is not None:
+            speech_handle._add_interrupt_callback(self._rt_session.interrupt)
             try:
-                generation_ev = await self._rt_session.say(text)
+                say_fut = asyncio.ensure_future(self._rt_session.say(text))
+                await speech_handle.wait_if_not_interrupted([say_fut])
+                if speech_handle.interrupted:
+                    if not say_fut.done():
+                        say_fut.cancel()
+                    else:
+                        self._rt_session.interrupt()
+                    return
+                generation_ev = await say_fut
             except llm.RealtimeError as e:
                 logger.error("failed to say text: %s", str(e))
                 speech_handle._mark_done(error=e)
                 return
+            finally:
+                speech_handle._remove_interrupt_callback(self._rt_session.interrupt)
 
             await self._realtime_generation_task(
                 speech_handle=speech_handle,

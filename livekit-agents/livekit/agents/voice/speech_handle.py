@@ -300,7 +300,7 @@ class SpeechHandle:
                 try:
                     cb()
                 except Exception as e:
-                    logger.warning(f"error in interrupt callback: {cb}: {type(e).__name__}")
+                    logger.warning(f"error in interrupt callback: {type(e).__name__}")
 
             def _on_timeout() -> None:
                 logger.error(

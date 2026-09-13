@@ -291,3 +291,25 @@ async def test_interrupting_a_finished_speech_spares_the_newer_reply() -> None:
         await asyncio.wait_for(handle_a.wait_for_playout(), timeout=5)
 
         assert not rt_session.interrupted
+
+
+async def test_interrupt_while_awaiting_realtime_say_cancels_and_interrupts() -> None:
+    capabilities = fake_capabilities()
+    capabilities.supports_say = True
+    model = FakeRealtimeModel(capabilities=capabilities)
+
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="test"))
+        handle = session.say("hello world")
+
+        while not model.active_session.say_futs:
+            await asyncio.sleep(0.01)
+
+        say_fut = model.active_session.say_futs[0]
+        assert not say_fut.done()
+
+        handle.interrupt(force=True)
+        await asyncio.sleep(0.05)
+
+        assert handle.interrupted
+        assert say_fut.cancelled() or model.active_session.interrupted
