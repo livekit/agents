@@ -772,10 +772,20 @@ class TestVadMinSilenceRequirement:
             TurnDetector(min_silence_duration=-0.5)
 
         with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            TurnDetector(min_silence_duration=float("nan"))
+
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
             TurnDetectorOptions(
                 sample_rate=16000,
                 thresholds=ThresholdOptions("turn-detector-v1-mini", 0.5, 0.5),
                 min_silence_duration=0,
+            )
+
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            TurnDetectorOptions(
+                sample_rate=16000,
+                thresholds=ThresholdOptions("turn-detector-v1-mini", 0.5, 0.5),
+                min_silence_duration=float("nan"),
             )
 
         ar = _make_recognition_for_validation()
@@ -785,3 +795,17 @@ class TestVadMinSilenceRequirement:
         ar._turn_detector = detector
         with pytest.raises(ValueError, match="min_silence_duration must be positive"):
             ar._check_vad_silence_requirement()
+
+        detector.min_silence_duration = float("nan")
+        with pytest.raises(ValueError, match="min_silence_duration must be positive"):
+            ar._check_vad_silence_requirement()
+
+    def test_turn_detector_min_silence_duration_stream_fallback(self) -> None:
+        ar = _make_recognition_for_validation()
+        # Detector has no min_silence_duration attribute
+        ar._turn_detector = object()
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.min_silence_duration = 0.08
+        ar._turn_detector_stream = mock_stream
+
+        assert ar._turn_detector_min_silence_duration == 0.08

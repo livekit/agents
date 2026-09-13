@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -110,7 +111,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
                     conn_options=conn_options,
                 )
 
-        if min_silence_duration <= 0:
+        if not (math.isfinite(min_silence_duration) and min_silence_duration > 0):
             raise ValueError("min_silence_duration must be positive")
 
         opts = TurnDetectorOptions(

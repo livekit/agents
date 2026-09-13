@@ -885,11 +885,11 @@ class AudioRecognition:
             raw_val = getattr(self._turn_detector, "min_silence_duration", None)
             if raw_val is not None:
                 val = float(raw_val)
-        elif self._turn_detector_stream is not None:
+        if val is None and self._turn_detector_stream is not None:
             raw_val = getattr(self._turn_detector_stream, "min_silence_duration", None)
             if raw_val is not None:
                 val = float(raw_val)
-        if val is not None and val > 0:
+        if val is not None and math.isfinite(val) and val > 0:
             return val
         return MIN_SILENCE_DURATION_MS / 1000
 
@@ -909,7 +909,7 @@ class AudioRecognition:
         detector_min_silence = getattr(detector, "min_silence_duration", None)
         if detector_min_silence is not None:
             silence_val = float(detector_min_silence)
-            if silence_val <= 0:
+            if not (math.isfinite(silence_val) and silence_val > 0):
                 raise ValueError("min_silence_duration must be positive")
             required = silence_val
         else:
