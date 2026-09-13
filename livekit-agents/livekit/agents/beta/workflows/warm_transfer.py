@@ -147,7 +147,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         self._human_agent_identity = "human-agent-sip"
         self._destination_disconnect_reason: rtc.DisconnectReason.ValueType | None = None
         self._destination_call_status: str | None = None
-        self._human_agent_participant_disconnected_cb: Any | None = None
+        self._human_agent_participant_disconnected_cb: Any | None = (
+            self._on_human_agent_participant_disconnected
+        )
 
         self._setup_origination(
             sip_call_to=sip_call_to,
@@ -323,6 +325,26 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 )
             )
 
+    def _on_human_agent_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        if participant.identity == self._human_agent_identity:
+            self._destination_disconnect_reason = participant.disconnect_reason
+            self._destination_call_status = participant.attributes.get("sip.callStatus")
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._human_agent_failed_fut.set_result(None)
+            reason_name = (
+                rtc.DisconnectReason.Name(participant.disconnect_reason)
+                if participant.disconnect_reason is not None
+                else "UNKNOWN_REASON"
+            )
+            self._set_result(
+                WarmTransferError(
+                    f"destination left: {reason_name}",
+                    code=WarmTransferFailure.DESTINATION_LEFT,
+                    disconnect_reason=participant.disconnect_reason,
+                    call_status=self._destination_call_status,
+                )
+            )
+
     def _on_caller_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.kind not in DEFAULT_PARTICIPANT_KINDS:
             return
@@ -381,16 +403,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 
         # if human agent hung up for whatever reason, we'd resume the caller conversation
         room.on("disconnected", self._on_human_agent_room_close)
-
-        def _on_human_agent_participant_disconnected(
-            participant: rtc.RemoteParticipant,
-        ) -> None:
-            if participant.identity == self._human_agent_identity:
-                self._destination_disconnect_reason = participant.disconnect_reason
-                self._destination_call_status = participant.attributes.get("sip.callStatus")
-
-        self._human_agent_participant_disconnected_cb = _on_human_agent_participant_disconnected
-        room.on("participant_disconnected", _on_human_agent_participant_disconnected)
+        room.on("participant_disconnected", self._on_human_agent_participant_disconnected)
 
         human_agent_sess: AgentSession = AgentSession(
             vad=self.session.vad or NOT_GIVEN,
@@ -429,7 +442,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 identity=self._human_agent_identity,
                 room=room,
             )
-        except Exception:
+        except BaseException:
             human_agent_sess.shutdown()
             raise
 

@@ -114,6 +114,42 @@ async def test_human_agent_room_close_without_destination_left() -> None:
 
 
 @pytest.mark.asyncio
+async def test_human_agent_participant_disconnected_completes_transfer() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._human_agent_sess = None
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.done = MagicMock(return_value=False)
+    task.complete = MagicMock()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_identity = "human-agent-sip"
+
+    # Other participant disconnecting should be ignored
+    other_participant = MagicMock(spec=rtc.RemoteParticipant)
+    other_participant.identity = "other-participant"
+    task._on_human_agent_participant_disconnected(other_participant)
+    task.complete.assert_not_called()
+    assert not task._human_agent_failed_fut.done()
+
+    # Destination participant disconnecting with USER_UNAVAILABLE completes transfer
+    dest_participant = MagicMock(spec=rtc.RemoteParticipant)
+    dest_participant.identity = "human-agent-sip"
+    dest_participant.disconnect_reason = rtc.DisconnectReason.USER_UNAVAILABLE
+    dest_participant.attributes = {"sip.callStatus": "busy"}
+
+    task._on_human_agent_participant_disconnected(dest_participant)
+
+    task.complete.assert_called_once()
+    assert task._human_agent_failed_fut.done()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.DESTINATION_LEFT
+    assert result.disconnect_reason == rtc.DisconnectReason.USER_UNAVAILABLE
+    assert result.call_status == "busy"
+    assert "destination left: USER_UNAVAILABLE" in str(result)
+
+
+@pytest.mark.asyncio
 async def test_twilio_connector_warm_transfer_initializes_destination_state() -> None:
     from livekit.agents.beta.workflows.warm_transfer import TwilioConnectorWarmTransferTask
 
@@ -129,6 +165,7 @@ async def test_twilio_connector_warm_transfer_initializes_destination_state() ->
         assert hasattr(task, "_destination_call_status")
         assert task._destination_call_status is None
         assert hasattr(task, "_human_agent_participant_disconnected_cb")
-        assert task._human_agent_participant_disconnected_cb is None
+        assert task._human_agent_participant_disconnected_cb is not None
+        assert callable(task._human_agent_participant_disconnected_cb)
     finally:
         await task._background_audio._audio_mixer.aclose()
