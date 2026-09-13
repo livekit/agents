@@ -73,7 +73,7 @@ async def test_human_agent_room_close_with_destination_left() -> None:
     task._set_io_enabled = MagicMock()
     task.done = MagicMock(return_value=False)
     task.complete = MagicMock()
-    task._human_agent_failed_fut = asyncio.get_event_loop().create_future()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
 
     # Pre-recorded destination departure
     task._destination_disconnect_reason = rtc.DisconnectReason.USER_UNAVAILABLE
@@ -98,7 +98,7 @@ async def test_human_agent_room_close_without_destination_left() -> None:
     task._set_io_enabled = MagicMock()
     task.done = MagicMock(return_value=False)
     task.complete = MagicMock()
-    task._human_agent_failed_fut = asyncio.get_event_loop().create_future()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
 
     task._destination_disconnect_reason = None
     task._destination_call_status = None
