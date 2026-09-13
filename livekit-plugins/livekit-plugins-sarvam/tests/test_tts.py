@@ -285,3 +285,73 @@ async def test_synthesize_stream_with_wav_codec_handles_extended_chunks():
     total_samples = sum(ev.frame.samples_per_channel for ev in events)
     expected_samples = len(raw_pcm) // 2
     assert total_samples == expected_samples
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_with_wav_codec_handles_split_header_chunks():
+    """Verify SynthesizeStream reassembles WAV headers split across multiple WebSocket messages."""
+    import struct
+
+    sarvam_tts = TTS(
+        api_key="test-api-key",
+        speech_sample_rate=SAMPLE_RATE,
+        output_audio_codec="wav",
+    )
+
+    raw_pcm = _generate_raw_pcm(duration_ms=100, sample_rate=SAMPLE_RATE)
+    fmt_chunk = struct.pack("<4sIHHIIHH", b"fmt ", 16, 1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16)
+    junk_payload = b"MetadataAcrossChunks"
+    junk_chunk = struct.pack("<4sI", b"JUNK", len(junk_payload)) + junk_payload
+    data_header = struct.pack("<4sI", b"data", len(raw_pcm))
+    body = fmt_chunk + junk_chunk + data_header + raw_pcm
+    riff_header = struct.pack("<4sI4s", b"RIFF", 4 + len(body), b"WAVE")
+    wav_bytes = riff_header + body
+
+    # Split midway through the headers (before 'data' chunk)
+    split_pos = len(riff_header) + len(fmt_chunk) + 4  # inside the JUNK chunk
+    chunk1 = wav_bytes[:split_pos]
+    chunk2 = wav_bytes[split_pos:]
+
+    stream = sarvam_tts.stream()
+
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="test-sarvam-tts-stream-split", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="test-req-stream-split",
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        mime_type="audio/pcm",
+        stream=True,
+    )
+    emitter.start_segment(segment_id="seg-split")
+
+    events: list[tts.SynthesizedAudio] = []
+
+    async def collect():
+        async for ev in dst_ch:
+            events.append(ev)
+            if ev.is_final:
+                return
+
+    collect_task = asyncio.create_task(collect())
+
+    # Send first chunk (header only)
+    msg1 = {"type": "audio", "data": {"audio": base64.b64encode(chunk1).decode("ascii")}}
+    success1 = await stream._handle_audio_message(msg1, emitter)
+    assert success1 is True
+
+    # Send second chunk (remainder of headers + PCM)
+    msg2 = {"type": "audio", "data": {"audio": base64.b64encode(chunk2).decode("ascii")}}
+    success2 = await stream._handle_audio_message(msg2, emitter)
+    assert success2 is True
+
+    emitter.end_segment()
+    emitter.end_input()
+    await emitter.join()
+    await collect_task
+
+    assert len(events) > 0
+    assert events[-1].is_final
+    total_samples = sum(ev.frame.samples_per_channel for ev in events)
+    expected_samples = len(raw_pcm) // 2
+    assert total_samples == expected_samples

@@ -1002,7 +1002,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._recv_task: asyncio.Task | None = None
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
+        # Streaming WAV parsing state
+        self._wav_header_buf = bytearray()
+        self._wav_header_parsed = False
+        self._wav_is_riff: bool | None = None
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._wav_header_buf.clear()
+        self._wav_header_parsed = False
+        self._wav_is_riff = None
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
@@ -1362,6 +1370,61 @@ class SynthesizeStream(tts.SynthesizeStream):
                 body={"raw_message": msg_data},
             ) from e
 
+    @staticmethod
+    def _locate_data_chunk(buf: bytearray) -> tuple[bool, int]:
+        """Try to locate the data chunk in buf.
+
+        Returns (found, data_offset). If found is True, buf[data_offset:] is PCM samples.
+        """
+        if len(buf) < 12:
+            return False, 0
+        if bytes(buf[:4]) != b"RIFF" or bytes(buf[8:12]) != b"WAVE":
+            return True, 0
+
+        pos = 12
+        while pos + 8 <= len(buf):
+            chunk_id = bytes(buf[pos : pos + 4])
+            chunk_size = struct.unpack("<I", buf[pos + 4 : pos + 8])[0]
+            pos += 8
+            if chunk_id == b"data":
+                return True, pos
+            pos += chunk_size + (chunk_size % 2)
+
+        return False, 0
+
+    def _extract_streaming_wav_pcm(self, audio_bytes: bytes) -> bytes:
+        """Extract PCM payload across WebSocket chunks for WAV containers.
+
+        Maintains state across chunks to handle headers split across messages.
+        """
+        if self._wav_is_riff is False:
+            return audio_bytes
+
+        if self._wav_is_riff is None:
+            if not audio_bytes.startswith(b"RIFF"):
+                self._wav_is_riff = False
+                self._wav_header_parsed = True
+                return audio_bytes
+            self._wav_is_riff = True
+
+        if self._wav_header_parsed:
+            if audio_bytes.startswith(b"RIFF"):
+                # New RIFF container in the stream
+                self._wav_header_buf.clear()
+                self._wav_header_parsed = False
+            else:
+                return audio_bytes
+
+        self._wav_header_buf.extend(audio_bytes)
+        found, offset = self._locate_data_chunk(self._wav_header_buf)
+        if found:
+            self._wav_header_parsed = True
+            pcm = bytes(self._wav_header_buf[offset:])
+            self._wav_header_buf.clear()
+            return pcm
+        else:
+            return b""
+
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
         try:
@@ -1372,10 +1435,11 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             audio_bytes = base64.b64decode(audio_data)
             if self._opts.output_audio_codec == "wav":
-                audio_bytes = _extract_wav_pcm(audio_bytes)
+                audio_bytes = self._extract_streaming_wav_pcm(audio_bytes)
             if self._opts.output_audio_codec in _TELEPHONY_CODECS:
                 audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
-            output_emitter.push(audio_bytes)
+            if audio_bytes:
+                output_emitter.push(audio_bytes)
 
             return True
 
