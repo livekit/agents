@@ -3327,7 +3327,12 @@ class AgentActivity(RecognitionHooks):
                 _record_user_turn_stages(current_span, _previous_user_metrics)
 
         if forwarded_text and add_to_chat_ctx:
-            clean_text = strip_chat_markup(forwarded_text)
+            clean_text = strip_chat_markup(
+                forwarded_text,
+                tts=self.tts
+                if (self._session.output.audio_enabled and self.tts is not None)
+                else None,
+            )
             if clean_text:
                 msg = self._agent._chat_ctx.add_message(
                     role="assistant",

@@ -63,6 +63,34 @@ async def test_say_strips_break_tags_from_chat_ctx() -> None:
         messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
         assert len(messages) == 4
         assert messages[3].text_content == "tomato"
+
+        # Plain text with HTML tags is preserved when SSML is not enabled
+        handle6 = session.say("Use <p> and </p> tags")
+        await handle6.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 5
+        assert messages[4].text_content == "Use <p> and </p> tags"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_say_text_only_preserves_markup() -> None:
+    agent = Agent(instructions="test", llm=FakeLLM())
+    session = AgentSession(
+        vad=None,
+        turn_handling={"turn_detection": None},
+    )
+    session.output.set_audio_enabled(False)
+    await session.start(agent)
+    try:
+        handle = session.say("Use <p> and </p> tags")
+        await handle.wait_for_playout()
+
+        messages = [msg for msg in agent.chat_ctx.messages() if msg.role == "assistant"]
+        assert len(messages) == 1
+        assert messages[0].text_content == "Use <p> and </p> tags"
     finally:
         await session.aclose()
 
@@ -74,9 +102,27 @@ def test_strip_chat_markup_whitespace_only() -> None:
 
 
 def test_strip_chat_markup_structural_ssml_boundaries() -> None:
-    """Adjacent <p> and <s> blocks should preserve word boundaries."""
-    assert strip_chat_markup("<p>Hello</p><p>world</p>") == "Hello world"
-    assert strip_chat_markup("<s>First.</s><s>Second.</s>") == "First. Second."
+    """Adjacent <p> and <s> blocks should preserve word boundaries when SSML is enabled."""
+    assert strip_chat_markup("<speak><p>Hello</p><p>world</p></speak>") == "Hello world"
+    assert strip_chat_markup("<speak><s>First.</s><s>Second.</s></speak>") == "First. Second."
+    assert strip_chat_markup("<p>Hello</p><p>world</p>", ssml=True) == "Hello world"
+    assert strip_chat_markup("<s>First.</s><s>Second.</s>", ssml=True) == "First. Second."
+
+
+def test_strip_chat_markup_preserves_literal_markup_when_ssml_disabled() -> None:
+    """Preserve literal HTML/XML markup when SSML is not enabled."""
+    assert strip_chat_markup("Use <p> and </p> tags") == "Use <p> and </p> tags"
+    assert strip_chat_markup("Use <s> and </s> tags") == "Use <s> and </s> tags"
+    assert strip_chat_markup("<p>Hello</p><p>world</p>") == "<p>Hello</p><p>world</p>"
+    assert strip_chat_markup("<s>First.</s><s>Second.</s>") == "<s>First.</s><s>Second.</s>"
+
+
+def test_strip_chat_markup_quoted_attributes_with_closing_angle() -> None:
+    """Handle closing angles inside quoted SSML attributes."""
+    assert strip_chat_markup('<sub alias="2 > 1">comparison</sub>') == "comparison"
+    assert strip_chat_markup('<speak><sub alias="2 > 1">comparison</sub></speak>') == "comparison"
+    assert strip_chat_markup('<speak><prosody rate=">fast">hello</prosody></speak>') == "hello"
+    assert strip_chat_markup('<sub alias="2 > 1">comparison') == "comparison"
 
 
 def test_strip_chat_markup_incomplete_ssml_tags() -> None:

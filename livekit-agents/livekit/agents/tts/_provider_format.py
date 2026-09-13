@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from ._mood import match_mood
@@ -1044,30 +1044,76 @@ def strip_all_markup(text: str) -> str:
     return split_all_markup(text)[0]
 
 
-_SSML_BREAK_RE = re.compile(r"<\s*/?\s*break\b[^>]*\/?>", re.IGNORECASE)
+_ATTR_PATTERN = r"(?:\"[^\"]*\"|'[^']*'|[^'\">])*"
+_SSML_BREAK_RE = re.compile(rf"<\s*/?\s*break\b{_ATTR_PATTERN}\/?>", re.IGNORECASE)
 _SSML_STRUCTURAL_RE = re.compile(
-    r"<\s*(?P<tag>p|s)\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    rf"<\s*(?P<tag>p|s)\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
 )
-_SSML_TAG_PATTERN = (
-    r"phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio|"
-    r"[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+"
-)
+_SSML_TAG_PATTERN = r"phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio"
+_SSML_NAMESPACED_TAG_PATTERN = r"[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+"
+_SSML_ALL_TAGS = rf"{_SSML_TAG_PATTERN}|{_SSML_NAMESPACED_TAG_PATTERN}"
+
 _SSML_WRAPPING_RE = re.compile(
-    rf"<\s*(?P<tag>{_SSML_TAG_PATTERN})\b[^>]*>(.*?)</\s*(?P=tag)\s*>",
+    rf"<\s*(?P<tag>{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _SSML_STANDALONE_RE = re.compile(
-    rf"<\s*/?\s*(?:speak|p|s|mark|{_SSML_TAG_PATTERN})\b[^>]*\/?>",
+    rf"<\s*/?\s*(?:speak|p|s|mark|{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}\/?>",
     re.IGNORECASE,
 )
 _SSML_INCOMPLETE_RE = re.compile(
-    rf"<\s*(?:p|s|{_SSML_TAG_PATTERN})\b[^>]*>",
+    rf"<\s*(?:p|s|{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}>",
+    re.IGNORECASE,
+)
+
+_SSML_NAMESPACED_WRAPPING_RE = re.compile(
+    rf"<\s*(?P<tag>{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_NAMESPACED_STANDALONE_RE = re.compile(
+    rf"<\s*/?\s*(?:{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}\/?>",
+    re.IGNORECASE,
+)
+_SSML_NAMESPACED_INCOMPLETE_RE = re.compile(
+    rf"<\s*(?:{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}>",
     re.IGNORECASE,
 )
 
 
-def strip_chat_markup(text: str) -> str:
+def _is_ssml_enabled(text: str, tts: Any = None, ssml: bool | None = None) -> bool:
+    if ssml is not None:
+        return ssml
+    text_lower = text.lower()
+    if "<speak" in text_lower:
+        return True
+    if any(tag in text_lower for tag in ("<phoneme", "<prosody", "<say-as")):
+        return True
+    if "<sub " in text_lower and "alias=" in text_lower:
+        return True
+    if tts is None:
+        return False
+    opts = getattr(tts, "_opts", None)
+    if opts is not None:
+        if getattr(opts, "text_type", None) == "ssml":
+            return True
+        if getattr(opts, "enable_ssml", False):
+            return True
+        if getattr(opts, "enable_ssml_parsing", False):
+            return True
+        if getattr(opts, "ssml", False):
+            return True
+    provider = getattr(tts, "provider", "")
+    if provider in ("azure", "cartesia"):
+        return True
+    if getattr(getattr(tts, "capabilities", None), "ssml", False):
+        return True
+    if getattr(tts, "ssml_enabled", False) or getattr(tts, "enable_ssml", False):
+        return True
+    return False
+
+
+def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -> str:
     """Strip expressive markup and SSML tags before storing text in chat context.
 
     Preserves word boundaries when removing <break> tags, unwraps common SSML tags
@@ -1080,25 +1126,36 @@ def strip_chat_markup(text: str) -> str:
     # Replace break tags with a space to preserve word boundaries
     text = _SSML_BREAK_RE.sub(" ", text)
 
-    # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+    # Provider-specific namespaced tags (e.g. Amazon Polly, Azure) are always speech markup
     while True:
-        replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
-        if replaced == text:
-            break
-        text = replaced
-
-    # Unwrap inline SSML wrapping tags to keep inner text
-    while True:
-        unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
+        unwrapped = _SSML_NAMESPACED_WRAPPING_RE.sub(r"\2", text)
         if unwrapped == text:
             break
         text = unwrapped
+    text = _SSML_NAMESPACED_STANDALONE_RE.sub(" ", text)
+    text = _SSML_NAMESPACED_INCOMPLETE_RE.sub("", text)
 
-    # Remove standalone / framing tags
-    text = _SSML_STANDALONE_RE.sub(" ", text)
+    # Only process standard SSML tags (<p>, <s>, <prosody>, etc.) when SSML is enabled
+    if _is_ssml_enabled(text, tts=tts, ssml=ssml):
+        # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+        while True:
+            replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
+            if replaced == text:
+                break
+            text = replaced
 
-    # Strip incomplete (unmatched) opening SSML tags left by interruptions
-    text = _SSML_INCOMPLETE_RE.sub("", text)
+        # Unwrap inline SSML wrapping tags to keep inner text
+        while True:
+            unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
+            if unwrapped == text:
+                break
+            text = unwrapped
+
+        # Remove standalone / framing tags
+        text = _SSML_STANDALONE_RE.sub(" ", text)
+
+        # Strip incomplete (unmatched) opening SSML tags left by interruptions
+        text = _SSML_INCOMPLETE_RE.sub("", text)
 
     # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
     text = strip_all_markup(text)
