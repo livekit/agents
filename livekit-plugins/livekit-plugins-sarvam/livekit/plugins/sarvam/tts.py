@@ -1004,13 +1004,13 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         # Streaming WAV parsing state
         self._wav_header_buf = bytearray()
-        self._wav_header_parsed = False
         self._wav_is_riff: bool | None = None
+        self._wav_data_remaining: int | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         self._wav_header_buf.clear()
-        self._wav_header_parsed = False
         self._wav_is_riff = None
+        self._wav_data_remaining = None
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
@@ -1371,15 +1371,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from e
 
     @staticmethod
-    def _locate_data_chunk(buf: bytearray) -> tuple[bool, int]:
+    def _locate_data_chunk(buf: bytearray) -> tuple[bool, int, int]:
         """Try to locate the data chunk in buf.
 
-        Returns (found, data_offset). If found is True, buf[data_offset:] is PCM samples.
+        Returns (found, data_offset, data_size). If found is True,
+        buf[data_offset : data_offset + data_size] contains PCM samples.
         """
         if len(buf) < 12:
-            return False, 0
+            return False, 0, 0
         if bytes(buf[:4]) != b"RIFF" or bytes(buf[8:12]) != b"WAVE":
-            return True, 0
+            return True, 0, len(buf)
 
         pos = 12
         while pos + 8 <= len(buf):
@@ -1387,40 +1388,110 @@ class SynthesizeStream(tts.SynthesizeStream):
             chunk_size = struct.unpack("<I", buf[pos + 4 : pos + 8])[0]
             pos += 8
             if chunk_id == b"data":
-                return True, pos
+                return True, pos, chunk_size
             pos += chunk_size + (chunk_size % 2)
 
-        return False, 0
+        return False, 0, 0
 
     def _extract_streaming_wav_pcm(self, audio_bytes: bytes) -> bytes:
         """Extract PCM payload across WebSocket chunks for WAV containers.
 
-        Maintains state across chunks to handle headers split across messages.
+        Maintains state across chunks to handle headers split across messages,
+        buffers partial RIFF signatures, and honors data chunk boundaries.
         """
         if self._wav_is_riff is False:
             return audio_bytes
 
-        if self._wav_is_riff is None:
-            if not audio_bytes.startswith(b"RIFF"):
-                self._wav_is_riff = False
-                self._wav_header_parsed = True
-                return audio_bytes
-            self._wav_is_riff = True
-
-        if self._wav_header_parsed:
-            if audio_bytes.startswith(b"RIFF"):
-                # New RIFF container in the stream
-                self._wav_header_buf.clear()
-                self._wav_header_parsed = False
+        if self._wav_data_remaining is not None:
+            if self._wav_data_remaining > 0:
+                sample_bytes = min(len(audio_bytes), self._wav_data_remaining)
+                pcm = audio_bytes[:sample_bytes]
+                self._wav_data_remaining -= sample_bytes
+                trailing = audio_bytes[sample_bytes:]
+                if self._wav_data_remaining == 0 and trailing:
+                    riff_idx = trailing.find(b"RIFF")
+                    if riff_idx != -1:
+                        self._wav_data_remaining = None
+                        return pcm + self._extract_streaming_wav_pcm(trailing[riff_idx:])
+                    for prefix_len in (3, 2, 1):
+                        if trailing.endswith(b"RIFF"[:prefix_len]):
+                            self._wav_header_buf.extend(trailing[-prefix_len:])
+                            self._wav_data_remaining = None
+                            break
+                    return pcm
+                return pcm
             else:
-                return audio_bytes
+                riff_idx = audio_bytes.find(b"RIFF")
+                if riff_idx != -1:
+                    self._wav_data_remaining = None
+                    return self._extract_streaming_wav_pcm(audio_bytes[riff_idx:])
+                for prefix_len in (3, 2, 1):
+                    if audio_bytes.endswith(b"RIFF"[:prefix_len]):
+                        self._wav_header_buf.extend(audio_bytes[-prefix_len:])
+                        self._wav_data_remaining = None
+                        break
+                return b""
 
         self._wav_header_buf.extend(audio_bytes)
-        found, offset = self._locate_data_chunk(self._wav_header_buf)
-        if found:
-            self._wav_header_parsed = True
-            pcm = bytes(self._wav_header_buf[offset:])
+        buf = self._wav_header_buf
+
+        if self._wav_is_riff is None:
+            if len(buf) < 4:
+                if b"RIFF"[: len(buf)] == buf:
+                    return b""
+                self._wav_is_riff = False
+                pcm = bytes(buf)
+                self._wav_header_buf.clear()
+                return pcm
+            if bytes(buf[:4]) != b"RIFF":
+                self._wav_is_riff = False
+                pcm = bytes(buf)
+                self._wav_header_buf.clear()
+                return pcm
+            self._wav_is_riff = True
+
+        if self._wav_is_riff is True and not bytes(buf).startswith(b"RIFF"):
+            riff_idx = buf.find(b"RIFF")
+            if riff_idx != -1:
+                del buf[:riff_idx]
+            else:
+                matched = False
+                for prefix_len in (3, 2, 1):
+                    if buf.endswith(b"RIFF"[:prefix_len]):
+                        del buf[:-prefix_len]
+                        matched = True
+                        break
+                if not matched:
+                    buf.clear()
+                return b""
+
+        if len(buf) < 12:
+            return b""
+        if bytes(buf[8:12]) != b"WAVE":
+            self._wav_is_riff = False
+            pcm = bytes(buf)
             self._wav_header_buf.clear()
+            return pcm
+
+        found, offset, data_size = self._locate_data_chunk(buf)
+        if found:
+            self._wav_data_remaining = data_size
+            payload = bytes(buf[offset:])
+            self._wav_header_buf.clear()
+            sample_bytes = min(len(payload), self._wav_data_remaining)
+            pcm = payload[:sample_bytes]
+            self._wav_data_remaining -= sample_bytes
+            trailing = payload[sample_bytes:]
+            if self._wav_data_remaining == 0 and trailing:
+                riff_idx = trailing.find(b"RIFF")
+                if riff_idx != -1:
+                    self._wav_data_remaining = None
+                    return pcm + self._extract_streaming_wav_pcm(trailing[riff_idx:])
+                for prefix_len in (3, 2, 1):
+                    if trailing.endswith(b"RIFF"[:prefix_len]):
+                        self._wav_header_buf.extend(trailing[-prefix_len:])
+                        self._wav_data_remaining = None
+                        break
             return pcm
         else:
             return b""
