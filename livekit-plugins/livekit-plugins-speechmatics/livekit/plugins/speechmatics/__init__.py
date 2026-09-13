@@ -51,6 +51,27 @@ class SpeechmaticsPlugin(Plugin):
 
 Plugin.register_plugin(SpeechmaticsPlugin())
 
+
+# Deprecated exports, resolved lazily so that importing one warns. Remove after 2026-10-05.
+_warned_deprecated: set[str] = set()
+
+
+def __getattr__(name: str):
+    if name == "OperatingPoint":
+        from speechmatics.rt import OperatingPoint
+
+        # A single `from ... import` looks the name up twice.
+        if name not in _warned_deprecated:
+            _warned_deprecated.add(name)
+            logger.warning(
+                "`OperatingPoint` is deprecated and will be removed after 2026-10-05; "
+                "use `model` instead (Agent STT accepts only `linden-1`)"
+            )
+        return OperatingPoint
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 # Cleanup docs of unexported modules
 _module = dir()
 NOT_IN_ALL = [m for m in _module if m not in __all__]
