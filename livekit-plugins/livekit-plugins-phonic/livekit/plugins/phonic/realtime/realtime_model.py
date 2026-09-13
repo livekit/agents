@@ -1030,23 +1030,26 @@ class RealtimeSession(llm.RealtimeSession):
             self._generate_reply_task.cancel()
 
         if self._pending_generate_reply_fut and not self._pending_generate_reply_fut.done():
-            self._pending_generate_reply_fut.cancel()
+            old_fut = self._pending_generate_reply_fut
+            self._pending_generate_reply_fut = None
+            old_fut.cancel()
 
         self._pending_generate_reply_fut = fut
-        self._generate_reply_task = asyncio.create_task(
-            self._send_say(text, fut), name="phonic-say"
-        )
+        say_task = asyncio.create_task(self._send_say(text, fut), name="phonic-say")
+        self._generate_reply_task = say_task
 
         def _on_timeout() -> None:
             if not fut.done():
                 fut.set_exception(llm.RealtimeError("say() timed out."))
 
-        handle = asyncio.get_event_loop().call_later(10.0, _on_timeout)
+        handle = asyncio.get_running_loop().call_later(10.0, _on_timeout)
 
-        def _on_fut_done(f: asyncio.Future[Any]) -> None:
+        def _on_fut_done(f: asyncio.Future[Any], task: asyncio.Task[None] = say_task) -> None:
             handle.cancel()
-            if f.cancelled() and self._generate_reply_task and not self._generate_reply_task.done():
-                self._generate_reply_task.cancel()
+            if self._pending_generate_reply_fut is f:
+                self._pending_generate_reply_fut = None
+            if f.cancelled() and not task.done():
+                task.cancel()
 
         fut.add_done_callback(_on_fut_done)
         return fut
