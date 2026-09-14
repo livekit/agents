@@ -726,6 +726,48 @@ class TestPlainTextAngleBrackets:
         assert "bob@example.com" in ev.token
         stream.end_input()
 
+    def test_angle_bracketed_prose_is_not_a_tag(self) -> None:
+        # regression: an XML name is followed by whitespace, "/" or ">". Without that
+        # rule the depth counter read a markdown autolink or an angle-bracketed address
+        # as an unclosed open tag, so depth stayed > 0 and every later sentence was held
+        # until flush — the same end-of-turn batching the bare "<" fix removed
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert not _has_unclosed_xml_tags("Docs are at <https://docs.livekit.io> today.")
+        assert not _has_unclosed_xml_tags("Email me at <bob@example.com> please.")
+        assert not _has_unclosed_xml_tags("Press <ctrl+c> to quit.")
+        assert not _has_unclosed_xml_tags("See <http://example.com/a?b=1> for details.")
+
+    def test_hyphenated_tag_names_still_counted(self) -> None:
+        # the guard must not over-correct: xAI's prosody tags carry hyphens, and an
+        # unclosed one still has to hold the sentence
+        from livekit.agents.tokenize.token_stream import _has_unclosed_xml_tags
+
+        assert _has_unclosed_xml_tags("<higher-pitch>no way")
+        assert not _has_unclosed_xml_tags("<higher-pitch>no way</higher-pitch> done")
+        assert not _has_unclosed_xml_tags('<break time="500ms"/> done')
+
+    @pytest.mark.asyncio
+    async def test_autolink_streams_with_xml_aware(self) -> None:
+        # end-to-end: an expressive agent quoting a URL must keep streaming
+        tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+        stream = tok.stream()
+        stream.push_text(
+            "Docs are at <https://docs.livekit.io> now. And a second sentence to split."
+        )
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "docs.livekit.io" in ev.token
+        stream.end_input()
+
+    @pytest.mark.asyncio
+    async def test_email_streams_with_xml_aware(self) -> None:
+        tok = SentenceTokenizer(min_sentence_len=1, stream_context_len=5, xml_aware=True)
+        stream = tok.stream()
+        stream.push_text("Email me at <bob@example.com> please. Second sentence for the split.")
+        ev = await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert "bob@example.com" in ev.token
+        stream.end_input()
+
 
 # ===========================================================================
 # Universal transcript stripping (provider-agnostic, used by the transcript sinks)
