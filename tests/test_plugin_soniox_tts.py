@@ -171,3 +171,32 @@ async def test_invalid_stream_idle_timeout_rejected() -> None:
         soniox.TTS(api_key="fake-key", stream_idle_timeout=0)
     with pytest.raises(ValueError):
         soniox.TTS(api_key="fake-key", stream_idle_timeout=-1.0)
+
+
+async def test_reduce_silence_propagates_to_options() -> None:
+    tts = soniox.TTS(api_key="fake-key", model="tts-rt-v2")
+    assert tts._opts.reduce_silence is False
+
+    tts.update_options(reduce_silence=True)
+    assert tts._opts.reduce_silence is True
+
+    tts = soniox.TTS(api_key="fake-key", model="tts-rt-v2", reduce_silence=True)
+    assert tts._opts.reduce_silence is True
+
+
+async def test_reduce_silence_rejected_on_unsupported_model() -> None:
+    # default model is tts-rt-v1-preview, which lacks supports_silence_reduction
+    with pytest.raises(ValueError, match="reduce_silence"):
+        soniox.TTS(api_key="fake-key", reduce_silence=True)
+    with pytest.raises(ValueError, match="reduce_silence"):
+        soniox.TTS(api_key="fake-key", model="tts-rt-v1", reduce_silence=True)
+
+    tts = soniox.TTS(api_key="fake-key")
+    with pytest.raises(ValueError, match="reduce_silence"):
+        tts.update_options(reduce_silence=True)
+    assert tts._opts.reduce_silence is False
+
+    tts = soniox.TTS(api_key="fake-key", model="tts-rt-v2", reduce_silence=True)
+    with pytest.raises(ValueError, match="reduce_silence"):
+        tts.update_options(model="tts-rt-v1")
+    assert tts._opts.model == "tts-rt-v2"
