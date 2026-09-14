@@ -65,6 +65,7 @@ class FallbackAdapter(
 
         self._llm_instances = llm
         self._attempt_timeout = attempt_timeout
+        self._current_llm_index: int = 0
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
@@ -83,6 +84,59 @@ class FallbackAdapter(
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def switch_to_next(self, *, only_if_available: bool = True) -> bool:
+        """
+        Move pointer to next LLM in order.
+
+        Args:
+            only_if_available: if True, skip unavailable LLMs
+
+        Returns:
+            True if switched, False otherwise
+        """
+
+        n = len(self._llm_instances)
+        start = self._current_llm_index
+
+        for offset in range(1, n + 1):
+            i = (start + offset) % n
+            status = self._status[i]
+
+            if not only_if_available or status.available:
+                prev = self._current_llm_index
+                self._current_llm_index = i
+
+                logger.info(
+                    f"Manual switch LLM from "
+                    f"{self._llm_instances[prev].label} "
+                    f"to {self._llm_instances[i].label}"
+                )
+
+                return True
+
+        return False
+
+    def _ordered_indices(self) -> list[int]:
+        n = len(self._llm_instances)
+        return (
+            [self._current_llm_index]
+            + list(range(self._current_llm_index + 1, n))
+            + list(range(0, self._current_llm_index))
+        )
+
+    def _mark_failed(self, idx: int) -> None:
+        self._status[idx].available = False
+
+        for i in self._ordered_indices()[1:]:
+            if self._status[i].available:
+                self._current_llm_index = i
+                logger.info(
+                    f"Auto switch LLM from "
+                    f"{self._llm_instances[idx].label} "
+                    f"to {self._llm_instances[i].label}"
+                )
+                return
 
     def chat(
         self,
@@ -239,12 +293,17 @@ class FallbackLLMStream(LLMStream):
     async def _run(self) -> None:
         start_time = time.time()
 
-        all_failed = all(not llm_status.available for llm_status in self._fallback_adapter._status)
+        adapter = self._fallback_adapter
+
+        all_failed = all(not llm_status.available for llm_status in adapter._status)
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
-        for i, llm in enumerate(self._fallback_adapter._llm_instances):
-            llm_status = self._fallback_adapter._status[i]
+        indices = range(len(adapter._llm_instances)) if all_failed else adapter._ordered_indices()
+
+        for i in indices:
+            llm = adapter._llm_instances[i]
+            llm_status = adapter._status[i]
             if llm_status.available or all_failed:
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
@@ -261,8 +320,8 @@ class FallbackLLMStream(LLMStream):
                     return
                 except Exception:  # exceptions already logged inside _try_generate
                     if llm_status.available:
-                        llm_status.available = False
-                        self._fallback_adapter.emit(
+                        adapter._mark_failed(i)
+                        adapter.emit(
                             "llm_availability_changed",
                             AvailabilityChangedEvent(llm=llm, available=False),
                         )
@@ -282,7 +341,8 @@ class FallbackLLMStream(LLMStream):
                             extra=extra,
                         )
 
-            self._try_recovery(llm)
+            if not llm_status.available:
+                self._try_recovery(llm)
 
         raise APIConnectionError(
             f"all LLMs failed ({[llm.label for llm in self._fallback_adapter._llm_instances]}) after {time.time() - start_time} seconds"  # noqa: E501
