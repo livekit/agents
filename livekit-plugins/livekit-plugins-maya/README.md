@@ -13,14 +13,15 @@ reference before changing them.
 ## Install this contribution
 
 This contribution is not yet a published upstream package. From a checkout of
-this branch, install the plugin into your agent environment:
+this branch, install the matching core and plugin into your agent environment:
 
 ```sh
-uv pip install --no-sources ./livekit-plugins/livekit-plugins-maya
+uv pip install --no-sources ./livekit-agents ./livekit-plugins/livekit-plugins-maya
 ```
 
-This resolves released LiveKit Agents rather than the repository's development
-workspace. The [Maya Research Cookbook](https://github.com/MayaResearch/maya-cookbook)
+The matching core includes a per-stream metrics metadata hook. Installing only
+the plugin against an older released core does not include that metrics fix.
+The [Maya Research Cookbook](https://github.com/MayaResearch/maya-cookbook)
 provides a tested immutable pin, API reference, TTS quickstarts, and complete
 LiveKit, Pipecat and from-scratch agent examples.
 
@@ -67,6 +68,10 @@ speech recognition, an LLM, or LiveKit room credentials.
   cannot inherit abandoned audio. LiveKit handles clearing local playout.
 - Updating options selects a correctly configured connection for the next turn,
   without closing a currently active turn.
+- Metrics retain the model selected by the acquired connection, even when options
+  change while a turn is active. Concurrent turns keep separate metadata.
+- A simultaneous sender failure and terminal response is treated as a failure;
+  that connection is discarded rather than reused.
 - Closing the provider prevents new acquisitions and retires handshakes that
   finish during shutdown, including directly constructed public streams.
 - Errors after audio receipt are not automatically retried, avoiding repeated

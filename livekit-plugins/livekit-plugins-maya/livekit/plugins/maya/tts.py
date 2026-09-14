@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -312,6 +313,9 @@ class ChunkedStream(tts.ChunkedStream):
             return
         try:
             async with self._maya._connection(self._conn_options.timeout) as connection:
+                self._metrics_metadata = Metadata(
+                    model_name=connection.settings.model, model_provider=self._maya.provider
+                )
                 self._acquire_time = self._maya._pool.last_acquire_time
                 self._connection_reused = self._maya._pool.last_connection_reused
                 try:
@@ -383,6 +387,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return
             output_emitter.start_segment(segment_id=turn.context_id)
             async with self._maya._connection(self._conn_options.timeout) as connection:
+                self._metrics_metadata = Metadata(
+                    model_name=connection.settings.model, model_provider=self._maya.provider
+                )
                 self._acquire_time = self._maya._pool.last_acquire_time
                 self._connection_reused = self._maya._pool.last_connection_reused
                 tasks: list[asyncio.Task[None]] = []
@@ -413,6 +420,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     )
                     tasks = [sender, receiver]
                     await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    # Both tasks can finish in one scheduler wakeup. Retrieve every
+                    # completed exception before propagating one, so transport failure
+                    # cannot be hidden by a simultaneous successful terminal response.
+                    failures = [
+                        task.exception() for task in tasks if task.done() and not task.cancelled()
+                    ]
+                    for failure in failures:
+                        if failure is not None:
+                            raise failure
                     if receiver.done():
                         await receiver
                     else:

@@ -17,6 +17,61 @@ from livekit.plugins import maya
 
 pytestmark = pytest.mark.unit
 OPTIONS = APIConnectOptions(max_retry=0, timeout=0.2)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_metrics_keep_acquired_model_during_update(streaming: bool) -> None:
+    service = Service(mode="hold")
+    async with service.engine() as engine:
+        metrics: list[Any] = []
+        engine.on("metrics_collected", metrics.append)
+        if streaming:
+            old = engine.stream(conn_options=OPTIONS)
+            old.push_text("Old model. ")
+            old.end_input()
+        else:
+            old = engine.synthesize("Old model.", conn_options=OPTIONS)
+        await asyncio.wait_for(anext(old), 1)
+        engine.update_options(model="future-model")
+        service.mode = "normal"
+        await speak(engine, streaming)
+        socket = service.sockets[0]
+        context = next(f["context_id"] for f in socket.frames if f["type"] == "text")
+        socket.reply({"type": "end", "context_id": context})
+        await collect(old)
+        assert [m.metadata.model_name for m in metrics] == ["future-model", "Maya Calyx"]
+        assert engine.model == "future-model"
+
+
+async def test_simultaneous_sender_failure_is_not_pooled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.plugins.maya import tts as implementation
+
+    original_send = implementation.send_text
+    original_wait = asyncio.wait
+
+    async def failing_send(*args: Any, **kwargs: Any) -> None:
+        await original_send(*args, **kwargs)
+        if not kwargs["more"]:
+            raise APIError("final send failed", retryable=False)
+
+    async def simultaneous_wait(tasks: Any, **kwargs: Any) -> Any:
+        # Force both completion results to be observed in the same scheduler wakeup.
+        if kwargs.get("return_when") == asyncio.FIRST_COMPLETED and isinstance(tasks, list):
+            kwargs["return_when"] = asyncio.ALL_COMPLETED
+        return await original_wait(tasks, **kwargs)
+
+    monkeypatch.setattr(implementation, "send_text", failing_send)
+    monkeypatch.setattr(asyncio, "wait", simultaneous_wait)
+    service = Service()
+    async with service.engine() as engine:
+        with pytest.raises(APIError, match="final send failed"):
+            await speak(engine, True)
+        assert service.sockets[0].closed
+        monkeypatch.setattr(implementation, "send_text", original_send)
+        assert await speak(engine, True) == PCM
+        assert len(service.sockets) == 2
+
+
 PCM = b"\x21\x03\x32\x04" * 2400
 METADATA = {"type": "metadata", "sample_rate": 24000, "channels": 1, "encoding": "pcm_s16le"}
 
