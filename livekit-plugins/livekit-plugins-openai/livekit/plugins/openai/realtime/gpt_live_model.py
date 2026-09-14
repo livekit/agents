@@ -282,9 +282,9 @@ class GPTLiveSession(
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
 
-        # what holds the continuation back: the response still running under each delegation, as
-        # the calls it has made so far, and confirmed calls without an output yet; the framework
-        # hands a result back by call id alone, so a call is looked up in both
+        # delegation_id -> call_ids of its response that has not completed yet; on completion the
+        # call_ids move to the open set, and stay there until each output is sent to the backend.
+        # response_pending is set once an output is sent and cleared by the response.create
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
