@@ -296,13 +296,20 @@ def test_aligned_transcript_auto_enabled_for_preview_model_any_language() -> Non
     assert tts.capabilities.aligned_transcript is True
 
 
-def test_explicit_word_timestamps_true_skips_gate_and_warns(
+def test_explicit_word_timestamps_true_requests_but_does_not_advertise(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Explicit True keeps the wire request but not the capability.
+
+    add_timestamps still goes out (a stale support matrix stays observable), but
+    advertising alignment on a combo known not to deliver would send consumers
+    down the empty-transcript path this gate exists to avoid.
+    """
     with caplog.at_level(logging.WARNING, logger="livekit.plugins.cartesia"):
         tts = cartesia_tts.TTS(api_key="test-key", language="ja", word_timestamps=True)
 
-    assert tts.capabilities.aligned_transcript is True
+    assert tts.capabilities.aligned_transcript is False
+    assert tts._opts.word_timestamps is True
     assert any("word_timestamps was requested" in record.message for record in caplog.records)
 
 
@@ -333,7 +340,8 @@ def test_update_options_to_preview_model_enables_capability() -> None:
 def test_update_options_keeps_explicit_word_timestamps_true() -> None:
     tts = cartesia_tts.TTS(api_key="test-key", language="en", word_timestamps=True)
     tts.update_options(language="ja")
-    assert tts.capabilities.aligned_transcript is True
+    # the wire request survives the language change; the capability does not
+    assert tts.capabilities.aligned_transcript is False
 
     options = cartesia_tts._to_cartesia_options(tts._opts, streaming=True)
     assert options["add_timestamps"] is True

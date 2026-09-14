@@ -313,7 +313,14 @@ class TTS(tts.TTS):
         self._sync_aligned_transcript()
 
     def _sync_aligned_transcript(self) -> None:
-        """Resolve word_timestamps for the current model/language and mirror it on the capability."""
+        """Resolve word_timestamps for the current model/language and gate the capability.
+
+        The request flag and the capability describe different facts: an explicit
+        ``word_timestamps=True`` still sends ``add_timestamps`` (so timestamps flow
+        if the provider delivers after all), but ``aligned_transcript`` only claims
+        combos known to return them; advertising alignment the provider cannot
+        supply would recreate the empty-transcript path this gate exists to avoid.
+        """
         supported = _supports_word_timestamps(self._opts.model, self._opts.language)
         if is_given(self._word_timestamps):
             enabled = self._word_timestamps
@@ -321,7 +328,8 @@ class TTS(tts.TTS):
                 # https://docs.cartesia.ai/api-reference/tts/compare-tts-endpoints
                 logger.warning(
                     "word_timestamps was requested for model %s with language %s, which is not "
-                    "known to return them, aligned transcripts may be empty",
+                    "known to return them; timestamps are still requested, but the "
+                    "aligned_transcript capability stays off",
                     self._opts.model,
                     self._opts.language.language if self._opts.language else None,
                 )
@@ -329,7 +337,7 @@ class TTS(tts.TTS):
             enabled = supported
 
         self._opts.word_timestamps = enabled
-        self._capabilities.aligned_transcript = enabled
+        self._capabilities.aligned_transcript = enabled and supported
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
