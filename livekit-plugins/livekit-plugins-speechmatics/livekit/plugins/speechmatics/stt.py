@@ -1011,6 +1011,7 @@ def _resolve_model(
 _DROPPED_ARGS = (
     "audio_settings",
     "chunk_size",
+    "end_of_turn_config",
     "end_of_utterance_max_delay",
     "end_of_utterance_mode",
     "end_of_utterance_silence_trigger",
@@ -1022,6 +1023,7 @@ _DROPPED_ARGS = (
     "punctuation_overrides",
     "speaker_passive_format",
     "transcription_config",
+    "vad_config",
 )
 
 # Deprecated arguments that were renamed: old name -> (STTOptions field, value coercion).

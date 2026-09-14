@@ -10,10 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
 )
@@ -21,7 +19,7 @@ from typing import (
 import json_repair
 import pydantic
 from pydantic import BaseModel, TypeAdapter, create_model
-from pydantic.fields import Field, FieldInfo
+from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined, from_json
 from typing_extensions import TypeVar
 
@@ -513,46 +511,15 @@ def function_arguments_to_pydantic_model(func: Callable[..., Any]) -> type[BaseM
             continue
 
         default_value = param.default if param.default is not param.empty else ...
-        field_info: FieldInfo | None = None
-        field_attrs: dict[str, Any] = {}
+        field_info = FieldInfo.from_annotation(type_hint)
 
-        # Annotated[str, Field(description="...")]
-        if get_origin(type_hint) is Annotated:
-            annotated_args = get_args(type_hint)
-            type_hint = annotated_args[0]
-            annotated_field = next(
-                (x for x in annotated_args[1:] if isinstance(x, FieldInfo)), None
-            )
-            if annotated_field and hasattr(annotated_field, "asdict"):
-                # `asdict` is available after pydantic 2.12
-                field_dict = annotated_field.asdict()
-                field_attrs = field_dict["attributes"]
-                # Constraints (ge/le/gt/lt/multiple_of/min_length/pattern/...) live
-                # in `metadata`, not `attributes`. Re-attach them to the annotation
-                # so `Field(...)` constraints on a tool argument are preserved.
-                if field_dict["metadata"]:
-                    type_hint = Annotated[(type_hint, *field_dict["metadata"])]
-            elif annotated_field:
-                field_attrs["default"] = annotated_field.default
-                field_attrs["description"] = annotated_field.description
-                field_info = annotated_field
+        if default_value is not ... and field_info.default is PydanticUndefined:
+            field_info.default = default_value
 
-        if (
-            default_value is not ...
-            and field_attrs.get("default", PydanticUndefined) is PydanticUndefined
-        ):
-            field_attrs["default"] = default_value
+        if field_info.description is None:
+            field_info.description = param_docs.get(param_name)
 
-        if field_attrs.get("description") is None:
-            field_attrs["description"] = param_docs.get(param_name, None)
-
-        if not field_info:
-            field_info = Field(**field_attrs)
-        else:
-            for k, v in field_attrs.items():
-                setattr(field_info, k, v)
-
-        fields[param_name] = (type_hint, field_info)
+        fields[param_name] = (field_info.annotation, field_info)
 
     return create_model(model_name, **fields)
 

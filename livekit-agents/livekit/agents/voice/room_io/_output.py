@@ -5,12 +5,14 @@ import json
 import time
 
 from google.protobuf.json_format import MessageToDict
+from opentelemetry import context as otel_context
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from ...tts._provider_format import (
     ExpressiveTag,
     TranscriptMarkupStripper,
@@ -95,9 +97,13 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
-        await self._publish_track()
+        # detached: publishing spawns the track's tasks, which must not inherit this span
+        with tracer.detached_span("publish_audio_output", context=trace_context) as span:
+            await self._publish_track()
+            if self._publication is not None:
+                span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
         if self._flush_task:
@@ -142,6 +148,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         if not self._pushed_duration:
             return
+
+        # a detaching sink never reaches the playout wait, so the playhead is reported here
+        self._report_run(
+            offset=self._source_pushed_duration - self._audio_source.queued_duration,
+            ended_at=time.time(),
+        )
         self._interrupted_event.set()
 
     def pause(self) -> None:
@@ -156,7 +168,12 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def _report_run(
         self, *, offset: float, ended_at: float, resumes_at: float | None = None
     ) -> None:
-        """Report the open run, and begin the next past any audio that never played."""
+        """Report the open run, and begin the next past any audio that never played.
+
+        The run covers ``[_run_offset, offset)`` and stopped at ``ended_at``. The next one
+        starts at ``offset``, or at ``resumes_at`` when the audio between the two was
+        discarded rather than played.
+        """
         if self._dry_at is not None:
             # a run cannot outlast the audio the source held, however late the caller noticed
             ended_at = min(ended_at, self._dry_at)

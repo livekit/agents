@@ -72,6 +72,7 @@ class PhonicToolConfig(TypedDict, total=False):
     require_speech_before_tool_call: bool
     forbid_speech_after_tool_call: bool
     forbid_tool_call_after_speech: bool
+    allow_tool_chaining: bool
     # Built-in tools only (set on the matching ``phonic_tools`` entry):
     respond_after_sec: float  # choose_not_to_respond: seconds to wait before a follow-up (or omit)
     speech_before_tool_call: (
@@ -157,6 +158,7 @@ class _RealtimeOptions:
     pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]]
     template_variables: NotGivenOr[dict[str, str]]
     enable_redaction: NotGivenOr[bool]
+    enable_watermarking: NotGivenOr[bool]
     mcp_servers: NotGivenOr[list[str]]
     observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
     configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
@@ -230,6 +232,7 @@ class RealtimeModel(llm.RealtimeModel):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -284,6 +287,8 @@ class RealtimeModel(llm.RealtimeModel):
             template_variables: Variables substituted into the system prompt and welcome message.
             enable_redaction: When True, PII/PHI is redacted from transcripts and bleeped from audio
                 after the conversation ends.
+            enable_watermarking: When True, embeds an inaudible provenance watermark in the agent's
+                generated audio. Adds a very small amount of latency.
             mcp_servers: Names of pre-configured MCP servers to make available to the assistant.
                 Names must be unique.
             observability_integrations: Names of observability integrations to forward traces to
@@ -367,6 +372,7 @@ class RealtimeModel(llm.RealtimeModel):
             pronunciation_dictionary=pronunciation_dictionary,
             template_variables=template_variables,
             enable_redaction=enable_redaction,
+            enable_watermarking=enable_watermarking,
             mcp_servers=mcp_servers,
             observability_integrations=observability_integrations,
             configuration_endpoint=configuration_endpoint,
@@ -430,6 +436,7 @@ class RealtimeModel(llm.RealtimeModel):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -474,6 +481,7 @@ class RealtimeModel(llm.RealtimeModel):
                 pronunciation_dictionary=pronunciation_dictionary,
                 template_variables=template_variables,
                 enable_redaction=enable_redaction,
+                enable_watermarking=enable_watermarking,
                 mcp_servers=mcp_servers,
                 observability_integrations=observability_integrations,
                 configuration_endpoint=configuration_endpoint,
@@ -659,13 +667,13 @@ class RealtimeSession(llm.RealtimeSession):
                     "type": "custom_websocket",
                     "tool_schema": tool_schema,
                     "tool_call_output_timeout_ms": TOOL_CALL_OUTPUT_TIMEOUT_MS,
-                    # fixed, not configurable: the plugin does not support tool chaining or tool
-                    # calls during agent speech within the Realtime generations framework
+                    # fixed, not configurable: the plugin does not support tool calls during
+                    # agent speech
                     "wait_for_speech_before_tool_call": True,
-                    "allow_tool_chaining": False,
                     "require_speech_before_tool_call": cfg.get(
                         "require_speech_before_tool_call", False
                     ),
+                    "allow_tool_chaining": cfg.get("allow_tool_chaining", False),
                     "forbid_speech_after_tool_call": cfg.get(
                         "forbid_speech_after_tool_call", False
                     ),
@@ -839,6 +847,7 @@ class RealtimeSession(llm.RealtimeSession):
             "pronunciation_dictionary": self._opts.pronunciation_dictionary,
             "template_variables": self._opts.template_variables,
             "enable_redaction": self._opts.enable_redaction,
+            "enable_watermarking": self._opts.enable_watermarking,
             "mcp_servers": self._opts.mcp_servers,
             "observability_integrations": self._opts.observability_integrations,
             "configuration_endpoint": self._opts.configuration_endpoint,
@@ -879,6 +888,7 @@ class RealtimeSession(llm.RealtimeSession):
         pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
         template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+        enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
         mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
         observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
         configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
@@ -919,6 +929,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ("pronunciation_dictionary", pronunciation_dictionary),
                 ("template_variables", template_variables),
                 ("enable_redaction", enable_redaction),
+                ("enable_watermarking", enable_watermarking),
                 ("mcp_servers", mcp_servers),
                 ("observability_integrations", observability_integrations),
                 ("configuration_endpoint", configuration_endpoint),
@@ -1447,8 +1458,8 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
-        # At most 1 tool call is supported per turn due to `allow_tool_chaining: False`,
-        # allowing us to close the generation.
+        # Close the generation after the tool call. With allow_tool_chaining enabled, any
+        # chained follow-up call arrives as a new generation.
         self._close_current_generation(interrupted=False)
 
     def _handle_tool_call_interrupted(self, message: ToolCallInterruptedPayload) -> None:
