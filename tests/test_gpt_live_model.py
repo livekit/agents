@@ -943,7 +943,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.create"
-        assert not session._delegated_responses and not session._backend_open_calls
+        assert not session._backend_running_responses and not session._backend_open_calls
     finally:
         await session.aclose()
         await model.aclose()
@@ -1026,7 +1026,7 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
             "response.item.create",
             "response.create",
         ]
-        assert not session._delegated_responses and not session._backend_open_calls
+        assert not session._backend_running_responses and not session._backend_open_calls
     finally:
         await session.aclose()
         await model.aclose()
