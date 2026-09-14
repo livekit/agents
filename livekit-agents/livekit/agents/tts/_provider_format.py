@@ -16,6 +16,7 @@ Provider docs:
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -1161,23 +1162,32 @@ def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -
     (such as <phoneme>, <prosody>, <say-as>, <emphasis>) while keeping their inner text,
     and strips provider-specific expressive markup tags.
     """
+    is_ssml = _is_ssml_enabled(text, tts=tts, ssml=ssml)
     if "<" not in text:
+        if is_ssml:
+            return html.unescape(text.strip())
         return text.strip()
 
     # Replace break tags with a space to preserve word boundaries
     text = _SSML_BREAK_RE.sub(" ", text)
 
     # Provider-specific namespaced tags (e.g. Amazon Polly, Azure) are always speech markup
+    had_namespaced = False
     while True:
         unwrapped = _SSML_NAMESPACED_WRAPPING_RE.sub(r"\2", text)
         if unwrapped == text:
             break
+        had_namespaced = True
         text = unwrapped
-    text = _SSML_NAMESPACED_STANDALONE_RE.sub(" ", text)
-    text = _SSML_NAMESPACED_INCOMPLETE_RE.sub("", text)
+    if _SSML_NAMESPACED_STANDALONE_RE.search(text):
+        had_namespaced = True
+        text = _SSML_NAMESPACED_STANDALONE_RE.sub(" ", text)
+    if _SSML_NAMESPACED_INCOMPLETE_RE.search(text):
+        had_namespaced = True
+        text = _SSML_NAMESPACED_INCOMPLETE_RE.sub("", text)
 
     # Only process standard SSML tags (<p>, <s>, <sub>, <prosody>, etc.) when SSML is enabled
-    if _is_ssml_enabled(text, tts=tts, ssml=ssml):
+    if is_ssml:
         # Replace <sub alias="...">inner</sub> with the spoken alias
         def _sub_alias_replace(m: re.Match[str]) -> str:
             val = m.group("alias1") if m.group("alias1") is not None else m.group("alias2")
@@ -1211,6 +1221,10 @@ def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -
 
     # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
     text = strip_all_markup(text)
+
+    # Decode XML character and numeric references in retained SSML text and aliases
+    if is_ssml or had_namespaced:
+        text = html.unescape(text)
 
     # Collapse any introduced horizontal whitespace runs
     text = re.sub(r"[^\S\r\n]+", " ", text)

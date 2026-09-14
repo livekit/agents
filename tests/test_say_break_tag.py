@@ -242,3 +242,30 @@ def test_strip_chat_markup_wrapped_tts_adapters() -> None:
 
     opts_adapter = FakeFallbackAdapter([FakeOptsTTS()])
     assert strip_chat_markup("<p>Hello</p><p>world</p>", tts=opts_adapter) == "Hello world"
+
+
+def test_strip_chat_markup_decodes_xml_character_references() -> None:
+    """Decode XML character and numeric references in retained SSML text and aliases."""
+    # Retained text in <speak>
+    assert strip_chat_markup("<speak>AT&amp;T</speak>") == "AT&T"
+    assert (
+        strip_chat_markup('<speak><sub alias="Ben &amp; Jerry&apos;s">B&amp;J</sub></speak>')
+        == "Ben & Jerry's"
+    )
+    assert (
+        strip_chat_markup("<speak>Rock &amp; Roll &#169; 2026 &#x2122;</speak>")
+        == "Rock & Roll © 2026 ™"
+    )
+    assert strip_chat_markup("<speak>5 &lt; 10 &amp; 10 &gt; 5</speak>") == "5 < 10 & 10 > 5"
+
+    # With explicit ssml=True
+    assert strip_chat_markup("AT&amp;T", ssml=True) == "AT&T"
+    assert strip_chat_markup('<sub alias="AT&amp;T">ATT</sub>', ssml=True) == "AT&T"
+
+    # Provider-specific SSML
+    assert strip_chat_markup('<amazon:effect name="drc">AT&amp;T</amazon:effect>') == "AT&T"
+
+    # When SSML is disabled, XML references remain untouched
+    assert strip_chat_markup("AT&amp;T") == "AT&amp;T"
+    assert strip_chat_markup("Use &amp; in XML") == "Use &amp; in XML"
+    assert strip_chat_markup("Use <p>AT&amp;T</p>") == "Use <p>AT&amp;T</p>"
