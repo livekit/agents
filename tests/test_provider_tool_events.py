@@ -1,9 +1,8 @@
 """End-to-end: provider (server-side) tool calls surface as a start/end lifecycle
 on the AgentSession, parallel to `tool_execution_updated` for locally-run tools.
 
-Drives a real AgentSession pipeline with a synthetic LLM that emits the
-`provider_tool_call` event on the LLM (the same EventEmitter seam as
-`metrics_collected`), and asserts the session re-emits
+Drives a real AgentSession pipeline with a synthetic LLM stream that emits the
+`provider_tool_call` event, and asserts the session re-emits
 `provider_tool_execution_updated` — the exact contract a consumer (e.g. the
 dashboard voice worker) subscribes to for its "tool is running" UX.
 """
@@ -55,12 +54,12 @@ class _ProviderToolStream(llm.LLMStream):
     async def _run(self) -> None:
         for call_id, name, arguments in self._calls:
             # a provider tool begins running server-side (early, "is running" cue)...
-            self._llm.emit(
+            self.emit(
                 "provider_tool_call",
                 ProviderToolCall(phase="started", call_id=call_id, name=name, arguments=arguments),
             )
             # ...and finishes, with its result
-            self._llm.emit(
+            self.emit(
                 "provider_tool_call",
                 ProviderToolCall(
                     phase="done", call_id=call_id, name=name, arguments=arguments, result="ok"
@@ -100,6 +99,7 @@ async def test_provider_tool_lifecycle_emits_start_then_end() -> None:
     assert ended.name == "web_search"
     assert ended.arguments == '{"q":"livekit"}'
     assert ended.result == "ok"
+    assert ended.status == "done"
 
 
 @pytest.mark.asyncio

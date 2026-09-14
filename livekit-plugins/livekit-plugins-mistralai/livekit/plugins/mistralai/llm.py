@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -59,6 +60,14 @@ class _PendingFunctionCall:
     id: str
     name: str
     tool_call_id: str
+    arguments: str = ""
+
+
+@dataclass
+class _PendingProviderToolCall:
+    """Tracks a provider tool until a terminal lifecycle update is emitted."""
+
+    name: str
     arguments: str = ""
 
 
@@ -221,12 +230,13 @@ class LLMStream(llm.LLMStream):
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
-        self._provider_tool_args: dict[str, str] = {}
+        self._pending_provider_tool_calls: dict[str, _PendingProviderToolCall] = {}
 
     async def _run(self) -> None:
         self._emitted_tool_calls = set()
-        self._provider_tool_args = {}
+        self._pending_provider_tool_calls = {}
         retryable = True
+        terminal_status: Literal["error", "cancelled"] = "error"
 
         try:
             entries, extra_data = self._chat_ctx.to_provider_format(format="mistralai")
@@ -259,6 +269,9 @@ class LLMStream(llm.LLMStream):
             for chat_chunk in self._flush_pending_fnc_calls(pending_fnc_calls):
                 self._event_ch.send_nowait(chat_chunk)
 
+        except asyncio.CancelledError:
+            terminal_status = "cancelled"
+            raise
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
         except APIStatusError as e:
@@ -271,6 +284,23 @@ class LLMStream(llm.LLMStream):
             ) from None
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
+        finally:
+            self._end_pending_provider_tool_calls(status=terminal_status)
+
+    def _end_pending_provider_tool_calls(self, *, status: Literal["error", "cancelled"]) -> None:
+        pending_calls = self._pending_provider_tool_calls
+        self._pending_provider_tool_calls = {}
+        for call_id, call in pending_calls.items():
+            self.emit(
+                "provider_tool_call",
+                ProviderToolCall(
+                    phase="done",
+                    status=status,
+                    call_id=call_id,
+                    name=call.name,
+                    arguments=call.arguments,
+                ),
+            )
 
     def _flush_pending_fnc_calls(self, pending: dict[str, _PendingFunctionCall]) -> list[ChatChunk]:
         """Emit completed FunctionToolCalls from the pending buffer."""
@@ -357,8 +387,10 @@ class LLMStream(llm.LLMStream):
             )
 
         if isinstance(data, ToolExecutionStartedEvent):
-            self._provider_tool_args[data.id] = data.arguments
-            self._llm.emit(
+            self._pending_provider_tool_calls[data.id] = _PendingProviderToolCall(
+                name=data.name, arguments=data.arguments
+            )
+            self.emit(
                 "provider_tool_call",
                 ProviderToolCall(
                     phase="started",
@@ -369,20 +401,24 @@ class LLMStream(llm.LLMStream):
             )
 
         elif isinstance(data, ToolExecutionDeltaEvent):
-            if data.id not in self._provider_tool_args:
-                self._provider_tool_args[data.id] = ""
-            self._provider_tool_args[data.id] += data.arguments
+            if data.id not in self._pending_provider_tool_calls:
+                self._pending_provider_tool_calls[data.id] = _PendingProviderToolCall(
+                    name=data.name
+                )
+            self._pending_provider_tool_calls[data.id].arguments += data.arguments
 
         elif isinstance(data, ToolExecutionDoneEvent):
-            args = self._provider_tool_args.pop(data.id, "")
+            pending = self._pending_provider_tool_calls.pop(data.id, None)
+            args = pending.arguments if pending is not None else ""
             logger.debug(
                 "executed provider tool",
                 extra={"function": data.name, "lk.pii.arguments": args, "lk.pii.info": data.info},
             )
-            self._llm.emit(
+            self.emit(
                 "provider_tool_call",
                 ProviderToolCall(
                     phase="done",
+                    status="done",
                     call_id=data.id,
                     name=data.name,
                     arguments=args,

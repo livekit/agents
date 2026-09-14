@@ -154,12 +154,22 @@ def perform_llm_inference(
     model_settings: ModelSettings,
     model: str | None = None,
     provider: str | None = None,
+    on_provider_tool_call: Callable[[llm.ProviderToolCall], None] | None = None,
 ) -> tuple[asyncio.Task[bool], _LLMGenerationData]:
     text_ch = aio.Chan[str | FlushSentinel]()
     function_ch = aio.Chan[llm.FunctionCall]()
     data = _LLMGenerationData(text_ch=text_ch, function_ch=function_ch)
     llm_task = asyncio.create_task(
-        _llm_inference_task(node, chat_ctx, tool_ctx, model_settings, data, model, provider)
+        _llm_inference_task(
+            node,
+            chat_ctx,
+            tool_ctx,
+            model_settings,
+            data,
+            model,
+            provider,
+            on_provider_tool_call,
+        )
     )
     llm_task.add_done_callback(lambda _: text_ch.close())
     llm_task.add_done_callback(lambda _: function_ch.close())
@@ -183,6 +193,7 @@ async def _llm_inference_task(
     data: _LLMGenerationData,
     model: str | None = None,
     provider: str | None = None,
+    on_provider_tool_call: Callable[[llm.ProviderToolCall], None] | None = None,
 ) -> bool:
     start_time = time.perf_counter()
     data.started_at = start_time
@@ -246,6 +257,9 @@ async def _llm_inference_task(
 
     if not isinstance(llm_node, AsyncIterable):
         return False
+
+    if isinstance(llm_node, llm.LLMStream) and on_provider_tool_call is not None:
+        llm_node.on("provider_tool_call", on_provider_tool_call)
 
     # forward llm stream to output channels
     usage: CompletionUsage | None = None
@@ -323,8 +337,12 @@ async def _llm_inference_task(
         )
         raise
     finally:
-        if isinstance(llm_node, _ACloseable):
-            await llm_node.aclose()
+        try:
+            if isinstance(llm_node, _ACloseable):
+                await llm_node.aclose()
+        finally:
+            if isinstance(llm_node, llm.LLMStream) and on_provider_tool_call is not None:
+                llm_node.off("provider_tool_call", on_provider_tool_call)
 
     if (
         usage is not None

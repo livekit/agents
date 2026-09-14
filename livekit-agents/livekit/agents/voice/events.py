@@ -540,13 +540,14 @@ class ProviderToolCallStarted(BaseModel):
 
 
 class ProviderToolCallEnded(BaseModel):
-    """A provider-executed tool call finished, with its result when the provider returns one."""
+    """A provider-executed tool call reached a terminal state."""
 
     type: Literal["provider_tool_call_ended"] = "provider_tool_call_ended"
     call_id: str
     name: str
     arguments: str = ""
     result: str | None = None
+    status: Literal["done", "error", "cancelled"] = "done"
 
 
 class ProviderToolExecutionUpdatedEvent(BaseModel):

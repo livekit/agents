@@ -6,7 +6,15 @@ from typing import Any
 import pytest
 
 from livekit.agents import APIConnectionError
-from livekit.agents.llm import ChatContext, FallbackAdapter, LLMStream, Tool
+from livekit.agents.llm import (
+    ChatChunk,
+    ChatContext,
+    ChoiceDelta,
+    FallbackAdapter,
+    LLMStream,
+    ProviderToolCall,
+    Tool,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -88,6 +96,140 @@ class _FailingLLM(_NamedLLM):
         return _FailingLLMStream(
             self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options
         )
+
+
+class _ProviderToolLLMStream(LLMStream):
+    async def _run(self) -> None:
+        self.emit(
+            "provider_tool_call",
+            ProviderToolCall(
+                phase="started", call_id="provider-call", name="web_search", arguments="{}"
+            ),
+        )
+        self._event_ch.send_nowait(
+            ChatChunk(id="response", delta=ChoiceDelta(role="assistant", content="done"))
+        )
+        self.emit(
+            "provider_tool_call",
+            ProviderToolCall(
+                phase="done",
+                status="done",
+                call_id="provider-call",
+                name="web_search",
+                arguments="{}",
+                result="result",
+            ),
+        )
+
+
+class _ProviderToolLLM(_NamedLLM):
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
+    ) -> LLMStream:
+        return _ProviderToolLLMStream(
+            self, chat_ctx=chat_ctx, tools=tools or [], conn_options=conn_options
+        )
+
+
+class _RecoveringProviderToolLLMStream(LLMStream):
+    def __init__(self, *args: Any, attempt: int, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._attempt = attempt
+
+    async def _run(self) -> None:
+        call_id = f"provider-call-{self._attempt}"
+        self.emit(
+            "provider_tool_call",
+            ProviderToolCall(phase="started", call_id=call_id, name="web_search"),
+        )
+        self.emit(
+            "provider_tool_call",
+            ProviderToolCall(phase="done", status="done", call_id=call_id, name="web_search"),
+        )
+        if self._attempt == 1:
+            raise APIConnectionError("primary failed")
+        self._event_ch.send_nowait(
+            ChatChunk(id="recovered", delta=ChoiceDelta(role="assistant", content="recovered"))
+        )
+
+
+class _RecoveringProviderToolLLM(_NamedLLM):
+    def __init__(self) -> None:
+        super().__init__(model="primary-model", provider="primary")
+        self._attempt = 0
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
+    ) -> LLMStream:
+        self._attempt += 1
+        return _RecoveringProviderToolLLMStream(
+            self,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            attempt=self._attempt,
+        )
+
+
+async def test_forwards_provider_tool_events_from_active_llm() -> None:
+    child = _ProviderToolLLM(model="primary-model", provider="primary")
+    fallback_adapter = FallbackAdapter([child])
+    events: list[ProviderToolCall] = []
+
+    try:
+        async with fallback_adapter.chat(chat_ctx=ChatContext.empty()) as stream:
+            stream.on("provider_tool_call", events.append)
+            async for _ in stream:
+                pass
+
+        assert [(event.phase, event.call_id) for event in events] == [
+            ("started", "provider-call"),
+            ("done", "provider-call"),
+        ]
+    finally:
+        await fallback_adapter.aclose()
+
+
+async def test_does_not_forward_provider_tool_events_from_recovery_probe() -> None:
+    primary = _RecoveringProviderToolLLM()
+    secondary = _NamedLLM(
+        model="secondary-model",
+        provider="secondary",
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="fallback response", ttft=0.01, duration=0.02)
+        ],
+    )
+    fallback_adapter = FallbackAdapter([primary, secondary])
+    events: list[ProviderToolCall] = []
+
+    try:
+        chat_ctx = ChatContext.empty()
+        chat_ctx.add_message(role="user", content="hello")
+        async with fallback_adapter.chat(chat_ctx=chat_ctx) as stream:
+            stream.on("provider_tool_call", events.append)
+            async for _ in stream:
+                pass
+
+        recovery_task = fallback_adapter._status[0].recovering_task
+        assert recovery_task is not None
+        await recovery_task
+
+        assert [(event.phase, event.call_id) for event in events] == [
+            ("started", "provider-call-1"),
+            ("done", "provider-call-1"),
+        ]
+    finally:
+        await fallback_adapter.aclose()
 
 
 async def test_reports_active_instance_model_and_provider() -> None:

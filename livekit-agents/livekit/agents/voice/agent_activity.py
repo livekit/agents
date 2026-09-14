@@ -916,14 +916,12 @@ class AgentActivity(RecognitionHooks):
             if isinstance(old_llm, llm.LLM):
                 old_llm.off("metrics_collected", self._on_metrics_collected)
                 old_llm.off("error", self._on_error)
-                old_llm.off("provider_tool_call", self._on_provider_tool_call)
 
             self._agent._llm = new_llm  # llm_node reads activity.llm per generation
             if isinstance(self.llm, llm.LLM):
                 self.llm.prewarm()
                 self.llm.on("metrics_collected", self._on_metrics_collected)
                 self.llm.on("error", self._on_error)
-                self.llm.on("provider_tool_call", self._on_provider_tool_call)
 
         if is_given(new_tts):
             old_tts = self.tts
@@ -1194,7 +1192,6 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
-            self.llm.on("provider_tool_call", self._on_provider_tool_call)
 
         if isinstance(self.stt, stt.STT):
             self.stt.on("metrics_collected", self._on_metrics_collected)
@@ -1557,7 +1554,6 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
             self.llm.off("error", self._on_error)
-            self.llm.off("provider_tool_call", self._on_provider_tool_call)
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
@@ -2148,6 +2144,7 @@ class AgentActivity(RecognitionHooks):
                 name=call.name,
                 arguments=call.arguments,
                 result=call.result,
+                status=call.status or "done",
             )
         self._session.emit(
             "provider_tool_execution_updated",
@@ -3530,6 +3527,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
+            on_provider_tool_call=self._on_provider_tool_call,
         )
         tasks.append(llm_task)
 
