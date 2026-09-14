@@ -512,6 +512,62 @@ class LLM(llm.LLM):
         )
 
     @staticmethod
+    def with_orcarouter(
+        *,
+        model: str = "orcarouter/auto",
+        api_key: str | None = None,
+        base_url: str = "https://api.orcarouter.ai/v1",
+        client: openai.AsyncClient | None = None,
+        site_url: str | None = None,
+        app_name: str | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: ToolChoice = "auto",
+        reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
+        safety_identifier: NotGivenOr[str] = NOT_GIVEN,
+        prompt_cache_key: NotGivenOr[str] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        timeout: httpx.Timeout | None = None,
+    ) -> LLM:
+        """
+        Create a new instance of OrcaRouter LLM.
+
+        ``api_key`` must be set to your OrcaRouter API key, either using the argument or by setting
+        the ``ORCAROUTER_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("ORCAROUTER_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "OrcaRouter API key is required, either as argument or set ORCAROUTER_API_KEY environment variable"
+            )
+
+        # Set up analytics headers for OrcaRouter
+        default_headers: dict[str, str] = {}
+        if site_url:
+            default_headers["HTTP-Referer"] = site_url
+        if app_name:
+            default_headers["X-Title"] = app_name
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            client=client,
+            base_url=base_url,
+            user=user,
+            temperature=temperature,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+            safety_identifier=safety_identifier,
+            prompt_cache_key=prompt_cache_key,
+            top_p=top_p,
+            extra_headers=default_headers,
+            timeout=timeout,
+        )
+
+    @staticmethod
     def with_deepseek(
         *,
         model: str | DeepSeekChatModels = "deepseek-chat",
