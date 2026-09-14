@@ -56,6 +56,8 @@ class _FakeActivity(SimpleNamespace):
             ),
             _realtime_generation_task=_realtime_generation_task,
             generation_calls=generation_calls,
+            _background_speeches=set(),
+            _schedule_speech=lambda speech, priority, force=False: None,
         )
 
 

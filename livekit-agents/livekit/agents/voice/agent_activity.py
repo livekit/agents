@@ -214,6 +214,15 @@ class _PausedSpeechInfo:
     timeout: float
 
 
+@dataclass(frozen=True)
+class _BackgroundSpeech:
+    """A speech off the floor but not done: running its tools, or waiting for a requested reply."""
+
+    handle: SpeechHandle
+    interrupt_on_audio_activity: bool
+    """Whether the user starting to talk cancels it, as it does a speech that holds the floor."""
+
+
 def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
     """End the ``user_turn`` span the activity adopted from recognition (see ``_EndOfTurnInfo``).
 
@@ -459,8 +468,9 @@ class AgentActivity(RecognitionHooks):
             self._interruption_by_audio_activity_enabled
         )
 
-        # speeches that audio playout finished but not done because of tool calls
-        self._background_speeches: set[SpeechHandle] = set()
+        # speeches that audio playout finished but not done because of tool calls, or that wait
+        # for the reply the model was asked for
+        self._background_speeches: set[_BackgroundSpeech] = set()
 
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
@@ -1873,7 +1883,8 @@ class AgentActivity(RecognitionHooks):
         self, force: bool = False, source: InterruptionSource = "programmatic"
     ) -> list[SpeechHandle]:
         interrupted_speeches: list[SpeechHandle] = []
-        for speech in self._background_speeches:
+        for background in self._background_speeches:
+            speech = background.handle
             if force or speech.allow_interruptions:
                 interrupted_speeches.append(speech.interrupt(force=force, source=source))
 
@@ -2329,6 +2340,19 @@ class AgentActivity(RecognitionHooks):
         if self._rt_session is not None:
             self._rt_session.start_user_activity()
 
+        # a reply the model is still working on is cancelled, as it was while it held the floor;
+        # under the pause rule it has no sound to pause and simply waits its turn
+        pending_replies = [
+            background.handle
+            for background in self._background_speeches
+            if background.interrupt_on_audio_activity
+            and not background.handle.interrupted
+            and background.handle.allow_interruptions
+        ]
+        if pending_replies and not self._pause_enabled():
+            for speech in pending_replies:
+                speech.interrupt(source="audio_activity")
+
         if (
             self._current_speech is not None
             and not self._current_speech.interrupted
@@ -2364,7 +2388,9 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.interrupt()
 
                 self._current_speech.interrupt(source="audio_activity")
-        elif self._current_speech is None or not self._current_speech.interrupted:
+        elif not pending_replies and (
+            self._current_speech is None or not self._current_speech.interrupted
+        ):
             self._interruption_detected = False
 
     # region recognition hooks
@@ -3899,11 +3925,12 @@ class AgentActivity(RecognitionHooks):
             return
 
         # wait for the tool execution to complete
-        self._background_speeches.add(speech_handle)
+        background = _BackgroundSpeech(speech_handle, interrupt_on_audio_activity=False)
+        self._background_speeches.add(background)
         try:
             await exe_task
         finally:
-            self._background_speeches.discard(speech_handle)
+            self._background_speeches.discard(background)
 
         # important: no agent output should be used after this point
 
@@ -4112,7 +4139,16 @@ class AgentActivity(RecognitionHooks):
                 tool_choice=(model_settings.tool_choice if per_response_tool_choice else NOT_GIVEN),
                 tools=(turn_tools if per_response_tool_choice else NOT_GIVEN),
             )
-            await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+            # the request is out: the floor is free while the model works, so a generation that
+            # is ready meanwhile plays instead of waiting behind a reply that has no sound yet
+            speech_handle._clear_authorization()
+            speech_handle._mark_generation_done()
+            background = _BackgroundSpeech(speech_handle, interrupt_on_audio_activity=True)
+            self._background_speeches.add(background)
+            try:
+                await speech_handle.wait_if_not_interrupted([generate_reply_fut])
+            finally:
+                self._background_speeches.discard(background)
             if speech_handle.interrupted:
                 # cancel the pending generation; the plugin emits response.cancel
                 if not generate_reply_fut.done():
@@ -4134,7 +4170,9 @@ class AgentActivity(RecognitionHooks):
                 self._session._update_agent_state("listening")
                 return
 
-            # _realtime_generation_task will clear the authorization
+            # back in line ahead of what was scheduled meanwhile and behind what is playing;
+            # _realtime_generation_task waits for the authorization and clears it
+            self._schedule_speech(speech_handle, SpeechHandle.SPEECH_PRIORITY_HIGH, force=True)
             await self._realtime_generation_task(
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
@@ -4609,11 +4647,12 @@ class AgentActivity(RecognitionHooks):
             lambda _: self._session._update_agent_state("thinking")
         )
 
-        self._background_speeches.add(speech_handle)
+        background = _BackgroundSpeech(speech_handle, interrupt_on_audio_activity=False)
+        self._background_speeches.add(background)
         try:
             await exe_task
         finally:
-            self._background_speeches.discard(speech_handle)
+            self._background_speeches.discard(background)
 
         # important: no agent output should be used after this point
 

@@ -264,7 +264,7 @@ async def test_interrupting_a_finished_speech_spares_the_newer_reply() -> None:
         await asyncio.wait_for(_wait_for_second_reply(), timeout=5)
         assert not handle_a.done()
         assert session._activity is not None
-        assert handle_a in session._activity._background_speeches
+        assert any(b.handle is handle_a for b in session._activity._background_speeches)
 
         rt_session.interrupted = False
         handle_a.interrupt(force=True)

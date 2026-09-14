@@ -90,6 +90,7 @@ def test_audio_activity_waits_for_min_words() -> None:
     activity._interruption_by_audio_activity_enabled = True
     activity._rt_turn_detection_enabled = False
     activity._rt_session = None
+    activity._background_speeches = set()
     activity._agent = MagicMock()
     activity._session = MagicMock()
     activity._session._text_only = False
@@ -121,6 +122,7 @@ def test_rejected_audio_interruption_clears_confirmed_verdict() -> None:
     activity._interruption_by_audio_activity_enabled = True
     activity._rt_turn_detection_enabled = False
     activity._rt_session = None
+    activity._background_speeches = set()
     activity._agent = MagicMock()
     activity._session = MagicMock()
     activity._session._aec_warmup_remaining = 0
