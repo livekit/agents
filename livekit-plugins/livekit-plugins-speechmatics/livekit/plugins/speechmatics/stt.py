@@ -290,7 +290,7 @@ class STT(stt.STT):
             turn_detection_mode=turn_detection_mode,
             speaker_format=_set(speaker_format),
             known_speakers=_set(known_speakers) or [],
-            additional_vocab=_set(additional_vocab) or [],
+            additional_vocab=_normalize_additional_vocab(_set(additional_vocab) or []),
             model=_resolve_model(model, operating_point),
             include_partials=_set(include_partials),
             enable_diarization=enable_diarization if is_given(enable_diarization) else True,
@@ -917,6 +917,46 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
         TurnDetectionMode.SMART_TURN,
     }
 )
+
+
+def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry]:
+    """Accept vocab entries from either SDK, returning entries agent-STT can serialize.
+
+    The pre-Agent-STT plugin took `speechmatics.voice`'s pydantic `AdditionalVocabEntry`.
+    The Agent STT config carries an unrecognised object straight into
+    `transcription_config.additional_vocab`, where the JSON encode then refuses it — so
+    without this the old class fails when the session starts rather than at construction.
+    Both classes have the same two fields, so the value survives the copy.
+
+    Entries are duck-typed on `content` instead of matched against the voice class, which
+    keeps the voice SDK off the runtime path. Dicts pass through: the SDK accepts them.
+
+    No warning: the two classes hold the same two fields, so the entry is copied without
+    losing anything and the word reaches the engine exactly as asked. There is nothing for
+    the caller to do differently.
+
+    Raises:
+        ValueError: if an entry is neither a mapping nor an object with `content`.
+    """
+    normalized: list[AdditionalVocabEntry] = []
+
+    for entry in entries:
+        if isinstance(entry, (AdditionalVocabEntry, dict)):
+            normalized.append(cast(AdditionalVocabEntry, entry))
+            continue
+
+        content = getattr(entry, "content", None)
+        if content is None:
+            raise ValueError(
+                f"`additional_vocab` entry {entry!r} is not an `AdditionalVocabEntry`: no "
+                "`content` to read"
+            )
+
+        normalized.append(
+            AdditionalVocabEntry(content=content, sounds_like=getattr(entry, "sounds_like", None))
+        )
+
+    return normalized
 
 
 def _resolve_turn_detection_mode(mode: TurnDetectionMode) -> TurnDetectionMode:
