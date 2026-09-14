@@ -1331,9 +1331,9 @@ class AgentActivity(RecognitionHooks):
 
                 if self._new_turns_blocked:
                     raise ToolError(
-                        "An agent transition is in progress. This tool call cannot start an "
-                        "AgentTask while its agent is exiting. Wait until the transition is "
-                        "complete before retrying, if the tool is available to the new agent."
+                        "An agent transition is in progress, so this tool call cannot continue. "
+                        "Wait until the transition is complete before retrying, if the tool is "
+                        "available to the new agent."
                     )
 
                 # past the queue: a run watching a task still waiting its turn waits for

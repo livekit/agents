@@ -177,8 +177,11 @@ async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
 
         await asyncio.wait_for(target_entered.wait(), timeout=5.0)
         assert task_error is not None
-        assert "agent transition is in progress" in task_error.message
-        assert "Wait until the transition is complete" in task_error.message
+        assert task_error.message == (
+            "An agent transition is in progress, so this tool call cannot continue. "
+            "Wait until the transition is complete before retrying, if the tool is "
+            "available to the new agent."
+        )
         assert not task_entered.is_set()
         assert tool_task is not None and tool_task.done()
         outputs = [
