@@ -443,15 +443,7 @@ class GPTLiveSession(
         self._session_id = None
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": f"Bearer {self._opts.api_key}",
-        }
-        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
-        path = parsed.path.rstrip("/")
-        if not path.endswith("/live/sessions"):
-            path = f"{path}/live/sessions"
-        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+        url, headers = self._create_ws_url_and_headers()
         if lk_oai_debug:
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
@@ -467,6 +459,18 @@ class GPTLiveSession(
             raise APIConnectionError(
                 f"{self._live_model._provider_label} connection error"
             ) from None
+
+    def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
+        headers = {
+            "User-Agent": "LiveKit Agents",
+            "Authorization": f"Bearer {self._opts.api_key}",
+        }
+        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
+        path = parsed.path.rstrip("/")
+        if not path.endswith("/live/sessions"):
+            path = f"{path}/live/sessions"
+        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+        return url, headers
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
@@ -865,7 +869,7 @@ class GPTLiveSession(
             "gpt-live returned an error",
             extra={"lk.pii.error": error.model_dump(exclude_none=True)},
         )
-        recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
+        recoverable = not self._is_fatal_error(error)
         api_error = APIError(
             message="GPT-Live returned an error",
             retryable=recoverable,
@@ -873,6 +877,9 @@ class GPTLiveSession(
         if not recoverable:
             raise api_error
         self._emit_error(api_error, recoverable=True)
+
+    def _is_fatal_error(self, error: types.ErrorBody) -> bool:
+        return (error.code or error.type or "") in _FATAL_ERROR_CODES
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
