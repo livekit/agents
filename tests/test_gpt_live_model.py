@@ -943,7 +943,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.create"
-        assert not session._backend_open_calls and not session._backend_responses_running
+        assert not session._delegated_responses and not session._backend_open_calls
     finally:
         await session.aclose()
         await model.aclose()
@@ -1026,7 +1026,7 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
             "response.item.create",
             "response.create",
         ]
-        assert not session._backend_open_calls and not session._backend_responses_running
+        assert not session._delegated_responses and not session._backend_open_calls
     finally:
         await session.aclose()
         await model.aclose()
@@ -1035,7 +1035,7 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
 async def test_a_failed_response_releases_the_continuation_it_held_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A response that fails while running no longer blocks an answered one."""
+    """A response that fails no longer blocks an answered one, and its own calls are discarded."""
     ws = _connect_hook(monkeypatch)
 
     model = GPTLiveModel(api_key="sk-test")
@@ -1051,6 +1051,7 @@ async def test_a_failed_response_releases_the_continuation_it_held_back(
         session._handle_event(
             _response_event("item_d2", {"type": "response.created", "response": {"id": "resp_2"}})
         )
+        session._handle_event(_response_event("item_d2", _function_call_done("call_2")))
 
         await session._append_items(
             [llm.FunctionCallOutput(call_id="call_1", output="one", is_error=False)]
@@ -1063,6 +1064,13 @@ async def test_a_failed_response_releases_the_continuation_it_held_back(
         )
         await asyncio.sleep(0.05)
         assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
+
+        # the service refuses an output for a discarded call, so it is context for the voice model
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_2", output="two", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert ws.sent[-1]["type"] == "session.thinking.append"
     finally:
         await session.aclose()
         await model.aclose()

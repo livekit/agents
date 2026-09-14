@@ -128,9 +128,13 @@ class _Speech:
 #   response.created ─► response.output_item.done ×N (function calls) ─► response.completed
 #
 # A response completes with its calls unanswered. Each result is queued with response.item.create,
-# and one response.create continues the chain once no response is running and every call in the
-# session is answered; the service refuses anything earlier. The voice model speaks the
-# continuation's text on its own.
+# and one response.create runs the next response, the continuation, once every call in the session
+# has one; a partial batch is rejected. The voice model speaks the continuation's text on its own.
+@dataclass
+class _DelegatedResponse:
+    """The current response of one delegation, and the tool calls it waits on."""
+
+    call_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -283,9 +287,10 @@ class GPTLiveSession(
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
 
-        # what holds the continuation back: backend responses still running and backend tool
-        # calls without an output yet; the framework hands a result back by call id alone
-        self._backend_responses_running = 0
+        # what holds the continuation back: the response still running under each delegation,
+        # and confirmed calls without an output yet; the framework hands a result back by call id
+        # alone, so a call is looked up in both
+        self._delegated_responses: dict[str | None, _DelegatedResponse] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_answers_pending = False
 
@@ -432,7 +437,7 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
-        self._backend_responses_running = 0
+        self._delegated_responses.clear()
         self._backend_open_calls.clear()
         self._backend_answers_pending = False
         self._usage_total = types.Usage()
@@ -715,13 +720,15 @@ class GPTLiveSession(
             )
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
-        # a response the application started itself has a null delegation
+        # the inner event carries no response id, so a delegation's responses are followed in
+        # sequence: a continuation is the next response.created under the same delegation, and a
+        # response the application started itself has a null delegation
         event = envelope.event
         response = event.response
         d_id = envelope.delegation_id
 
         if event.type == "response.created":
-            self._backend_responses_running += 1
+            self._delegated_responses[d_id] = _DelegatedResponse()
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -734,7 +741,14 @@ class GPTLiveSession(
                     extra={"call_id": item.call_id, "name": item.name},
                 )
                 return
-            self._backend_open_calls.add(item.call_id)
+            if (pending := self._delegated_responses.get(d_id)) is None:
+                logger.warning(
+                    "gpt-live function call outside a known response",
+                    extra={"call_id": item.call_id, "delegation_id": d_id},
+                )
+                self._backend_open_calls.add(item.call_id)
+            else:
+                pending.call_ids.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -772,7 +786,8 @@ class GPTLiveSession(
                         ),
                     ),
                 )
-            self._backend_responses_running = max(0, self._backend_responses_running - 1)
+            if (pending := self._delegated_responses.pop(d_id, None)) is not None:
+                self._backend_open_calls |= pending.call_ids
             self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
@@ -785,15 +800,16 @@ class GPTLiveSession(
                     "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
-            # its calls stay pending on the backend and still need their outputs
-            self._backend_responses_running = max(0, self._backend_responses_running - 1)
+            # the service discards a failed response's calls: an output for one is refused, so
+            # it goes to the voice model as context instead
+            self._delegated_responses.pop(d_id, None)
             self._maybe_continue_response()
 
     def _maybe_continue_response(self) -> None:
         # one response.create continues the chain, and only once nothing is still asking and every
         # call in the conversation has its answer: the service refuses a partial batch
         if (
-            self._backend_responses_running
+            self._delegated_responses
             or self._backend_open_calls
             or not self._backend_answers_pending
         ):
@@ -992,9 +1008,9 @@ class GPTLiveSession(
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 if text := item.text_content:
                     self.append_instructions(text)
-            elif (
-                isinstance(item, llm.FunctionCallOutput)
-                and item.call_id in self._backend_open_calls
+            elif isinstance(item, llm.FunctionCallOutput) and (
+                item.call_id in self._backend_open_calls
+                or any(item.call_id in p.call_ids for p in self._delegated_responses.values())
             ):
                 backend_outputs.append(item)
             elif (rendered := _render_item(item)) is not None:
@@ -1013,6 +1029,8 @@ class GPTLiveSession(
                 )
             )
             self._backend_open_calls.discard(output.call_id)
+            for pending in self._delegated_responses.values():
+                pending.call_ids.discard(output.call_id)
         if backend_outputs:
             if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
                 logger.warning(
