@@ -15,6 +15,8 @@
 See https://docs.livekit.io/agents/integrations/stt/speechmatics/ for more information.
 """
 
+from typing import Any
+
 from speechmatics.agent_stt import (
     AdditionalVocabEntry,
     AudioEncoding,
@@ -52,22 +54,34 @@ class SpeechmaticsPlugin(Plugin):
 Plugin.register_plugin(SpeechmaticsPlugin())
 
 
-# Deprecated exports, resolved lazily so that importing one warns. Remove after 2026-10-05.
+# Names this plugin exported before Agent STT, served from the voice SDK that defined them so
+# they are the same objects callers already hold. Resolved lazily, which both keeps the import
+# off the hot path and lets the lookup warn — binding them at module level would skip
+# `__getattr__` entirely. Remove these, and the `speechmatics-voice` dependency, after 2026-10-05.
 _warned_deprecated: set[str] = set()
 
 
-def __getattr__(name: str):
-    if name == "OperatingPoint":
-        from speechmatics.rt import OperatingPoint
+def _warn_deprecated(name: str, guidance: str) -> None:
+    # A single `from ... import` looks the name up twice.
+    if name not in _warned_deprecated:
+        _warned_deprecated.add(name)
+        logger.warning(f"`{name}` is deprecated and will be removed after 2026-10-05; {guidance}")
 
-        # A single `from ... import` looks the name up twice.
-        if name not in _warned_deprecated:
-            _warned_deprecated.add(name)
-            logger.warning(
-                "`OperatingPoint` is deprecated and will be removed after 2026-10-05; "
-                "use `model` instead (Agent STT accepts only `linden-1`)"
-            )
+
+def __getattr__(name: str) -> Any:
+    if name == "OperatingPoint":
+        from speechmatics.voice import OperatingPoint
+
+        _warn_deprecated(name, "use `model` instead (Agent STT accepts only `linden-1`)")
         return OperatingPoint
+
+    if name == "SpeakerFocusMode":
+        from speechmatics.voice import SpeakerFocusMode
+
+        _warn_deprecated(
+            name, "speaker focus has no Agent STT equivalent and `focus_mode` is ignored"
+        )
+        return SpeakerFocusMode
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

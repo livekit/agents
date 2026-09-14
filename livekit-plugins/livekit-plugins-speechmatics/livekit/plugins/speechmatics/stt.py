@@ -86,10 +86,20 @@ class TurnDetectionMode(str, Enum):
 
     The member names and values mirror the Agent STT SDK's own turn-detection modes so
     the two never drift.
+
+    `FIXED`, `ADAPTIVE` and `SMART_TURN` are the pre-Agent-STT modes. They are kept so
+    existing code still runs and are reconciled by `_resolve_turn_detection_mode`.
     """
 
     VAD = AgentTurnDetectionMode.VAD.value
     EXTERNAL = AgentTurnDetectionMode.EXTERNAL.value
+
+    # Deprecated, resolved to `VAD`. This enum has always been the plugin's own — no SDK
+    # declares these three — so the values are carried over verbatim from the modes the
+    # plugin accepted before Agent STT. Remove after 2026-10-05.
+    FIXED = "fixed"
+    ADAPTIVE = "adaptive"
+    SMART_TURN = "smart_turn"
 
 
 @dataclasses.dataclass
@@ -102,7 +112,7 @@ class STTOptions:
     domain: str | None = None
 
     # Endpointing mode
-    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL
+    turn_detection_mode: TurnDetectionMode = TurnDetectionMode.VAD
 
     # Output formatting
     speaker_format: str | None = None
@@ -135,7 +145,7 @@ class STT(stt.STT):
         *,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
-        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.EXTERNAL,
+        turn_detection_mode: TurnDetectionMode = TurnDetectionMode.VAD,
         model: NotGivenOr[Model | str] = NOT_GIVEN,
         operating_point: NotGivenOr[Model | str] = NOT_GIVEN,
         domain: NotGivenOr[str] = NOT_GIVEN,
@@ -167,14 +177,15 @@ class STT(stt.STT):
                 Agent STT host, `wss://eu2.rt.speechmatics.com/v2/agent`) when neither is
                 set.
 
-            turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
-                default) hands turn control to the caller, who drives it via `finalize()`
-                — in practice from the `vad` passed below, since LiveKit does not call
-                `finalize()` itself. Without a `vad`, `EXTERNAL` never closes a turn, so
-                nothing is finalized. `VAD` instead lets the STT service run its own VAD
-                and close turns itself; pair it with `turn_detection="stt"` on the
-                `AgentSession`, which otherwise ignores the end-of-speech events this
-                plugin emits. Defaults to `TurnDetectionMode.EXTERNAL`.
+            turn_detection_mode: How end-of-speech turns are detected. `VAD` (the default)
+                lets the STT service run its own VAD and close turns itself; pair it with
+                `turn_detection="stt"` on the `AgentSession`, which otherwise ignores the
+                end-of-speech events this plugin emits. `EXTERNAL` instead hands turn
+                control to the caller, who drives it via `finalize()` — in practice from
+                the `vad` passed below, since LiveKit does not call `finalize()` itself.
+                Without a `vad`, `EXTERNAL` never closes a turn, so nothing is finalized.
+                The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes all resolve to
+                `VAD` with a warning. Defaults to `TurnDetectionMode.VAD`.
 
             model: The transcription model to use, e.g. `"linden-1"`. A model agent-STT
                 does not support raises a `ValueError`. Defaults to the SDK's default
@@ -230,6 +241,9 @@ class STT(stt.STT):
             **kwargs: Catches deprecated parameters. A warning is logged for any
                 recognised deprecated name.
         """
+
+        # Normalize the deprecated modes away before anything reads the mode.
+        turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
         # An external VAD, if provided, drives finalize(); none is auto-loaded.
         self._vad = vad if is_given(vad) else None
@@ -862,6 +876,46 @@ def _build_diarization_config(opts: STTOptions) -> SpeakerDiarizationConfig | No
         fields["speakers"] = opts.known_speakers
 
     return SpeakerDiarizationConfig(**fields) if fields else None
+
+
+# The pre-Agent-STT modes, all of which named a service-side endpointing strategy.
+# Remove after 2026-10-05.
+_DEPRECATED_TURN_DETECTION_MODES = frozenset(
+    {
+        TurnDetectionMode.FIXED,
+        TurnDetectionMode.ADAPTIVE,
+        TurnDetectionMode.SMART_TURN,
+    }
+)
+
+
+def _resolve_turn_detection_mode(mode: TurnDetectionMode) -> TurnDetectionMode:
+    """Reconcile the pre-Agent-STT turn detection modes with the two that remain.
+
+    `FIXED`, `ADAPTIVE` and `SMART_TURN` each selected one of the old engine's
+    service-side endpointing strategies. Agent-STT exposes a single one, so all three
+    resolve to `VAD`; `EXTERNAL` keeps its meaning and passes through.
+
+    `FIXED` is the lossy case: it timed turns from `end_of_utterance_silence_trigger`,
+    which agent-STT does not support, so the service's own timing applies instead. It
+    warns separately rather than resolving quietly.
+
+    Returns:
+        `VAD` or `EXTERNAL` — the only modes the rest of the plugin handles.
+    """
+    if mode not in _DEPRECATED_TURN_DETECTION_MODES:
+        return mode
+
+    logger.warning(
+        f"`TurnDetectionMode.{mode.name}` is deprecated and will be removed after 2026-10-05; "
+        "it resolves to `TurnDetectionMode.VAD`, where the service closes turns itself"
+    )
+    if mode is TurnDetectionMode.FIXED:
+        logger.warning(
+            "`TurnDetectionMode.FIXED` timed turns with `end_of_utterance_silence_trigger`, "
+            "which agent-STT does not support: the service's own endpointing timing applies"
+        )
+    return TurnDetectionMode.VAD
 
 
 def _handle_turn_detection_mode(mode: TurnDetectionMode) -> AgentTurnDetectionMode:

@@ -22,17 +22,22 @@ model. Pass it as a string or as `speechmatics.Model.LINDEN_1`.
 
 The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is detected:
 
-- `EXTERNAL` (default) — Speechmatics does not endpoint on its own. Turns close when the caller
+- `VAD` (default) — Speechmatics runs its own VAD and closes turns itself (service-side
+  endpointing). No `vad` is required. Pair it with `turn_detection="stt"` on the `AgentSession`,
+  otherwise the session's own turn detector decides and Speechmatics' end-of-turn is ignored.
+- `EXTERNAL` — Speechmatics does not endpoint on its own. Turns close when the caller
   calls `finalize()`. In practice you pass a `vad` to the plugin and its end-of-speech drives
   `finalize()`; LiveKit does **not** call `finalize()` for you, and no VAD is auto-loaded. Without a
   `vad` (and without calling `finalize()` yourself) turns never close, so nothing is finalized.
   The session's own turn detector decides when the user's turn ends; `finalize()` only makes
   Speechmatics flush what it has as a final segment.
-- `VAD` — Speechmatics runs its own VAD and closes turns itself (service-side endpointing). No `vad`
-  is required. Pair it with `turn_detection="stt"` on the `AgentSession`, otherwise the session's own
-  turn detector decides and Speechmatics' end-of-turn is ignored.
 
-## Usage — service-side endpointing (`VAD`)
+The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes each selected one of the old engine's
+service-side endpointing strategies. Agent STT exposes a single one, so all three are deprecated
+and resolve to `VAD` with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
+timing, which Agent STT does not support.
+
+## Usage — service-side endpointing (`VAD`, default)
 
 Let Speechmatics detect turns and tell the session to act on them:
 
@@ -41,15 +46,13 @@ from livekit.agents import AgentSession
 from livekit.plugins import speechmatics
 
 agent = AgentSession(
-    stt=speechmatics.STT(
-        turn_detection_mode=speechmatics.TurnDetectionMode.VAD,
-    ),
+    stt=speechmatics.STT(),
     turn_detection="stt",
     ...
 )
 ```
 
-## Usage — caller-driven endpointing (`EXTERNAL`, default)
+## Usage — caller-driven endpointing (`EXTERNAL`)
 
 Pass a `vad` to the plugin; its end-of-speech drives `finalize()`. `AgentSession` loads its own VAD
 when none is given, so pass the same instance to both and a single VAD serves the session and the
@@ -63,7 +66,8 @@ vad = inference.VAD()
 
 agent = AgentSession(
     stt=speechmatics.STT(
-        # EXTERNAL is the default; a VAD passed here drives finalize() on end-of-speech.
+        turn_detection_mode=speechmatics.TurnDetectionMode.EXTERNAL,
+        # The VAD passed here drives finalize() on end-of-speech.
         vad=vad,
         speaker_format="[Speaker {speaker_id}] {text}",
     ),
