@@ -76,7 +76,7 @@ class Chan(Generic[T]):
                 await p
             except ChanClosed:
                 raise
-            except:
+            except Exception:
                 p.cancel()
                 with contextlib.suppress(ValueError):
                     self._puts.remove(p)
