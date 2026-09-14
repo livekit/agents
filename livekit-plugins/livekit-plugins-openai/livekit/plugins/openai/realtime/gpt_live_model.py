@@ -1014,8 +1014,6 @@ class GPTLiveSession(
             )
             self._backend_open_calls.discard(output.call_id)
         if backend_outputs:
-            # reply_required is not honored: the chain waits for its continuation and holds every
-            # later question until it arrives, so a batch with no reply would stall the session
             self._backend_answers_pending = True
             self._maybe_continue_response()
 
