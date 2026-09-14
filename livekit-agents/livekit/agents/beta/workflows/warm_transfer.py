@@ -64,6 +64,23 @@ class WarmTransferResult:
     human_agent_identity: str
 
 
+def _is_not_found(exc: Exception) -> bool:
+    status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+    if status == 404:
+        return True
+    code = getattr(exc, "code", None)
+    if code is not None:
+        try:
+            if code == api.TwirpErrorCode.NOT_FOUND:
+                return True
+        except Exception:
+            pass
+        if str(code).lower() == "not_found":
+            return True
+    msg = str(exc).lower()
+    return "not found" in msg or "not_found" in msg
+
+
 class WarmTransferTask(AgentTask[WarmTransferResult]):
     def __init__(
         self,
@@ -504,36 +521,83 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                     destination_room=self._caller_room.name,
                 )
             )
-        except Exception:
-            # 1. Check if destination is already in the caller room (move succeeded remotely
-            # despite RPC error/timeout)
-            dest_in_caller = False
-            caller_remote = getattr(self._caller_room, "remote_participants", None)
-            if caller_remote is not None:
-                if self._human_agent_identity in caller_remote:
-                    dest_in_caller = True
-                else:
-                    for p in caller_remote.values():
-                        if getattr(p, "identity", None) == self._human_agent_identity:
-                            dest_in_caller = True
-                            break
+        except Exception as move_exc:
+            temp_disconnect_reason: rtc.DisconnectReason.ValueType | None = None
+            temp_call_status: str | None = None
+            temp_room_closed_reason: rtc.DisconnectReason.ValueType | None = None
 
-            # If not yet observed in caller_room client events, query server state to account
-            # for potential event propagation delay
-            if not dest_in_caller:
-                try:
+            def _temp_on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+                nonlocal temp_disconnect_reason, temp_call_status
+                if getattr(participant, "identity", None) == self._human_agent_identity:
+                    if getattr(participant, "disconnect_reason", None) is not None:
+                        temp_disconnect_reason = participant.disconnect_reason
+                    if (
+                        getattr(participant, "attributes", None)
+                        and "sip.callStatus" in participant.attributes
+                    ):
+                        temp_call_status = participant.attributes.get("sip.callStatus")
+
+            def _temp_on_room_close(reason: rtc.DisconnectReason.ValueType | None = None) -> None:
+                nonlocal temp_room_closed_reason
+                if reason is not None:
+                    temp_room_closed_reason = reason
+                else:
+                    temp_room_closed_reason = getattr(human_agent_room, "disconnect_reason", None)
+
+            human_agent_room.on("participant_disconnected", _temp_on_participant_disconnected)
+            human_agent_room.on("disconnected", _temp_on_room_close)
+
+            lookup_failed = False
+            try:
+                # 1. Check if destination is already in the caller room (move succeeded remotely
+                # despite RPC error/timeout)
+                dest_in_caller = False
+                caller_remote = getattr(self._caller_room, "remote_participants", None)
+                if caller_remote is not None:
+                    if self._human_agent_identity in caller_remote:
+                        dest_in_caller = True
+                    else:
+                        for p in caller_remote.values():
+                            if getattr(p, "identity", None) == self._human_agent_identity:
+                                dest_in_caller = True
+                                break
+
+                # If not yet observed in caller_room client events, query server state to account
+                # for potential event propagation delay
+                if not dest_in_caller:
                     room_api = getattr(getattr(job_ctx, "api", None), "room", None)
                     if room_api is not None and hasattr(room_api, "get_participant"):
-                        p_info = await room_api.get_participant(
-                            api.RoomParticipantIdentity(
-                                room=self._caller_room.name,
-                                identity=self._human_agent_identity,
-                            )
-                        )
-                        if getattr(p_info, "identity", None) == self._human_agent_identity:
-                            dest_in_caller = True
-                except Exception:
-                    pass
+                        for attempt in range(2):
+                            try:
+                                p_info = await room_api.get_participant(
+                                    api.RoomParticipantIdentity(
+                                        room=self._caller_room.name,
+                                        identity=self._human_agent_identity,
+                                    )
+                                )
+                                if getattr(p_info, "identity", None) == self._human_agent_identity:
+                                    dest_in_caller = True
+                                lookup_failed = False
+                                break
+                            except Exception as lookup_exc:
+                                if _is_not_found(lookup_exc):
+                                    lookup_failed = False
+                                    break
+                                lookup_failed = True
+                                logger.warning(
+                                    f"failed to query destination participant in caller room (attempt {attempt + 1}/2): {lookup_exc}"
+                                )
+                                if attempt == 0:
+                                    await asyncio.sleep(0.2)
+            finally:
+                human_agent_room.off("participant_disconnected", _temp_on_participant_disconnected)
+                human_agent_room.off("disconnected", _temp_on_room_close)
+
+            # Record any departure facts captured during recovery
+            if temp_disconnect_reason is not None:
+                self._destination_disconnect_reason = temp_disconnect_reason
+            if temp_call_status is not None:
+                self._destination_call_status = temp_call_status
 
             if dest_in_caller:
                 logger.debug("destination joined caller room despite move_participant error")
@@ -572,12 +636,25 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 is_connected = (
                     human_agent_room.connection_state == rtc.ConnectionState.CONN_CONNECTED
                 )
+            if temp_room_closed_reason is not None:
+                is_connected = False
+
+            # If the lookup in caller_room failed due to transient API outage, and we have
+            # no evidence of destination disconnect, preserve the indeterminate state.
+            if lookup_failed and self._destination_disconnect_reason is None and is_connected:
+                logger.warning(
+                    "lookup in caller room failed and destination absent from staging room; preserving indeterminate state",
+                    extra={"error": str(move_exc)},
+                )
+                raise
 
             with contextlib.suppress(asyncio.InvalidStateError):
                 self._human_agent_failed_fut.set_result(None)
 
             if not is_connected:
-                reason = getattr(human_agent_room, "disconnect_reason", None)
+                reason = temp_room_closed_reason or getattr(
+                    human_agent_room, "disconnect_reason", None
+                )
                 reason_val = reason if reason is not None else rtc.DisconnectReason.UNKNOWN_REASON
                 self._set_result(
                     WarmTransferError(

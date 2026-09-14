@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -430,6 +431,7 @@ async def test_merge_calls_keeps_listeners_detached_during_recovery() -> None:
     mock_human_room.name = "human-room"
     mock_human_room.remote_participants = {}
     mock_human_room.on = MagicMock()
+    mock_human_room.off = MagicMock()
     mock_human_sess.room_io.room = mock_human_room
     task._human_agent_sess = mock_human_sess
 
@@ -437,8 +439,11 @@ async def test_merge_calls_keeps_listeners_detached_during_recovery() -> None:
     mock_dest_p.identity = "dest-agent"
 
     async def _mock_get_participant(*args, **kwargs):
-        # Verify listeners remain detached while lookup is in flight
-        mock_human_room.on.assert_not_called()
+        # Verify permanent callbacks are NOT registered during lookup
+        for call_args in mock_human_room.on.call_args_list:
+            handler = call_args[0][1]
+            assert handler is not task._on_human_agent_room_close
+            assert handler is not task._human_agent_participant_disconnected_cb
         return mock_dest_p
 
     mock_job_ctx = MagicMock()
@@ -450,8 +455,125 @@ async def test_merge_calls_keeps_listeners_detached_during_recovery() -> None:
     ):
         await task._merge_calls()
 
-    # Recovery succeeded, listeners should not have been re-attached to human_agent_room
-    mock_human_room.on.assert_not_called()
+    # Recovery succeeded: permanent listeners must not have been registered
+    for call_args in mock_human_room.on.call_args_list:
+        handler = call_args[0][1]
+        assert handler is not task._on_human_agent_room_close
+        assert handler is not task._human_agent_participant_disconnected_cb
+    # Temporary listeners must have been detached
+    assert mock_human_room.off.call_count >= 2
+    assert not task._human_agent_failed_fut.done()
+    task.complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_calls_captures_disconnect_facts_during_recovery() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._caller_room = MagicMock()
+    task._caller_room.name = "caller-room"
+    task._caller_room.remote_participants = {}
+    task._human_agent_identity = "dest-agent"
+    task._destination_disconnect_reason = None
+    task._destination_call_status = None
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_participant_disconnected_cb = MagicMock()
+    task._on_human_agent_room_close = MagicMock()
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.complete = MagicMock()
+    task.done = MagicMock(return_value=False)
+
+    temp_listeners: dict[str, Any] = {}
+    mock_human_sess = MagicMock()
+    mock_human_room = MagicMock()
+    mock_human_room.name = "human-room"
+    mock_human_room.remote_participants = {}
+
+    def _mock_on(event, handler):
+        temp_listeners[event] = handler
+
+    def _mock_off(event, handler):
+        temp_listeners.pop(event, None)
+
+    mock_human_room.on = MagicMock(side_effect=_mock_on)
+    mock_human_room.off = MagicMock(side_effect=_mock_off)
+    mock_human_sess.room_io.room = mock_human_room
+    task._human_agent_sess = mock_human_sess
+
+    async def _mock_get_participant(*args, **kwargs):
+        # Simulate destination disconnecting during recovery await
+        if "participant_disconnected" in temp_listeners:
+            p = MagicMock(spec=rtc.RemoteParticipant)
+            p.identity = "dest-agent"
+            p.disconnect_reason = rtc.DisconnectReason.USER_UNAVAILABLE
+            p.attributes = {"sip.callStatus": "busy"}
+            temp_listeners["participant_disconnected"](p)
+        raise RuntimeError("participant not found")
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.api.room.move_participant = AsyncMock(side_effect=RuntimeError("timeout"))
+    mock_job_ctx.api.room.get_participant = AsyncMock(side_effect=_mock_get_participant)
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        with pytest.raises(RuntimeError, match="timeout"):
+            await task._merge_calls()
+
+    # Destination departure facts captured during recovery must be preserved
+    assert task._human_agent_failed_fut.done()
+    task.complete.assert_called_once()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.DESTINATION_LEFT
+    assert result.disconnect_reason == rtc.DisconnectReason.USER_UNAVAILABLE
+    assert result.call_status == "busy"
+    assert "destination left: USER_UNAVAILABLE" in str(result)
+    # Temporary listeners must have been detached
+    assert len(temp_listeners) == 0
+
+
+@pytest.mark.asyncio
+async def test_merge_calls_preserves_indeterminate_state_on_transient_lookup_error() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._caller_room = MagicMock()
+    task._caller_room.name = "caller-room"
+    task._caller_room.remote_participants = {}
+    task._human_agent_identity = "dest-agent"
+    task._destination_disconnect_reason = None
+    task._destination_call_status = None
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_participant_disconnected_cb = MagicMock()
+    task._on_human_agent_room_close = MagicMock()
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.complete = MagicMock()
+    task.done = MagicMock(return_value=False)
+
+    mock_human_sess = MagicMock()
+    mock_human_room = MagicMock()
+    mock_human_room.name = "human-room"
+    mock_human_room.remote_participants = {}
+    mock_human_room.on = MagicMock()
+    mock_human_room.off = MagicMock()
+    mock_human_sess.room_io.room = mock_human_room
+    task._human_agent_sess = mock_human_sess
+
+    mock_job_ctx = MagicMock()
+    orig_exc = RuntimeError("move rpc failed")
+    mock_job_ctx.api.room.move_participant = AsyncMock(side_effect=orig_exc)
+    # get_participant fails with a transient 503 outage, not a 404/not_found
+    mock_job_ctx.api.room.get_participant = AsyncMock(
+        side_effect=RuntimeError("503 Service Unavailable")
+    )
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        with pytest.raises(RuntimeError, match="move rpc failed"):
+            await task._merge_calls()
+
+    # Indeterminate state: must NOT complete the task as DESTINATION_LEFT
     assert not task._human_agent_failed_fut.done()
     task.complete.assert_not_called()
 
