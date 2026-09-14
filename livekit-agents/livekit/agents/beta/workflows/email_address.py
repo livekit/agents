@@ -60,6 +60,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -118,9 +119,15 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Repeat the email character by character: {separated_email}"
+            if self._spell_read_back
+            else "Repeat the email back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 

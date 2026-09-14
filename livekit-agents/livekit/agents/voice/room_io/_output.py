@@ -5,12 +5,14 @@ import json
 import time
 
 from google.protobuf.json_format import MessageToDict
+from opentelemetry import context as otel_context
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from ... import utils
 from ...log import logger
+from ...telemetry import trace_types, tracer
 from ...tts._provider_format import (
     ExpressiveTag,
     TranscriptMarkupStripper,
@@ -95,9 +97,13 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def subscribed(self) -> asyncio.Future[None]:
         return self._subscribed_fut
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
         self._forwarding_task = asyncio.create_task(self._forward_audio())
-        await self._publish_track()
+        # detached: publishing spawns the track's tasks, which must not inherit this span
+        with tracer.detached_span("publish_audio_output", context=trace_context) as span:
+            await self._publish_track()
+            if self._publication is not None:
+                span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
         if self._flush_task:

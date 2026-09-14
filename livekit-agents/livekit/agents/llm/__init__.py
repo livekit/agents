@@ -13,6 +13,19 @@ from .chat_context import (
     ImageContent,
     MetricsReport,
 )
+from .duplex import (
+    DuplexAudioFrame,
+    DuplexCapabilities,
+    DuplexModel,
+    DuplexOutputTranscriptDelta,
+    DuplexSession,
+)
+from .duplex_adapter import (
+    AdaptiveNoiseGate,
+    AudioGate,
+    DuplexRealtimeAdapter,
+    FixedGate,
+)
 from .fallback_adapter import AvailabilityChangedEvent, FallbackAdapter
 from .llm import (
     LLM,
@@ -104,6 +117,15 @@ __all__ = [
     "utils",
     "remote_chat_context",
     "FunctionToolCall",
+    "DuplexModel",
+    "DuplexSession",
+    "DuplexCapabilities",
+    "DuplexAudioFrame",
+    "DuplexOutputTranscriptDelta",
+    "DuplexRealtimeAdapter",
+    "AudioGate",
+    "AdaptiveNoiseGate",
+    "FixedGate",
     "RealtimeModel",
     "RealtimeError",
     "RealtimeModelError",
