@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="770" viewBox="0 0 1600 770"
+  role="img" aria-labelledby="title description" shape-rendering="geometricPrecision">
+  <title id="title">Voicemail</title>
+  <desc id="description">Voicemail playback and independent reply authorization. AgentSession handles interruptions. AMD suppresses a new message for the same stage or applies a new stage's response policy.</desc>
+  <metadata id="lucide-license">
+    Icons are derived from Lucide Icons and Contributors.
+    ISC License. Copyright (c) 2026 Lucide Icons and Contributors.
+    Permission to use, copy, modify, and/or distribute this software for any purpose with or
+    without fee is hereby granted, provided that the above copyright notice and this permission
+    notice appear in all copies.
+  </metadata>
+
+  <defs>
+    <symbol id="icon-circle-question" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+      <path d="M12 17h.01"/>
+    </symbol>
+    <symbol id="icon-bot" viewBox="0 0 24 24">
+      <path d="M12 8V4H8"/>
+      <rect width="16" height="12" x="4" y="8" rx="2"/>
+      <path d="M2 14h2M20 14h2M15 13v2M9 13v2"/>
+    </symbol>
+    <symbol id="icon-mailbox" viewBox="0 0 24 24">
+      <path d="M22 17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5C2 7 4 5 6.5 5H18c2.2 0 4 1.8 4 4v8Z"/>
+      <polyline points="15,9 18,9 18,11"/>
+      <path d="M6.5 5C9 5 11 7 11 9.5V17a2 2 0 0 1-2 2"/>
+      <line x1="6" x2="7" y1="10" y2="10"/>
+    </symbol>
+    <symbol id="icon-grid-3x3" viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="3" rx="2"/>
+      <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+    </symbol>
+    <symbol id="icon-user-round" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="5"/>
+      <path d="M20 21a8 8 0 0 0-16 0"/>
+    </symbol>
+    <symbol id="icon-ban" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M4.929 4.929 19.07 19.071"/>
+    </symbol>
+    <symbol id="icon-waveform" viewBox="0 0 24 24">
+      <path d="M2 10v4M6 6v12M10 3v18M14 8v8M18 5v14M22 10v4"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <path d="M20 6 9 17l-5-5"/>
+    </symbol>
+
+    <marker id="arrow-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#1C2329"/>
+    </marker>
+    <marker id="arrow-signal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#3157C8"/>
+    </marker>
+    <marker id="arrow-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#28705A"/>
+    </marker>
+    <marker id="arrow-unavailable" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#A94335"/>
+    </marker>
+
+    <style>
+      text { font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .display { font-size: 48px; font-weight: 600; letter-spacing: -0.035em; fill: #1C2329; }
+      .subtitle { font-size: 15px; fill: #555C61; }
+      .kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; fill: #555C61; }
+      .micro { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; fill: #858A8D; }
+      .title { font-size: 18px; font-weight: 600; fill: #1C2329; }
+      .copy { font-size: 12.5px; fill: #555C61; }
+      .code { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; fill: #555C61; }
+      .icon { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .wire { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .ink { stroke: #1C2329; stroke-width: 1.8; }
+      .signal { stroke: #3157C8; stroke-width: 2; }
+      .human { stroke: #28705A; stroke-width: 2; }
+      .unavailable { stroke: #A94335; stroke-width: 2; }
+      .stage { stroke: #77756E; stroke-width: 1.5; }
+      .repeat { stroke: #3157C8; stroke-width: 1.7; stroke-dasharray: 5 7; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="770" fill="#F3F1EB"/>
+  <text x="64" y="85" class="display">Voicemail</text>
+  <text x="64" y="117" class="subtitle">Generate one message. AgentSession handles interruption; AMD guards the next reply.</text>
+  <g transform="translate(1450 64)">
+    <rect x="0" y="-18" width="86" height="28" rx="14" fill="none" stroke="#ACA79C"/>
+    <text x="43" y="1" text-anchor="middle" class="micro" fill="#555C61">ACTIVE</text>
+  </g>
+  <line x1="64" y1="140" x2="1536" y2="140" stroke="#D8D4CA"/>
+
+  <text x="64" y="204" class="kicker">MESSAGE PLAYBACK</text>
+  <path d="M320 286H368" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M624 286H672" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M928 286H976" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M1232 286H1280" class="wire signal" marker-end="url(#arrow-signal)"/>
+
+  <text x="64" y="402" class="kicker">INDEPENDENT REPLY GUARD</text>
+  <path d="M334 496H414" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M714 496H782" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M803 475L824 496 803 517 782 496Z" fill="#FBFAF7" stroke="#1C2329" stroke-width="1.5"/>
+  <path d="M824 496H868M868 432V560" class="wire stage"/>
+  <path d="M868 432H920" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M868 560H920" class="wire stage" marker-end="url(#arrow-ink)"/>
+
+    <g>
+      <rect x="64" y="236" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <use href="#icon-mailbox" x="84" y="274" width="24" height="24" class="icon" stroke="#3157C8"/>
+      <text x="122" y="285" class="title" fill="#1C2329">Voicemail detected</text>
+      <text x="122" y="309" class="copy">Enter machine-vm</text>
+    </g>
+    
+    <g>
+      <rect x="368" y="236" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="398" cy="286" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="398" y="290" text-anchor="middle" class="code" fill="#3157C8">1</text>
+      <text x="426" y="285" class="title" fill="#1C2329">Generate once</text>
+      <text x="426" y="309" class="copy">Inject voicemail instructions</text>
+    </g>
+    
+    <g>
+      <rect x="672" y="236" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="702" cy="286" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="702" y="290" text-anchor="middle" class="code" fill="#3157C8">2</text>
+      <text x="730" y="285" class="title" fill="#1C2329">Play the message</text>
+      <text x="730" y="309" class="copy">Session handles interruption</text>
+    </g>
+    
+    <g>
+      <rect x="976" y="236" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="1006" cy="286" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="1006" y="290" text-anchor="middle" class="code" fill="#3157C8">3</text>
+      <text x="1034" y="285" class="title" fill="#1C2329">Playback ends</text>
+      <text x="1034" y="309" class="copy">Flag full playback only</text>
+    </g>
+    
+    <g>
+      <rect x="1280" y="236" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="1310" cy="286" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="1310" y="290" text-anchor="middle" class="code" fill="#3157C8">4</text>
+      <text x="1338" y="285" class="title" fill="#1C2329">Keep listening</text>
+      <text x="1338" y="309" class="copy">AMD stays active</text>
+    </g>
+    
+    <g>
+      <rect x="64" y="446" width="270" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="94" cy="496" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="94" y="500" text-anchor="middle" class="code" fill="#3157C8">1</text>
+      <text x="122" y="495" class="title" fill="#1C2329">Client-side EOT</text>
+      <text x="122" y="519" class="copy">During or after playback</text>
+    </g>
+    
+    <g>
+      <rect x="414" y="446" width="300" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="444" cy="496" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="444" y="500" text-anchor="middle" class="code" fill="#3157C8">2</text>
+      <text x="472" y="495" class="title" fill="#1C2329">Classify the turn</text>
+      <text x="472" y="519" class="copy">Guard the next reply</text>
+    </g>
+    
+    <g>
+      <rect x="920" y="382" width="340" height="100" rx="12" fill="#E9EEFC" stroke="#3157C8"/>
+      <use href="#icon-check" x="940" y="420" width="24" height="24" class="icon" stroke="#3157C8"/>
+      <text x="978" y="431" class="title" fill="#1C2329">Same stage</text>
+      <text x="978" y="455" class="copy">Suppress a new voicemail</text>
+    </g>
+    
+    <g>
+      <rect x="920" y="510" width="340" height="100" rx="12" fill="#FBFAF7" stroke="#ACA79C"/>
+      <use href="#icon-check" x="940" y="548" width="24" height="24" class="icon" stroke="#77756E"/>
+      <text x="978" y="559" class="title" fill="#1C2329">Stage changes</text>
+      <text x="978" y="583" class="copy">Human · IVR · unavailable</text>
+    </g>
+    
+  <line x1="64" y1="658" x2="1536" y2="658" stroke="#D8D4CA"/>
+  <text x="64" y="690" class="kicker">INTERRUPTION</text>
+  <text x="184" y="690" class="copy">False interruption can resume speech; confirmed interruption can stop it. Neither requires a new reply.</text>
+  <text x="64" y="730" class="kicker">STAGE RULE</text>
+  <text x="184" y="730" class="copy">Voicemail can move to IVR for submission, review, recording, or re-recording; it cannot move to Screening.</text>
+
+</svg>

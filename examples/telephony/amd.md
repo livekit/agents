@@ -153,6 +153,14 @@ Use `dev` for a LiveKit room. To place an outbound call, also set
 `SIP_PHONE_NUMBER`, `SIP_PARTICIPANT_IDENTITY`, and `SIP_OUTBOUND_TRUNK_ID`.
 Console mode does not place SIP calls.
 
+For fixed audio scripts in LiveKit rooms, see [AMD audio scenarios](amd_simulation/README.md).
+The runner uses separate machine and human voices and checks trajectories, replies,
+DTMF, and timing. It does not place SIP calls.
+
+```sh
+uv run python -m examples.telephony.amd_simulation --scenario screening-human
+```
+
 ## Current limits
 
 - Pipeline STT/LLM/TTS only. Realtime reply control is not implemented.

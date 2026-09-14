@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620"
+  role="img" aria-labelledby="title description" shape-rendering="geometricPrecision">
+  <title id="title">Screening</title>
+  <desc id="description">Screening-stage turn loop with exits to a human, voicemail, or unavailable.</desc>
+  <metadata id="lucide-license">
+    Icons are derived from Lucide Icons and Contributors.
+    ISC License. Copyright (c) 2026 Lucide Icons and Contributors.
+    Permission to use, copy, modify, and/or distribute this software for any purpose with or
+    without fee is hereby granted, provided that the above copyright notice and this permission
+    notice appear in all copies.
+  </metadata>
+
+  <defs>
+    <symbol id="icon-circle-question" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+      <path d="M12 17h.01"/>
+    </symbol>
+    <symbol id="icon-bot" viewBox="0 0 24 24">
+      <path d="M12 8V4H8"/>
+      <rect width="16" height="12" x="4" y="8" rx="2"/>
+      <path d="M2 14h2M20 14h2M15 13v2M9 13v2"/>
+    </symbol>
+    <symbol id="icon-mailbox" viewBox="0 0 24 24">
+      <path d="M22 17a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9.5C2 7 4 5 6.5 5H18c2.2 0 4 1.8 4 4v8Z"/>
+      <polyline points="15,9 18,9 18,11"/>
+      <path d="M6.5 5C9 5 11 7 11 9.5V17a2 2 0 0 1-2 2"/>
+      <line x1="6" x2="7" y1="10" y2="10"/>
+    </symbol>
+    <symbol id="icon-grid-3x3" viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="3" rx="2"/>
+      <path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>
+    </symbol>
+    <symbol id="icon-user-round" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="5"/>
+      <path d="M20 21a8 8 0 0 0-16 0"/>
+    </symbol>
+    <symbol id="icon-ban" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M4.929 4.929 19.07 19.071"/>
+    </symbol>
+    <symbol id="icon-waveform" viewBox="0 0 24 24">
+      <path d="M2 10v4M6 6v12M10 3v18M14 8v8M18 5v14M22 10v4"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <path d="M20 6 9 17l-5-5"/>
+    </symbol>
+
+    <marker id="arrow-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#1C2329"/>
+    </marker>
+    <marker id="arrow-signal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#3157C8"/>
+    </marker>
+    <marker id="arrow-human" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#28705A"/>
+    </marker>
+    <marker id="arrow-unavailable" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M1 1 9 5 1 9Z" fill="#A94335"/>
+    </marker>
+
+    <style>
+      text { font-family: "IBM Plex Sans", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .display { font-size: 48px; font-weight: 600; letter-spacing: -0.035em; fill: #1C2329; }
+      .subtitle { font-size: 15px; fill: #555C61; }
+      .kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.16em; fill: #555C61; }
+      .micro { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; fill: #858A8D; }
+      .title { font-size: 18px; font-weight: 600; fill: #1C2329; }
+      .copy { font-size: 12.5px; fill: #555C61; }
+      .code { font-size: 11px; font-weight: 600; letter-spacing: 0.01em; fill: #555C61; }
+      .icon { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .wire { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .ink { stroke: #1C2329; stroke-width: 1.8; }
+      .signal { stroke: #3157C8; stroke-width: 2; }
+      .human { stroke: #28705A; stroke-width: 2; }
+      .unavailable { stroke: #A94335; stroke-width: 2; }
+      .stage { stroke: #77756E; stroke-width: 1.5; }
+      .repeat { stroke: #3157C8; stroke-width: 1.7; stroke-dasharray: 5 7; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="620" fill="#F3F1EB"/>
+  <text x="64" y="85" class="display">Screening</text>
+  <text x="64" y="117" class="subtitle">Answer the platform’s screening proxy until it connects, rejects, or routes to voicemail.</text>
+  <g transform="translate(1450 64)">
+    <rect x="0" y="-18" width="86" height="28" rx="14" fill="none" stroke="#ACA79C"/>
+    <text x="43" y="1" text-anchor="middle" class="micro" fill="#555C61">ACTIVE</text>
+  </g>
+  <line x1="64" y1="140" x2="1536" y2="140" stroke="#D8D4CA"/>
+
+  <path d="M320 352H368" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M624 352H672" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M928 352H976" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M1232 352H1280" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M1408 402V470Q1408 482 1396 482H204Q192 482 192 470V402" class="wire repeat" marker-end="url(#arrow-signal)"/>
+  <g transform="translate(824 482)">
+    <rect x="-132" y="-13" width="264" height="26" rx="13" fill="#F3F1EB"/>
+    <text x="0" y="4" text-anchor="middle" class="micro" fill="#3157C8">NEXT COMMITTED SCREENING TURN</text>
+  </g>
+
+  <path d="M496 302V290Q496 278 508 278H1424" class="wire stage"/>
+  <path d="M944 278V254" class="wire human" marker-end="url(#arrow-human)"/>
+  <path d="M1184 278V254" class="wire signal" marker-end="url(#arrow-signal)"/>
+  <path d="M1424 278V254" class="wire unavailable" marker-end="url(#arrow-unavailable)"/>
+
+    <g>
+      <rect x="64" y="302" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <use href="#icon-bot" x="84" y="340" width="24" height="24" class="icon" stroke="#3157C8"/>
+      <text x="122" y="351" class="title" fill="#1C2329">Screening prompt</text>
+      <text x="122" y="375" class="copy">Remote proxy speaks</text>
+    </g>
+    
+    <g>
+      <rect x="368" y="302" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="398" cy="352" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="398" y="356" text-anchor="middle" class="code" fill="#3157C8">1</text>
+      <text x="426" y="351" class="title" fill="#1C2329">Client-side EOT</text>
+      <text x="426" y="375" class="copy">Classify; emit amd_prediction</text>
+    </g>
+    
+    <g>
+      <rect x="672" y="302" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="702" cy="352" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="702" y="356" text-anchor="middle" class="code" fill="#3157C8">2</text>
+      <text x="730" y="351" class="title" fill="#1C2329">Inject instructions</text>
+      <text x="730" y="375" class="copy">Retain one AMD control item</text>
+    </g>
+    
+    <g>
+      <rect x="976" y="302" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="1006" cy="352" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="1006" y="356" text-anchor="middle" class="code" fill="#3157C8">3</text>
+      <text x="1034" y="351" class="title" fill="#1C2329">Generate one reply</text>
+      <text x="1034" y="375" class="copy">Same Agent, normal voice</text>
+    </g>
+    
+    <g>
+      <rect x="1280" y="302" width="256" height="100" rx="12" fill="#FFFFFF" stroke="#D8D4CA"/>
+      <circle cx="1310" cy="352" r="15" fill="#F3F1EB" stroke="#D8D4CA"/><text x="1310" y="356" text-anchor="middle" class="code" fill="#3157C8">4</text>
+      <text x="1338" y="351" class="title" fill="#1C2329">Wait</text>
+      <text x="1338" y="375" class="copy">Next prompt</text>
+    </g>
+    
+    <g>
+      <rect x="832" y="154" width="224" height="100" rx="12" fill="#E6F1EC" stroke="#28705A"/>
+      <use href="#icon-user-round" x="852" y="192" width="24" height="24" class="icon" stroke="#28705A"/>
+      <text x="890" y="203" class="title" fill="#28705A">Human</text>
+      <text x="890" y="227" class="copy">Person answers</text>
+    </g>
+    
+    <g>
+      <rect x="1072" y="154" width="224" height="100" rx="12" fill="#E9EEFC" stroke="#3157C8"/>
+      <use href="#icon-mailbox" x="1092" y="192" width="24" height="24" class="icon" stroke="#3157C8"/>
+      <text x="1130" y="203" class="title" fill="#1C2329">Voicemail</text>
+      <text x="1130" y="227" class="copy">Sent to message-taking</text>
+    </g>
+    
+    <g>
+      <rect x="1312" y="154" width="224" height="100" rx="12" fill="#F6E9E5" stroke="#A94335"/>
+      <use href="#icon-ban" x="1332" y="192" width="24" height="24" class="icon" stroke="#A94335"/>
+      <text x="1370" y="203" class="title" fill="#A94335">Unavailable</text>
+      <text x="1370" y="227" class="copy">Rejected</text>
+    </g>
+    
+  <line x1="64" y1="526" x2="1536" y2="526" stroke="#D8D4CA"/>
+  <text x="64" y="558" class="kicker">STAGE RULE</text>
+  <text x="184" y="558" class="copy">Every screening turn is classified; there is no direct Screening → IVR edge.</text>
+
+</svg>
