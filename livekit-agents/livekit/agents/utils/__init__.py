@@ -1,11 +1,24 @@
 from livekit import rtc
 
-from . import aio, audio, codecs, http_context, http_server, hw, images
+from . import aio, audio, codecs, http_context, http_server, hw, images, large_payload
 from .audio import AudioArrayBuffer, AudioBuffer, combine_frames, merge_frames
 from .bounded_dict import BoundedDict
 from .connection_pool import ConnectionPool
 from .env import resolve_env_var
 from .exp_filter import ExpFilter
+from .large_payload import (
+    DEFAULT_INLINE_PAYLOAD_LIMIT,
+    DEFAULT_STREAM_PAYLOAD_LIMIT,
+    LargePayloadChecksumError,
+    LargePayloadDescriptor,
+    LargePayloadDescriptorTooLargeError,
+    LargePayloadError,
+    LargePayloadInfo,
+    LargePayloadTooLargeError,
+    parse_large_payload_descriptor,
+    publish_large_payload,
+    read_large_payload_stream,
+)
 from .log import log_exceptions
 from .misc import is_dev_mode, is_given, is_hosted, nodename, shortuuid, time_ms
 from .moving_average import MovingAverage
@@ -33,6 +46,7 @@ __all__ = [
     "audio",
     "aio",
     "hw",
+    "large_payload",
     "is_dev_mode",
     "is_given",
     "is_hosted",
@@ -41,6 +55,17 @@ __all__ = [
     "wait_for_participant",
     "wait_for_track_publication",
     "resolve_env_var",
+    "DEFAULT_INLINE_PAYLOAD_LIMIT",
+    "DEFAULT_STREAM_PAYLOAD_LIMIT",
+    "LargePayloadChecksumError",
+    "LargePayloadDescriptor",
+    "LargePayloadDescriptorTooLargeError",
+    "LargePayloadError",
+    "LargePayloadInfo",
+    "LargePayloadTooLargeError",
+    "parse_large_payload_descriptor",
+    "publish_large_payload",
+    "read_large_payload_stream",
 ]
 
 # Cleanup docs of unexported modules
