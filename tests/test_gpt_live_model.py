@@ -989,10 +989,11 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
 
 @pytest.mark.parametrize("status", ["missing", None, "incomplete", "in_progress", "failed"])
 async def test_noncompleted_backend_calls_are_not_dispatched(
-    monkeypatch: pytest.MonkeyPatch, status: str | None
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str | None
 ) -> None:
     """An output_item.done event does not imply that its function call completed."""
     _connect_hook(monkeypatch)
+    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
     model = GPTLiveModel(api_key="sk-test")
     session = model.session()
     calls: list[llm.FunctionCall] = []
@@ -1012,6 +1013,34 @@ async def test_noncompleted_backend_calls_are_not_dispatched(
         assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
 
         # A later completed event for the same call must still be dispatched.
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        assert [call.call_id for call in calls] == ["call_1"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("missing_field", ["call_id", "name", "arguments"])
+async def test_backend_calls_with_missing_fields_are_not_dispatched(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, missing_field: str
+) -> None:
+    _connect_hook(monkeypatch)
+    caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    calls: list[llm.FunctionCall] = []
+    session.on("function_call", calls.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
+        event = _function_call_done("call_1")
+        del event["item"][missing_field]
+        session._handle_event(_response_event("item_d1", event))
+        assert not calls
+        assert not session._delegated_responses["item_d1"].call_ids
+        assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
+
         session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
         assert [call.call_id for call in calls] == ["call_1"]
     finally:
