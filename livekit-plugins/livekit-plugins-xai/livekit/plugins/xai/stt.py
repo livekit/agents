@@ -561,7 +561,14 @@ class SpeechStream(stt.RecognizeStream):
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
         elif msg_type == "error":
-            logger.error("xAI STT error: %s", data.get("message", "unknown error"))
+            error_msg = data.get("message", "unknown error")
+            logger.error("xAI STT error: %s", error_msg)
+            raise APIStatusError(
+                message=f"xAI STT error: {error_msg}",
+                status_code=500,
+                request_id=None,
+                body=None,
+            )
 
         else:
             logger.warning("received unexpected message from xAI: %s", msg_type)
