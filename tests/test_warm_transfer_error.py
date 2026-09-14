@@ -44,7 +44,7 @@ async def test_decline_transfer_creates_structured_error() -> None:
     assert isinstance(result, WarmTransferError)
     assert result.code == WarmTransferFailure.DECLINED
     assert result.reason == "agent is in a meeting"
-    assert "human agent declined to connect: agent is in a meeting" in str(result)
+    assert str(result) == "human agent declined to connect"
 
 
 @pytest.mark.asyncio

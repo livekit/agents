@@ -296,7 +296,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         """
         self._set_result(
             WarmTransferError(
-                f"human agent declined to connect: {reason}",
+                "human agent declined to connect",
                 code=WarmTransferFailure.DECLINED,
                 reason=reason,
             )
@@ -542,10 +542,7 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                     pass
 
             if dest_in_caller:
-                logger.debug(
-                    f"{self._human_agent_identity} joined caller room {self._caller_room.name} "
-                    "despite move_participant error"
-                )
+                logger.debug("destination joined caller room despite move_participant error")
                 return
 
             # 2. Check if destination is still present in the staging room
