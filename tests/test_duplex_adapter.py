@@ -909,6 +909,31 @@ async def test_a_lone_function_call_is_not_the_reply_the_speech_after_it_is() ->
     await session.aclose()
 
 
+async def test_late_words_are_not_the_reply_the_speech_after_them_is() -> None:
+    """Words for sound the model already produced cannot answer a request made after it."""
+    fake, session = _askable()
+    fake.push(0.001, count=20)
+    fake.push(0.5, count=3)
+    await _settle()
+    fake.say("Hello", start_ms=2000, end_ms=2200)
+    fake.push(0.001, count=8)
+    await _settle()
+
+    fut = session.generate_reply()
+    fake.say(" there.", start_ms=2200, end_ms=2300)
+    await _settle()
+    assert not fut.done()
+
+    fake.push(0.5, count=3)
+    fake.push(0.001, count=8)
+    await _settle()
+    generation = await asyncio.wait_for(fut, 1)
+    assert generation.user_initiated
+    frames, text = await _read(generation)
+    assert frames and text == ""
+    await session.aclose()
+
+
 async def test_a_superseded_or_abandoned_ask_fails_rather_than_cancels() -> None:
     """The framework's reply task handles RealtimeError; a cancelled future would end it."""
     fake, session = _askable()
