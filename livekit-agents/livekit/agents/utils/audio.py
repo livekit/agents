@@ -127,6 +127,8 @@ class AudioByteStream:
         if min_samples_per_channel is not None:
             if progressive:
                 raise ValueError("progressive and min_samples_per_channel are mutually exclusive")
+            if min_samples_per_channel <= 0:
+                raise ValueError("min_samples_per_channel must be greater than zero")
             self._initial_bytes_per_frame = min(
                 min_samples_per_channel * self._bytes_per_sample, self._target_bytes_per_frame
             )

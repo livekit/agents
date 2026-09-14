@@ -58,6 +58,8 @@ def test_capped_preserves_bytes_and_clears() -> None:
     assert stream.flush() == []
 
 
-def test_capped_rejects_progressive() -> None:
+def test_capped_rejects_progressive_and_a_zero_minimum() -> None:
     with pytest.raises(ValueError):
         AudioByteStream(RATE, 1, progressive=True, min_samples_per_channel=RATE // 100)
+    with pytest.raises(ValueError):
+        AudioByteStream(RATE, 1, min_samples_per_channel=0)  # would loop forever in push
