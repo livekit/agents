@@ -57,13 +57,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._subscribed_fut = asyncio.Future[None]()
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
-        # a pause discards whatever the source already holds, so a frame commits at most 50 ms;
-        # a realtime-paced model must never have audio held back, so 10 ms is enough to emit
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate,
-            num_channels,
-            samples_per_channel=sample_rate // 20,
-            min_samples_per_channel=sample_rate // 100,
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
         )
 
         self._flush_task: asyncio.Task[None] | None = None
