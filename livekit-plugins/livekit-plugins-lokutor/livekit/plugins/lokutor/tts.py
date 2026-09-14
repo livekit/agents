@@ -261,7 +261,11 @@ class ChunkedStream(tts.ChunkedStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError() from e
+            # Keep only the exception type, and drop the cause: an aiohttp
+            # transport error can carry the request URL, headers or a response
+            # body, and `from e` would preserve all of it on __cause__ for any
+            # telemetry that walks the chain. See REVIEW.md.
+            raise APIConnectionError(type(e).__name__) from None
 
 
 class SynthesizeStream(tts.SynthesizeStream):
@@ -344,7 +348,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError() from e
+            # Keep only the exception type, and drop the cause: an aiohttp
+            # transport error can carry the request URL, headers or a response
+            # body, and `from e` would preserve all of it on __cause__ for any
+            # telemetry that walks the chain. See REVIEW.md.
+            raise APIConnectionError(type(e).__name__) from None
 
 
 def _build_request(opts: _TTSOptions, text: str) -> dict[str, Any]:
