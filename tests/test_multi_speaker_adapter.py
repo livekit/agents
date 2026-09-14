@@ -120,7 +120,7 @@ class _RecordingStream(RecognizeStream):
 
 
 class _HiccupSTT(_RecordingSTT):
-    """Its stream delivers a good transcript and then drops the connection, every attempt.
+    """Its stream delivers a provider health event and then drops, every attempt.
 
     ``max_retry=0`` on the inner stream mirrors a plugin that has already spent its own retry
     budget, so each hiccup propagates to the adapter's wrapper.
@@ -141,9 +141,9 @@ class _HiccupStream(RecognizeStream):
     async def _run(self) -> None:
         self._event_ch.send_nowait(
             SpeechEvent(
-                type=SpeechEventType.FINAL_TRANSCRIPT,
+                type=SpeechEventType.RECOGNITION_USAGE,
                 request_id="req-1",
-                alternatives=[SpeechData(language="en", text="hello", speaker_id="A")],
+                recognition_usage=RecognitionUsage(audio_duration=1.0),
             )
         )
         await asyncio.sleep(0)
@@ -273,11 +273,11 @@ async def test_stream_reports_usage_once() -> None:
     assert received[0].audio_duration == 1.0
 
 
-async def test_successful_transcript_forgives_earlier_hiccups() -> None:
+async def test_provider_response_forgives_earlier_hiccups() -> None:
     """Suppressing the adapter's own metrics must not drop the retry-count reset.
 
     ``RecognizeStream._main_task`` gives up once ``_num_retries`` exceeds ``max_retry``, and
-    the base metrics monitor resets it on every final transcript. Without that reset,
+    the base metrics monitor resets it on every provider response. Without that reset,
     unrelated brief failures accumulate over a long call until recognition dies for good.
     """
     inner = _HiccupSTT()
@@ -285,23 +285,24 @@ async def test_successful_transcript_forgives_earlier_hiccups() -> None:
     conn = APIConnectOptions(max_retry=3, retry_interval=0.0, timeout=5.0)
     stream = adapter.stream(conn_options=conn)
 
-    transcripts: list[str] = []
+    usage_events = 0
     fatal: list[BaseException] = []
 
     async def _read() -> None:
+        nonlocal usage_events
         try:
             async for ev in stream:
-                if ev.type == SpeechEventType.FINAL_TRANSCRIPT and ev.alternatives[0].text:
-                    transcripts.append(ev.alternatives[0].text)
+                if ev.type == SpeechEventType.RECOGNITION_USAGE:
+                    usage_events += 1
         except Exception as e:  # noqa: BLE001 - recorded, asserted on below
             fatal.append(e)
 
     task = asyncio.create_task(_read())
     stream.push_frame(_silence())
-    while len(transcripts) < 5 and not fatal:
+    while usage_events < 5 and not fatal:
         await asyncio.sleep(0)
 
-    assert not fatal, f"recognition died after {len(transcripts)} good transcripts: {fatal}"
+    assert not fatal, f"recognition died after {usage_events} provider responses: {fatal}"
     assert stream._num_retries == 0
 
     await utils.aio.cancel_and_wait(task)

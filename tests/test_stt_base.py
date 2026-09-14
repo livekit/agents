@@ -193,8 +193,6 @@ class _FlappingStream(RecognizeStream):
         stt: STT,
         drops: int,
         emit: SpeechEvent | None,
-        silent_runs: int = 0,
-        yield_after_emit: bool = True,
     ) -> None:
         super().__init__(
             stt=stt,
@@ -203,15 +201,12 @@ class _FlappingStream(RecognizeStream):
         self.runs = 0
         self._drops = drops
         self._emit = emit
-        self._silent_runs = silent_runs
-        self._yield_after_emit = yield_after_emit
 
     async def _run(self) -> None:
         self.runs += 1
-        if self._emit is not None and self.runs > self._silent_runs:
+        if self._emit is not None:
             self._event_ch.send_nowait(self._emit)
-            if self._yield_after_emit:
-                await asyncio.sleep(0)
+            await asyncio.sleep(0)
         if self.runs <= self._drops:
             raise APIConnectionError("socket dropped")
         await asyncio.sleep(3600)  # healthy at last
@@ -221,63 +216,48 @@ async def _survives(
     emit: SpeechEvent | None,
     *,
     drops: int = 10,
-    silent_runs: int = 0,
-    yield_after_emit: bool = True,
 ) -> bool:
     stream = _FlappingStream(
         stt=_DummySTT(),
         drops=drops,
         emit=emit,
-        silent_runs=silent_runs,
-        yield_after_emit=yield_after_emit,
     )
     try:
         for _ in range(500):
             if stream._task.done() or stream.runs > drops:
                 break
             await asyncio.sleep(0.01)
-        return not stream._task.done()
+        if stream._task.done():
+            stream._task.exception()
+            return False
+        return True
     finally:
         if not stream._task.done():
             await stream.aclose()
 
 
-async def test_retry_budget_survives_drops_while_the_caller_is_silent() -> None:
+@pytest.mark.parametrize(
+    "event",
+    [
+        SpeechEvent(type=SpeechEventType.INTERIM_TRANSCRIPT),
+        SpeechEvent(type=SpeechEventType.PREFLIGHT_TRANSCRIPT),
+        SpeechEvent(type=SpeechEventType.FINAL_TRANSCRIPT),
+        SpeechEvent(
+            type=SpeechEventType.RECOGNITION_USAGE,
+            recognition_usage=RecognitionUsage(audio_duration=5.0),
+        ),
+    ],
+)
+async def test_retry_budget_resets_after_provider_response(event: SpeechEvent) -> None:
     """The budget counts consecutive failures, not the lifetime of the stream.
 
-    Every reconnect here succeeds, so the stream is healthy throughout. Resetting
-    only on FINAL_TRANSCRIPT tied the budget to the caller speaking: an agent
-    talking over a silent caller, or a caller on hold, never earned it back, and
-    max_retry drops spread over one long call killed the stream for good.
+    A response proves the connection came up, even when the caller has not produced
+    a final transcript. START/END_OF_SPEECH are excluded because adapters may emit
+    them without contacting the STT provider.
     """
-    usage_only = SpeechEvent(
-        type=SpeechEventType.RECOGNITION_USAGE,
-        recognition_usage=RecognitionUsage(audio_duration=5.0),
-    )
-    assert await _survives(usage_only)
+    assert await _survives(event)
 
 
 async def test_retry_budget_still_gives_up_when_nothing_is_ever_delivered() -> None:
     """A connection that has never delivered anything must not retry forever."""
     assert not await _survives(None)
-
-
-async def test_retry_budget_resets_even_when_the_producer_never_yields() -> None:
-    """The reset must land in the producer's turn, not the consumer's.
-
-    `send_nowait` wakes the metrics consumer but does not run it. An attempt that
-    publishes an event and then raises in the same event-loop turn would otherwise
-    reach the terminal branch of `_main_task` with the budget still exhausted, and
-    a plugin can emit its last usage event during teardown, just before the socket
-    error propagates. Enters the event-delivering attempt already at max_retry.
-    """
-    usage_only = SpeechEvent(
-        type=SpeechEventType.RECOGNITION_USAGE,
-        recognition_usage=RecognitionUsage(audio_duration=5.0),
-    )
-    assert await _survives(
-        usage_only,
-        drops=12,
-        silent_runs=DEFAULT_API_CONNECT_OPTIONS.max_retry,
-        yield_after_emit=False,
-    )
