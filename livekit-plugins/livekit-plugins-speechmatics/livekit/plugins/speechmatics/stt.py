@@ -187,14 +187,13 @@ class STT(stt.STT):
                 The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes all resolve to
                 `VAD` with a warning. Defaults to `TurnDetectionMode.VAD`.
 
-            model: The transcription model to use, e.g. `"linden-1"`. A model agent-STT
-                does not support raises a `ValueError`. Defaults to the SDK's default
-                model. Preferred over `operating_point`.
+            model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
+                does not accept falls back to the default model with a warning. Defaults
+                to the SDK's default model. Preferred over `operating_point`.
 
-            operating_point: Deprecated alias for `model`. If both are given they must
-                name the same value, otherwise a `ValueError` is raised. Note the old
-                `enhanced` / `standard` operating points are not agent-STT models and
-                are rejected. Optional.
+            operating_point: Deprecated alias for `model`; `model` wins if both are given.
+                The old `enhanced` / `standard` operating points are not agent-STT models,
+                so they fall back to the default model too. Optional.
 
             domain: Domain to use. Optional.
 
@@ -963,47 +962,44 @@ def _resolve_model(
         - neither given          -> the SDK's default model
         - only `operating_point` -> use it, with a deprecation warning
         - only `model`           -> use it
-        - both given             -> they must name the same value; if they differ a
-                                    `ValueError` is raised, otherwise `model` is used
+        - both given             -> `model` wins, with a warning if the two differ
 
-    The resolved name is checked against the models agent-STT accepts, so a value the
-    service would reject fails here rather than on the wire mid-session.
+    This never raises. A name agent-STT does not accept — a typo, or one of the `enhanced` /
+    `standard` operating points the plugin took before Agent STT — falls back to the default
+    model with a warning, so old code keeps transcribing instead of dying at construction.
 
     Returns:
         The resolved model name as a string.
-
-    Raises:
-        ValueError: if `model` and `operating_point` are both given but differ, or if
-            the resolved name is not a supported model.
     """
     resolved_model = _model_name(model) if is_given(model) else None
     resolved_op = _model_name(operating_point) if is_given(operating_point) else None
 
-    if resolved_model is not None and resolved_op is not None:
-        if resolved_model != resolved_op:
-            raise ValueError(
-                f"`model` ({resolved_model!r}) and `operating_point` ({resolved_op!r}) name "
-                "different options. Pass only `model` (`operating_point` is deprecated)."
-            )
-        resolved = resolved_model
-    elif resolved_op is not None:
+    if resolved_op is not None:
         logger.warning(
             "`operating_point` is deprecated and will be removed in a future release; "
             "use `model` instead"
         )
-        resolved = resolved_op
-    elif resolved_model is not None:
-        resolved = resolved_model
-    else:
+
+    if resolved_model and resolved_op and resolved_model != resolved_op:
+        logger.warning(
+            f"`model` ({resolved_model!r}) and `operating_point` ({resolved_op!r}) name "
+            f"different options; using {resolved_model!r}."
+        )
+
+    resolved = resolved_model or resolved_op
+    if not resolved:
         return DEFAULT_MODEL.value
 
     supported = [m.value for m in Model]
-    if resolved not in supported:
-        raise ValueError(
-            f"Unsupported model {resolved!r}; agent-STT accepts {', '.join(supported)}"
-        )
+    if resolved in supported:
+        return resolved
 
-    return resolved
+    logger.warning(
+        f"{resolved!r} is not a model agent-STT accepts ({', '.join(supported)}); using "
+        f"{DEFAULT_MODEL.value!r} instead. The old `enhanced` and `standard` operating points "
+        f"belong to the previous service and have no Agent STT equivalent."
+    )
+    return DEFAULT_MODEL.value
 
 
 # Deprecated arguments with no agent-STT equivalent. Accepted so upgrading does not break
