@@ -379,6 +379,8 @@ class SpeechStream(stt.RecognizeStream):
 
                 try:
                     self._process_stream_event(json.loads(msg.data))
+                except APIStatusError:
+                    raise
                 except Exception:
                     logger.exception("failed to process xAI message")
 
