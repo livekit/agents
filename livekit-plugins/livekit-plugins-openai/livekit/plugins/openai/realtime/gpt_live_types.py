@@ -6,7 +6,7 @@ service reshapes cannot break a live session; client events serialise with ``exc
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import model_serializer
 
@@ -264,7 +264,7 @@ class OutputItem(BaseModel):
 
     id: str | None = None
     type: str | None = None
-    status: str | None = None
+    status: Literal["in_progress", "completed", "incomplete"] | None = None
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
@@ -275,7 +275,8 @@ class ResponsesEvent(BaseModel):
 
     type: str = ""
     response: ResponseSnapshot | None = None
-    item: OutputItem | None = None
+    # OpenAI's lenient parser needs a weak-referenceable union on Python 3.13.
+    item: Optional[OutputItem] = None  # noqa: UP045
 
 
 class ResponseEventEnvelope(BaseModel):
