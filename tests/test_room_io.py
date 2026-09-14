@@ -769,24 +769,6 @@ async def test_legacy_transcription_published_when_a_client_is_legacy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_legacy_transcription_treats_unknown_protocol_as_legacy() -> None:
-    room = _FakeRoom()
-    room.local_participant.publish_transcription = AsyncMock()
-    unknown = SimpleNamespace(
-        identity="unknown",
-        kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
-        attributes={},
-    )
-    room.remote_participants = {"unknown": unknown, "mock": MagicMock()}
-    room.remote_participants["mock"].kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
-    room.remote_participants["mock"].attributes = {}
-
-    await _capture_and_flush(_make_legacy_output(room), "hello")
-
-    assert room.local_participant.publish_transcription.await_count == 2
-
-
-@pytest.mark.asyncio
 async def test_legacy_transcription_skipped_with_no_standard_participants() -> None:
     """An empty considered set means skip: a SIP-only room has nobody who renders text."""
     for remotes in (

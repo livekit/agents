@@ -27,7 +27,6 @@ from ...types import (
     TOPIC_TRANSCRIPTION,
     TimedString,
 )
-from ...utils.participant import _client_protocol
 from .. import io
 from ..transcription import find_micro_track_id
 
@@ -275,6 +274,12 @@ def _legacy_transcription_needed(room: rtc.Room) -> bool:
     ``client_protocol >= CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS``, meaning it rebuilds
     transcription events from the ``lk.transcription`` stream channel instead.
 
+    The client protocol is read from the private ``_info``, because livekit-rtc exposes no
+    public property for it. There is no fallback: the field is ``required`` in the FFI
+    protobuf, and ``livekit`` is pinned to an exact version, so it is always present. A
+    rename must fail loudly here rather than report 0 for every participant, which would
+    silently keep legacy publishing on for good.
+
     Only STANDARD participants -- user-created client SDK instances -- are considered. SIP,
     INGRESS, AGENT (including avatar workers), CONNECTOR and BRIDGE participants never render
     legacy transcripts, so their client protocol tells us nothing about whether the legacy
@@ -294,7 +299,7 @@ def _legacy_transcription_needed(room: rtc.Room) -> bool:
         if p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) == local_identity:
             continue
 
-        if _client_protocol(p) < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS:
+        if p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS:
             return True
 
     return False
