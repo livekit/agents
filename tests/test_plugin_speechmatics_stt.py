@@ -578,7 +578,7 @@ def test_unknown_attributes_still_raise() -> None:
     import livekit.plugins.speechmatics as plugin
 
     with pytest.raises(AttributeError, match="NotAThing"):
-        plugin.NotAThing
+        _ = plugin.NotAThing
 
 
 def test_voice_sdk_stays_off_the_runtime_path() -> None:
