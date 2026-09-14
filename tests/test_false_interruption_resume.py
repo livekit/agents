@@ -44,6 +44,7 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     """AudioRecognition wired to drive one real eou bounce against ``hooks``."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._hooks = hooks
     ar._stt = None  # realtime model, no STT
     ar._audio_transcript = ""
@@ -92,6 +93,13 @@ def _recognition(hooks: AgentActivity, last_speaking_time: float) -> AudioRecogn
     )
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_wait_not_committed = 0
+    ar._user_turn_resumes = 0
+    ar._eou_detection_span = None
     ar._user_silence_ev = asyncio.Event()
     ar._speaking = False
     ar._final_transcript_confidence = []
