@@ -20,6 +20,7 @@ import os
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, cast
+from urllib.parse import urlparse
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -64,9 +65,11 @@ from .version import __version__ as lk_version
 
 # Endpoint resolution. The default is the EU real-time Agent STT host; the env var
 # overrides it (e.g. to target another region or a self-hosted endpoint), and an explicit
-# `base_url` argument overrides both.
+# `base_url` argument overrides both. Every Agent STT endpoint ends in `AGENT_URL_PATH`;
+# anything else speaks a protocol this plugin cannot read.
 DEFAULT_BASE_URL = "wss://eu2.rt.speechmatics.com/v2/agent"
 BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
+AGENT_URL_PATH = "/v2/agent"
 
 # Audio format we can actually send. The service fixes the sample rate at 16 kHz, and
 # LiveKit frames are 16-bit PCM which we forward unconverted, so declaring any other
@@ -114,9 +117,10 @@ class TurnDetectionMode(str, Enum):
     SMART_TURN = "smart_turn"
 
 
-# The mode a caller gets when they ask for none, and where the deprecated modes land. Single
-# source of truth: changing it moves the default and the deprecated modes together.
-DEFAULT_TURN_DETECTION_MODE = TurnDetectionMode.VAD
+# The mode a caller gets when they ask for none, and where the deprecated modes land.
+# `EXTERNAL` for parity with the plugin's pre-Agent-STT default. Single source of truth:
+# changing it moves the default and the deprecated modes together.
+DEFAULT_TURN_DETECTION_MODE = TurnDetectionMode.EXTERNAL
 
 
 @dataclasses.dataclass
@@ -194,15 +198,15 @@ class STT(stt.STT):
                 Agent STT host, `wss://eu2.rt.speechmatics.com/v2/agent`) when neither is
                 set.
 
-            turn_detection_mode: How end-of-speech turns are detected. `VAD` (the default)
-                lets the STT service run its own VAD and close turns itself; pair it with
-                `turn_detection="stt"` on the `AgentSession`, which otherwise ignores the
-                end-of-speech events this plugin emits. `EXTERNAL` instead hands turn
-                control to the caller, who drives it via `finalize()` — in practice from
-                the `vad` passed below, since LiveKit does not call `finalize()` itself.
-                Without a `vad`, `EXTERNAL` never closes a turn, so nothing is finalized.
-                The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes all resolve to
-                the default mode with a warning. Defaults to
+            turn_detection_mode: How end-of-speech turns are detected. `EXTERNAL` (the
+                default) hands turn control to the caller, who drives it via `finalize()`
+                — in practice from the `vad` passed below, since LiveKit does not call
+                `finalize()` itself. With no `vad` and none loadable, `EXTERNAL` never
+                closes a turn, so nothing is finalized. `VAD` instead lets the service
+                and close turns itself; pair it with `turn_detection="stt"` on the
+                `AgentSession`, which otherwise ignores the end-of-speech events this
+                plugin emits. The deprecated `FIXED`, `ADAPTIVE` and `SMART_TURN` modes
+                all resolve to the default mode with a warning. Defaults to
                 `DEFAULT_TURN_DETECTION_MODE`.
 
             model: The transcription model to use, e.g. `"linden-1"`. A name agent-STT
@@ -252,17 +256,25 @@ class STT(stt.STT):
                 Defaults to `AudioEncoding.PCM_S16LE`.
 
             vad: External Voice Activity Detector, used only in `EXTERNAL` turn-detection
-                mode where its end-of-speech drives `finalize()`. Ignored otherwise;
-                nothing is auto-loaded. Defaults to NOT_GIVEN.
+                mode where its end-of-speech drives `finalize()`. Ignored in `VAD` mode.
+                When omitted in `EXTERNAL` mode, `livekit-plugins-silero` is loaded if it
+                is installed, so a bare `STT()` still closes turns. Pass `vad=None` to opt
+                out and drive `finalize()` yourself. Defaults to NOT_GIVEN.
 
-            **kwargs: Catches deprecated parameters. A warning is logged for any
-                recognised deprecated name.
+            **kwargs: Catches deprecated parameters. A warning is logged for every name,
+                whether it is a recognised deprecation or not.
         """
 
         # Normalize the deprecated modes away before anything reads the mode.
         turn_detection_mode = _resolve_turn_detection_mode(turn_detection_mode)
 
-        # An external VAD, if provided, drives finalize(); none is auto-loaded.
+        # `EXTERNAL` is the default and the service does not endpoint in it, so a bare
+        # `STT()` has nothing to close a turn with. Load a local VAD to drive `finalize()`,
+        # as the plugin did before Agent STT, so zero-config still transcribes. An explicit
+        # `vad=None` opts out: that caller drives `finalize()` themselves.
+        if turn_detection_mode == TurnDetectionMode.EXTERNAL and not is_given(vad):
+            vad = _load_default_vad()
+
         self._vad = vad if is_given(vad) else None
 
         # EXTERNAL mode needs something to close turns. The service does not endpoint on its own,
@@ -919,6 +931,26 @@ _DEPRECATED_TURN_DETECTION_MODES = frozenset(
 )
 
 
+def _load_default_vad() -> vad.VAD | None:
+    """Load a local VAD to drive `finalize()` in `EXTERNAL` mode, or `None` if unavailable.
+
+    The pre-Agent-STT plugin loaded Silero here and raised `ImportError` when it was
+    missing, which made the plugin unusable wherever the optional package was not
+    installed. Returning `None` instead lets construction succeed and leaves the caller
+    with the `EXTERNAL`-without-a-`vad` warning, which says what to do about it.
+
+    Deliberately not `livekit.agents.inference.VAD`: that one is bundled, so it would load
+    for everybody and run a second VAD over the same audio as the one `AgentSession` fills
+    in for itself, with independent thresholds.
+    """
+    try:
+        from livekit.plugins.silero import VAD as SileroVAD
+    except ImportError:
+        return None
+
+    return SileroVAD.load()
+
+
 def _normalize_additional_vocab(entries: list[Any]) -> list[AdditionalVocabEntry]:
     """Accept vocab entries from either SDK, returning entries agent-STT can serialize.
 
@@ -963,9 +995,9 @@ def _resolve_turn_detection_mode(mode: TurnDetectionMode) -> TurnDetectionMode:
     """Reconcile the pre-Agent-STT turn detection modes with the two that remain.
 
     `FIXED`, `ADAPTIVE` and `SMART_TURN` each selected one of the old engine's
-    service-side endpointing strategies. Agent-STT exposes a single one, so none of the
-    three can be honoured and all resolve to `DEFAULT_TURN_DETECTION_MODE`; `EXTERNAL`
-    keeps its meaning and passes through.
+    service-side endpointing strategies. Agent-STT exposes none of them by name, so all
+    three resolve to `DEFAULT_TURN_DETECTION_MODE`; `EXTERNAL` keeps its meaning and
+    passes through.
 
     `FIXED` is the lossy case: it timed turns from `end_of_utterance_silence_trigger`,
     which agent-STT does not support, so the service's own timing applies instead. It
@@ -1009,10 +1041,21 @@ def _resolve_base_url(base_url: NotGivenOr[str]) -> str:
         1. the explicit `base_url` argument
         2. the ``SPEECHMATICS_RT_URL`` environment variable
         3. ``DEFAULT_BASE_URL``
+
+    Warns if the result is not an Agent STT endpoint. The check covers all three sources,
+    which matters most for the environment variable: it survives an upgrade untouched, so
+    a value left pointing at `/v2` silently keeps the caller on the old protocol.
     """
-    if is_given(base_url):
-        return base_url
-    return os.getenv(BASE_URL_ENV_VAR, DEFAULT_BASE_URL)
+    resolved = base_url if is_given(base_url) else os.getenv(BASE_URL_ENV_VAR, DEFAULT_BASE_URL)
+
+    if not urlparse(resolved).path.rstrip("/").endswith(AGENT_URL_PATH):
+        logger.warning(
+            f"{resolved!r} is not an Agent STT endpoint: those end in {AGENT_URL_PATH!r}. This "
+            "plugin only reads the Agent STT protocol, so the session will connect and then "
+            "produce no transcripts — if your transcripts are missing, this is why."
+        )
+
+    return resolved
 
 
 def _model_name(value: Model | str) -> str:
@@ -1130,3 +1173,12 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
 
         logger.warning(f"`{name}` is deprecated, migrated to `{replacement}`")
         setattr(opts, replacement, value)
+
+    # Anything left is a typo or an argument from some other plugin. `**kwargs` swallows it,
+    # so without this the caller never learns why their setting had no effect.
+    unrecognized = sorted(set(kwargs) - _DROPPED_ARGS.keys() - _MIGRATED_ARGS.keys())
+    if unrecognized:
+        logger.warning(
+            f"unrecognized argument(s) ignored: {', '.join(unrecognized)}. Check for a typo — "
+            "nothing reads them."
+        )
