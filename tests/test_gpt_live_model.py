@@ -943,7 +943,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.create"
-        assert not session._delegated_responses and not session._fnc_call_to_delegation
+        assert not session._backend_open_calls and not session._backend_responses_running
     finally:
         await session.aclose()
         await model.aclose()
@@ -982,6 +982,87 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
             "response.item.create",
             "response.create",
         ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backend is one chain: a fast response cannot continue while a slow one's call is open."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_slow")))
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        # the same delegation asks again before the first call is answered: the first call
+        # stays in view
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_2"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_fast")))
+        session._handle_event(_response_event("item_d1", _completed("resp_2")))
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_fast", output="fast", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_slow", output="slow", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert not session._backend_open_calls and not session._backend_responses_running
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_failed_response_releases_the_continuation_it_held_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that fails while running no longer blocks an answered one."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        session._handle_event(
+            _response_event("item_d2", {"type": "response.created", "response": {"id": "resp_2"}})
+        )
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_1", output="one", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+
+        session._handle_event(
+            _response_event("item_d2", {"type": "response.failed", "response": {"id": "resp_2"}})
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
     finally:
         await session.aclose()
         await model.aclose()

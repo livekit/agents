@@ -128,15 +128,9 @@ class _Speech:
 #   response.created ─► response.output_item.done ×N (function calls) ─► response.completed
 #
 # A response completes with its calls unanswered. Each result is queued with response.item.create,
-# and response.create runs the next response, the continuation, once every call has one; a partial
-# batch is rejected. The voice model speaks the continuation's text on its own.
-@dataclass
-class _DelegatedResponse:
-    """The current response of one delegation, and the tool calls it waits on."""
-
-    call_ids: set[str] = field(default_factory=set)
-    returned: set[str] = field(default_factory=set)
-    completed: bool = False
+# and one response.create continues the chain once no response is running and every call in the
+# session is answered; the service refuses anything earlier. The voice model speaks the
+# continuation's text on its own.
 
 
 @dataclass
@@ -289,10 +283,11 @@ class GPTLiveSession(
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
 
-        # the current response per delegation and the delegation each tool call belongs to,
-        # since the framework hands a result back by call id alone
-        self._delegated_responses: dict[str | None, _DelegatedResponse] = {}
-        self._fnc_call_to_delegation: dict[str, str | None] = {}
+        # what holds the continuation back: backend responses still running and backend tool
+        # calls without an output yet; the framework hands a result back by call id alone
+        self._backend_responses_running = 0
+        self._backend_open_calls: set[str] = set()
+        self._backend_answers_pending = False
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -437,8 +432,9 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
-        self._delegated_responses.clear()
-        self._fnc_call_to_delegation.clear()
+        self._backend_responses_running = 0
+        self._backend_open_calls.clear()
+        self._backend_answers_pending = False
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -719,15 +715,13 @@ class GPTLiveSession(
             )
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
-        # the inner event carries no response id, so a delegation's responses are followed in
-        # sequence: a continuation is the next response.created under the same delegation, and a
-        # response the application started itself has a null delegation
+        # a response the application started itself has a null delegation
         event = envelope.event
         response = event.response
         d_id = envelope.delegation_id
 
         if event.type == "response.created":
-            self._delegated_responses[d_id] = _DelegatedResponse()
+            self._backend_responses_running += 1
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
@@ -740,14 +734,7 @@ class GPTLiveSession(
                     extra={"call_id": item.call_id, "name": item.name},
                 )
                 return
-            if (pending := self._delegated_responses.get(d_id)) is None:
-                logger.warning(
-                    "gpt-live function call outside a known response",
-                    extra={"call_id": item.call_id, "delegation_id": d_id},
-                )
-                pending = self._delegated_responses[d_id] = _DelegatedResponse(completed=True)
-            pending.call_ids.add(item.call_id)
-            self._fnc_call_to_delegation[item.call_id] = d_id
+            self._backend_open_calls.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -785,9 +772,8 @@ class GPTLiveSession(
                         ),
                     ),
                 )
-            if (pending := self._delegated_responses.get(d_id)) is not None:
-                pending.completed = True
-                self._maybe_continue_response(d_id)
+            self._backend_responses_running = max(0, self._backend_responses_running - 1)
+            self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
             logger.warning(
@@ -799,21 +785,20 @@ class GPTLiveSession(
                     "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
-            if (pending := self._delegated_responses.pop(d_id, None)) is not None:
-                for call_id in pending.call_ids:
-                    self._fnc_call_to_delegation.pop(call_id, None)
+            # its calls stay pending on the backend and still need their outputs
+            self._backend_responses_running = max(0, self._backend_responses_running - 1)
+            self._maybe_continue_response()
 
-    def _maybe_continue_response(self, delegation_id: str | None) -> None:
-        # response.create runs the continuation, and only once the response has finished asking
-        # and every call it made has its answer; a partial batch is rejected
-        pending = self._delegated_responses.get(delegation_id)
-        if pending is None or not pending.completed or not pending.call_ids <= pending.returned:
+    def _maybe_continue_response(self) -> None:
+        # one response.create continues the chain, and only once nothing is still asking and every
+        # call in the conversation has its answer: the service refuses a partial batch
+        if (
+            self._backend_responses_running
+            or self._backend_open_calls
+            or not self._backend_answers_pending
+        ):
             return
-        del self._delegated_responses[delegation_id]
-        if not pending.call_ids:
-            return
-        for call_id in pending.call_ids:
-            self._fnc_call_to_delegation.pop(call_id, None)
+        self._backend_answers_pending = False
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
 
     # metrics and errors
@@ -1001,7 +986,7 @@ class GPTLiveSession(
         # a system or developer message is a standing rule for the voice model, a tool result
         # answering a call the backend delegated goes back on the backend's channel, and everything
         # else is context for the voice model, as one append
-        backend_outputs: list[tuple[llm.FunctionCallOutput, str | None]] = []
+        backend_outputs: list[llm.FunctionCallOutput] = []
         lines: list[str] = []
         for item in items:
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
@@ -1009,16 +994,16 @@ class GPTLiveSession(
                     self.append_instructions(text)
             elif (
                 isinstance(item, llm.FunctionCallOutput)
-                and item.call_id in self._fnc_call_to_delegation
+                and item.call_id in self._backend_open_calls
             ):
-                backend_outputs.append((item, self._fnc_call_to_delegation[item.call_id]))
+                backend_outputs.append(item)
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
         if lines:
             self.append_thinking("\n".join(lines))
 
-        for output, delegation_id in backend_outputs:
+        for output in backend_outputs:
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -1027,9 +1012,10 @@ class GPTLiveSession(
                     ),
                 )
             )
-            if (pending := self._delegated_responses.get(delegation_id)) is not None:
-                pending.returned.add(output.call_id)
-            self._maybe_continue_response(delegation_id)
+            self._backend_open_calls.discard(output.call_id)
+        if backend_outputs:
+            self._backend_answers_pending = True
+            self._maybe_continue_response()
 
         # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
