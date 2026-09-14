@@ -809,3 +809,52 @@ class TestVadMinSilenceRequirement:
         ar._turn_detector_stream = mock_stream
 
         assert ar._turn_detector_min_silence_duration == 0.08
+
+    def test_check_vad_silence_requirement_uses_stream_threshold(self) -> None:
+        ar = _make_recognition_for_validation()
+        # VAD configured for 0.1s
+        ar._vad = _FakeVad(min_silence_duration=0.1)
+        # Custom detector exposes NO min_silence_duration on itself
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        del detector.min_silence_duration
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.min_silence_duration = 0.08
+        detector.stream.return_value = mock_stream
+
+        # When stream is provided, 0.1s VAD >= 0.08s stream -> passes!
+        ar._check_vad_silence_requirement(detector, stream=mock_stream)
+
+        # When stream requires 0.15s, 0.1s VAD < 0.15s -> raises ValueError!
+        mock_stream.min_silence_duration = 0.15
+        with pytest.raises(ValueError, match="is too low for the TurnDetector"):
+            ar._check_vad_silence_requirement(detector, stream=mock_stream)
+
+    def test_turn_detector_describe_options_includes_min_silence_duration(self) -> None:
+        from livekit.agents.inference.eot import TurnDetector
+
+        td = TurnDetector(min_silence_duration=0.35)
+        options = td.describe_options()
+        assert "min_silence_duration" in options
+        assert options["min_silence_duration"] == 0.35
+
+    def test_start_order_turn_detector_before_vad(self) -> None:
+        call_order = []
+        ar = _make_recognition_for_validation()
+        ar._stt = None
+        ar._turn_detector = MagicMock(spec=_StreamingTurnDetector)
+        ar._vad = None
+        ar._interruption_detection = None
+        ar._update_stt = MagicMock(side_effect=lambda *a, **kw: call_order.append("stt"))  # type: ignore[method-assign]
+        ar._update_turn_detector = MagicMock(  # type: ignore[method-assign]
+            side_effect=lambda *a, **kw: call_order.append("turn_detector")
+        )
+        ar._update_vad = MagicMock(side_effect=lambda *a, **kw: call_order.append("vad"))  # type: ignore[method-assign]
+        ar._update_interruption_detection = MagicMock(  # type: ignore[method-assign]
+            side_effect=lambda *a, **kw: call_order.append("interruption")
+        )
+
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        ar._start(turn_detector_stream=mock_stream)
+
+        ar._update_turn_detector.assert_called_once_with(ar._turn_detector, stream=mock_stream)
+        assert call_order == ["stt", "turn_detector", "vad", "interruption"]

@@ -147,6 +147,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
             "provider": self.provider,
             "sample_rate": self._opts.sample_rate,
             "local_fallback": self._local_fallback,
+            "min_silence_duration": self.min_silence_duration,
         }
         thresholds = self._opts.thresholds
         if is_given(thresholds.overrides):

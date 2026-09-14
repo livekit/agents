@@ -419,10 +419,10 @@ class AudioRecognition:
         turn_detector_stream: _StreamingTurnDetectorStream | None = None,
     ) -> None:
         self._update_stt(self._stt, pipeline=stt_pipeline)
-        self._update_vad(self._vad)
-        self._update_interruption_detection(self._interruption_detection)
         if isinstance(self._turn_detector, _StreamingTurnDetector) or self._turn_detector is None:
             self._update_turn_detector(self._turn_detector, stream=turn_detector_stream)
+        self._update_vad(self._vad)
+        self._update_interruption_detection(self._interruption_detection)
 
     def _stop(self) -> None:
         self._update_stt(None)
@@ -897,6 +897,7 @@ class AudioRecognition:
         self,
         detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        stream: NotGivenOr[_StreamingTurnDetectorStream | None] = NOT_GIVEN,
     ) -> None:
         if not is_given(detector):
             detector = self._turn_detector
@@ -906,7 +907,10 @@ class AudioRecognition:
             return
         if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
+        target_stream = stream if is_given(stream) else self._turn_detector_stream
         detector_min_silence = getattr(detector, "min_silence_duration", None)
+        if detector_min_silence is None and target_stream is not None:
+            detector_min_silence = getattr(target_stream, "min_silence_duration", None)
         if detector_min_silence is not None:
             silence_val = float(detector_min_silence)
             if not (math.isfinite(silence_val) and silence_val > 0):
@@ -996,7 +1000,7 @@ class AudioRecognition:
         opening a fresh stream on *detector*; the live transport stream — and its
         per-session cloud->local fallback state — survives the handoff.
         """
-        self._check_vad_silence_requirement(detector)
+        self._check_vad_silence_requirement(detector, stream=stream)
         self._turn_detector = detector
 
         if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
