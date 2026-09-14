@@ -38,6 +38,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGive
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
 
+from .log import logger
 from .models import TTSEncoding, TTSModels
 from .version import __version__
 
@@ -485,17 +486,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         # way to be certain we've drained everything, the caller must never reuse the
         # underlying connection when this heuristic (rather than an explicit signal) is
         # what ended the loop - see _run.
+        #
+        # Before the closing fragment is sent, `conn_options.timeout` bounds inactivity
+        # (like it does for legacy's single `ws.receive(timeout=...)`), not the whole
+        # pre-finalize phase: a long input segment can legitimately take longer than
+        # that to finish streaming from the caller, and each received frame proves the
+        # connection is still alive, so the deadline is pushed out on every frame
+        # instead of being measured once from task startup.
         event_loop = asyncio.get_event_loop()
-        hard_deadline = event_loop.time() + self._conn_options.timeout
+        inactivity_deadline = event_loop.time() + self._conn_options.timeout
         while True:
             try:
                 msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
             except asyncio.TimeoutError:
                 if ctx_state["finalized"]:
                     return False
-                if event_loop.time() >= hard_deadline:
+                if event_loop.time() >= inactivity_deadline:
                     raise
                 continue
+            inactivity_deadline = event_loop.time() + self._conn_options.timeout
             self._parse_status_event(msg, output_emitter)
 
     async def _recv_one(
@@ -537,9 +546,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     TimedString(text=word, start_time=start, end_time=end)
                 )
         elif status == "error":
-            raise APIConnectionError(
-                f"SmallestAI TTS error: {event.get('message', 'unknown error')}"
+            # The provider's error message may echo back a fragment of the input text
+            # (e.g. "unsupported character in text: ..."), so it's logged separately
+            # under a PII-tagged key instead of being embedded in the exception message,
+            # which flows into TTS telemetry/traces.
+            provider_message = event.get("message", "unknown error")
+            logger.error(
+                "SmallestAI TTS error", extra={"lk.pii.provider_message": provider_message}
             )
+            raise APIConnectionError("SmallestAI TTS error")
         return status, event
 
 
