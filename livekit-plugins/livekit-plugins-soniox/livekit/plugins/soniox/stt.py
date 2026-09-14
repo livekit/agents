@@ -247,6 +247,8 @@ class SpeechStream(stt.SpeechStream):
         self.audio_queue: asyncio.Queue[bytes | str] = asyncio.Queue()
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession for WebSocket connections."""
@@ -306,24 +308,29 @@ class SpeechStream(stt.SpeechStream):
         logger.debug("Soniox Speech-to-Text API connection established!")
 
         self._reported_duration_ms = 0
+        self._num_output_tokens = 0
+        self._reported_output_tokens = 0
         self.audio_queue = asyncio.Queue()
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
-        """Report the total audio duration processed by the STT engine."""
+        """Report the audio duration and output tokens processed by the STT engine."""
         to_report_ms = total_audio_proc_ms - self._reported_duration_ms
-        if to_report_ms <= 0:
+        to_report_output_tokens = self._num_output_tokens - self._reported_output_tokens
+        if to_report_ms <= 0 and to_report_output_tokens <= 0:
             return
 
         usage_event = stt.SpeechEvent(
             type=stt.SpeechEventType.RECOGNITION_USAGE,
             alternatives=[],
             recognition_usage=stt.RecognitionUsage(
-                audio_duration=to_report_ms / 1000,
+                audio_duration=max(to_report_ms, 0) / 1000,
+                output_tokens=max(to_report_output_tokens, 0),
             ),
         )
         self._event_ch.send_nowait(usage_event)
-        self._reported_duration_ms = int(total_audio_proc_ms)
+        self._reported_duration_ms = max(int(total_audio_proc_ms), self._reported_duration_ms)
+        self._reported_output_tokens = self._num_output_tokens
 
     async def _run(self) -> None:
         """Manage connection lifecycle, spawning tasks and handling reconnection."""
@@ -523,6 +530,11 @@ class SpeechStream(stt.SpeechStream):
                     # 1) process tokens: accumulate final/non-final,
                     #    flush immediately on endpoint tokens.
                     for token in tokens:
+                        # Non-final tokens are re-sent as final later, so only
+                        # final tokens count toward output usage. <end>/<fin>
+                        # markers are control tokens, not transcription output.
+                        if token["is_final"] and not is_end_token(token):
+                            self._num_output_tokens += 1
                         is_translated = token.get("translation_status") == "translation"
                         if is_translation_mode and not is_end_token(token) and not is_translated:
                             # Original-language token: capture text for source_text only.
