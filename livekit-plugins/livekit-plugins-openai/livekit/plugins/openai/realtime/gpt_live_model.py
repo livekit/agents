@@ -1014,6 +1014,13 @@ class GPTLiveSession(
             )
             self._backend_open_calls.discard(output.call_id)
         if backend_outputs:
+            if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
+                logger.warning(
+                    "a tool result wants no reply, but GPT Live will answer it anyway: the "
+                    "backend has no way to close a call without a spoken continuation, and an "
+                    "unanswered call holds every later tool call. Continuing regardless.",
+                    extra={"functions": silenced},
+                )
             self._backend_answers_pending = True
             self._maybe_continue_response()
 
