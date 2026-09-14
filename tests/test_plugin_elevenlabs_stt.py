@@ -55,7 +55,6 @@ def _new_stream(
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
-        secondary_languages=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
         previous_text=None,
