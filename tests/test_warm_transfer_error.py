@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -169,3 +169,70 @@ async def test_twilio_connector_warm_transfer_initializes_destination_state() ->
         assert callable(task._human_agent_participant_disconnected_cb)
     finally:
         await task._background_audio._audio_mixer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_on_enter_dial_failure_chains_original_exception() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._hold_audio = None
+    task._caller_room = MagicMock()
+    task._set_io_enabled = MagicMock()
+    task._human_agent_sess = None
+    task._hold_audio_handle = None
+    task.done = MagicMock(return_value=False)
+    task.complete = MagicMock()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.room = MagicMock()
+
+    orig_exc = RuntimeError("SIP gateway error 503")
+
+    async def _failing_dial():
+        raise orig_exc
+
+    task._dial_human_agent = _failing_dial
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        await task.on_enter()
+
+    task.complete.assert_called_once()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.DIAL_FAILED
+    assert result.__cause__ is orig_exc
+
+
+@pytest.mark.asyncio
+async def test_on_enter_shuts_down_child_session_when_failed_fut_done() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._hold_audio = None
+    task._caller_room = MagicMock()
+    task._set_io_enabled = MagicMock()
+    task._human_agent_sess = None
+    task._hold_audio_handle = None
+    task.done = MagicMock(return_value=False)
+    task.complete = MagicMock()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.room = MagicMock()
+    mock_child_sess = MagicMock()
+
+    async def _successful_dial():
+        # Destination disconnected while dial was completing
+        task._human_agent_failed_fut.set_result(None)
+        return mock_child_sess
+
+    task._dial_human_agent = _successful_dial
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        await task.on_enter()
+
+    # The session must be shut down and not leaked
+    mock_child_sess.shutdown.assert_called_once()
+    assert task._human_agent_sess is None

@@ -244,17 +244,28 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 (dial_human_agent_task, self._human_agent_failed_fut),
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            if dial_human_agent_task not in done:
-                raise RuntimeError()
+            if (
+                dial_human_agent_task not in done
+                or self._human_agent_failed_fut.done()
+                or self.done()
+            ):
+                if dial_human_agent_task in done and not dial_human_agent_task.cancelled():
+                    try:
+                        dial_sess = dial_human_agent_task.result()
+                        dial_sess.shutdown()
+                    except Exception:
+                        pass
+                raise RuntimeError("could not dial human agent")
 
             self._human_agent_sess = dial_human_agent_task.result()
             # let the human speak first
 
-        except Exception:
+        except Exception as exc:
             logger.exception("could not dial human agent")
             err = WarmTransferError(
                 "could not dial human agent", code=WarmTransferFailure.DIAL_FAILED
             )
+            err.__cause__ = exc
             self._set_result(err)
             return
 
