@@ -671,3 +671,84 @@ async def test_synthesize_stream_with_wav_codec_handles_consecutive_riff_contain
     total_samples = sum(ev.frame.samples_per_channel for ev in events)
     expected_samples = (len(pcm1) + len(pcm2)) // 2
     assert total_samples == expected_samples
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_with_wav_codec_ignores_riff_inside_trailing_metadata():
+    """Verify that literal b'RIFF' inside trailing LIST/JUNK metadata does not trigger a false container match."""
+    import struct
+
+    sarvam_tts = TTS(
+        api_key="test-api-key",
+        speech_sample_rate=SAMPLE_RATE,
+        output_audio_codec="wav",
+    )
+
+    def _make_container_with_riff_metadata(
+        duration_ms: int, track_title: str
+    ) -> tuple[bytes, bytes]:
+        pcm = _generate_raw_pcm(duration_ms=duration_ms, sample_rate=SAMPLE_RATE)
+        fmt = struct.pack("<4sIHHIIHH", b"fmt ", 16, 1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16)
+        data = struct.pack("<4sI", b"data", len(pcm))
+        # LIST chunk payload contains b"RIFF" inside the metadata string
+        list_payload = b"INFOINAM" + track_title.encode("ascii") + b"\x00"
+        list_chunk = struct.pack("<4sI", b"LIST", len(list_payload)) + list_payload
+        body = fmt + data + pcm + list_chunk
+        riff = struct.pack("<4sI4s", b"RIFF", 4 + len(body), b"WAVE")
+        return riff + body, pcm
+
+    # Container 1 has metadata containing literal b"RIFF Studio"
+    container1, pcm1 = _make_container_with_riff_metadata(60, "RIFF Studio Recording")
+    # Container 2 has metadata containing literal b"Another RIFF Track"
+    container2, pcm2 = _make_container_with_riff_metadata(80, "Another RIFF Track")
+
+    stream = sarvam_tts.stream()
+
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = tts.AudioEmitter(label="test-sarvam-tts-stream-riff-meta", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="test-req-stream-riff-meta",
+        sample_rate=SAMPLE_RATE,
+        num_channels=1,
+        mime_type="audio/pcm",
+        stream=True,
+    )
+    emitter.start_segment(segment_id="seg-riff-meta")
+
+    events: list[tts.SynthesizedAudio] = []
+
+    async def collect():
+        async for ev in dst_ch:
+            events.append(ev)
+            if ev.is_final:
+                return
+
+    collect_task = asyncio.create_task(collect())
+
+    # Send container 1 split across messages:
+    # chunk 1: header + PCM
+    # chunk 2: trailing LIST chunk (containing "RIFF")
+    # chunk 3: container 2
+    split_point = len(container1) - len(b"INFOINAMRIFF Studio Recording\x00") - 8
+    chunk1 = container1[:split_point]
+    chunk2 = container1[split_point:]
+
+    msg1 = {"type": "audio", "data": {"audio": base64.b64encode(chunk1).decode("ascii")}}
+    assert await stream._handle_audio_message(msg1, emitter) is True
+
+    msg2 = {"type": "audio", "data": {"audio": base64.b64encode(chunk2).decode("ascii")}}
+    assert await stream._handle_audio_message(msg2, emitter) is True
+
+    msg3 = {"type": "audio", "data": {"audio": base64.b64encode(container2).decode("ascii")}}
+    assert await stream._handle_audio_message(msg3, emitter) is True
+
+    emitter.end_segment()
+    emitter.end_input()
+    await emitter.join()
+    await collect_task
+
+    assert len(events) > 0
+    assert events[-1].is_final
+    total_samples = sum(ev.frame.samples_per_channel for ev in events)
+    expected_samples = (len(pcm1) + len(pcm2)) // 2
+    assert total_samples == expected_samples

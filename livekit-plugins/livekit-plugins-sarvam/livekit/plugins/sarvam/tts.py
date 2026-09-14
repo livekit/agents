@@ -1006,11 +1006,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._wav_header_buf = bytearray()
         self._wav_is_riff: bool | None = None
         self._wav_data_remaining: int | None = None
+        self._wav_container_remaining: int | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         self._wav_header_buf.clear()
         self._wav_is_riff = None
         self._wav_data_remaining = None
+        self._wav_container_remaining = None
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
@@ -1397,7 +1399,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Extract PCM payload across WebSocket chunks for WAV containers.
 
         Maintains state across chunks to handle headers split across messages,
-        buffers partial RIFF signatures, and honors data chunk boundaries.
+        buffers partial RIFF signatures, tracks container boundaries, and honors
+        data chunk boundaries without searching within metadata.
         """
         if self._wav_is_riff is False:
             return audio_bytes
@@ -1407,30 +1410,42 @@ class SynthesizeStream(tts.SynthesizeStream):
                 sample_bytes = min(len(audio_bytes), self._wav_data_remaining)
                 pcm = audio_bytes[:sample_bytes]
                 self._wav_data_remaining -= sample_bytes
+                if self._wav_container_remaining is not None:
+                    self._wav_container_remaining -= sample_bytes
                 trailing = audio_bytes[sample_bytes:]
-                if self._wav_data_remaining == 0 and trailing:
-                    riff_idx = trailing.find(b"RIFF")
-                    if riff_idx != -1:
+
+                if self._wav_data_remaining == 0:
+                    if (
+                        self._wav_container_remaining is not None
+                        and self._wav_container_remaining > 0
+                    ):
+                        skip_bytes = min(len(trailing), self._wav_container_remaining)
+                        self._wav_container_remaining -= skip_bytes
+                        trailing = trailing[skip_bytes:]
+
+                    if self._wav_container_remaining is None or self._wav_container_remaining == 0:
                         self._wav_data_remaining = None
-                        return pcm + self._extract_streaming_wav_pcm(trailing[riff_idx:])
-                    for prefix_len in (3, 2, 1):
-                        if trailing.endswith(b"RIFF"[:prefix_len]):
-                            self._wav_header_buf.extend(trailing[-prefix_len:])
-                            self._wav_data_remaining = None
-                            break
-                    return pcm
+                        self._wav_container_remaining = None
+                        if trailing:
+                            return pcm + self._extract_streaming_wav_pcm(trailing)
                 return pcm
             else:
-                riff_idx = audio_bytes.find(b"RIFF")
-                if riff_idx != -1:
-                    self._wav_data_remaining = None
-                    return self._extract_streaming_wav_pcm(audio_bytes[riff_idx:])
-                for prefix_len in (3, 2, 1):
-                    if audio_bytes.endswith(b"RIFF"[:prefix_len]):
-                        self._wav_header_buf.extend(audio_bytes[-prefix_len:])
+                if self._wav_container_remaining is not None and self._wav_container_remaining > 0:
+                    skip_bytes = min(len(audio_bytes), self._wav_container_remaining)
+                    self._wav_container_remaining -= skip_bytes
+                    trailing = audio_bytes[skip_bytes:]
+                    if self._wav_container_remaining == 0:
                         self._wav_data_remaining = None
-                        break
-                return b""
+                        self._wav_container_remaining = None
+                        if trailing:
+                            return self._extract_streaming_wav_pcm(trailing)
+                    return b""
+                else:
+                    self._wav_data_remaining = None
+                    self._wav_container_remaining = None
+                    if audio_bytes:
+                        return self._extract_streaming_wav_pcm(audio_bytes)
+                    return b""
 
         self._wav_header_buf.extend(audio_bytes)
         buf = self._wav_header_buf
@@ -1475,23 +1490,29 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         found, offset, data_size = self._locate_data_chunk(buf)
         if found:
+            file_size = struct.unpack("<I", buf[4:8])[0]
+            total_riff_size = max(8 + file_size, offset + data_size)
+            self._wav_container_remaining = total_riff_size - offset
             self._wav_data_remaining = data_size
+
             payload = bytes(buf[offset:])
             self._wav_header_buf.clear()
             sample_bytes = min(len(payload), self._wav_data_remaining)
             pcm = payload[:sample_bytes]
             self._wav_data_remaining -= sample_bytes
+            self._wav_container_remaining -= sample_bytes
             trailing = payload[sample_bytes:]
-            if self._wav_data_remaining == 0 and trailing:
-                riff_idx = trailing.find(b"RIFF")
-                if riff_idx != -1:
+            if self._wav_data_remaining == 0:
+                if self._wav_container_remaining > 0:
+                    skip_bytes = min(len(trailing), self._wav_container_remaining)
+                    self._wav_container_remaining -= skip_bytes
+                    trailing = trailing[skip_bytes:]
+
+                if self._wav_container_remaining == 0:
                     self._wav_data_remaining = None
-                    return pcm + self._extract_streaming_wav_pcm(trailing[riff_idx:])
-                for prefix_len in (3, 2, 1):
-                    if trailing.endswith(b"RIFF"[:prefix_len]):
-                        self._wav_header_buf.extend(trailing[-prefix_len:])
-                        self._wav_data_remaining = None
-                        break
+                    self._wav_container_remaining = None
+                    if trailing:
+                        return pcm + self._extract_streaming_wav_pcm(trailing)
             return pcm
         else:
             return b""
