@@ -511,20 +511,86 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                     "participant_disconnected", self._human_agent_participant_disconnected_cb
                 )
 
-            dest_present = False
+            # 1. Check if destination is already in the caller room (move succeeded remotely
+            # despite RPC error/timeout)
+            dest_in_caller = False
+            caller_remote = getattr(self._caller_room, "remote_participants", None)
+            if caller_remote is not None:
+                if self._human_agent_identity in caller_remote:
+                    dest_in_caller = True
+                else:
+                    for p in caller_remote.values():
+                        if getattr(p, "identity", None) == self._human_agent_identity:
+                            dest_in_caller = True
+                            break
+
+            # If not yet observed in caller_room client events, query server state to account
+            # for potential event propagation delay
+            if not dest_in_caller:
+                try:
+                    room_api = getattr(getattr(job_ctx, "api", None), "room", None)
+                    if room_api is not None and hasattr(room_api, "get_participant"):
+                        p_info = await room_api.get_participant(
+                            api.RoomParticipantIdentity(
+                                room=self._caller_room.name,
+                                identity=self._human_agent_identity,
+                            )
+                        )
+                        if getattr(p_info, "identity", None) == self._human_agent_identity:
+                            dest_in_caller = True
+                except Exception:
+                    pass
+
+            if dest_in_caller:
+                logger.debug(
+                    f"{self._human_agent_identity} joined caller room {self._caller_room.name} "
+                    "despite move_participant error"
+                )
+                return
+
+            # 2. Check if destination is still present in the staging room
+            dest_in_staging = False
             remote_participants = getattr(human_agent_room, "remote_participants", None)
             if remote_participants is not None:
                 if self._human_agent_identity in remote_participants:
-                    dest_present = True
+                    dest_in_staging = True
                 else:
                     for p in remote_participants.values():
                         if getattr(p, "identity", None) == self._human_agent_identity:
-                            dest_present = True
+                            dest_in_staging = True
                             break
 
-            if not dest_present:
-                with contextlib.suppress(asyncio.InvalidStateError):
-                    self._human_agent_failed_fut.set_result(None)
+            if dest_in_staging:
+                raise
+
+            # 3. Destination is absent from both rooms.
+            # Check whether the staging room itself closed while the move was in flight.
+            is_connected = True
+            isconnected_fn = getattr(human_agent_room, "isconnected", None)
+            if callable(isconnected_fn):
+                is_connected = bool(isconnected_fn())
+            elif isinstance(isconnected_fn, bool):
+                is_connected = isconnected_fn
+            elif hasattr(human_agent_room, "connection_state"):
+                is_connected = (
+                    human_agent_room.connection_state == rtc.ConnectionState.CONN_CONNECTED
+                )
+
+            with contextlib.suppress(asyncio.InvalidStateError):
+                self._human_agent_failed_fut.set_result(None)
+
+            if not is_connected:
+                reason = getattr(human_agent_room, "disconnect_reason", None)
+                reason_val = reason if reason is not None else rtc.DisconnectReason.UNKNOWN_REASON
+                self._set_result(
+                    WarmTransferError(
+                        f"room closed: {rtc.DisconnectReason.Name(reason_val)}",
+                        code=WarmTransferFailure.ROOM_CLOSED,
+                        disconnect_reason=reason,
+                        call_status=self._destination_call_status,
+                    )
+                )
+            else:
                 reason_name = (
                     rtc.DisconnectReason.Name(self._destination_disconnect_reason)
                     if self._destination_disconnect_reason is not None

@@ -316,3 +316,93 @@ async def test_merge_calls_missed_destination_departure() -> None:
     assert result.code == WarmTransferFailure.DESTINATION_LEFT
     assert result.disconnect_reason == rtc.DisconnectReason.USER_UNAVAILABLE
     assert result.call_status == "busy"
+
+
+@pytest.mark.asyncio
+async def test_merge_calls_destination_joined_caller_recovers_from_error() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._caller_room = MagicMock()
+    task._caller_room.name = "caller-room"
+    task._human_agent_identity = "dest-agent"
+    task._destination_disconnect_reason = None
+    task._destination_call_status = None
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_participant_disconnected_cb = MagicMock()
+    task._on_human_agent_room_close = MagicMock()
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.complete = MagicMock()
+    task.done = MagicMock(return_value=False)
+
+    # Destination is already present in caller room
+    mock_dest_p = MagicMock()
+    mock_dest_p.identity = "dest-agent"
+    task._caller_room.remote_participants = {"dest-agent": mock_dest_p}
+
+    mock_human_sess = MagicMock()
+    mock_human_room = MagicMock()
+    mock_human_room.name = "human-room"
+    mock_human_room.remote_participants = {}
+    mock_human_sess.room_io.room = mock_human_room
+    task._human_agent_sess = mock_human_sess
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.api.room.move_participant = AsyncMock(side_effect=RuntimeError("response timeout"))
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        # Should return without raising since the destination is already in the caller room
+        await task._merge_calls()
+
+    assert not task._human_agent_failed_fut.done()
+    task.complete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merge_calls_room_closed_distinguished_from_destination_left() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._caller_room = MagicMock()
+    task._caller_room.name = "caller-room"
+    task._caller_room.remote_participants = {}
+    task._human_agent_identity = "dest-agent"
+    task._destination_disconnect_reason = None
+    task._destination_call_status = None
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_participant_disconnected_cb = MagicMock()
+    task._on_human_agent_room_close = MagicMock()
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.complete = MagicMock()
+    task.done = MagicMock(return_value=False)
+
+    mock_human_sess = MagicMock()
+    mock_human_room = MagicMock()
+    mock_human_room.name = "human-room"
+    mock_human_room.remote_participants = {}
+    # Staging room disconnected
+    mock_human_room.isconnected = MagicMock(return_value=False)
+    mock_human_room.disconnect_reason = rtc.DisconnectReason.ROOM_CLOSED
+    mock_human_sess.room_io.room = mock_human_room
+    task._human_agent_sess = mock_human_sess
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.api.room.move_participant = AsyncMock(
+        side_effect=RuntimeError("room disconnected")
+    )
+    mock_job_ctx.api.room.get_participant = AsyncMock(
+        side_effect=RuntimeError("participant not found")
+    )
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        with pytest.raises(RuntimeError, match="room disconnected"):
+            await task._merge_calls()
+
+    assert task._human_agent_failed_fut.done()
+    task.complete.assert_called_once()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.ROOM_CLOSED
+    assert result.disconnect_reason == rtc.DisconnectReason.ROOM_CLOSED
