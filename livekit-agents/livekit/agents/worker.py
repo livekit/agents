@@ -23,6 +23,7 @@ import multiprocessing as mp
 import os
 import sys
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -745,13 +746,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 )
 
             if self._mp_ctx_str == "forkserver":
-                # `livekit.agents.inference._warmup` is a side-effect module:
-                # importing it from the forkserver process calls `init_vad()` and
-                # `init_eot()`, paging the native model weights into the
-                # forkserver. Forked job processes inherit those pages via COW.
+                # the framework's warm-up runs once in the forkserver and is inherited via
+                # COW; under `spawn` each job process imports it itself (see ipc._preload)
                 plugin_packages = [p.package for p in Plugin.registered_plugins] + [
-                    "av",
-                    "livekit.agents.inference._warmup",
+                    "livekit.agents.ipc._preload",
                     # Must remain last; it freezes objects imported by earlier preloads.
                     "livekit.agents.ipc._preload_freeze",
                 ]
@@ -1293,7 +1291,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self.emit("worker_registered", reg.worker_id, reg.server_info)
 
     def _handle_availability(self, msg: agent.AvailabilityRequest) -> None:
-        task = self._loop.create_task(self._answer_availability(msg))
+        # receipt is now, not when the task gets to run: that delay is dispatch latency
+        task = self._loop.create_task(self._answer_availability(msg, received_at=time.time()))
         self._job_lifecycle_tasks.add(task)
         task.add_done_callback(self._job_lifecycle_tasks.discard)
 
@@ -1348,10 +1347,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # before either job appears in active_jobs.
         return self._get_effective_load() < load_threshold
 
-    async def _answer_availability(self, msg: agent.AvailabilityRequest) -> None:
+    async def _answer_availability(
+        self, msg: agent.AvailabilityRequest, *, received_at: float | None = None
+    ) -> None:
         """Ask the user if they want to accept this job and forward the answer to the server.
         If we get the job assigned, we start a new process."""
 
+        if received_at is None:
+            received_at = time.time()
         await self._refresh_worker_load()
         if not self._is_available():
             availability_resp = agent.WorkerMessage()
@@ -1378,6 +1381,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         async def _on_accept(args: JobAcceptArguments) -> None:
             nonlocal answered
             answered = True
+            accepted_at = time.time()
 
             availability_resp = agent.WorkerMessage()
             availability_resp.availability.job_id = msg.job.id
@@ -1414,6 +1418,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=job_assign.token,
                 worker_id=self._id,
                 fake_job=False,
+                received_at=received_at,
+                accepted_at=accepted_at,
+                assigned_at=time.time(),
             )
 
             await self._proc_pool.launch_job(running_info)
