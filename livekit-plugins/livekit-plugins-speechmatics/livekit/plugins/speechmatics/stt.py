@@ -74,6 +74,15 @@ BASE_URL_ENV_VAR = "SPEECHMATICS_RT_URL"
 SUPPORTED_SAMPLE_RATE = 16000
 SUPPORTED_AUDIO_ENCODINGS = (AudioEncoding.PCM_S16LE,)
 
+# Why each part of the pre-Agent-STT surface is inert, reported wherever a caller still
+# reaches for it. See `_DROPPED_ARGS` and `STT.update_speakers`.
+_SPEAKER_FOCUS_REMOVED = (
+    "`SpeakerFocusMode` is not supported by Agent STT, so speaker focus is dropped from the "
+    "config; it is expected to be reintroduced in a future release"
+)
+_EOU_REMOVED = "end-of-utterance timing is the service's own and is not configurable"
+_LEGACY_ARG = "the argument predates Agent STT and was already unused"
+
 
 class TurnDetectionMode(str, Enum):
     """How turn boundaries (end of speech) are detected.
@@ -489,6 +498,19 @@ class STT(stt.STT):
         if len(results) == 1:
             return results[0]
         return results
+
+    def update_speakers(
+        self,
+        focus_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
+        ignore_speakers: NotGivenOr[list[str]] = NOT_GIVEN,
+        focus_mode: Any = NOT_GIVEN,
+    ) -> None:
+        """Deprecated no-op, kept so code written against the previous plugin still runs.
+
+        Agent STT does not support speaker focus, so there is nothing to update mid-session
+        and the arguments are ignored. Diarization is unaffected — see `get_speaker_ids`.
+        """
+        logger.warning(f"`STT.update_speakers()` is deprecated: {_SPEAKER_FOCUS_REMOVED}")
 
 
 class SpeechStream(stt.RecognizeStream):
@@ -1002,25 +1024,26 @@ def _resolve_model(
     return DEFAULT_MODEL.value
 
 
-# Deprecated arguments with no agent-STT equivalent. Accepted so upgrading does not break
-# construction, but they reach neither the config nor the wire.
-_DROPPED_ARGS = (
-    "audio_settings",
-    "chunk_size",
-    "end_of_turn_config",
-    "end_of_utterance_max_delay",
-    "end_of_utterance_mode",
-    "end_of_utterance_silence_trigger",
-    "focus_mode",
-    "focus_speakers",
-    "http_session",
-    "ignore_speakers",
-    "max_delay",
-    "punctuation_overrides",
-    "speaker_passive_format",
-    "transcription_config",
-    "vad_config",
-)
+# Deprecated arguments with no agent-STT equivalent, each with the reason it is gone.
+# Accepted so upgrading does not break construction, but they reach neither the config nor
+# the wire.
+_DROPPED_ARGS: dict[str, str] = {
+    "audio_settings": _LEGACY_ARG,
+    "chunk_size": _LEGACY_ARG,
+    "end_of_turn_config": _EOU_REMOVED,
+    "end_of_utterance_max_delay": _EOU_REMOVED,
+    "end_of_utterance_mode": _EOU_REMOVED,
+    "end_of_utterance_silence_trigger": _EOU_REMOVED,
+    "focus_mode": _SPEAKER_FOCUS_REMOVED,
+    "focus_speakers": _SPEAKER_FOCUS_REMOVED,
+    "http_session": _LEGACY_ARG,
+    "ignore_speakers": _SPEAKER_FOCUS_REMOVED,
+    "max_delay": "Agent STT rejects it",
+    "punctuation_overrides": "Agent STT rejects it",
+    "speaker_passive_format": "a segment has no active/passive split to format",
+    "transcription_config": _LEGACY_ARG,
+    "vad_config": "turn detection is set with `turn_detection_mode`",
+}
 
 # Deprecated arguments that were renamed: old name -> (STTOptions field, value coercion).
 _MIGRATED_ARGS: dict[str, tuple[str, Callable[[Any], Any]]] = {
@@ -1037,9 +1060,9 @@ def _check_deprecated_args(kwargs: dict[str, Any], opts: STTOptions) -> None:
     is carried over to the option that replaced it.
     """
 
-    for name in _DROPPED_ARGS:
+    for name, reason in _DROPPED_ARGS.items():
         if name in kwargs:
-            logger.warning(f"`{name}` is deprecated and no longer used")
+            logger.warning(f"`{name}` is deprecated and ignored: {reason}")
 
     for name, (replacement, coerce) in _MIGRATED_ARGS.items():
         if name not in kwargs:

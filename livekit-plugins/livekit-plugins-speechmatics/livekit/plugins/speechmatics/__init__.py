@@ -79,7 +79,9 @@ def __getattr__(name: str) -> Any:
         from speechmatics.voice import SpeakerFocusMode
 
         _warn_deprecated(
-            name, "speaker focus has no Agent STT equivalent and `focus_mode` is ignored"
+            name,
+            "speaker focus is not supported by Agent STT and `focus_mode` is ignored; it is "
+            "expected to be reintroduced in a future release",
         )
         return SpeakerFocusMode
 
