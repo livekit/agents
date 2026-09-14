@@ -153,6 +153,7 @@ class FallbackLLMStream(LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._fallback_adapter = llm
+        self._retry_on_chunk_sent = llm._retry_on_chunk_sent
         self._parallel_tool_calls = parallel_tool_calls
         self._tool_choice = tool_choice
         self._extra_kwargs = extra_kwargs
@@ -289,7 +290,7 @@ class FallbackLLMStream(LLMStream):
                         self._event_ch.send_nowait(result)
 
                     return
-                except Exception as e:  # exceptions already logged inside _try_generate
+                except Exception:  # exceptions already logged inside _try_generate
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(
@@ -300,9 +301,6 @@ class FallbackLLMStream(LLMStream):
                     if text_sent or tool_calls_sent:
                         extra = {"text_sent": text_sent, "tool_calls_sent": tool_calls_sent}
                         if not self._fallback_adapter._retry_on_chunk_sent:
-                            if isinstance(e, APIError):
-                                # Prevent LLMStream's outer retry loop from replaying output.
-                                e.retryable = False
                             logger.error(
                                 f"{llm.label} failed after sending chunk, skip retrying. "
                                 "Set `retry_on_chunk_sent` to `True` to enable retrying after chunks are sent.",
