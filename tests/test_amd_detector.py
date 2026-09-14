@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from opentelemetry import trace
 
 from livekit import rtc
 from livekit.agents import (
@@ -210,6 +211,38 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
         assert not any(m.id.startswith(detector._control_prefix) for m in agent.chat_ctx.items)
         await detector.aclose()
         assert (await completed).reason == "cancelled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "category", [AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_UNAVAILABLE]
+)
+async def test_amd_guard_retains_the_adopted_user_turn_span(category: AMDCategory) -> None:
+    async with running() as (detector, session, classifier, model):
+        span = Mock(spec=trace.Span)
+        span.get_span_context.return_value = trace.INVALID_SPAN_CONTEXT
+        info = end_of_turn()
+        info.user_turn_span = span
+        session._activity.on_end_of_turn(info)
+        await classifier.request()
+        await session.current_agent.hook_started.wait()
+        await asyncio.sleep(0)
+
+        assert info.amd_turn_id == 1
+        assert info.user_turn_span_adopted
+        span.end.assert_not_called()
+        assert model.calls.empty()
+
+        classifier.prediction(1, category)
+        await asyncio.wait_for(session._activity._user_turn_completed_atask, 2)
+        span.end.assert_called_once_with()
+        assert not info.user_turn_span_adopted
+        if category == AMDCategory.MACHINE_UNAVAILABLE:
+            assert (await detector.execute()).category == category
+            assert model.calls.empty()
+        else:
+            call = await asyncio.wait_for(model.calls.get(), 2)
+            assert call["chat_ctx"].items[-1].text_content == DEFAULT_SCREENING_INSTRUCTIONS
 
 
 @pytest.mark.asyncio

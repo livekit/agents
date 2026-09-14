@@ -35,7 +35,9 @@ class _FakeSource:
         self.queued_duration = 0.0
 
     async def wait_for_playout(self) -> None:
-        self.queued_duration = 0.0
+        # the test drains the queue; a real source takes as long as the audio it holds
+        while self.queued_duration:
+            await asyncio.sleep(0)
 
 
 def _frame(seconds: float) -> rtc.AudioFrame:
@@ -92,6 +94,8 @@ async def test_uninterrupted_playback_is_reported_once() -> None:
         assert h.progress == []  # nothing to report while playback is continuous
 
         h.sink.flush()
+        await h.settle()
+        h.source.queued_duration = 0.0  # the backlog plays out
         for _ in range(50):
             await asyncio.sleep(0)
 
@@ -99,6 +103,14 @@ async def test_uninterrupted_playback_is_reported_once() -> None:
     ev = h.progress[0]
     assert ev.offset == 0.0
     assert ev.duration == pytest.approx(0.3)
+
+
+async def test_a_packet_reaches_the_source_whole_whatever_its_size() -> None:
+    """Nothing waits in the byte stream for the next packet, so realtime-paced audio never gaps."""
+    async with _Harness() as h:
+        await h.push(0.08)
+        assert h.source.queued_duration == pytest.approx(0.08)
+        assert h.sink._source_pushed_duration == pytest.approx(0.08)
 
 
 async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
@@ -123,7 +135,7 @@ async def test_a_drained_source_ends_its_run_when_it_ran_dry() -> None:
 async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -> None:
     """A segment whose flush trails its own playout still sits where it played."""
     async with _Harness() as h:
-        # 60ms is the progressive ramp, 20ms then 40ms, so the byte stream holds nothing back
+        # 60ms frames as 50ms then 10ms, so the byte stream holds nothing back
         await h.push(0.06)
         played, dry_at = h.sink._source_pushed_duration, h.sink._dry_at
         assert dry_at is not None
@@ -139,6 +151,22 @@ async def test_a_flush_after_the_source_drained_ends_the_run_when_it_ran_dry() -
     assert ev.offset == 0.0
     assert ev.duration == pytest.approx(played)
     assert ev.started_at == pytest.approx(dry_at - played)
+
+
+async def test_a_cleared_buffer_reports_the_playhead_without_waiting() -> None:
+    """A swap detaches the sink before its playout wait runs, so the clear is its last word."""
+    async with _Harness() as h:
+        await h.push(0.5)
+        pushed = h.sink._source_pushed_duration
+        h.now += 0.3
+        h.source.queued_duration = 0.2  # queued, so not yet played
+
+        h.sink.clear_buffer()
+
+    assert len(h.progress) == 1
+    ev = h.progress[0]
+    assert ev.offset == 0.0
+    assert ev.duration == pytest.approx(pushed - 0.2)
 
 
 async def test_a_cleared_queue_leaves_a_hole_rather_than_a_short_tail() -> None:
@@ -181,6 +209,8 @@ async def test_a_pause_and_resume_report_two_runs_around_the_hole() -> None:
 
         h.now += 1.0  # the resumed audio plays out
         h.sink.flush()
+        await h.settle()
+        h.source.queued_duration = 0.0
         for _ in range(50):
             await asyncio.sleep(0)
 
@@ -230,12 +260,36 @@ async def test_an_interruption_ends_the_run_at_the_playhead() -> None:
     assert h.progress[0].duration == pytest.approx(pushed - 0.15)
 
 
+async def test_the_playout_wait_reports_what_plays_after_a_clear() -> None:
+    """The clear reports the playhead, and the queue plays on until the wait drops it."""
+    async with _Harness() as h:
+        await h.push(0.5)
+        pushed = h.sink._source_pushed_duration
+        h.source.queued_duration = 0.2
+
+        h.sink.flush()
+        h.sink.clear_buffer()
+        h.now += 0.05
+        h.source.queued_duration = 0.15  # the device played on while the wait was scheduled
+
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+    played = round(pushed - 0.2, 3)
+    assert [(round(ev.offset, 3), round(ev.duration, 3)) for ev in h.progress] == [
+        (0.0, played),
+        (played, 0.05),
+    ]
+
+
 async def test_offsets_restart_with_each_segment() -> None:
     async with _Harness() as h:
         for _ in range(2):
             h.source.queued_duration = 0.5
             await h.push(0.2)
             h.sink.flush()
+            await h.settle()
+            h.source.queued_duration = 0.0
             for _ in range(50):
                 await asyncio.sleep(0)
             h.now += 1.0

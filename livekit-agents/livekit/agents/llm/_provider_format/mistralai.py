@@ -6,7 +6,7 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import convert_mid_conversation_instructions, group_tool_calls
 
 
 @dataclass
@@ -23,6 +23,8 @@ def to_conversations_ctx(
         A tuple of (entries, instructions) where instructions is the extracted
         system/developer message content (or None if absent).
     """
+    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+
     item_groups = group_tool_calls(chat_ctx)
     entries: list[dict[str, Any]] = []
     instructions: str | None = None

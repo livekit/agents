@@ -20,21 +20,22 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+          cache-suffix: ruff
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
-      - name: Install the project
-        run: uv sync --all-extras --dev
+      - name: Install Ruff
+        run: uv sync --locked --only-group lint
 
       - name: Ruff
-        run: uv run ruff check --output-format=github .
+        run: uv run --no-sync ruff check --output-format=github .
         continue-on-error: true
         id: ruff-check
 
       - name: Check format
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
         continue-on-error: true
         id: ruff-format
 

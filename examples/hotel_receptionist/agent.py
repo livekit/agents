@@ -74,28 +74,58 @@ server = AgentServer()
 _SEED_DB_BYTES = build_seed_bytes(TODAY)
 
 
+def _expected_state_statements(userdata: dict[str, object]) -> list[str] | None:
+    """No key means the DB isn't checked; null or [] means it must come back unchanged."""
+    if "expected_state" not in userdata:
+        return None
+    statements = userdata["expected_state"]
+    if statements is None:
+        return []
+    if not isinstance(statements, list) or not all(isinstance(s, str) for s in statements):
+        raise TypeError("expected_state must be a list of SQL statements")
+    return statements
+
+
 async def on_simulation_end(ctx: SimulationContext) -> None:
-    # Grade the run on final DB state: build the scenario's `expected_state` on a
-    # fresh seed, then diff it against the agent's DB. The diff compares
-    # agent-decided facts only (room type, dates, extras, status), so minted
-    # codes / order / which-king don't matter and the agent need not reproduce the
-    # statements — while collateral damage still surfaces.
-    expected_state = ctx.userdata().get("expected_state") or []
-    if not expected_state:
-        return
-
-    session = ctx.job_context.primary_session
-    expected = await build_expected(_SEED_DB_BYTES, expected_state)
+    tagger = ctx.job_context.tagger
+    failure: str | None = None
+    graded = False
     try:
-        diffs = diff_databases(expected.connection, session.userdata.db.connection)
-    finally:
-        await expected.aclose()
+        expected_state = _expected_state_statements(ctx.userdata())
+        graded = expected_state is not None
+        if expected_state is not None:
+            # Grade the run on final DB state: build the scenario's `expected_state` on a
+            # fresh seed, then diff it against the agent's DB. The diff compares
+            # agent-decided facts only (room type, dates, extras, status), so minted
+            # codes / order / which-king don't matter and the agent need not reproduce the
+            # statements — while collateral damage still surfaces.
+            session = ctx.job_context.primary_session
+            expected = await build_expected(_SEED_DB_BYTES, expected_state)
+            try:
+                diffs = diff_databases(expected.connection, session.userdata.db.connection)
+            finally:
+                await expected.aclose()
+            if diffs:
+                failure = "final DB diverges from expected: " + " | ".join(diffs[:8])
+    except Exception as exc:
+        # Grading that can't run is not a pass. The prefix tells a broken scenario
+        # apart from a failing agent.
+        logger.exception("expected-state grading failed")
+        failure = f"expected-state grading failed: {exc}"
 
-    # Veto the run if the final DB state diverged. The effective result is the AND of
-    # this check and the simulator's conversation judgment, so a mismatch fails a run
-    # the simulator passed; a match simply leaves the simulator's verdict to stand.
-    if diffs:
-        ctx.fail(reason="final DB diverges from expected: " + " | ".join(diffs[:8]))
+    # Most scenarios skip the DB check on purpose, so the run has to record
+    # whether it ran at all.
+    tagger.add("state:graded" if graded else "state:ungraded")
+
+    # A run passes only if both the conversation and the DB check pass. A scenario
+    # with no DB check is graded on the conversation alone.
+    if failure:
+        ctx.fail(reason=failure)
+        tagger.fail(reason=failure)
+    elif ctx.simulator_verdict.success:
+        tagger.success(reason=ctx.simulator_verdict.reason)
+    else:
+        tagger.fail(reason=ctx.simulator_verdict.reason)
 
 
 async def on_session_end(ctx: JobContext) -> None:
@@ -124,76 +154,6 @@ async def on_session_end(ctx: JobContext) -> None:
     await judges.evaluate(report.chat_history)
 
     userdata = ctx.primary_session.userdata
-
-    db_diffs: list[str] = []
-    try:
-        sim_ctx = ctx.simulation_context()
-        if sim_ctx is None:
-            logger.info(
-                "local expected-state diff skipped: no simulation context "
-                "(job/room metadata carried no SimulationDispatch)"
-            )
-        expected_state = (sim_ctx.userdata().get("expected_state") if sim_ctx else None) or []
-        if sim_ctx is not None and not expected_state:
-            logger.info("local expected-state diff skipped: scenario has no expected_state")
-        if expected_state:
-            logger.info("running local expected-state diff (%d statement(s))", len(expected_state))
-            expected = await build_expected(_SEED_DB_BYTES, expected_state)
-            try:
-                db_diffs = diff_databases(expected.connection, userdata.db.connection)
-            finally:
-                await expected.aclose()
-    except Exception:
-        logger.exception("error running local expected-state diff")
-
-    # "Did the call do real work?" is a DB question, not per-tool bookkeeping:
-    # compare the final DB against the untouched seed. Any change in the
-    # transactional tables (booking, cancellation, modification, dispute,
-    # followup, late-arrival note...) counts.
-    try:
-        seed_db = HotelDB.from_bytes(_SEED_DB_BYTES)
-        try:
-            state_changes = diff_databases(seed_db.connection, userdata.db.connection)
-        finally:
-            await seed_db.aclose()
-    except Exception:
-        logger.exception("error diffing final DB against seed")
-        state_changes = []
-
-    # Read-only calls (policy questions, availability checks, booking lookups)
-    # are real work too - a Q&A call that answered from a successful read tool
-    # shouldn't be tagged as having accomplished nothing.
-    read_tools = {
-        "lookup_policy",
-        "lookup_booking",
-        "lookup_invoice",
-        "lookup_restaurant_reservation",
-        "check_room_availability",
-        "check_restaurant_availability",
-        "lookup_guest_history",
-    }
-    call_names = {
-        item.call_id: item.name
-        for item in report.chat_history.items
-        if item.type == "function_call"
-    }
-    served_reads = any(
-        item.type == "function_call_output"
-        and not item.is_error
-        and call_names.get(item.call_id) in read_tools
-        for item in report.chat_history.items
-    )
-
-    if db_diffs:
-        ctx.tagger.fail(reason="final DB diverges from expected: " + " | ".join(db_diffs[:8]))
-    elif state_changes or served_reads:
-        ctx.tagger.success()
-    else:
-        ctx.tagger.fail(
-            reason="The call accomplished nothing: no state was changed (booking, "
-            "cancellation, modification, dispute, followup, message, wake-up call...) "
-            "and no information was looked up for the caller."
-        )
 
     logger.info("session tags: %s", ctx.tagger.tags)
 
