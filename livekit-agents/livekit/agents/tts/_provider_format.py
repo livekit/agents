@@ -1081,40 +1081,76 @@ _SSML_NAMESPACED_INCOMPLETE_RE = re.compile(
 )
 
 
+_SSML_SUB_RE = re.compile(
+    rf"<\s*sub\b{_ATTR_PATTERN}\balias\s*=\s*(?:\"(?P<alias1>[^\"]*)\"|'(?P<alias2>[^']*)'){_ATTR_PATTERN}>(.*?)</\s*sub\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _is_ssml_enabled(text: str, tts: Any = None, ssml: bool | None = None) -> bool:
     if ssml is not None:
         return ssml
-    text_lower = text.lower()
-    if "<speak" in text_lower:
-        return True
-    if any(tag in text_lower for tag in ("<phoneme", "<prosody", "<say-as")):
-        return True
-    if "<sub " in text_lower and "alias=" in text_lower:
+    if re.search(r"<\s*speak(?=\s|/?>)", text, re.IGNORECASE):
         return True
     if tts is None:
         return False
-    opts = getattr(tts, "_opts", None)
-    if opts is not None:
-        if getattr(opts, "text_type", None) == "ssml":
+
+    to_check = [tts]
+    visited: set[int] = set()
+    while to_check:
+        curr = to_check.pop(0)
+        curr_id = id(curr)
+        if curr_id in visited:
+            continue
+        visited.add(curr_id)
+
+        opts = getattr(curr, "_opts", None)
+        if opts is not None:
+            if getattr(opts, "text_type", None) == "ssml":
+                return True
+            if getattr(opts, "enable_ssml", False):
+                return True
+            if getattr(opts, "enable_ssml_parsing", False):
+                return True
+            if getattr(opts, "ssml", False):
+                return True
+        provider = getattr(curr, "provider", "")
+        if isinstance(provider, str):
+            p_lower = provider.lower().strip()
+            if p_lower in {"azure", "azure tts", "cartesia"}:
+                return True
+        mod = getattr(curr.__class__, "__module__", "").lower()
+        if any(
+            m in mod
+            for m in (
+                "livekit.plugins.azure",
+                "livekit.plugins.cartesia",
+                ".azure.",
+                ".cartesia.",
+            )
+        ):
             return True
-        if getattr(opts, "enable_ssml", False):
+        if getattr(getattr(curr, "capabilities", None), "ssml", False):
             return True
-        if getattr(opts, "enable_ssml_parsing", False):
+        if getattr(curr, "ssml_enabled", False) or getattr(curr, "enable_ssml", False):
             return True
-        if getattr(opts, "ssml", False):
-            return True
-    provider = getattr(tts, "provider", "")
-    if isinstance(provider, str):
-        p_lower = provider.lower().strip()
-        if "azure" in p_lower or "cartesia" in p_lower:
-            return True
-    mod = getattr(tts.__class__, "__module__", "").lower()
-    if ".azure." in mod or ".cartesia." in mod:
-        return True
-    if getattr(getattr(tts, "capabilities", None), "ssml", False):
-        return True
-    if getattr(tts, "ssml_enabled", False) or getattr(tts, "enable_ssml", False):
-        return True
+
+        wrapped = getattr(curr, "_wrapped_tts", None)
+        if wrapped is not None:
+            to_check.append(wrapped)
+        direct_tts = getattr(curr, "_tts", None)
+        if direct_tts is not None:
+            if isinstance(direct_tts, (list, tuple)):
+                to_check.extend(direct_tts)
+            else:
+                to_check.append(direct_tts)
+        instances = getattr(curr, "_tts_instances", None)
+        if instances is not None and isinstance(instances, (list, tuple)):
+            to_check.extend(instances)
+        tts_list = getattr(curr, "_tts_list", None)
+        if tts_list is not None and isinstance(tts_list, (list, tuple)):
+            to_check.extend(tts_list)
+
     return False
 
 
@@ -1140,8 +1176,19 @@ def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -
     text = _SSML_NAMESPACED_STANDALONE_RE.sub(" ", text)
     text = _SSML_NAMESPACED_INCOMPLETE_RE.sub("", text)
 
-    # Only process standard SSML tags (<p>, <s>, <prosody>, etc.) when SSML is enabled
+    # Only process standard SSML tags (<p>, <s>, <sub>, <prosody>, etc.) when SSML is enabled
     if _is_ssml_enabled(text, tts=tts, ssml=ssml):
+        # Replace <sub alias="...">inner</sub> with the spoken alias
+        def _sub_alias_replace(m: re.Match[str]) -> str:
+            val = m.group("alias1") if m.group("alias1") is not None else m.group("alias2")
+            return val if val is not None else ""
+
+        while True:
+            replaced = _SSML_SUB_RE.sub(_sub_alias_replace, text)
+            if replaced == text:
+                break
+            text = replaced
+
         # Replace structural SSML tags (<p>, <s>) with inner text + space separator
         while True:
             replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)

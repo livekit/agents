@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from livekit.agents import Agent, AgentSession
@@ -115,20 +117,47 @@ def test_strip_chat_markup_preserves_literal_markup_when_ssml_disabled() -> None
     assert strip_chat_markup("Use <s> and </s> tags") == "Use <s> and </s> tags"
     assert strip_chat_markup("<p>Hello</p><p>world</p>") == "<p>Hello</p><p>world</p>"
     assert strip_chat_markup("<s>First.</s><s>Second.</s>") == "<s>First.</s><s>Second.</s>"
+    assert (
+        strip_chat_markup('Explain <phoneme alphabet="ipa">tomato</phoneme>')
+        == 'Explain <phoneme alphabet="ipa">tomato</phoneme>'
+    )
+    assert (
+        strip_chat_markup("Document <speaker> before <p> here")
+        == "Document <speaker> before <p> here"
+    )
+
+
+def test_strip_chat_markup_sub_alias() -> None:
+    """SSML <sub> tags should substitute their spoken alias in assistant history."""
+    assert (
+        strip_chat_markup('<sub alias="World Wide Web Consortium">W3C</sub>', ssml=True)
+        == "World Wide Web Consortium"
+    )
+    assert (
+        strip_chat_markup('<speak><sub alias="World Wide Web Consortium">W3C</sub></speak>')
+        == "World Wide Web Consortium"
+    )
+    # sub without alias unwraps inner text
+    assert strip_chat_markup("<sub>W3C</sub>", ssml=True) == "W3C"
+    # When SSML disabled, sub tags are preserved literally
+    assert (
+        strip_chat_markup('<sub alias="World Wide Web Consortium">W3C</sub>')
+        == '<sub alias="World Wide Web Consortium">W3C</sub>'
+    )
 
 
 def test_strip_chat_markup_quoted_attributes_with_closing_angle() -> None:
     """Handle closing angles inside quoted SSML attributes."""
-    assert strip_chat_markup('<sub alias="2 > 1">comparison</sub>') == "comparison"
-    assert strip_chat_markup('<speak><sub alias="2 > 1">comparison</sub></speak>') == "comparison"
+    assert strip_chat_markup('<sub alias="2 > 1">comparison</sub>', ssml=True) == "2 > 1"
+    assert strip_chat_markup('<speak><sub alias="2 > 1">comparison</sub></speak>') == "2 > 1"
     assert strip_chat_markup('<speak><prosody rate=">fast">hello</prosody></speak>') == "hello"
-    assert strip_chat_markup('<sub alias="2 > 1">comparison') == "comparison"
+    assert strip_chat_markup('<sub alias="2 > 1">comparison', ssml=True) == "comparison"
 
 
 def test_strip_chat_markup_incomplete_ssml_tags() -> None:
-    """Incomplete SSML tags from interruptions should be stripped."""
-    assert strip_chat_markup('<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato') == "tomato"
-    assert strip_chat_markup('<prosody rate="fast">hello') == "hello"
+    """Incomplete SSML tags from interruptions should be stripped when SSML is enabled."""
+    assert strip_chat_markup('<phoneme alphabet="ipa" ph="təˈmeɪtoʊ">tomato', ssml=True) == "tomato"
+    assert strip_chat_markup('<prosody rate="fast">hello', ssml=True) == "hello"
 
 
 def test_strip_chat_markup_provider_specific_ssml() -> None:
@@ -167,3 +196,49 @@ def test_strip_chat_markup_azure_provider_normalization() -> None:
     azure_tts = FakeAzureTTS()
     text = "<p>Hello</p><p>world</p>"
     assert strip_chat_markup(text, tts=azure_tts) == "Hello world"
+
+
+def test_strip_chat_markup_azure_openai_does_not_enable_ssml() -> None:
+    """Azure OpenAI TTS should not trigger SSML cleanup for literal <p> and <s> tags."""
+
+    class FakeAzureOpenAITTS:
+        __module__ = "livekit.plugins.openai.tts"
+
+        @property
+        def provider(self) -> str:
+            return "my-resource.openai.azure.com"
+
+    openai_tts = FakeAzureOpenAITTS()
+    text = "Use <p> and </p> tags"
+    assert strip_chat_markup(text, tts=openai_tts) == "Use <p> and </p> tags"
+
+
+def test_strip_chat_markup_wrapped_tts_adapters() -> None:
+    """Wrapped TTS instances inside adapters (FallbackAdapter, StreamAdapter) should be inspected."""
+
+    class FakeSSMLTTS:
+        @property
+        def provider(self) -> str:
+            return "Azure TTS"
+
+    class FakeFallbackAdapter:
+        def __init__(self, instances: list[Any]) -> None:
+            self._tts_instances = instances
+
+    class FakeStreamAdapter:
+        def __init__(self, tts: Any) -> None:
+            self._wrapped_tts = tts
+
+    class FakeOptsTTS:
+        def __init__(self) -> None:
+            self._opts = type("Opts", (), {"enable_ssml": True})()
+
+    azure_tts = FakeSSMLTTS()
+    fallback_adapter = FakeFallbackAdapter([azure_tts])
+    assert strip_chat_markup("<p>Hello</p><p>world</p>", tts=fallback_adapter) == "Hello world"
+
+    stream_adapter = FakeStreamAdapter(azure_tts)
+    assert strip_chat_markup("<p>Hello</p><p>world</p>", tts=stream_adapter) == "Hello world"
+
+    opts_adapter = FakeFallbackAdapter([FakeOptsTTS()])
+    assert strip_chat_markup("<p>Hello</p><p>world</p>", tts=opts_adapter) == "Hello world"
