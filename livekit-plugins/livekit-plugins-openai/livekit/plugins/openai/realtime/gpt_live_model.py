@@ -737,13 +737,13 @@ class GPTLiveSession(
             if item.status != "completed":
                 logger.debug(
                     "gpt-live ignoring incomplete function call",
-                    extra={"function_name": item.name, "status": item.status},
+                    extra={"lk.pii.function_name": item.name, "lk.pii.status": item.status},
                 )
                 return
             if not item.call_id or not item.name or item.arguments is None:
                 logger.warning(
                     "gpt-live dropping function call with missing fields",
-                    extra={"call_id": item.call_id, "function_name": item.name},
+                    extra={"lk.pii.call_id": item.call_id, "lk.pii.function_name": item.name},
                 )
                 return
             if (pending := self._delegated_responses.get(d_id)) is None:

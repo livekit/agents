@@ -16,6 +16,7 @@ import pytest
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
+from livekit.agents.telemetry import pii
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
@@ -408,6 +409,13 @@ async def test_provider_content_is_only_logged_under_pii_fields(
                 },
             )
         )
+        for status in ("incomplete", private):
+            event = _function_call_done(private, name=private)
+            event["item"]["status"] = status
+            session._handle_event(_response_event("d1", event))
+        event = _function_call_done(private, name=private)
+        del event["item"]["arguments"]
+        session._handle_event(_response_event("d1", event))
         session._handle_event({"type": "error", "error": {"message": private}})
         with pytest.raises(APIError) as fatal:
             session._handle_event(
@@ -420,6 +428,7 @@ async def test_provider_content_is_only_logged_under_pii_fields(
             for key, value in vars(record).items():
                 if private in repr(value):
                     assert ".pii." in key
+            assert private not in repr(pii.filter_attributes(vars(record)))
         assert any("lk.pii.event" in vars(record) for record in caplog.records)
     finally:
         await session.aclose()
