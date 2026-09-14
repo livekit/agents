@@ -2886,7 +2886,10 @@ class AgentActivity(RecognitionHooks):
             # the invalidated preemptive attempt answered this same turn: one agent_turn
             _continue_discarded_turn(discarded_preemptive, speech_handle)
 
-        if self._user_turn_completed_atask != asyncio.current_task():
+        if (
+            self._user_turn_completed_atask != asyncio.current_task()
+            and not speech_handle._allow_interruptions
+        ):
             # If a new user turn has already started, interrupt this one since it's now outdated
             # (We still create the SpeechHandle and the generate_reply coroutine, otherwise we may
             # lose data like the beginning of a user speech).
