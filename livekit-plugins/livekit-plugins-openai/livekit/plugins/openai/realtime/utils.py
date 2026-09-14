@@ -46,7 +46,10 @@ DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioTranscription(
     model="gpt-4o-mini-transcribe",
 )
 
-# use beta version TurnDetection and InputAudioTranscription for compatibility
+# use beta version TurnDetection and InputAudioTranscription for compatibility.
+# server_vad (not semantic_vad) is intentional: Azure OpenAI Realtime has been
+# observed to accept a semantic_vad session config but never emit
+# input_audio_buffer.speech_started, which breaks server-side interruption/barge-in.
 AZURE_DEFAULT_TURN_DETECTION = TurnDetection(
     type="server_vad",
     threshold=0.5,
