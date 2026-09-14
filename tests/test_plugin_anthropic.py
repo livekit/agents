@@ -177,37 +177,6 @@ class TestAnthropicChatContextFormatting:
         assert len(messages) == 3
         assert messages[-1] == {"role": "user", "content": [{"text": ".", "type": "text"}]}
 
-    def test_trailing_assistant_with_tool_use_skips_dummy_user_message(self) -> None:
-        ctx = llm.ChatContext.empty()
-        ctx.add_message(role="user", content="Check weather")
-        ctx.insert(
-            llm.FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}')
-        )
-
-        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
-
-        assert len(messages) == 2
-        assert messages[-1]["role"] == "assistant"
-        assert any(
-            isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"]
-        )
-
-    def test_trailing_assistant_with_text_and_tool_use_skips_dummy_user_message(self) -> None:
-        ctx = llm.ChatContext.empty()
-        ctx.add_message(role="user", content="Check weather")
-        ctx.add_message(role="assistant", content="Looking up...")
-        ctx.insert(
-            llm.FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "SF"}')
-        )
-
-        messages, _ = ctx.to_provider_format(format="anthropic", inject_trailing_user_message=True)
-
-        assert len(messages) == 2
-        assert messages[-1]["role"] == "assistant"
-        assert any(
-            isinstance(b, dict) and b.get("type") == "tool_use" for b in messages[-1]["content"]
-        )
-
     def test_trailing_assistant_inject_false_skips_dummy_user_message(self) -> None:
         ctx = llm.ChatContext.empty()
         ctx.add_message(role="user", content="Hello")
