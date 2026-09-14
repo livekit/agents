@@ -668,26 +668,27 @@ wheels = [
 
 [[package]]
 name = "bithuman"
-version = "2.7.0"
+version = "2.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "av", marker = "python_full_version < '3.14'" },
-    { name = "loguru", marker = "python_full_version < '3.14'" },
-    { name = "networkx", marker = "python_full_version < '3.14'" },
-    { name = "numpy", marker = "python_full_version < '3.14'" },
-    { name = "opencv-python-headless", marker = "python_full_version < '3.14'" },
-    { name = "pydantic", marker = "python_full_version < '3.14'" },
-    { name = "pydantic-settings", marker = "python_full_version < '3.14'" },
-    { name = "pyyaml", marker = "python_full_version < '3.14'" },
-    { name = "soundfile", marker = "python_full_version < '3.14'" },
+    { name = "av" },
+    { name = "loguru" },
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "soundfile" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/f4/9faa8a78e8968f4404e5e47a2852d7a97313a667424a8e6f8bff16a28899/bithuman-2.7.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b399a37e187c17a8874e0eeb8e7e7a0907a4155537fac08185dabdb62491a7aa", size = 27205973, upload-time = "2026-07-17T00:14:45.72Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/a5/40bdd753427b1da0fedda69b49c1748ef015cb696f5589e00f1c1583fe62/bithuman-2.7.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:c9b48614a2fc4d41e746866d8015cbe4c938f3015fba350b4ec871e68fd65167", size = 16999376, upload-time = "2026-07-17T00:14:12.829Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/fd/5f6691083f2a1fa04ce0aabf246affce9d8f583cd15e933bb7bfd8b24811/bithuman-2.7.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e1db36bf327c5290f492fa7c44f6cc8012d20f0e681360a557b2c2b525b5628d", size = 18158588, upload-time = "2026-07-17T00:14:08.381Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/7c/92a39e19be2012c87a5f4a2a2795204acb3aeb7494a9c57ca47b92405ab3/bithuman-2.7.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:32d746e790c3cd59877b9f2b566168c0954fde5ac29bf7ed9e414d131ae25584", size = 27206062, upload-time = "2026-07-17T00:15:17.352Z" },
-    { url = "https://files.pythonhosted.org/packages/29/ba/67a984b1568d43cdcd1d24061c50715d68319c5a69716074811709f412e3/bithuman-2.7.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:0ace42a748c99fdd8764bfbaf39c58bced02d1e8cc4a549edf39a846a3f44685", size = 16999419, upload-time = "2026-07-17T00:14:27.629Z" },
-    { url = "https://files.pythonhosted.org/packages/74/de/7dcd1c98b229898eee416d15a7ec1e0c43e90143a6cb8d8b12aac504fb8c/bithuman-2.7.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2bce74db0daf656cc13d22395370b503581eee969a77aca4823ebab0eed10076", size = 18158601, upload-time = "2026-07-17T00:13:50.538Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/14/1bf01c706b1fd371feba3bcb05443ac6057ae32372e6599a265e30fb4534/bithuman-2.9.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:e467ddb3b233a1a2d9ecac82c4c8536260a88482e7739698eb908afacc301b65", size = 27264874, upload-time = "2026-08-02T15:11:25.697Z" },
+    { url = "https://files.pythonhosted.org/packages/74/68/133bdb25afc22777cdc8261cc228a0653f0193c1eea4179a4d14a9086509/bithuman-2.9.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:0ce78d094dd8e7f5b8b7ae7bba6bbb22016f9d4527e8b22cdc352d0a9493cc1d", size = 20021684, upload-time = "2026-08-02T15:16:37.517Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/0d/17059397e3f6c3cbe904ef36ab72ead8023d4d0ead9cd9b506a60c121e63/bithuman-2.9.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:415fcebf5ef742671a115c361b044b6dd688c21bb74bdaad55e235db346cd004", size = 21303102, upload-time = "2026-08-02T15:19:38.163Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/b4/53fb0031555e22137ac61031ccf142ad50be4cfa304496572ddcdbd46a8b/bithuman-2.9.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:a4f95745d95af8081c85ab08c71ef50433dabd617b79533ec3e12753bfde41f6", size = 27264991, upload-time = "2026-08-02T15:10:29.955Z" },
+    { url = "https://files.pythonhosted.org/packages/34/ab/1ae1e433d3bac812285c9ff91ecd447dc3e4819ebcecbf61f679770a3211/bithuman-2.9.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:fad0ed29d1b29ca74521a53a71909a2622490164f91f57b70ea7ff18ad51378e", size = 20021722, upload-time = "2026-08-02T15:16:39.755Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/18/7c681043db160fbc25f74f0492f3ed4b9893e4a1cf7e3801a88641260bcc/bithuman-2.9.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:b82ed1b0d3ac901e5ca82a9a3575ff7f52253a3e4af92a2459ef4e3b6205cc7b", size = 21303228, upload-time = "2026-08-02T15:19:40.247Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/02/013058852966e004a854f51fe15c9225e312d61d9a82dce9b5f490368914/bithuman-2.9.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:3ce21dd3e2e2ffc98dd7dcae69d67a274ac5150da9b8d32ab741af0ff3d92a04", size = 27264903, upload-time = "2026-08-02T15:10:36.165Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/16/a366605044b5e937c4d4b89d12c11aacb56481d496090acedc7635f6347b/bithuman-2.9.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:ebf74ce5abc8bc287cf54e0721c08072bbe688bc63f3f360fb159b17f387b601", size = 20022106, upload-time = "2026-08-02T15:16:41.894Z" },
+    { url = "https://files.pythonhosted.org/packages/14/90/dec13070970669ae57799e4c0dce80a0bd22178c01592ef9886bf75a5795/bithuman-2.9.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:50c34dc5760bcb12121583da1fcc56c69111b841e06d6fe3bf3bf3fedace40d3", size = 21303723, upload-time = "2026-08-02T15:19:42.288Z" },
 ]
 
 [[package]]
@@ -2733,13 +2734,13 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-bithuman"
 source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
-    { name = "bithuman", marker = "python_full_version < '3.14'" },
+    { name = "bithuman" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", marker = "python_full_version >= '3.11' and python_full_version < '3.14'", specifier = ">=0.5.25,<3" },
+    { name = "bithuman", specifier = ">=0.5.25,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
 
@@ -3638,8 +3639,8 @@ name = "loguru"
 version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
-    { name = "win32-setctime", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
@@ -4139,15 +4140,6 @@ wheels = [
 ]
 
 [[package]]
-name = "networkx"
-version = "3.6.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
-]
-
-[[package]]
 name = "nltk"
 version = "3.10.3"
 source = { registry = "https://pypi.org/simple" }
@@ -4299,7 +4291,7 @@ name = "opencv-python-headless"
 version = "5.0.0.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.14'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1d/99/76b7c80252aa83c1af16393454aafd125a0287101afe8deb0a6821af0e30/opencv_python_headless-5.0.0.93.tar.gz", hash = "sha256:b82f9831daab90b725c7c1ee1b36cb5732c367096ac76d119e64e14eb70d5f3c", size = 81817738, upload-time = "2026-07-02T07:01:06.039Z" }
 wheels = [
@@ -5796,9 +5788,9 @@ name = "soundfile"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "python_full_version < '3.14'" },
-    { name = "numpy", marker = "python_full_version < '3.14'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.14'" },
+    { name = "cffi" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/db/949331952a6fb1c5b12e9de80fd08747966c2039d1a61db4764fbd3981c2/soundfile-0.14.0.tar.gz", hash = "sha256:ba1c1a2d618bca5c406647c83b89f07cc8810fa506a50622a6993ba130c1de11", size = 47842, upload-time = "2026-06-06T08:58:47.869Z" }
 wheels = [
