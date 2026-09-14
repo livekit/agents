@@ -505,12 +505,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 )
             )
         except Exception:
-            human_agent_room.on("disconnected", self._on_human_agent_room_close)
-            if self._human_agent_participant_disconnected_cb is not None:
-                human_agent_room.on(
-                    "participant_disconnected", self._human_agent_participant_disconnected_cb
-                )
-
             # 1. Check if destination is already in the caller room (move succeeded remotely
             # despite RPC error/timeout)
             dest_in_caller = False
@@ -558,6 +552,12 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                             break
 
             if dest_in_staging:
+                # Destination is still in staging room; restore listeners and re-raise move error
+                human_agent_room.on("disconnected", self._on_human_agent_room_close)
+                if self._human_agent_participant_disconnected_cb is not None:
+                    human_agent_room.on(
+                        "participant_disconnected", self._human_agent_participant_disconnected_cb
+                    )
                 raise
 
             # 3. Destination is absent from both rooms.
