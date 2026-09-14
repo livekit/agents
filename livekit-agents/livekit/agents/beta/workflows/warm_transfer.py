@@ -252,6 +252,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 if dial_human_agent_task in done and not dial_human_agent_task.cancelled():
                     try:
                         dial_sess = dial_human_agent_task.result()
+                    except Exception:
+                        raise
+                    try:
                         dial_sess.shutdown()
                     except Exception:
                         pass
@@ -506,6 +509,34 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             if self._human_agent_participant_disconnected_cb is not None:
                 human_agent_room.on(
                     "participant_disconnected", self._human_agent_participant_disconnected_cb
+                )
+
+            dest_present = False
+            remote_participants = getattr(human_agent_room, "remote_participants", None)
+            if remote_participants is not None:
+                if self._human_agent_identity in remote_participants:
+                    dest_present = True
+                else:
+                    for p in remote_participants.values():
+                        if getattr(p, "identity", None) == self._human_agent_identity:
+                            dest_present = True
+                            break
+
+            if not dest_present:
+                with contextlib.suppress(asyncio.InvalidStateError):
+                    self._human_agent_failed_fut.set_result(None)
+                reason_name = (
+                    rtc.DisconnectReason.Name(self._destination_disconnect_reason)
+                    if self._destination_disconnect_reason is not None
+                    else "UNKNOWN_REASON"
+                )
+                self._set_result(
+                    WarmTransferError(
+                        f"destination left: {reason_name}",
+                        code=WarmTransferFailure.DESTINATION_LEFT,
+                        disconnect_reason=self._destination_disconnect_reason,
+                        call_status=self._destination_call_status,
+                    )
                 )
             raise
 

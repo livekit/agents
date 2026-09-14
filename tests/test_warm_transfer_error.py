@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -236,3 +236,83 @@ async def test_on_enter_shuts_down_child_session_when_failed_fut_done() -> None:
     # The session must be shut down and not leaked
     mock_child_sess.shutdown.assert_called_once()
     assert task._human_agent_sess is None
+
+
+@pytest.mark.asyncio
+async def test_on_enter_reraises_dial_error_when_failed_fut_also_done() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._hold_audio = None
+    task._caller_room = MagicMock()
+    task._set_io_enabled = MagicMock()
+    task._human_agent_sess = None
+    task._hold_audio_handle = None
+    task.done = MagicMock(return_value=False)
+    task.complete = MagicMock()
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.room = MagicMock()
+    sip_exc = RuntimeError("SIP status 503 Service Unavailable")
+
+    async def _failing_dial():
+        task._human_agent_failed_fut.set_result(None)
+        raise sip_exc
+
+    task._dial_human_agent = _failing_dial
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        await task.on_enter()
+
+    task.complete.assert_called_once()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.DIAL_FAILED
+    # Must preserve the real dial error as cause rather than generic RuntimeError
+    assert result.__cause__ is sip_exc
+
+
+@pytest.mark.asyncio
+async def test_merge_calls_missed_destination_departure() -> None:
+    task = object.__new__(WarmTransferTask)
+    task._caller_room = MagicMock()
+    task._caller_room.name = "caller-room"
+    task._human_agent_identity = "dest-agent"
+    task._destination_disconnect_reason = rtc.DisconnectReason.USER_UNAVAILABLE
+    task._destination_call_status = "busy"
+    task._human_agent_failed_fut = asyncio.get_running_loop().create_future()
+    task._human_agent_participant_disconnected_cb = MagicMock()
+    task._on_human_agent_room_close = MagicMock()
+    task._hold_audio_handle = None
+    task._set_io_enabled = MagicMock()
+    task.complete = MagicMock()
+    task.done = MagicMock(return_value=False)
+
+    mock_human_sess = MagicMock()
+    mock_human_room = MagicMock()
+    mock_human_room.name = "human-room"
+    # Remote participants does NOT contain dest-agent (already departed)
+    mock_human_room.remote_participants = {}
+    mock_human_sess.room_io.room = mock_human_room
+    task._human_agent_sess = mock_human_sess
+
+    mock_job_ctx = MagicMock()
+    mock_job_ctx.api.room.move_participant = AsyncMock(
+        side_effect=RuntimeError("participant not found")
+    )
+
+    with patch(
+        "livekit.agents.beta.workflows.warm_transfer.get_job_context", return_value=mock_job_ctx
+    ):
+        with pytest.raises(RuntimeError, match="participant not found"):
+            await task._merge_calls()
+
+    # Even though move_participant failed, task should complete with DESTINATION_LEFT
+    assert task._human_agent_failed_fut.done()
+    task.complete.assert_called_once()
+    result = task.complete.call_args[0][0]
+    assert isinstance(result, WarmTransferError)
+    assert result.code == WarmTransferFailure.DESTINATION_LEFT
+    assert result.disconnect_reason == rtc.DisconnectReason.USER_UNAVAILABLE
+    assert result.call_status == "busy"
