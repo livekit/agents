@@ -723,6 +723,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         # trace
         self._user_speaking_span: trace.Span | None = None
+        self._user_speaking_started_at_ns: int | None = None
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
@@ -1402,6 +1403,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if self._user_speaking_span:
             self._user_speaking_span.end()
             self._user_speaking_span = None
+            self._user_speaking_started_at_ns = None
 
         if self._forward_audio_atask is not None:
             await utils.aio.cancel_and_wait(self._forward_audio_atask)
@@ -2189,9 +2191,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
         if state == "speaking" and self._user_speaking_span is None:
-            self._user_speaking_span = tracer.start_span(
-                "user_speaking", start_time=last_speaking_time_ns
+            started_at_ns = (
+                last_speaking_time_ns if last_speaking_time_ns is not None else time.time_ns()
             )
+            self._user_speaking_span = tracer.start_span("user_speaking", start_time=started_at_ns)
+            self._user_speaking_started_at_ns = started_at_ns
 
             if self._room_io and self._room_io.linked_participant:
                 _set_participant_attributes(
@@ -2202,8 +2206,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=last_speaking_time_ns)
+            ended_at_ns = (
+                last_speaking_time_ns if last_speaking_time_ns is not None else time.time_ns()
+            )
+            if self._user_speaking_started_at_ns is not None:
+                # the end anchor is back-dated (a VAD silence window, a provider timestamp) and
+                # can predate the span's own start; never negative
+                ended_at_ns = max(ended_at_ns, self._user_speaking_started_at_ns)
+            self._user_speaking_span.end(end_time=ended_at_ns)
             self._user_speaking_span = None
+            self._user_speaking_started_at_ns = None
 
         if state == "listening" and self._agent_state == "listening":
             self._set_user_away_timer()

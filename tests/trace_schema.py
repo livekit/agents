@@ -8,8 +8,8 @@ names the one edge it cares about. This module writes the rules down once:
 * :data:`MAY_OUTLIVE_PARENT`: the few child/parent edges where the child is allowed to end
   after its parent, each with the reason. Everything else must sit inside its parent.
 * :func:`check_trace`: applies those rules plus the per-turn invariants (one ``agent_turn``
-  per speech, its own generation events matching ``lk.generation_count``) and returns the
-  violations.
+  per speech, its own generation events matching ``lk.generation_count``) and the one every
+  span owes on its own (it never ends before it starts), and returns the violations.
 
 It reads spans from an in-memory exporter (the fake-session tests) or from an OTLP JSON export
 downloaded from LiveKit Cloud, so the same rules check a unit test and a real run::
@@ -237,6 +237,12 @@ def check_trace(
         )
 
     for s in spans:
+        if s.end_ns < s.start_ns:
+            # exported as a negative duration, which viewers read as an unsigned 64-bit
+            # nanosecond count (~18446744073700 ms) that swamps the rest of the trace
+            violations.append(
+                f"{s.name}: ends {(s.start_ns - s.end_ns) / 1e6:.1f} ms before it starts"
+            )
         allowed = SPAN_PARENTS.get(s.name)
         if allowed is None:
             violations.append(f"{s.name}: unknown span, add it to tests.trace_schema.SPAN_PARENTS")

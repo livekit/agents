@@ -130,6 +130,16 @@ def test_unknown_span_and_missing_parent_are_reported() -> None:
     assert check_trace(spans, allow_missing_parents=True) == []
 
 
+def test_span_ending_before_it_starts_is_reported() -> None:
+    # livekit/agents#3396: a back-dated end anchor closed user_speaking before its own start.
+    # The negative duration reaches viewers as an unsigned nanosecond count.
+    spans = _sound_trace()
+    spans.append(_span("user_speaking", "sp", "u", 6.0, 5.5))
+    assert any(
+        v.startswith("user_speaking: ends 500.0 ms before it starts") for v in check_trace(spans)
+    )
+
+
 def test_bounds_are_checked_except_where_deliberately_allowed() -> None:
     spans = _sound_trace()
     spans.append(_span("tts_node", "t", "a", 11.0, 12.5))  # ends after agent_turn
