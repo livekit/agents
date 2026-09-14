@@ -17,14 +17,17 @@ from livekit import rtc
 
 from ... import utils
 from ...log import logger
+from ...types import USERDATA_AUDIO_RAW
 from .. import io
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
 
-# Both channels sit on one absolute timeline: the user's audio where it arrived, the agent's
+# All channels sit on one absolute timeline: the user's audio where it arrived, the agent's
 # where the device reports it played. Silence is whatever nothing was written over.
 
+CHANNELS = ("input", "output", "raw_input")
+CHANNEL_LAYOUT = "3.0"
 WRITE_INTERVAL = 2.5
 FFMPEG_STRICT_LEVEL = "experimental"
 
@@ -153,6 +156,12 @@ class _Track:
 
 
 class RecorderIO:
+    """Record user input, agent output, and raw user input as three audio channels.
+
+    The raw channel uses ``lk.audio.raw`` when present, or the input frame otherwise.
+    Each channel is independently converted to mono at the recording sample rate.
+    """
+
     def __init__(
         self,
         *,
@@ -207,8 +216,8 @@ class RecorderIO:
                 await utils.aio.cancel_and_wait(self._write_atask)
                 self._write_atask = None
 
-            self._end_run(channel=0)
-            self._end_run(channel=1)
+            for channel in range(len(CHANNELS)):
+                self._end_run(channel=channel)
             self._q.put_nowait(_Flush(until=time.time()))
             self._q.put_nowait(None)
             await asyncio.shield(self._close_fut)
@@ -220,6 +229,8 @@ class RecorderIO:
             # a contiguous stream, so what has arrived is exactly what is settled
             self._input_settled = started_at + frame.duration
             self._q.put_nowait(_Captured(channel=0, started_at=started_at, frame=frame))
+            raw = frame.userdata.get(USERDATA_AUDIO_RAW, frame)
+            self._q.put_nowait(_Captured(channel=2, started_at=started_at, frame=raw))
 
         self._in_record = RecorderAudioInput(
             recording_io=self, source=audio_input, on_frame=on_frame
@@ -282,14 +293,16 @@ class RecorderIO:
         stream: av.AudioStream = container.add_stream(  # type: ignore
             codec_name,
             rate=self._sample_rate,
-            layout="stereo",
+            layout=CHANNEL_LAYOUT,
         )
+        # These are independent signals, not a surround mix.
+        stream.codec_context.options["mapping_family"] = "255"
 
         # native ffmpeg opus encoder is experimental
         if codec_name == "opus":
             stream.codec_context.options["strict"] = FFMPEG_STRICT_LEVEL
 
-        tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in range(2)]
+        tracks = [_Track(sample_rate=self._sample_rate, t0=self._t0) for _ in CHANNELS]
         cursor = 0
 
         try:
@@ -320,7 +333,9 @@ class RecorderIO:
                     block = np.stack([t.take(cursor, end) for t in tracks])
                     cursor = end
 
-                    av_frame = av.AudioFrame.from_ndarray(block, format="fltp", layout="stereo")
+                    av_frame = av.AudioFrame.from_ndarray(
+                        block, format="fltp", layout=CHANNEL_LAYOUT
+                    )
                     av_frame.sample_rate = self._sample_rate
                     for packet in stream.encode(av_frame):
                         container.mux(packet)
@@ -330,7 +345,7 @@ class RecorderIO:
         except Exception:
             logger.exception("recorder encode thread failed; recording may be incomplete")
         finally:
-            for label, track in zip(("input", "output"), tracks, strict=True):
+            for label, track in zip(CHANNELS, tracks, strict=True):
                 if track.dropped_samples:
                     logger.warning(
                         "recorder dropped audio that reached it after its place in the timeline "

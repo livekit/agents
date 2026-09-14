@@ -34,6 +34,7 @@ import warnings
 from typing import Any, Literal, Protocol
 
 from livekit import rtc
+from livekit.agents.types import USERDATA_AUDIO_PROCESSING, USERDATA_AUDIO_RAW
 from livekit.plugins.krisp_internal import VivaMode
 
 from .auth import KrispLicenseAuthProvider, LiveKitCloudAuthProvider
@@ -249,6 +250,7 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
                 _FRAME_PARAMS_DEPRECATION_SHOWN = True
 
         provider = _resolve_auth_provider(auth_provider, model_path)
+        self._is_cloud = isinstance(provider, LiveKitCloudAuthProvider)
         self._inner = _build_inner(
             mode,
             provider,
@@ -260,7 +262,31 @@ class KrispVivaFilterFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
     # ----- FrameProcessor hooks: forward to the inner processor -------------
 
     def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
-        return self._inner._process(frame)
+        # The license backend pairs its raw samples with its buffered output.
+        if not self._is_cloud or not self.enabled or frame.num_channels != 1:
+            return self._inner._process(frame)
+
+        raw = rtc.AudioFrame(
+            data=bytearray(frame.data),
+            sample_rate=frame.sample_rate,
+            num_channels=frame.num_channels,
+            samples_per_channel=frame.samples_per_channel,
+        )
+        processed = self._inner._process(frame)
+        if processed is frame:
+            return frame
+
+        return rtc.AudioFrame(
+            data=processed.data,
+            sample_rate=processed.sample_rate,
+            num_channels=processed.num_channels,
+            samples_per_channel=processed.samples_per_channel,
+            userdata={
+                **processed.userdata,
+                USERDATA_AUDIO_RAW: raw,
+                USERDATA_AUDIO_PROCESSING: "isolated",
+            },
+        )
 
     def _on_credentials_updated(self, *, token: str, url: str) -> None:
         self._inner._on_credentials_updated(token=token, url=url)

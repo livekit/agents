@@ -85,6 +85,19 @@ USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 The key for the timed transcripts in the audio frame userdata.
 """
 
+USERDATA_AUDIO_RAW = "lk.audio.raw"
+"""Optional ``rtc.AudioFrame`` containing the audio immediately before processing.
+
+The raw frame owns its sample buffer and covers the same source interval as the
+processed frame. Consumers select their target frame before resampling.
+"""
+
+USERDATA_AUDIO_PROCESSING = "lk.audio.processing"
+"""Optional processing label: ``"denoised"`` for NC or ``"isolated"`` for VF.
+
+The processed PCM remains in the containing audio frame's data.
+"""
+
 USERDATA_TTS_STARTED_TIME = "lk.tts_started_time"
 """
 The key for the time (``time.perf_counter()``) at which the synthesized text was first
