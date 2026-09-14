@@ -136,6 +136,10 @@ class TestModelDisablesPrefill:
             "claude-fable-5",
             "claude-sonnet-5-1",
             "claude-sonnet-4-6-20260101",
+            "claude-sonnet-4-10",
+            "claude-sonnet-4-10-20260215",
+            "claude-sonnet-10",
+            "claude-sonnet-10-20260501",
         ],
     )
     def test_disables_prefill_newer_models(self, model: str) -> None:
