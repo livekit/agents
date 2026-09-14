@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from typing import Any
 
 import aiohttp
@@ -83,6 +84,15 @@ class AvatarSession(BaseAvatarSession):
         self._room: rtc.Room | None = None
         self._realtime_session_id: str | None = None
         self._end_session_task: asyncio.Task[None] | None = None
+        self._session_started_at: float | None = None
+        # Set to True once we intentionally initiate the end-of-session flow so
+        # that the participant_disconnected handler can tell the difference
+        # between an agent-initiated teardown and an unexpected server-side
+        # termination.
+        self._session_ending: bool = False
+        # Strong references to in-flight _log_session_status tasks so they
+        # cannot be garbage-collected before they emit their log lines.
+        self._pending_status_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def avatar_identity(self) -> str:
@@ -133,10 +143,14 @@ class AvatarSession(BaseAvatarSession):
 
         logger.debug("starting Runway avatar session")
         await self._create_session(livekit_url, livekit_token, room.name)
+        self._session_started_at = time.monotonic()
 
         @agent_session.on("close")
         def _on_agent_session_close(_: Any) -> None:
+            self._session_ending = True
             self._ensure_end_session_task()
+
+        room.on("participant_disconnected", self._on_participant_disconnected)
 
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
@@ -146,6 +160,52 @@ class AvatarSession(BaseAvatarSession):
                 sample_rate=SAMPLE_RATE,
             ),
         )
+
+    def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
+        """Handle avatar participant leaving the room unexpectedly.
+
+        When the avatar participant disconnects without the agent having
+        initiated the teardown, log a warning and fetch the Runway session
+        status so operators can see why the session ended early.
+        """
+        if participant.identity != self._avatar_participant_identity:
+            return
+        # If we initiated the teardown ourselves, the disconnect is expected.
+        if self._session_ending:
+            return
+        elapsed = (
+            time.monotonic() - self._session_started_at
+            if self._session_started_at is not None
+            else None
+        )
+        extra: dict[str, object] = {
+            "session_id": self._realtime_session_id,
+            "elapsed_seconds": round(elapsed, 1) if elapsed is not None else None,
+        }
+        if is_given(self._max_duration) and elapsed is not None:
+            remaining = self._max_duration - elapsed
+            extra["requested_max_duration"] = self._max_duration
+            extra["remaining_seconds"] = round(remaining, 1)
+            if remaining > 60:  # ended more than 60 s before the requested limit
+                logger.warning(
+                    "Runway avatar participant left unexpectedly before max_duration; "
+                    "the server may have applied a lower limit than requested "
+                    "(%.0fs elapsed, %.0fs requested). "
+                    "The AgentSession will continue without video.",
+                    elapsed,
+                    self._max_duration,
+                    extra=extra,
+                )
+                if self._realtime_session_id is not None:
+                    self._schedule_log_session_status(self._realtime_session_id)
+                return
+        logger.warning(
+            "Runway avatar participant left unexpectedly. "
+            "The AgentSession will continue without video.",
+            extra=extra,
+        )
+        if self._realtime_session_id is not None:
+            self._schedule_log_session_status(self._realtime_session_id)
 
     async def _create_session(self, livekit_url: str, livekit_token: str, room_name: str) -> None:
         body: dict[str, object] = {
@@ -210,6 +270,7 @@ class AvatarSession(BaseAvatarSession):
         if self._room is None:
             return None
 
+        self._session_ending = True
         self._end_session_task = asyncio.create_task(
             self._end_runway_realtime_session(self._room),
             name="runway_end_realtime_session",
@@ -240,6 +301,58 @@ class AvatarSession(BaseAvatarSession):
         # room.disconnect()): cancel the session via API so we don't keep
         # billing until maxDuration.
         await self._cancel_runway_realtime_session()
+
+    async def _log_session_status(self, session_id: str) -> None:
+        """Query the Runway session status endpoint and log the result.
+
+        Called after an unexpected avatar-participant disconnect so that the
+        Runway-reported ``duration`` and any ``failureCode`` are visible in
+        worker logs rather than being lost silently.
+        """
+        try:
+            async with self._ensure_http_session().get(
+                f"{self._api_url}/v1/realtime_sessions/{session_id}",
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "X-Runway-Version": API_VERSION,
+                },
+                timeout=aiohttp.ClientTimeout(total=self._conn_options.timeout),
+            ) as response:
+                if not response.ok:
+                    logger.debug(
+                        "could not retrieve Runway session status",
+                        extra={
+                            "session_id": session_id,
+                            "http_status": response.status,
+                        },
+                    )
+                    return
+                payload = await response.json()
+                if not isinstance(payload, dict):
+                    return
+                status = payload.get("status")
+                duration = payload.get("duration")
+                failure_code = payload.get("failureCode")
+                extra: dict[str, object] = {
+                    "session_id": session_id,
+                    "runway_status": status,
+                    "runway_duration_seconds": duration,
+                }
+                if failure_code is not None:
+                    extra["runway_failure_code"] = failure_code
+                logger.warning(
+                    "Runway session status after unexpected avatar disconnect: "
+                    "status=%s duration=%ss%s",
+                    status,
+                    duration,
+                    f" failureCode={failure_code}" if failure_code is not None else "",
+                    extra=extra,
+                )
+        except Exception as exc:
+            logger.debug(
+                "error fetching Runway session status",
+                extra={"session_id": session_id, "error": str(exc)},
+            )
 
     async def _cancel_runway_realtime_session(self) -> None:
         session_id = self._realtime_session_id
@@ -276,7 +389,37 @@ class AvatarSession(BaseAvatarSession):
                 extra={"session_id": session_id, "error": str(exc)},
             )
 
+    def _schedule_log_session_status(self, session_id: str) -> None:
+        """Create a tracked task for _log_session_status.
+
+        Keeps a strong reference in ``_pending_status_tasks`` so the task
+        cannot be garbage-collected before it emits its log line.  The
+        done-callback removes the reference when the task finishes.
+        """
+        task = asyncio.create_task(
+            self._log_session_status(session_id),
+            name=f"runway_log_session_status_{session_id}",
+        )
+        self._pending_status_tasks.add(task)
+        task.add_done_callback(self._pending_status_tasks.discard)
+
     async def aclose(self) -> None:
+        # Prevent the disconnect handler from spawning new status-lookup
+        # tasks during teardown (must happen before anything else).
+        self._session_ending = True
+
+        # Deregister the handler before super().aclose() clears self._room,
+        # so no late disconnect events can create new tasks after this point.
+        if self._room is not None:
+            self._room.off("participant_disconnected", self._on_participant_disconnected)
+
         if end_session_task := self._ensure_end_session_task():
             await asyncio.shield(end_session_task)
+
+        # Wait for any in-flight status lookups so their log lines are
+        # emitted before the session is torn down.
+        if self._pending_status_tasks:
+            await asyncio.gather(*self._pending_status_tasks, return_exceptions=True)
+            self._pending_status_tasks.clear()
+
         await super().aclose()
