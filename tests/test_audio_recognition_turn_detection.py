@@ -719,6 +719,7 @@ class TestVadMinSilenceRequirement:
         ar._vad = _FakeVad(min_silence_duration=0.1)
 
         detector = MagicMock(spec=_StreamingTurnDetector)
+        detector.min_silence_duration = 0.2
 
         with pytest.raises(ValueError, match="min_silence_duration"):
             ar._update_turn_detector(detector)
@@ -858,3 +859,58 @@ class TestVadMinSilenceRequirement:
 
         ar._update_turn_detector.assert_called_once_with(ar._turn_detector, stream=mock_stream)
         assert call_order == ["stt", "turn_detector", "vad", "interruption"]
+
+    def test_update_turn_detector_creates_stream_and_validates_stream_silence(self) -> None:
+        ar = _make_recognition_for_validation()
+        ar._tasks = set()
+        ar._vad = _FakeVad(min_silence_duration=0.1)
+
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        del detector.min_silence_duration
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.min_silence_duration = 0.08
+        detector.stream.return_value = mock_stream
+
+        # When stream requires 0.08s and VAD has 0.1s, fresh update creates stream and succeeds
+        ar._update_turn_detector(detector)
+        assert ar._turn_detector_stream is mock_stream
+        detector.stream.assert_called_once()
+
+    async def test_update_turn_detector_closes_created_stream_on_validation_failure(self) -> None:
+        ar = _make_recognition_for_validation()
+        ar._tasks = set()
+        ar._vad = _FakeVad(min_silence_duration=0.1)
+
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        del detector.min_silence_duration
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.min_silence_duration = 0.15
+        mock_stream.aclose = AsyncMock()
+        detector.stream.return_value = mock_stream
+
+        # When stream requires 0.15s and VAD has 0.1s, fresh update fails and closes created stream
+        with pytest.raises(ValueError, match="is too low for the TurnDetector"):
+            ar._update_turn_detector(detector)
+
+        assert ar._turn_detector_stream is None
+        detector.stream.assert_called_once()
+        mock_stream.aclose.assert_called_once()
+        if ar._tasks:
+            await asyncio.gather(*list(ar._tasks))
+
+    def test_update_turn_detector_preserves_handed_off_stream_on_validation_failure(self) -> None:
+        ar = _make_recognition_for_validation()
+        ar._tasks = set()
+        ar._vad = _FakeVad(min_silence_duration=0.1)
+
+        detector = MagicMock(spec=_StreamingTurnDetector)
+        mock_stream = MagicMock(spec=_StreamingTurnDetectorStream)
+        mock_stream.min_silence_duration = 0.15
+        mock_stream.aclose = AsyncMock()
+
+        # When handed-off stream fails validation, caller retains ownership (aclose not called)
+        with pytest.raises(ValueError, match="is too low for the TurnDetector"):
+            ar._update_turn_detector(detector, stream=mock_stream)
+
+        assert ar._turn_detector_stream is None
+        mock_stream.aclose.assert_not_called()

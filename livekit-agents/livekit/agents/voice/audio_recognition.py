@@ -1000,19 +1000,38 @@ class AudioRecognition:
         opening a fresh stream on *detector*; the live transport stream — and its
         per-session cloud->local fallback state — survives the handoff.
         """
-        self._check_vad_silence_requirement(detector, stream=stream)
+        if stream is not None or getattr(detector, "min_silence_duration", None) is not None:
+            self._check_vad_silence_requirement(detector, stream=stream)
+
+        new_stream = stream
+        created_stream = False
+        if new_stream is None and isinstance(detector, _StreamingTurnDetector):
+            new_stream = detector.stream()
+            created_stream = True
+
+        try:
+            self._check_vad_silence_requirement(detector, stream=new_stream)
+        except Exception:
+            if created_stream and new_stream is not None:
+                try:
+                    task = asyncio.create_task(new_stream.aclose())
+                    task.add_done_callback(lambda _: self._tasks.discard(task))
+                    self._tasks.add(task)
+                except RuntimeError:
+                    pass
+            raise
+
         self._turn_detector = detector
 
-        if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
+        if (old_stream := self._turn_detector_stream) is not None and old_stream is not new_stream:
             task = asyncio.create_task(old_stream.aclose())
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
-        if stream is None:
-            stream = detector.stream() if isinstance(detector, _StreamingTurnDetector) else None
-        if self._turn_detector_stream is not stream:
+
+        if self._turn_detector_stream is not new_stream:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
-        self._turn_detector_stream = stream
+        self._turn_detector_stream = new_stream
 
     def _detach_turn_detector(self) -> _StreamingTurnDetectorStream | None:
         """Detach the turn detector stream for handoff to another AudioRecognition.
