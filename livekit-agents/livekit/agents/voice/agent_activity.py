@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import contextvars
 import heapq
+import itertools
 import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
@@ -344,7 +345,11 @@ class AgentActivity(RecognitionHooks):
         self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
-        self._speech_q: list[tuple[int, float, SpeechHandle]] = []
+        # (-priority, seq, speech): `seq` is strictly increasing, so two entries never
+        # tie on the first two elements and the heap never falls through to comparing
+        # SpeechHandles (which are not orderable)
+        self._speech_q: list[tuple[int, int, SpeechHandle]] = []
+        self._speech_seq: Iterator[int] = itertools.count()
         self._user_silence_event: asyncio.Event = asyncio.Event()
         self._user_silence_event.set()
 
@@ -1983,15 +1988,9 @@ class AgentActivity(RecognitionHooks):
             speech.interrupt(force=True)
             return
 
-        while True:
-            try:
-                # negate the priority to make it a max heap
-                heapq.heappush(self._speech_q, (-priority, time.perf_counter_ns(), speech))
-                break
-            except TypeError:
-                # handle TypeError when identical timestamps cause speech comparison failure
-                # with perf_counter_ns(), collisions should be rare
-                pass
+        # negate the priority to make it a max heap; the sequence number breaks ties
+        # in scheduling order
+        heapq.heappush(self._speech_q, (-priority, next(self._speech_seq), speech))
 
         speech._mark_scheduled()
         self._wake_up_scheduling_task()
