@@ -23,8 +23,6 @@ Select the desired frame at agent input before downstream resampling or batching
 raw_frame = frame.userdata.get("lk.audio.raw", frame)
 ```
 
-Session recordings contain three channels, in order: user input, agent output, and
-raw user input. When raw metadata is absent, the third channel uses the input frame.
 Other `FrameProcessor` plugins can expose the same userdata keys. Legacy native
 `NoiseCancellationOptions` filters do not expose raw audio through this contract.
 

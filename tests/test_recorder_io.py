@@ -1,4 +1,4 @@
-"""RecorderIO places all channels on one absolute timeline.
+"""RecorderIO places both channels on one absolute timeline.
 
 The user's audio goes where it arrived, the agent's where the sink reported it played, and
 whatever nothing was written over stays silent.
@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 from livekit import rtc
-from livekit.agents.types import USERDATA_AUDIO_PROCESSING, USERDATA_AUDIO_RAW
 from livekit.agents.voice import io
 from livekit.agents.voice.recorder_io import recorder_io as recorder_module
 from livekit.agents.voice.recorder_io.recorder_io import (
@@ -481,10 +480,9 @@ class _Sink(io.AudioOutput):
 def _decode(path: Path) -> tuple[np.ndarray, int]:
     with av.open(str(path)) as container:
         rate = container.streams.audio[0].rate
-        channels = container.streams.audio[0].codec_context.channels
         blocks = [f.to_ndarray() for f in container.decode(audio=0)]
     pcm = np.concatenate(blocks, axis=1)
-    return (pcm.reshape(-1, channels).T if pcm.shape[0] == 1 else pcm), rate
+    return (pcm.reshape(-1, 2).T if pcm.shape[0] == 1 else pcm), rate
 
 
 def _energy_bins(channel: np.ndarray, rate: int, width: float = 0.25) -> list[bool]:
@@ -529,9 +527,7 @@ async def test_a_recording_matches_when_each_channel_happened(tmp_path: Path) ->
         await recorder.aclose()
 
     pcm, rate = _decode(path)
-    assert pcm.shape[0] == 3
     assert pcm.shape[1] / rate == pytest.approx(3.0, abs=0.1)
-    np.testing.assert_allclose(pcm[2], pcm[0], atol=0.001)
 
     # the microphone's first second is there, and its silence is silence
     assert _energy_bins(pcm[0], rate) == [
@@ -563,41 +559,6 @@ async def test_a_recording_matches_when_each_channel_happened(tmp_path: Path) ->
         True,
         True,
     ]
-
-
-@pytest.mark.parametrize("raw_rate", [16000, RATE])
-async def test_recording_has_separate_aligned_raw_input(tmp_path: Path, raw_rate: int) -> None:
-    now = 1000.0
-    path = tmp_path / "raw.ogg"
-    with patch(_CLOCK, side_effect=lambda: now):
-        source = _Source()
-        recorder = RecorderIO(agent_session=MagicMock(), sample_rate=RATE)
-        audio_in = recorder.record_input(source)
-        audio_out = recorder.record_output(_Sink())
-        await recorder.start(output_path=path)
-
-        for index in range(20):
-            # Raw speech occupies the first second; VF removes it from the input.
-            raw = _tone(0.1, sample_rate=raw_rate, level=8000 if index < 10 else 0)
-            frame = _tone(0.1)
-            frame.userdata.update({USERDATA_AUDIO_RAW: raw, USERDATA_AUDIO_PROCESSING: "isolated"})
-            source.frames.append(frame)
-            now += 0.1
-            assert await audio_in.__anext__() is frame
-
-        await audio_out.capture_frame(_tone(0.5, level=8000))
-        audio_out.flush()
-        audio_out.on_playback_started(created_at=1001.5)
-        audio_out.on_playback_finished(playback_position=0.5, interrupted=False)
-        await recorder.aclose()
-
-    pcm, rate = _decode(path)
-    assert pcm.shape[0] == 3
-    assert pcm.shape[1] / rate == pytest.approx(2.0, abs=0.01)
-    assert _energy_bins(pcm[0], rate) == [False] * 8
-    assert _energy_bins(pcm[1], rate) == [False] * 6 + [True] * 2
-    # Allow for resampler/Opus ringing immediately after the tone stops.
-    assert _energy_bins(pcm[2, round(0.01 * rate) :], rate) == [True] * 4 + [False] * 4
 
 
 async def test_the_writer_waits_on_the_agent_but_not_on_a_quiet_source() -> None:
