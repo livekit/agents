@@ -1770,6 +1770,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
+                        activity._new_turns_blocked = True
                         reuse_resources = await activity.drain(new_activity=self._next_activity)
                         await activity.aclose()
                     elif previous_activity == "pause":

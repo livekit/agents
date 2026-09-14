@@ -1229,7 +1229,6 @@ class AgentActivity(RecognitionHooks):
     ) -> _ReusableResources | None:
         # `drain` must only be called by AgentSession
         # AgentSession makes sure there is always one agent available to the users.
-        self._new_turns_blocked = True
         current_span = trace.get_current_span()
         current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, self._agent.label)
 

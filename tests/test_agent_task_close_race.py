@@ -41,6 +41,61 @@ class _ParentAgent(Agent):
 
 
 @pytest.mark.asyncio
+@pytest.mark.virtual_time
+async def test_cancelled_drain_allows_inline_task() -> None:
+    drain_started = asyncio.Event()
+    task_completed = asyncio.Event()
+
+    class InlineTask(AgentTask[str]):
+        def __init__(self) -> None:
+            super().__init__(instructions="Run an inline task")
+
+        async def on_enter(self) -> None:
+            self.complete("completed")
+
+    class Source(Agent):
+        @function_tool
+        async def start_task(self) -> str:
+            """Run an inline task."""
+            result = await InlineTask()
+            task_completed.set()
+            return result
+
+    session = AgentSession(
+        llm=FakeLLM(
+            fake_responses=[
+                FakeLLMResponse(
+                    input="start_task",
+                    content="",
+                    ttft=0,
+                    duration=0,
+                    tool_calls=[
+                        FunctionToolCall(name="start_task", arguments="{}", call_id="task")
+                    ],
+                )
+            ]
+        )
+    )
+
+    async def drain() -> None:
+        drain_started.set()
+        await session.drain()
+
+    async with session:
+        await session.start(Source(instructions="Source agent"))
+        assert session._activity is not None
+        async with session._activity._lock:
+            drain_task = asyncio.create_task(drain())
+            await asyncio.wait_for(drain_started.wait(), timeout=5.0)
+            drain_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await drain_task
+
+        await asyncio.wait_for(session.run(user_input="start_task"), timeout=5.0)
+        await asyncio.wait_for(task_completed.wait(), timeout=5.0)
+
+
+@pytest.mark.asyncio
 async def test_aclose_while_on_enter_awaits_agent_task() -> None:
     """Closing the session while on_enter awaits an AgentTask must not deadlock:
     drain() waits for the on_enter task, which waits for the activity handoff,
@@ -58,7 +113,14 @@ async def test_aclose_while_on_enter_awaits_agent_task() -> None:
 @pytest.mark.asyncio
 @pytest.mark.virtual_time
 @pytest.mark.parametrize(
-    "phase", ["handoff_requested", "on_exit", "scheduling_paused", "tool_starts_during_drain"]
+    "phase",
+    [
+        "handoff_requested",
+        "direct_handoff",
+        "on_exit",
+        "scheduling_paused",
+        "tool_starts_during_drain",
+    ],
 )
 async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
     tool_started = asyncio.Event()
@@ -71,6 +133,7 @@ async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
     switch_started = asyncio.Event()
     release_switch = asyncio.Event()
     tool_task: asyncio.Task | None = None
+    handoff_task: asyncio.Task | None = None
     task_error: ToolError | None = None
 
     async def wait_until(predicate: Callable[[], bool]) -> None:
@@ -94,7 +157,7 @@ async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
     class Source(Agent):
         async def on_exit(self) -> None:
             exit_started.set()
-            if phase == "on_exit":
+            if phase in ("on_exit", "direct_handoff"):
                 await release_exit.wait()
 
         @function_tool
@@ -166,8 +229,11 @@ async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
                 await asyncio.wait_for(task_attempted.wait(), timeout=5.0)
                 assert not exit_started.is_set()
                 assert task_error is not None
-        elif phase in ("on_exit", "scheduling_paused"):
-            session.generate_reply(user_input="switch")
+        elif phase in ("direct_handoff", "on_exit", "scheduling_paused"):
+            if phase == "direct_handoff":
+                handoff_task = asyncio.create_task(session._update_activity(target))
+            else:
+                session.generate_reply(user_input="switch")
             await asyncio.wait_for(exit_started.wait(), timeout=5.0)
             if phase == "scheduling_paused":
                 await asyncio.wait_for(wait_until(lambda: activity.scheduling_paused), timeout=5.0)
@@ -201,4 +267,6 @@ async def test_handoff_while_tool_awaits_agent_task(phase: str) -> None:
             await asyncio.gather(tool_task, return_exceptions=True)
         if session._update_activity_atask is not None:
             await asyncio.wait_for(session._update_activity_atask, timeout=5.0)
+        if handoff_task is not None:
+            await asyncio.wait_for(handoff_task, timeout=5.0)
         await asyncio.wait_for(session.aclose(), timeout=5.0)
