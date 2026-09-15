@@ -409,11 +409,14 @@ async def test_provider_content_is_only_logged_under_pii_fields(
                 },
             )
         )
-        for status in ("incomplete", private):
-            event = _function_call_done(private, name=private)
+        # call ids, function names and statuses are identifiers and are logged plain; the
+        # arguments are the customer's content
+        for status in ("incomplete", "in_progress"):
+            event = _function_call_done("call_1")
             event["item"]["status"] = status
+            event["item"]["arguments"] = private
             session._handle_event(_response_event("d1", event))
-        event = _function_call_done(private, name=private)
+        event = _function_call_done("call_1")
         del event["item"]["arguments"]
         session._handle_event(_response_event("d1", event))
         session._handle_event({"type": "error", "error": {"message": private}})
@@ -952,7 +955,7 @@ async def test_a_backend_function_call_is_answered_and_the_response_continued(
         session._handle_event(_response_event("item_d1", _completed("resp_1")))
         await asyncio.sleep(0.05)
         assert ws.sent[-1]["type"] == "response.create"
-        assert not session._delegated_responses and not session._fnc_call_to_delegation
+        assert not session._backend_running_responses and not session._backend_open_calls
     finally:
         await session.aclose()
         await model.aclose()
@@ -996,6 +999,95 @@ async def test_a_response_continues_only_once_every_call_has_its_answer(
         await model.aclose()
 
 
+async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backend is one chain: a fast response cannot continue while a slow one's call is open."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_slow")))
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        # the same delegation asks again before the first call is answered: the first call
+        # stays in view
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_2"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_fast")))
+        session._handle_event(_response_event("item_d1", _completed("resp_2")))
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_fast", output="fast", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_slow", output="slow", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == [
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert not session._backend_running_responses and not session._backend_open_calls
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_failed_response_releases_the_continuation_it_held_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that fails no longer blocks an answered one, and its own calls are discarded."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event("item_d1", {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
+        session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        session._handle_event(
+            _response_event("item_d2", {"type": "response.created", "response": {"id": "resp_2"}})
+        )
+        session._handle_event(_response_event("item_d2", _function_call_done("call_2")))
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_1", output="one", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create"]
+
+        session._handle_event(
+            _response_event("item_d2", {"type": "response.failed", "response": {"id": "resp_2"}})
+        )
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in ws.sent[1:]] == ["response.item.create", "response.create"]
+
+        # the service refuses an output for a discarded call, so it is context for the voice model
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_2", output="two", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        assert ws.sent[-1]["type"] == "session.thinking.append"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize("status", ["missing", None, "incomplete", "in_progress", "failed"])
 async def test_noncompleted_backend_calls_are_not_dispatched(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: str | None
@@ -1018,7 +1110,7 @@ async def test_noncompleted_backend_calls_are_not_dispatched(
             event["item"]["status"] = status
         session._handle_event(_response_event("item_d1", event))
         assert not calls
-        assert not session._delegated_responses["item_d1"].call_ids
+        assert not session._backend_running_responses["item_d1"]
         assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
 
         # A later completed event for the same call must still be dispatched.
@@ -1047,7 +1139,7 @@ async def test_backend_calls_with_missing_fields_are_not_dispatched(
         del event["item"][missing_field]
         session._handle_event(_response_event("item_d1", event))
         assert not calls
-        assert not session._delegated_responses["item_d1"].call_ids
+        assert not session._backend_running_responses["item_d1"]
         assert not [item for item in session._history.items if isinstance(item, llm.FunctionCall)]
 
         session._handle_event(_response_event("item_d1", _function_call_done("call_1")))
