@@ -730,20 +730,27 @@ class GPTLiveSession(
             item = event.item
             if item is None or item.type != "function_call":
                 return
+            if item.status != "completed":
+                logger.debug(
+                    "gpt-live ignoring incomplete function call",
+                    extra={"function": item.name, "status": item.status},
+                )
+                return
             if not item.call_id or not item.name or item.arguments is None:
                 logger.warning(
                     "gpt-live dropping function call with missing fields",
-                    extra={"call_id": item.call_id, "name": item.name},
+                    extra={"call_id": item.call_id, "function": item.name},
                 )
                 return
-            if (calls := self._backend_running_responses.get(d_id)) is not None:
-                calls.add(item.call_id)
-            else:
+            if (calls := self._backend_running_responses.get(d_id)) is None:
                 logger.warning(
                     "gpt-live function call outside a known response",
-                    extra={"call_id": item.call_id, "delegation_id": d_id},
+                    extra={"call_id": item.call_id, "function": item.name, "delegation_id": d_id},
                 )
-                self._backend_open_calls.add(item.call_id)
+                calls = self._backend_open_calls
+            if item.call_id in calls:
+                return
+            calls.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
