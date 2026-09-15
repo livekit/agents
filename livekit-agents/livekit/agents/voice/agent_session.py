@@ -61,10 +61,11 @@ from ..types import (
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
+from ._reply_guard import ReplyGuard
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
-from .amd import AMD
+from .amd import AMD, AMDPredictionEvent
 from .events import (
     AgentEvent,
     AgentState,
@@ -78,6 +79,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
+    UserTurnCommittedEvent,
 )
 from .ivr import IVRActivity
 from .keyterm_detection import (
@@ -693,6 +695,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
+        self._user_turn_id = 0
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
 
@@ -743,11 +746,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
         self._amd: AMD | None = None
+        self._reply_guard: ReplyGuard | None = None
 
     @property
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
         return self._amd
+
+    def _set_amd(self, amd: AMD | None) -> None:
+        self._amd = amd
+        self._reply_guard = amd
+
+    @property
+    def _input_audio_allowed(self) -> bool:
+        return self._amd is None or not self._amd.enabled or self._amd.started
+
+    def _on_input_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._amd is not None:
+            self._amd.push_audio(frame)
+
+    def _on_user_turn_completed(self, _: asyncio.Task[None]) -> None:
+        if self._amd is not None:
+            self._amd._reschedule_timer()
+
+    def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
+        if self._session_host is not None:
+            self._session_host._on_amd_prediction(event)
 
     def on(self, event: EventTypes, callback: Callable | None = None) -> Callable:
         if event == "metrics_collected" and callback is not None:
@@ -1349,7 +1373,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         if self._amd is not None:
             await self._amd.aclose()
-            self._amd = None
+            self._set_amd(None)
 
         activity = self._activity
         while activity and isinstance(agent_task := activity.agent, AgentTask):
@@ -2231,9 +2255,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """End user speaking state when audio is disabled by default."""
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
-                self._activity.on_end_of_speech(None)
+                self._activity.on_end_of_speech(None, speech_end_time=time.time())
             else:
                 self._update_user_state("listening")
+
+    def _user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> int:
+        self._user_turn_id += 1
+        turn_id = self._user_turn_id
+        self.emit(
+            "user_turn_committed",
+            UserTurnCommittedEvent(
+                turn_id=turn_id, transcript=transcript, end_of_turn_delay=end_of_turn_delay
+            ),
+        )
+        return turn_id
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if ev.transcript:
