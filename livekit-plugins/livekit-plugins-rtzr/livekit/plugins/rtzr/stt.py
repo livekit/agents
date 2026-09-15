@@ -45,6 +45,7 @@ from .rtzrapi import DEFAULT_SAMPLE_RATE, RTZRConnectionError, RTZROpenAPIClient
 
 _STREAMING_CHUNK_MS = 200
 _IDLE_TIMEOUT_SECONDS = 25.0
+_MAX_REPLAY_DURATION_SECONDS = 60.0
 _RECV_COMPLETION_TIMEOUT = 5.0
 _IDLE_CHECK_INTERVAL = 1.0
 _BYTES_PER_SAMPLE = 2
@@ -192,6 +193,8 @@ class SpeechStream(stt.RecognizeStream):
         self._segment_audio: list[bytes] = []
         self._sent_audio_chunks = 0
         self._counted_audio_chunks = 0
+        self._segment_has_audio = False
+        self._segment_replayable = True
         self._pending_eos = False
         self._pending_usage_audio_duration = 0.0
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
@@ -282,11 +285,11 @@ class SpeechStream(stt.RecognizeStream):
                     self._failure.cancel()
         except APIError as error:
             # Retrying an exhausted input cannot recover a missing final response.
-            if (
+            if not self._segment_replayable or (
                 self._input_ch.closed
                 and self._input_ch.empty()
                 and self._pending_input is None
-                and not self._segment_audio
+                and not self._segment_has_audio
                 and not self._audio_chunker.buffered_duration
             ):
                 error.retryable = False
@@ -332,17 +335,37 @@ class SpeechStream(stt.RecognizeStream):
                 self._record_sent_audio(audio)
                 self._counted_audio_chunks += 1
             self._sent_audio_chunks += 1
+        if not self._segment_replayable:
+            self._discard_sent_audio()
+
+    def _queue_segment_audio(self, frames: list[rtc.AudioFrame]) -> None:
+        for frame in frames:
+            self._segment_audio.append(frame.data.tobytes())
+            self._segment_has_audio = True
+        max_replay_bytes = int(
+            self._opts.sample_rate * _BYTES_PER_SAMPLE * _MAX_REPLAY_DURATION_SECONDS
+        )
+        if self._segment_replayable and sum(map(len, self._segment_audio)) > max_replay_bytes:
+            self._segment_replayable = False
+            self._discard_sent_audio()
+
+    def _discard_sent_audio(self) -> None:
+        del self._segment_audio[: self._sent_audio_chunks]
+        self._counted_audio_chunks -= self._sent_audio_chunks
+        self._sent_audio_chunks = 0
 
     def _complete_segment(self) -> None:
         self._segment_audio.clear()
         self._sent_audio_chunks = 0
         self._counted_audio_chunks = 0
+        self._segment_has_audio = False
+        self._segment_replayable = True
 
     async def _finalize_segment(self) -> None:
-        self._segment_audio.extend(frame.data.tobytes() for frame in self._audio_chunker.flush())
+        self._queue_segment_audio(self._audio_chunker.flush())
         self._audio_chunker.clear()
         await self._send_pending_audio()
-        if not self._segment_audio:
+        if not self._segment_has_audio:
             return
         assert self._ws is not None
         try:
@@ -360,9 +383,7 @@ class SpeechStream(stt.RecognizeStream):
                 return
             if graceful:
                 self._pending_eos = True
-                self._segment_audio.extend(
-                    frame.data.tobytes() for frame in self._audio_chunker.flush()
-                )
+                self._queue_segment_audio(self._audio_chunker.flush())
                 self._audio_chunker.clear()
                 await self._send_pending_audio()
                 try:
@@ -447,10 +468,7 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, rtc.AudioFrame):
                     # Keep the first frame across connection retries before consuming PCM.
                     await self._ensure_connected()
-                    self._segment_audio.extend(
-                        frame.data.tobytes()
-                        for frame in self._audio_chunker.write(data.data.tobytes())
-                    )
+                    self._queue_segment_audio(self._audio_chunker.write(data.data.tobytes()))
                     self._pending_input = None
                     self._last_audio_at = time.monotonic()
                 else:

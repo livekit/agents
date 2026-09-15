@@ -200,6 +200,18 @@ async def test_unexpected_disconnect_retries_and_receivers_are_closed(monkeypatc
         )
 
 
+async def test_replay_buffer_is_bounded_without_truncated_retry(monkeypatch):
+    monkeypatch.setattr(rtzr_stt, "_MAX_REPLAY_DURATION_SECONDS", 0.02)
+    async with _stream(monkeypatch, max_retry=1) as (_, stream, sockets):
+        stream.push_frame(_frame(1, samples=481))
+        await _wait_until(lambda: sockets and not stream._segment_audio)
+        assert not stream._segment_replayable
+        await sockets[0]._messages.put(SimpleNamespace(type=aiohttp.WSMsgType.CLOSE))
+        with pytest.raises(APIConnectionError):
+            await asyncio.wait_for(stream._task, 2)
+        assert len(sockets) == 1
+
+
 async def test_idle_drain_serializes_new_audio(monkeypatch):
     monkeypatch.setattr(rtzr_stt, "_IDLE_CHECK_INTERVAL", 0.001)
     async with _stream(monkeypatch) as (_, stream, sockets):

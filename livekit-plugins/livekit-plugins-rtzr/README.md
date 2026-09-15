@@ -98,7 +98,8 @@ For external VAD integration, see the [RTZR voice agent guide](https://developer
 - A connection with no audio input for 25 seconds is closed and reopened lazily on
   new audio. Finalize itself keeps the connection open.
 - Audio chunks use the shared progressive buffer (20 ms initially, growing to 200 ms).
-- Connection retries replay the complete unfinalized utterance and its boundary;
-  final-response failures after input exhaustion are reported as terminal errors.
+- Connection retries replay up to 60 seconds of an unfinalized utterance and its boundary.
+  A later connection failure is terminal rather than replaying a truncated longer utterance;
+  final-response failures after input exhaustion are also terminal.
 - Recognition usage counts successfully sent PCM once. Failed connections are
   reported through LiveKit's error/retry path without double-counting replayed audio.
