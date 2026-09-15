@@ -20,8 +20,8 @@ from livekit.agents import AMD
 detector = AMD(
     session,
     participant_identity=callee_identity,
-    # llm=classification_llm,  # Optional classification and menu model.
-    # stt=fast_stt,            # Optional second STT for AMD only.
+    # llm=None,  # Use the active Agent's LLM instead of auto-selection.
+    # stt=None,  # Use only the session transcript instead of auto-selection.
 )
 
 @detector.on("amd_prediction")
@@ -44,14 +44,22 @@ early media. This does not cause the SIP provider to supply early media.
 
 ## Model selection and transcript race
 
-- `llm` accepts an LLM instance or a model string. If omitted, AMD uses the
-  active Agent's pipeline LLM. It does not auto-select a fast model.
-- `stt` accepts `str | STT | None | NotGiven`. If omitted or `None`, AMD uses
-  only the session transcript. A model instance or string enables a second STT.
+- `llm` accepts `str | LLM | None | NotGiven`. If omitted, AMD auto-selects
+  `google/gemini-3.1-flash-lite`. Pass `None` to use the active Agent's pipeline
+  LLM. A model instance or string selects a different classification and menu model.
+- `stt` accepts `str | STT | None | NotGiven`. If omitted, AMD auto-selects
+  `cartesia/ink-whisper`. Pass `None` to use only the session transcript.
+  A model instance or string selects a second STT for AMD only.
 - Model strings use LiveKit Inference. Provider plugins can use the caller's
   own provider credentials.
 - AMD closes models it creates from strings. It does not close supplied model
   instances. It closes its requests and STT streams in either case.
+
+Auto-selection requires a LiveKit Cloud `LIVEKIT_URL` and an API key and secret.
+AMD checks `LIVEKIT_INFERENCE_API_KEY` and `LIVEKIT_INFERENCE_API_SECRET`, with
+`LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` as fallbacks. Without these settings,
+omitted values inherit the Agent's LLM and session transcript. Explicit `None`
+always inherits. AMD resolves `llm` and `stt` independently.
 
 The first non-empty final transcript wins each AMD turn. Empty and interim
 results cannot win. AMD collects further final segments from the winning source

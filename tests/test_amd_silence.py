@@ -25,7 +25,7 @@ def detector_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_machine_silence_default_and_validation() -> None:
-    assert AMD(AgentSession())._machine_silence_threshold == 1.5
+    assert AMD(AgentSession(), llm=None, stt=None)._machine_silence_threshold == 1.5
     with pytest.raises(ValueError, match="machine_silence_threshold"):
         AMD(AgentSession(), machine_silence_threshold=-1)
 

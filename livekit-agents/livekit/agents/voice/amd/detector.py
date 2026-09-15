@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from collections import deque
@@ -16,6 +17,7 @@ from ... import inference, llm, stt
 from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import EventEmitter, aio, is_given
+from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _inference
 from ._transcription import TurnTranscript
@@ -86,11 +88,15 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     Args:
         session: Started session whose participant audio and client-side EOT to use.
-        llm: Classification and menu model. Defaults to the current Agent's LLM.
-            A string selects a LiveKit Inference model. Supplied models stay open
-            when AMD completes.
-        stt: Optional second STT model. A string selects a LiveKit Inference model.
-            None or NOT_GIVEN uses only the session transcript.
+        llm: Classification and menu model. When omitted, use
+            ``google/gemini-3.1-flash-lite`` if LiveKit Cloud credentials are
+            available; otherwise use the current Agent's LLM. Pass None to
+            always use the current Agent's LLM. A string selects a LiveKit
+            Inference model. Supplied models stay open when AMD completes.
+        stt: Optional second STT model. When omitted, use ``cartesia/ink-whisper``
+            if LiveKit Cloud credentials are available; otherwise use only the
+            session transcript. Pass None to always use only the session
+            transcript. A string selects a LiveKit Inference model.
         participant_identity: Select the participant before placing an outbound call.
         wait_until_answered: Discard pre-answer audio from AMD and AgentSession
             when True. When False, listen to subscribed SIP early media.
@@ -111,11 +117,14 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         max_uncertain_turns: Consecutive uncertain predictions before completion.
     """
 
+    _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
+    _DEFAULT_STT_MODEL: str = "cartesia/ink-whisper"
+
     def __init__(
         self,
         session: AgentSession,
         *,
-        llm: NotGivenOr[llm.LLM | str] = NOT_GIVEN,
+        llm: NotGivenOr[llm.LLM | str | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | str | None] = NOT_GIVEN,
         participant_identity: NotGivenOr[str] = NOT_GIVEN,
         wait_until_answered: bool = True,
@@ -137,6 +146,19 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("AMD timeouts and max_uncertain_turns must be positive")
         if machine_silence_threshold < 0:
             raise ValueError("machine_silence_threshold must be nonnegative")
+        if not is_given(llm) or not is_given(stt):
+            api_key = os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")
+            api_secret = os.getenv("LIVEKIT_INFERENCE_API_SECRET") or os.getenv(
+                "LIVEKIT_API_SECRET"
+            )
+            auto_select = (
+                is_cloud(os.getenv("LIVEKIT_URL", "")) and bool(api_key) and bool(api_secret)
+            )
+            if not is_given(llm):
+                llm = self._DEFAULT_LLM_MODEL if auto_select else None
+            if not is_given(stt):
+                stt = self._DEFAULT_STT_MODEL if auto_select else None
+
         self._session = session
         self._owns_llm = isinstance(llm, str)
         self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
@@ -226,7 +248,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise RuntimeError("AMD is already active")
         if self._session.options.ivr_detection or self._session._ivr_activity is not None:
             raise ValueError("Disable session-level ivr_detection when using AMD")
-        if not is_given(self._llm):
+        if self._llm is None:
             if not isinstance(activity.llm, llm.LLM):
                 raise ValueError("AMD requires an LLM for classification")
             self._llm = activity.llm
@@ -331,7 +353,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _new_transcript(self) -> TurnTranscript:
         return TurnTranscript(
-            self._stt if is_given(self._stt) else None,
+            self._stt,
             self._session.conn_options.stt_conn_options,
             self._on_transcript_update,
         )
@@ -509,7 +531,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 self._fallback(previous, "superseded")
 
     async def _classify(self, turn: _Turn, chat_ctx: llm.ChatContext) -> None:
-        assert is_given(self._llm)
+        assert self._llm is not None
         started = time.monotonic()
         try:
             result = await asyncio.wait_for(_inference.classify(self._llm, chat_ctx), 30)
@@ -675,7 +697,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._flush_reused_turns()
 
     async def _extract_menu(self, turn: _Turn) -> None:
-        assert is_given(self._llm)
+        assert self._llm is not None
         started = time.monotonic()
         try:
             menu = await asyncio.wait_for(_inference.extract_menu(self._llm, turn.transcript), 5)
@@ -861,9 +883,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if self._transcript is not None:
                 transcripts.append(self._transcript)
             close_tasks = [transcript.aclose() for transcript in transcripts]
-            if self._owns_stt and is_given(self._stt) and self._stt is not None:
+            if self._owns_stt and self._stt is not None:
                 close_tasks.append(self._stt.aclose())
-            if self._owns_llm and is_given(self._llm):
+            if self._owns_llm and self._llm is not None:
                 close_tasks.append(self._llm.aclose())
             for error in await asyncio.gather(*close_tasks, return_exceptions=True):
                 if isinstance(error, BaseException):

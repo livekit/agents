@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from livekit import rtc
-from livekit.agents import AMD, NOT_GIVEN, Agent, AgentSession, llm
+from livekit.agents import AMD, NOT_GIVEN, Agent, AgentSession, inference, llm
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.amd import AMDCategory, _inference
 
@@ -49,9 +49,168 @@ def push_audio(detector: AMD, stt: DrainingSTT) -> DrainingStream:
     return stt.streams[-1]
 
 
+@pytest.fixture
+def cloud_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_INFERENCE_API_KEY",
+        "LIVEKIT_INFERENCE_API_SECRET",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LIVEKIT_URL", "wss://test.livekit.cloud")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "test-key")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "test-secret")
+
+
+@pytest.fixture
+def model_factories(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
+    model = ClassifierLLM()
+    model.aclose = AsyncMock()
+    stt = DrainingSTT()
+    stt.aclose = AsyncMock()
+    llm_factory = Mock(return_value=model)
+    stt_factory = Mock(return_value=stt)
+    monkeypatch.setattr(inference.LLM, "from_model_string", llm_factory)
+    monkeypatch.setattr(inference.STT, "from_model_string", stt_factory)
+    return llm_factory, stt_factory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credentials", ["project", "inference", "mixed"])
+@pytest.mark.parametrize("finish", [False, True])
+async def test_default_models_are_auto_selected_and_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    cloud_credentials: None,
+    model_factories: tuple[Mock, Mock],
+    credentials: str,
+    finish: bool,
+) -> None:
+    if credentials != "project":
+        monkeypatch.delenv("LIVEKIT_API_KEY")
+        monkeypatch.setenv("LIVEKIT_INFERENCE_API_KEY", "test-key")
+    if credentials == "inference":
+        monkeypatch.delenv("LIVEKIT_API_SECRET")
+        monkeypatch.setenv("LIVEKIT_INFERENCE_API_SECRET", "test-secret")
+    llm_factory, stt_factory = model_factories
+    model, stt = llm_factory.return_value, stt_factory.return_value
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    try:
+        async with AMD(session) as detector:
+            await eventually(lambda: detector.started)
+            llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
+            stt_factory.assert_called_once_with("cartesia/ink-whisper")
+            assert detector._llm is model
+            assert detector._stt is stt
+            stream = push_audio(detector, stt)
+            if finish:
+                await commit(detector, session, model)
+                model.prediction(1, AMDCategory.HUMAN)
+                assert (await detector.execute()).category == AMDCategory.HUMAN
+        assert stream._task.done()
+        model.aclose.assert_awaited_once()
+        stt.aclose.assert_awaited_once()
+        assert session.amd is None
+        assert session._activity._authorization_allowed.is_set()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("missing", ["LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_URL"])
+def test_auto_selection_requires_cloud_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    cloud_credentials: None,
+    model_factories: tuple[Mock, Mock],
+    missing: str,
+) -> None:
+    monkeypatch.delenv(missing)
+    detector = AMD(AgentSession())
+    assert detector._llm is None
+    assert detector._stt is None
+    for factory in model_factories:
+        factory.assert_not_called()
+
+
+def test_auto_selection_does_not_use_cloud_models_for_a_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+    cloud_credentials: None,
+    model_factories: tuple[Mock, Mock],
+) -> None:
+    monkeypatch.setenv("LIVEKIT_URL", "ws://localhost:7880")
+    detector = AMD(AgentSession())
+    assert detector._llm is None
+    assert detector._stt is None
+    for factory in model_factories:
+        factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_none_always_inherits_the_active_agent_models(
+    cloud_credentials: None, model_factories: tuple[Mock, Mock]
+) -> None:
+    model = ClassifierLLM()
+    model.aclose = AsyncMock()
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment.", llm=model))
+    try:
+        async with AMD(session, llm=None, stt=None) as detector:
+            await eventually(lambda: detector.started)
+            assert detector._llm is model
+            assert detector._stt is None
+            assert detector._transcript._model is None
+            await commit(detector, session, model)
+            model.prediction(1, AMDCategory.HUMAN)
+            assert (await detector.execute()).category == AMDCategory.HUMAN
+        model.aclose.assert_not_awaited()
+        for factory in model_factories:
+            factory.assert_not_called()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize("inherited", ["llm", "stt"])
+def test_model_selection_is_independent_for_each_model(
+    cloud_credentials: None, model_factories: tuple[Mock, Mock], inherited: str
+) -> None:
+    detector = AMD(AgentSession(), **{inherited: None})
+    llm_factory, stt_factory = model_factories
+    if inherited == "llm":
+        llm_factory.assert_not_called()
+        stt_factory.assert_called_once_with("cartesia/ink-whisper")
+        assert detector._llm is None
+    else:
+        llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
+        stt_factory.assert_not_called()
+        assert detector._stt is None
+
+
+@pytest.mark.parametrize("as_strings", [False, True])
+def test_explicit_models_override_auto_selection(
+    cloud_credentials: None, model_factories: tuple[Mock, Mock], as_strings: bool
+) -> None:
+    llm_factory, stt_factory = model_factories
+    model, stt = llm_factory.return_value, stt_factory.return_value
+    detector = AMD(
+        AgentSession(),
+        llm="google/gemma-4-31b-it" if as_strings else model,
+        stt="cartesia/ink-2" if as_strings else stt,
+    )
+    assert detector._llm is model
+    assert detector._stt is stt
+    assert detector._owns_llm == as_strings
+    assert detector._owns_stt == as_strings
+    if as_strings:
+        llm_factory.assert_called_once_with("google/gemma-4-31b-it")
+        stt_factory.assert_called_once_with("cartesia/ink-2")
+    else:
+        llm_factory.assert_not_called()
+        stt_factory.assert_not_called()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("extra_stt", [None, NOT_GIVEN])
-async def test_default_uses_session_model_and_no_extra_stt_or_amd_credentials(
+async def test_default_falls_back_to_session_model_without_amd_credentials(
     monkeypatch: pytest.MonkeyPatch, extra_stt: Any
 ) -> None:
     for name in (
@@ -81,7 +240,7 @@ async def test_missing_llm_does_not_install_a_reply_guard() -> None:
     await session.start(Agent(instructions="Call about an appointment."))
     try:
         with pytest.raises(ValueError, match="requires an LLM"):
-            await AMD(session).__aenter__()
+            await AMD(session, llm=None, stt=None).__aenter__()
         assert session.amd is None
         assert session._activity._authorization_allowed.is_set()
     finally:

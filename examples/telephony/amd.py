@@ -4,8 +4,9 @@ Run this agent with console for local audio, or dev for a room/SIP call.
 Set SIP_PHONE_NUMBER, SIP_PARTICIPANT_IDENTITY, and SIP_OUTBOUND_TRUNK_ID
 only when you want the dev worker to place an outbound call.
 
-AMD reuses this Agent's Gemma model and Ink 2 transcript. Pass an explicit
-llm or stt to AMD to use other models. Realtime models are not supported yet.
+AMD auto-selects its default models when LiveKit Cloud credentials are available.
+Pass llm=None and stt=None to reuse this Agent's Gemma model and Ink 2 transcript.
+Realtime models are not supported yet.
 """
 
 import asyncio

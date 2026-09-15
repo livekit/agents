@@ -165,7 +165,7 @@ async def running(
         detector = AMD(
             session,
             llm=classifier,
-            **{"machine_silence_threshold": 0, **options},
+            **{"machine_silence_threshold": 0, "stt": None, **options},
         )
         async with detector:
             await eventually(lambda: detector.started)
@@ -622,7 +622,7 @@ async def test_three_timeouts_complete_detection() -> None:
 @pytest.mark.asyncio
 async def test_realtime_model_is_rejected_before_installing_guard() -> None:
     session = SimpleNamespace(_activity=SimpleNamespace(llm=Mock(spec=llm.RealtimeModel)))
-    detector = AMD(session)
+    detector = AMD(session, llm=None, stt=None)
     with pytest.raises(ValueError, match="pipeline STT/LLM/TTS only"):
         await detector.__aenter__()
 
@@ -674,6 +674,8 @@ async def test_sip_answer_gating_and_early_media(
     try:
         async with AMD(
             session,
+            llm=None,
+            stt=None,
             participant_identity="callee",
             wait_until_answered=wait_until_answered,
         ) as detector:
