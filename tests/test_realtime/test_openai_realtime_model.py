@@ -11,6 +11,7 @@ from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetectio
 from openai.types.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
     RealtimeErrorEvent,
 )
 from openai.types.realtime.audio_transcription import AudioTranscription
@@ -19,6 +20,7 @@ from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 from livekit.agents import llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
+from livekit.agents.metrics import STTMetrics
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime.realtime_model import (
     RealtimeModel,
@@ -517,3 +519,74 @@ def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -
     assert session._response_created_futures == {"response_create_1": fut}
     # still reported down the ordinary path
     assert captured["recoverable"] is True
+
+
+def _transcription_metrics_session() -> tuple[RealtimeSession, list[STTMetrics]]:
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._realtime_model = SimpleNamespace(  # type: ignore[assignment]
+        provider="openai",
+        label="openai.realtime",
+        _opts=SimpleNamespace(input_audio_transcription=AudioTranscription(model="whisper-1")),
+    )
+    collected: list[STTMetrics] = []
+
+    def _emit(name: str, ev: object) -> None:
+        if name == "metrics_collected" and isinstance(ev, STTMetrics):
+            collected.append(ev)
+
+    session.emit = _emit  # type: ignore[method-assign,assignment]
+    return session, collected
+
+
+def _completed_event_with_raw_usage(
+    usage: dict[str, object] | None,
+) -> ConversationItemInputAudioTranscriptionCompletedEvent:
+    event = ConversationItemInputAudioTranscriptionCompletedEvent.construct(
+        type="conversation.item.input_audio_transcription.completed",
+        event_id="evt",
+        item_id="item_1",
+        content_index=0,
+        transcript="hello",
+        usage=None,
+    )
+    event.usage = usage  # type: ignore[assignment]
+    return event
+
+
+def test_raw_duration_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._emit_transcription_metrics(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert len(collected) == 1
+    assert collected[0].audio_duration == 2.5
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "whisper-1"
+
+
+def test_raw_token_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._emit_transcription_metrics(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8},
+            }
+        )
+    )
+
+    assert len(collected) == 1
+    assert collected[0].input_tokens == 10
+    assert collected[0].output_tokens == 2
+    assert collected[0].total_tokens == 12
+    assert collected[0].input_audio_tokens == 8
+
+
+def test_missing_transcription_usage_emits_no_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._emit_transcription_metrics(_completed_event_with_raw_usage(None))
+    assert collected == []

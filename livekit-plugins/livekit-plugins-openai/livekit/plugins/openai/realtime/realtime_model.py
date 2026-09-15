@@ -14,11 +14,11 @@ from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
-from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics import RealtimeModelMetrics, STTMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -80,6 +80,10 @@ from openai.types.realtime import (
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
     SessionUpdateEvent,
+)
+from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
+    UsageTranscriptTextUsageDuration,
+    UsageTranscriptTextUsageTokens,
 )
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 from openai.types.realtime.realtime_session_create_response import (
@@ -297,6 +301,24 @@ _FATAL_ERROR_CODES = frozenset(
 def _is_fatal_error(error: object | None) -> bool:
     code = getattr(error, "code", None) or getattr(error, "type", None)
     return isinstance(code, str) and code in _FATAL_ERROR_CODES
+
+
+_TranscriptionUsage = UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration
+_TRANSCRIPTION_USAGE_ADAPTER: TypeAdapter[_TranscriptionUsage] = TypeAdapter(_TranscriptionUsage)
+
+
+def _coerce_transcription_usage(usage: object) -> _TranscriptionUsage | None:
+    """Parse transcription usage from a validated SDK object or a raw websocket dict.
+
+    ``_recv_task`` builds completed events with ``construct``, which historically left nested
+    ``usage`` as a plain dict. Validate it so duration/token metrics still emit.
+    """
+    if usage is None:
+        return None
+    try:
+        return _TRANSCRIPTION_USAGE_ADAPTER.validate_python(usage)
+    except ValidationError:
+        return None
 
 
 def _server_turn_taking_enabled(
@@ -2052,6 +2074,8 @@ class RealtimeSession(
             ),
         )
 
+        self._emit_transcription_metrics(event)
+
     def _handle_conversion_item_input_audio_transcription_failed(
         self, event: ConversationItemInputAudioTranscriptionFailedEvent
     ) -> None:
@@ -2074,6 +2098,55 @@ class RealtimeSession(
                 turn_started_at=turn_started_at,
             ),
         )
+
+    def _emit_transcription_metrics(
+        self, event: ConversationItemInputAudioTranscriptionCompletedEvent
+    ) -> None:
+        usage = _coerce_transcription_usage(event.usage)
+        if usage is None:
+            return
+
+        transcription_opts = self._realtime_model._opts.input_audio_transcription
+        transcription_model = transcription_opts.model if transcription_opts else None
+        metadata = Metadata(
+            model_name=transcription_model,
+            model_provider=self._realtime_model.provider,
+        )
+
+        if isinstance(usage, UsageTranscriptTextUsageTokens):
+            details = usage.input_token_details
+            input_audio_tokens = (
+                details.audio_tokens if details and details.audio_tokens is not None else 0
+            )
+            stt_metrics = STTMetrics(
+                request_id=event.event_id,
+                timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events
+                duration=0.0,
+                label=self._realtime_model.label,
+                audio_duration=0.0,
+                # uses websocket but results are not streamed incrementally so streamed=False
+                streamed=False,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                input_audio_tokens=input_audio_tokens,
+                metadata=metadata,
+            )
+            self.emit("metrics_collected", stt_metrics)
+        elif isinstance(usage, UsageTranscriptTextUsageDuration):
+            stt_metrics = STTMetrics(
+                request_id=event.event_id,
+                timestamp=time.time(),
+                # Request processing time is 0 so duration is 0.0 (server side events)
+                duration=0.0,
+                label=self._realtime_model.label,
+                audio_duration=usage.seconds,
+                # uses websocket but results are not streamed incrementally so streamed=False
+                streamed=False,
+                metadata=metadata,
+            )
+            self.emit("metrics_collected", stt_metrics)
 
     def _handle_response_text_delta(self, event: ResponseTextDeltaEvent) -> None:
         if isinstance(self._current_generation, _DiscardedGeneration):
