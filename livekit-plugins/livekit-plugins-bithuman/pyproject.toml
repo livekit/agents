@@ -26,13 +26,10 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-# bithuman 2.8.1+ ships wheels for every Python livekit-agents supports (3.10
-# through 3.14), so the dependency no longer needs a python_version marker. The
-# floor stays wide so platforms 2.x dropped (Windows, x86_64 macOS, macOS < 14)
-# can still resolve the 1.x line, which satisfies everything avatar.py calls.
 dependencies = [
     "livekit-agents>=1.8.2",
     "bithuman>=0.5.25,<3",
+    "pillow>=10.3.0",
 ]
 
 [project.urls]

@@ -2736,12 +2736,14 @@ source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
     { name = "bithuman" },
     { name = "livekit-agents" },
+    { name = "pillow" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bithuman", specifier = ">=0.5.25,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "pillow", specifier = ">=10.3.0" },
 ]
 
 [[package]]
