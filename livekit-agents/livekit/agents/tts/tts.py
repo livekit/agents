@@ -289,6 +289,8 @@ class ChunkedStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
+        # Providers may bind metrics to the settings actually used by this request.
+        self._metrics_metadata: Metadata | None = None
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -358,7 +360,8 @@ class ChunkedStream(ABC):
             streamed=False,
             acquire_time=self._acquire_time,
             connection_reused=self._connection_reused,
-            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+            metadata=self._metrics_metadata
+            or Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
         )
         if self._tts_request_span:
             self._tts_request_span.set_attribute(
@@ -568,6 +571,8 @@ class SynthesizeStream(ABC):
         self._output_tokens = 0
         self._acquire_time: float = 0.0
         self._connection_reused: bool = False
+        # Providers may bind metrics to the settings actually used by this request.
+        self._metrics_metadata: Metadata | None = None
 
         self._tts_request_span: trace.Span | None = None
 
@@ -717,7 +722,8 @@ class SynthesizeStream(ABC):
                 streamed=True,
                 acquire_time=self._acquire_time,
                 connection_reused=self._connection_reused,
-                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+                metadata=self._metrics_metadata
+                or Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(
