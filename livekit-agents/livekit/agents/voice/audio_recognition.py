@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import math
 import time
 from collections import deque
-from collections.abc import AsyncIterable, Callable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -160,6 +161,9 @@ class RecognitionHooks(Protocol):
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
+_STTPipelineContextVar = contextvars.ContextVar["_STTPipeline"]("stt_pipeline")
+
+
 class _STTPipeline:
     """Transferable STT pipeline that survives agent handoff.
 
@@ -173,7 +177,8 @@ class _STTPipeline:
         self._stt_node = stt_node
         # don't recreate the stream while the session is closing
         self._is_closing = is_closing or (lambda: False)
-        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        self._audio_ch = aio.Chan[rtc.AudioFrame | stt.RecognizeStream._FlushSentinel]()
+        self._flush_callback: Callable[[], None] | None = None
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
@@ -181,8 +186,20 @@ class _STTPipeline:
         self.input_started_at: float | None = None
 
     @property
-    def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
+    def audio_ch(self) -> aio.Chan[rtc.AudioFrame | stt.RecognizeStream._FlushSentinel]:
         return self._audio_ch
+
+    def flush(self) -> None:
+        self._audio_ch.send_nowait(stt.RecognizeStream._FlushSentinel())
+
+    async def _audio_input(self) -> AsyncIterator[rtc.AudioFrame]:
+        """Apply flushes in audio order without exposing sentinels to custom STT nodes."""
+        async for data in self._audio_ch:
+            if isinstance(data, stt.RecognizeStream._FlushSentinel):
+                if self._flush_callback:
+                    self._flush_callback()
+            else:
+                yield data
 
     @property
     def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
@@ -198,9 +215,10 @@ class _STTPipeline:
         """
         from .agent import ModelSettings
 
+        _STTPipelineContextVar.set(self)
         while True:
             try:
-                node = self._stt_node(self._audio_ch, ModelSettings())
+                node = self._stt_node(self._audio_input(), ModelSettings())
                 if asyncio.iscoroutine(node):
                     node = await node
 
@@ -1439,6 +1457,8 @@ class AudioRecognition:
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
             if self._stt_pipeline is not None and vad_speech_started:
+                if self._vad_base_turn_detection:
+                    self._stt_pipeline.flush()
                 self._arm_transcription_timeout(
                     ev.speech_duration,
                     delay=ev.silence_duration + ev.inference_duration,

@@ -391,3 +391,20 @@ async def test_stt_stream_recovery_failure_doesnt_block_main() -> None:
     assert events[0].alternatives[0].text == "hello world"
 
     await fallback.aclose()
+
+
+@pytest.mark.parametrize("supports_flush", [(True, True), (True, False), (False, True)])
+async def test_manual_flush_requires_support_from_every_fallback(supports_flush) -> None:
+    instances = [FakeSTT(), FakeSTT()]
+    for instance, supported in zip(instances, supports_flush, strict=True):
+        instance.capabilities.manual_flush = supported
+    adapter = FallbackAdapter(instances)
+    try:
+        assert adapter.capabilities.manual_flush is all(supports_flush)
+        instances[0].capabilities.manual_flush = False
+        assert adapter.capabilities.manual_flush is False
+        for instance in instances:
+            instance.capabilities.manual_flush = True
+        assert adapter.capabilities.manual_flush is True
+    finally:
+        await adapter.aclose()

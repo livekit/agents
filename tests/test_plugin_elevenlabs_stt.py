@@ -636,3 +636,25 @@ def test_committed_transcript_sets_confidence() -> None:
     final = stream._event_ch.events[1]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert final.alternatives[0].confidence > 0.9
+
+
+@pytest.mark.parametrize(
+    ("model", "server_vad", "manual_flush"),
+    [
+        ("scribe_v2_realtime", NOT_GIVEN, True),
+        ("scribe_v2_realtime", None, True),
+        ("scribe_v2_realtime", {}, False),
+        ("scribe_v2", NOT_GIVEN, False),
+    ],
+)
+def test_manual_flush_capability(model, server_vad, manual_flush) -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model, server_vad=server_vad)
+    assert instance.capabilities.manual_flush is manual_flush
+
+
+def test_manual_flush_capability_tracks_server_vad_updates() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    instance.update_options(server_vad={})
+    assert instance.capabilities.manual_flush is False
+    instance.update_options(server_vad=None)
+    assert instance.capabilities.manual_flush is True

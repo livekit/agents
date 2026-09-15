@@ -140,6 +140,12 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    manual_flush: bool = False
+    """Whether the STT supports flushing the stream to finalize a segment.
+
+    When enabled, VAD-based turn detection automatically flushes on VAD end-of-speech.
+    Disable this for custom STT nodes that buffer audio and manage flushing themselves.
+    """
 
 
 class STTError(BaseModel):
