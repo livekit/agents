@@ -117,6 +117,13 @@ _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activ
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 _IdleHoldContextVar = contextvars.ContextVar[bool]("agents_idle_hold", default=False)
 
+# Ceiling on how long interim/preflight transcripts may keep deferring the false-interruption
+# resume, as a multiple of ``false_interruption_timeout``. Interims are also produced by noise,
+# so re-arming on them has to be bounded: a stalled STT can emit interims for an entire call
+# without ever sending an end-of-turn (Deepgram Flux, see pipecat-ai/pipecat#5735), and an
+# unbounded re-arm would hold the pause open until the caller hangs up.
+_FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR = 3.0
+
 
 async def _aligned_transcript_or_text(
     timed_texts: AsyncIterable[str], text: AsyncIterable[str]
@@ -241,6 +248,8 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_timer: asyncio.TimerHandle | None = None
         # the timeout elapsed while a turn decision was still open; the resume waits on it
         self._false_interruption_pending: bool = False
+        # extra time already granted to this pause by interim/preflight re-arms
+        self._false_interruption_deferred: float = 0.0
         self._cancel_speech_pause_task: asyncio.Task[None] | None = None
 
         self._stt_eos_received: bool = False
@@ -2364,6 +2373,8 @@ class AgentActivity(RecognitionHooks):
         # speech. A non-empty interim in that window means the turn is still producing
         # transcript: audio below the VAD threshold, or an STT that never sent EOT.
         # Re-arm rather than clear, so a noisy room still resumes once interims stop.
+        # The re-arm is bounded, so a provider that stalls while still emitting interims
+        # cannot hold the pause open for the rest of the call.
         if (
             self.vad is not None
             and ev.alternatives[0].text
@@ -2377,7 +2388,7 @@ class AgentActivity(RecognitionHooks):
             and (timeout := self._session.options.interruption["false_interruption_timeout"])
             is not None
         ):
-            self._start_false_interruption_timer(timeout)
+            self._defer_false_interruption_timer(timeout)
 
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
@@ -4665,6 +4676,25 @@ class AgentActivity(RecognitionHooks):
             self._false_interruption_timer.cancel()
             self._false_interruption_timer = None
         self._false_interruption_pending = False
+        self._false_interruption_deferred = 0.0
+
+    def _defer_false_interruption_timer(self, timeout: float) -> None:
+        """Re-arm the resume timer from now, within a bounded deferral budget.
+
+        Used for interim and preflight transcripts. Interims are evidence that the turn is
+        still producing text, but noise produces them too, so the pause must not be extended
+        indefinitely: once the budget is spent the armed timer is left alone and fires.
+        """
+        budget = timeout * _FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR
+        budget -= self._false_interruption_deferred
+        if budget <= 0:
+            return
+
+        granted = min(timeout, budget)
+        deferred = self._false_interruption_deferred + granted
+        self._start_false_interruption_timer(granted)
+        # _start_false_interruption_timer clears the counter, so restore it after the fact
+        self._false_interruption_deferred = deferred
 
     def _restore_paused_speech_state(self, paused_speech: _PausedSpeechInfo) -> None:
         self._session._update_agent_state(
@@ -4705,6 +4735,7 @@ class AgentActivity(RecognitionHooks):
 
             self._paused_speech = None
             self._false_interruption_timer = None
+            self._false_interruption_deferred = 0.0
 
         def _on_turn_settled(settled: asyncio.Task[None]) -> None:
             if not self._false_interruption_pending:
