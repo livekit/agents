@@ -18,7 +18,6 @@ import asyncio
 import json
 import time
 import weakref
-from collections import deque
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -190,7 +189,10 @@ class SpeechStream(stt.RecognizeStream):
             progressive=True,
         )
         self._pending_input = None
-        self._pending_audio: deque[bytes] = deque()
+        self._segment_audio: list[bytes] = []
+        self._sent_audio_chunks = 0
+        self._counted_audio_chunks = 0
+        self._pending_eos = False
         self._pending_usage_audio_duration = 0.0
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at = 0.0
@@ -284,7 +286,7 @@ class SpeechStream(stt.RecognizeStream):
                 self._input_ch.closed
                 and self._input_ch.empty()
                 and self._pending_input is None
-                and not self._pending_audio
+                and not self._segment_audio
                 and not self._audio_chunker.buffered_duration
             ):
                 error.retryable = False
@@ -303,6 +305,7 @@ class SpeechStream(stt.RecognizeStream):
                 self.start_time_offset + time.monotonic() - self._run_started_at
             )
             self._ws = await self._connect_ws()
+            self._sent_audio_chunks = 0
             self._closing = False
             self._recv_task = asyncio.create_task(self._recv_loop(self._ws), name="RTZR.recv_loop")
             self._recv_task.add_done_callback(self._recv_done)
@@ -315,26 +318,38 @@ class SpeechStream(stt.RecognizeStream):
             await self._ws.send_bytes(audio)
         except (aiohttp.ClientError, OSError):
             raise APIConnectionError("RTZR audio send failed") from None
-        self._record_sent_audio(audio)
         self._last_audio_at = time.monotonic()
 
     async def _send_pending_audio(self) -> None:
-        """Retain queued PCM across retries until each WebSocket send succeeds."""
-        while self._pending_audio:
-            await self._send_audio(self._pending_audio[0])
-            self._pending_audio.popleft()
+        """Replay the complete unfinalized utterance on a replacement WebSocket."""
+        if not self._segment_audio:
+            return
+        await self._ensure_connected()
+        while self._sent_audio_chunks < len(self._segment_audio):
+            audio = self._segment_audio[self._sent_audio_chunks]
+            await self._send_audio(audio)
+            if self._sent_audio_chunks == self._counted_audio_chunks:
+                self._record_sent_audio(audio)
+                self._counted_audio_chunks += 1
+            self._sent_audio_chunks += 1
+
+    def _complete_segment(self) -> None:
+        self._segment_audio.clear()
+        self._sent_audio_chunks = 0
+        self._counted_audio_chunks = 0
 
     async def _finalize_segment(self) -> None:
-        self._pending_audio.extend(frame.data.tobytes() for frame in self._audio_chunker.flush())
+        self._segment_audio.extend(frame.data.tobytes() for frame in self._audio_chunker.flush())
         self._audio_chunker.clear()
         await self._send_pending_audio()
-        if self._pending_usage_audio_duration <= 0.0:
+        if not self._segment_audio:
             return
         assert self._ws is not None
         try:
             await self._ws.send_str(_FINALIZE_MESSAGE)
         except (aiohttp.ClientError, OSError):
             raise APIConnectionError("RTZR finalize send failed") from None
+        self._complete_segment()
         self._emit_usage_event_if_needed()
 
     async def _close_connection(self, *, graceful: bool) -> None:
@@ -344,7 +359,8 @@ class SpeechStream(stt.RecognizeStream):
             if ws is None:
                 return
             if graceful:
-                self._pending_audio.extend(
+                self._pending_eos = True
+                self._segment_audio.extend(
                     frame.data.tobytes() for frame in self._audio_chunker.flush()
                 )
                 self._audio_chunker.clear()
@@ -358,6 +374,8 @@ class SpeechStream(stt.RecognizeStream):
                         await asyncio.wait_for(recv_task, timeout=_RECV_COMPLETION_TIMEOUT)
                     except asyncio.TimeoutError:
                         raise APITimeoutError("RTZR final response timed out") from None
+                self._pending_eos = False
+                self._complete_segment()
         finally:
             if recv_task is not None:
                 await utils.aio.cancel_and_wait(recv_task)
@@ -413,6 +431,9 @@ class SpeechStream(stt.RecognizeStream):
             async with self._connection_lock:
                 if self._failure is not None and self._failure.done():
                     await self._failure
+                if self._pending_eos:
+                    await self._ensure_connected()
+                    await self._close_connection(graceful=True)
                 await self._send_pending_audio()
             if self._pending_input is None:
                 try:
@@ -426,7 +447,7 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, rtc.AudioFrame):
                     # Keep the first frame across connection retries before consuming PCM.
                     await self._ensure_connected()
-                    self._pending_audio.extend(
+                    self._segment_audio.extend(
                         frame.data.tobytes()
                         for frame in self._audio_chunker.write(data.data.tobytes())
                     )

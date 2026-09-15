@@ -34,15 +34,22 @@ def _frame(value: int, *, samples: int = 160, sample_rate: int = 8000) -> rtc.Au
 
 
 class _FakeWebSocket:
-    def __init__(self) -> None:
+    def __init__(self, *, fail: str | None = None) -> None:
         self.sent: list[tuple[str, bytes | str]] = []
         self.closed = False
         self._messages: asyncio.Queue[Any] = asyncio.Queue()
+        self._fail = fail
+        self._byte_sends = 0
 
     async def send_bytes(self, data: bytes) -> None:
+        self._byte_sends += 1
+        if self._fail == "audio" and self._byte_sends == 2:
+            raise aiohttp.ClientError("send failed")
         self.sent.append(("bytes", data))
 
     async def send_str(self, data: str) -> None:
+        if self._fail == "finalize" and data == '{"type":"Finalize"}':
+            raise aiohttp.ClientError("send failed")
         self.sent.append(("text", data))
         if data == "EOS":
             await self._messages.put(SimpleNamespace(type=aiohttp.WSMsgType.CLOSE))
@@ -76,7 +83,7 @@ async def test_expiring_token_refresh_is_shared_by_concurrent_callers(monkeypatc
 
 
 @asynccontextmanager
-async def _stream(monkeypatch, *, max_retry=0, language="ko"):
+async def _stream(monkeypatch, *, max_retry=0, language="ko", fail_first=None):
     monkeypatch.setenv("RTZR_CLIENT_ID", "client-id")
     monkeypatch.setenv("RTZR_CLIENT_SECRET", "client-secret")
     plugin = rtzr_stt.STT(model="whisper")
@@ -87,7 +94,7 @@ async def _stream(monkeypatch, *, max_retry=0, language="ko"):
     sockets = []
 
     async def connect():
-        ws = _FakeWebSocket()
+        ws = _FakeWebSocket(fail=fail_first if not sockets else None)
         sockets.append(ws)
         return ws
 
@@ -180,7 +187,7 @@ async def test_receive_failure_reaches_consumer(monkeypatch, payload):
 async def test_unexpected_disconnect_retries_and_receivers_are_closed(monkeypatch):
     async with _stream(monkeypatch, max_retry=1) as (_, stream, sockets):
         stream.push_frame(_frame(1, samples=400))
-        await _wait_until(lambda: sockets)
+        await _wait_until(lambda: sockets and sockets[0].sent)
         await sockets[0]._messages.put(SimpleNamespace(type=aiohttp.WSMsgType.CLOSE))
         await _wait_until(lambda: sockets[0].closed)
         stream.push_frame(_frame(2, samples=400))
@@ -188,7 +195,7 @@ async def test_unexpected_disconnect_retries_and_receivers_are_closed(monkeypatc
         await asyncio.wait_for(stream._task, 2)
         assert len(sockets) == 2
         assert all(ws.closed for ws in sockets)
-        assert b"".join(data for ws in sockets for kind, data in ws.sent if kind == "bytes") == (
+        assert b"".join(data for kind, data in sockets[1].sent if kind == "bytes") == (
             _frame(1, samples=400).data.tobytes() + _frame(2, samples=400).data.tobytes()
         )
 
@@ -252,30 +259,31 @@ async def test_drain_timeout_is_reported(monkeypatch):
 
 
 @pytest.mark.parametrize("operation", ["audio", "finalize"])
-async def test_send_failure_is_reported_and_usage_not_duplicated(monkeypatch, operation):
-    async with _stream(monkeypatch) as (plugin, stream, sockets):
+async def test_send_failure_replays_complete_segment_without_duplicate_usage(
+    monkeypatch, operation
+):
+    async with _stream(monkeypatch, max_retry=1, fail_first=operation) as (
+        plugin,
+        stream,
+        sockets,
+    ):
         metrics = []
         plugin.on("metrics_collected", metrics.append)
-        stream.push_frame(_frame(1, samples=480))
-        await _wait_until(
-            lambda: (
-                sockets
-                and sum(len(data) for kind, data in sockets[0].sent if kind == "bytes") == 960
-            )
-        )
-        if operation == "audio":
-            sockets[0].send_bytes = AsyncMock(side_effect=aiohttp.ClientError("sensitive data"))
-            stream.push_frame(_frame(2, samples=1600))
-        else:
-            sockets[0].send_str = AsyncMock(side_effect=aiohttp.ClientError("sensitive data"))
-            stream.flush()
-        with pytest.raises(APIConnectionError) as caught:
-            await asyncio.wait_for(stream._task, 1)
-        assert "sensitive data" not in str(caught.value)
+        frame = _frame(1, samples=4001)
+        stream.push_frame(frame)
+        stream.end_input()
+        await asyncio.wait_for(stream._task, 2)
         if stream._metrics_task:
             await stream._metrics_task
-        assert sum(metric.audio_duration for metric in metrics) == pytest.approx(0.06)
-        assert sockets[0].closed
+        assert len(sockets) == 2 and all(ws.closed for ws in sockets)
+        assert b"".join(data for kind, data in sockets[1].sent if kind == "bytes") == (
+            frame.data.tobytes()
+        )
+        assert [data for kind, data in sockets[1].sent if kind == "text"] == [
+            '{"type":"Finalize"}',
+            "EOS",
+        ]
+        assert sum(metric.audio_duration for metric in metrics) == pytest.approx(frame.duration)
 
 
 @pytest.mark.parametrize("statuses,expected_calls", [([401, 200], 2), ([401, 401], 2), ([403], 1)])
