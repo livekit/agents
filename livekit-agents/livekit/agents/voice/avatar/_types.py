@@ -158,6 +158,10 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
 
     async def aclose(self) -> None:
+        # first, and before any await: a cancellation mid-close (job-shutdown
+        # deadline) must not leave agent audio routed to the closing avatar
+        self._restore_audio_output()
+
         if self._room is not None and self._room.isconnected():
             job_ctx = get_job_context(required=False)
             if job_ctx is not None:
@@ -182,8 +186,6 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
                             extra={"identity": self.avatar_identity},
                             exc_info=True,
                         )
-
-        self._restore_audio_output()
 
         if self._agent_session:
             self._agent_session.off("conversation_item_added", self._on_conversation_item_added)

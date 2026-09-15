@@ -115,3 +115,42 @@ async def test_aclose_without_attach_is_a_no_op() -> None:
 
     await avatar.aclose()
     assert session.output.audio is previous
+
+
+async def test_a_cancelled_aclose_still_restores_the_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # aclose can be cancelled mid participant-removal (job-shutdown deadline);
+    # the route restore runs before any await so the cancellation can't skip it
+    import asyncio
+
+    session = AgentSession()
+    previous = FakeAudioOutput()
+    session.output.audio = previous
+
+    removal_started = asyncio.Event()
+
+    async def _hang(*args, **kwargs) -> None:
+        removal_started.set()
+        await asyncio.Event().wait()
+
+    ctx = MagicMock()
+    ctx.api.room.remove_participant = _hang
+    monkeypatch.setattr(
+        "livekit.agents.voice.avatar._types.get_job_context", lambda required=False: ctx
+    )
+
+    avatar = _FakeAvatar()
+    room = _room()
+    room.name = "avatar-room"  # a bare MagicMock .name breaks the protobuf request
+    await avatar.start(session, room)
+    assert session.output.audio is avatar.sink
+
+    room.isconnected.return_value = True
+    close_task = asyncio.create_task(avatar.aclose())
+    await asyncio.wait_for(removal_started.wait(), timeout=1.0)
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    assert session.output.audio is previous
