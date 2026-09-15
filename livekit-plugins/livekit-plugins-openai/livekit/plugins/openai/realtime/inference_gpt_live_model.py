@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import aiohttp
@@ -27,6 +27,7 @@ from .gpt_live_model import (
     GPTLiveModel,
     GPTLiveSession,
     GPTLiveVoices,
+    ResponsesDelegationOptions,
     _ResponsesDelegationOptionsBase,
 )
 
@@ -113,7 +114,7 @@ class InferenceGPTLiveModel(GPTLiveModel):
             model=model,
             voice=voice,
             delegation=delegation,
-            responses_options=responses_options,
+            responses_options=cast(NotGivenOr[ResponsesDelegationOptions], responses_options),
             api_key="livekit-inference",
             base_url=base_url or get_default_inference_url(),
             http_session=http_session,
