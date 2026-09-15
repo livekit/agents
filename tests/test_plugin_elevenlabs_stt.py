@@ -5,17 +5,19 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import time
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
+import aiohttp
 import pytest
 from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectionError, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -507,13 +509,15 @@ class _FakeWS:
     def __init__(self) -> None:
         self.sent: list[dict] = []
         self._closed = asyncio.Event()
+        self.received: asyncio.Queue[dict] = asyncio.Queue()
 
     async def send_str(self, data: str) -> None:
         self.sent.append(json.loads(data))
 
     async def receive(self) -> Any:
-        await self._closed.wait()
-        raise AssertionError("the test should never let recv_task resume")
+        return SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT, data=json.dumps(await self.received.get())
+        )
 
     async def close(self) -> None:
         self._closed.set()
@@ -636,3 +640,78 @@ def test_committed_transcript_sets_confidence() -> None:
     final = stream._event_ch.events[1]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert final.alternatives[0].confidence > 0.9
+
+
+@pytest.mark.parametrize(
+    ("model", "server_vad", "manual_flush"),
+    [
+        ("scribe_v2_realtime", NOT_GIVEN, True),
+        ("scribe_v2_realtime", None, True),
+        ("scribe_v2_realtime", {}, False),
+        ("scribe_v2", NOT_GIVEN, False),
+    ],
+)
+def test_manual_flush_capability(model, server_vad, manual_flush) -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model=model, server_vad=server_vad)
+    assert instance.capabilities.manual_flush is manual_flush
+
+
+def test_manual_flush_capability_tracks_server_vad_updates() -> None:
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
+    instance.update_options(server_vad={})
+    assert instance.capabilities.manual_flush is False
+    instance.update_options(server_vad=None)
+    assert instance.capabilities.manual_flush is True
+
+
+@pytest.mark.parametrize(
+    "message_type", ["auth_error", "quota_exceeded", "transcriber_error", "input_error", "error"]
+)
+def test_provider_error_content_stays_in_pii_attributes(
+    message_type: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    payload = {
+        "message_type": message_type,
+        "message": "customer transcript",
+        "details": "provider credential",
+    }
+    stream = _new_stream()
+    with caplog.at_level(logging.ERROR), pytest.raises(APIConnectionError) as exc:
+        stream._process_stream_event(payload)
+
+    assert str(exc.value) == f"ElevenLabs STT error [{message_type}]"
+    assert exc.value.__cause__ is None
+    assert exc.value.__suppress_context__
+    assert len(caplog.records) == 1
+    record = caplog.records[0]
+    assert record.getMessage() == f"ElevenLabs STT error [{message_type}]"
+    assert record.__dict__["lk.pii.data"] == payload
+    assert record.exc_info is None
+
+
+@pytest.mark.parametrize(
+    ("message_type", "retryable"),
+    [
+        ("auth_error", False),
+        ("quota_exceeded", False),
+        ("input_error", False),
+        ("transcriber_error", True),
+        ("error", True),
+    ],
+)
+async def test_provider_error_reaches_stream_consumer(message_type: str, retryable: bool) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(ws)
+    if retryable:
+        stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    try:
+        ws.received.put_nowait({"message_type": message_type, "message": "customer content"})
+        with pytest.raises(
+            APIConnectionError, match=rf"ElevenLabs STT error \[{message_type}\]"
+        ) as exc:
+            await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert exc.value.retryable is retryable
+        assert stream._num_retries == 0
+        assert ws._closed.is_set()
+    finally:
+        await stream.aclose()

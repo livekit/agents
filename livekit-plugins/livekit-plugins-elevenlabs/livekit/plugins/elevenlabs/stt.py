@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -114,7 +115,7 @@ class STT(stt.STT):
         tag_audio_events: bool = True,
         use_realtime: NotGivenOr[bool] = NOT_GIVEN,  # Deprecated
         sample_rate: STTRealtimeSampleRates = 16000,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         include_timestamps: bool = False,
         http_session: aiohttp.ClientSession | None = None,
         model: NotGivenOr[ElevenLabsSTTModels | str] = NOT_GIVEN,
@@ -146,7 +147,9 @@ class STT(stt.STT):
             use_realtime (bool): Whether to use "scribe_v2_realtime" model for streaming mode. Default is NOT_GIVEN.
                 Note that this flag is deprecated in favour of explicitly specifying the model id.
             sample_rate (STTRealtimeSampleRates): Audio sample rate in Hz. Default is 16000.
-            server_vad (NotGivenOr[VADOptions]): Server-side VAD options, only supported for Scribe v2 realtime model.
+            server_vad (NotGivenOr[VADOptions | None]): Server-side VAD options, only supported for Scribe v2 realtime model.
+                At construction, omit or set to None to use manual commits. Pass {} to enable server VAD defaults.
+                In update_options(), omission keeps the current setting; None disables server VAD and restores manual commits.
             http_session (aiohttp.ClientSession | None): Custom HTTP session for API requests. Optional.
             model (ElevenLabsSTTModels | str): ElevenLabs STT model to use. If not specified a default model will
                 be selected based on parameters provided.
@@ -217,6 +220,7 @@ class STT(stt.STT):
                 streaming=use_realtime,
                 interim_results=True,
                 aligned_transcript="word" if include_timestamps and use_realtime else False,
+                manual_flush=use_realtime and (not is_given(server_vad) or server_vad is None),
             )
         )
 
@@ -368,16 +372,24 @@ class STT(stt.STT):
         self,
         *,
         tag_audio_events: NotGivenOr[bool] = NOT_GIVEN,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
+        """Update STT options. Omitted options keep their current values.
+
+        Set server_vad to None to disable server VAD and use manual commits.
+        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        Changing server_vad reconnects active streams and can discard unfinished transcripts.
+        Wait for the current turn's final transcript before changing the commit strategy.
+        """
         if is_given(tag_audio_events):
             self._opts.tag_audio_events = tag_audio_events
 
         if is_given(server_vad):
             self._opts.server_vad = server_vad
+            self._capabilities.manual_flush = self._capabilities.streaming and server_vad is None
 
         if is_given(keyterms):
             self._opts.keyterms = keyterms
@@ -449,11 +461,18 @@ class SpeechStream(stt.SpeechStream):
     def update_options(
         self,
         *,
-        server_vad: NotGivenOr[VADOptions] = NOT_GIVEN,
+        server_vad: NotGivenOr[VADOptions | None] = NOT_GIVEN,
         no_verbatim: NotGivenOr[bool] = NOT_GIVEN,
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
         secondary_languages: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
+        """Update stream options. Omitted options keep their current values.
+
+        Set server_vad to None to disable server VAD and use manual commits.
+        Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
+        Changes reconnect the stream and can discard unfinished transcripts.
+        Wait for the current turn's final transcript before changing these options.
+        """
         if is_given(server_vad):
             self._opts.server_vad = server_vad
             self._reconnect_event.set()
@@ -610,6 +629,8 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                except APIError:
+                    raise
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
@@ -830,16 +851,15 @@ class SpeechStream(stt.SpeechStream):
             "input_error",
             "error",
         ):
-            error_msg = data.get("message", "Unknown error")
-            error_details = data.get("details", "")
-            details_suffix = " - " + error_details if error_details else ""
             logger.error(
-                "ElevenLabs STT error [%s]: %s%s",
+                "ElevenLabs STT error [%s]",
                 message_type,
-                error_msg,
-                details_suffix,
+                extra={"lk.pii.data": data},
             )
-            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
+            raise APIConnectionError(
+                f"ElevenLabs STT error [{message_type}]",
+                retryable=message_type not in ("auth_error", "quota_exceeded", "input_error"),
+            ) from None
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",
