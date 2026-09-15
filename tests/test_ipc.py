@@ -277,6 +277,26 @@ async def _wait_for_elements(q: asyncio.Queue, num_elements: int) -> None:
         await q.get()
 
 
+def _create_scheduler_test_pool(*, num_idle_processes: int) -> ipc.proc_pool.ProcPool:
+    return ipc.proc_pool.ProcPool(
+        initialize_process_fnc=_initialize_proc,
+        job_entrypoint_fnc=_job_entrypoint,
+        session_end_fnc=None,
+        simulation_end_fnc=None,
+        num_idle_processes=num_idle_processes,
+        job_executor_type=job.JobExecutorType.THREAD,
+        initialize_timeout=1.0,
+        close_timeout=1.0,
+        session_end_timeout=1.0,
+        inference_executor=None,
+        memory_warn_mb=0,
+        memory_limit_mb=0,
+        http_proxy=None,
+        mp_ctx=mp.get_context("spawn"),
+        loop=asyncio.get_running_loop(),
+    )
+
+
 async def test_proc_pool():
     mp_ctx = mp.get_context("spawn")
     loop = asyncio.get_running_loop()
@@ -407,7 +427,7 @@ async def test_slow_initialization():
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
 
-    # retry batch should also timeout and be killed
+    # retry batch should also timeout and be killed after the initialization backoff
     await _wait_for_elements(start_q, num_idle_processes)
     await _wait_for_elements(close_q, num_idle_processes)
 
@@ -418,6 +438,122 @@ async def test_slow_initialization():
 
     for exitcode in exitcodes:
         assert exitcode != 0, "process should have been killed"
+
+
+async def test_proc_pool_failed_spawn_uses_bounded_round_backoff():
+    pool = _create_scheduler_test_pool(num_idle_processes=1)
+    loop = asyncio.get_running_loop()
+
+    async def _spawn_result(initialized: bool) -> bool:
+        return initialized
+
+    for expected_delay in [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]:
+        pool._next_idle_process_spawn_at = loop.time() - 1.0
+        task = asyncio.create_task(_spawn_result(False))
+        pool._spawn_tasks.add(task)
+        await task
+        before_callback = loop.time()
+        pool._on_process_spawn_done(task)
+
+        assert task not in pool._spawn_tasks
+        assert pool._process_init_retry_delay == expected_delay
+        assert pool._next_idle_process_spawn_at - before_callback == pytest.approx(
+            expected_delay, abs=0.05
+        )
+
+    retry_at = pool._next_idle_process_spawn_at
+    task = asyncio.create_task(_spawn_result(True))
+    pool._spawn_tasks.add(task)
+    await task
+    pool._on_process_spawn_done(task)
+
+    assert pool._process_init_retry_delay == 0.0
+    assert pool._next_idle_process_spawn_at == retry_at
+
+    # Multiple failures inside one active retry round must not scale with pool size.
+    pool._next_idle_process_spawn_at = loop.time() - 1.0
+    first_failure = asyncio.create_task(_spawn_result(False))
+    pool._spawn_tasks.add(first_failure)
+    await first_failure
+    pool._on_process_spawn_done(first_failure)
+    first_retry_at = pool._next_idle_process_spawn_at
+
+    same_round_failure = asyncio.create_task(_spawn_result(False))
+    pool._spawn_tasks.add(same_round_failure)
+    await same_round_failure
+    pool._on_process_spawn_done(same_round_failure)
+
+    assert pool._process_init_retry_delay == 1.0
+    assert pool._next_idle_process_spawn_at >= first_retry_at
+
+
+async def test_proc_pool_spawn_exception_sets_backoff():
+    pool = _create_scheduler_test_pool(num_idle_processes=1)
+
+    async def _raise_during_spawn() -> bool:
+        raise RuntimeError("simulated spawn failure")
+
+    task = asyncio.create_task(_raise_during_spawn())
+    pool._spawn_tasks.add(task)
+    await asyncio.wait([task])
+    pool._on_process_spawn_done(task)
+
+    assert task not in pool._spawn_tasks
+    assert pool._process_init_retry_delay == 1.0
+
+
+async def test_proc_pool_backoff_only_delays_idle_replenishment(monkeypatch):
+    pool = _create_scheduler_test_pool(num_idle_processes=4)
+    attempts = 0
+    block_spawn = asyncio.Event()
+
+    async def _blocked_spawn() -> bool:
+        nonlocal attempts
+        attempts += 1
+        await block_spawn.wait()
+        return True
+
+    monkeypatch.setattr(pool, "_proc_spawn_task", _blocked_spawn)
+    pool._next_idle_process_spawn_at = asyncio.get_running_loop().time() + 10.0
+    pool._started = True
+    pool._main_atask = asyncio.create_task(pool._main_task())
+
+    try:
+        await asyncio.sleep(0.2)
+        assert attempts == 0
+
+        pool._jobs_waiting_for_process = 1
+        await _poll_until(lambda: attempts == 1, timeout=1.0)
+        await asyncio.sleep(0.2)
+
+        # The waiting job bypasses the cooldown, but the other three idle slots do not.
+        assert attempts == 1
+    finally:
+        await pool.aclose()
+
+
+async def test_proc_pool_resumes_idle_replenishment_after_backoff(monkeypatch):
+    pool = _create_scheduler_test_pool(num_idle_processes=2)
+    attempts = 0
+    block_spawn = asyncio.Event()
+
+    async def _blocked_spawn() -> bool:
+        nonlocal attempts
+        attempts += 1
+        await block_spawn.wait()
+        return True
+
+    monkeypatch.setattr(pool, "_proc_spawn_task", _blocked_spawn)
+    pool._next_idle_process_spawn_at = asyncio.get_running_loop().time() + 1.0
+    pool._started = True
+    pool._main_atask = asyncio.create_task(pool._main_task())
+
+    try:
+        await asyncio.sleep(0.05)
+        assert attempts == 0
+        await _poll_until(lambda: attempts == 2, timeout=2.0)
+    finally:
+        await pool.aclose()
 
 
 async def test_proc_pool_launch_job_raises_when_all_spawns_fail():
