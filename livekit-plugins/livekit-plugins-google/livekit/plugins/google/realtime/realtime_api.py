@@ -650,9 +650,11 @@ class RealtimeSession(llm.RealtimeSession):
                     turns=[
                         types.Content(
                             parts=[types.Part(text=instructions)],
-                            # Vertex AI ignores role=None or role="system" and only works with role="model".
-                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
-                            role="model" if self._opts.vertexai else None,
+                            # Both APIs error on role="system". This was role=None on the
+                            # Gemini API, which 2.5 accepted as the system role but 3.1 and
+                            # 3.8 reject with a 1007 close that kills the session. "model"
+                            # is accepted by all three and by Vertex.
+                            role="model",
                         )
                     ],
                     turn_complete=False,
