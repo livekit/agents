@@ -316,7 +316,7 @@ async def test_prediction_listener_failure_cleans_up_a_deferred_release() -> Non
         detector.on("amd_prediction", on_prediction)
         await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        assert (await detector.execute()).reason == "inference_error"
+        assert (await detector.execute()).reason == "internal_error"
         assert detector._fsm.decision(1) is not None
         assert session.amd is None
 

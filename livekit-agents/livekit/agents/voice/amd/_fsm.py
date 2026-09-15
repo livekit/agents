@@ -318,29 +318,8 @@ class _AMDFSM:
         history_ids = set(self._history_ids(turn_id))
         if not turn.inference_text and not self._updated_turn_ids & history_ids:
             return None, self._reuse_pending(turn, now)
-        self._supersede(turn_id, now)
-        if self._pending_turn is not None:
-            self._updated_turn_ids.update(self._pending_turn.updated_turn_ids)
-            self._fallback(self._pending_turn, AMDReason.SUPERSEDED, now)
-            self._flush_reused(now, reason=AMDReason.SUPERSEDED)
-        turn.updated_turn_ids = self._updated_turn_ids & history_ids
-        self._updated_turn_ids.difference_update(turn.updated_turn_ids | {turn_id})
-        self._last_inference_turn_id = turn_id
-        self._pending_turn = turn
-        turn.phase = _Phase.INFERRING
-        turn.deadline = turn.committed_at + self._inference_timeout
-        request = ClassifyRequest(
-            stage=self._category,
-            allowed_next_categories=sorted(ALLOWED[self._category]),
-            earlier_turns=[self._turns[index].context() for index in sorted(history_ids)],
-            updated_turn_ids=sorted(turn.updated_turn_ids),
-            speech_duration=turn.speech_duration,
-            turn_id=turn_id,
-            transcript=transcript.text,
-            transcript_source=transcript.source,
-            dtmf_digits=turn.dtmf_digits,
-        )
-        return request, []
+        self._supersede_pending(turn_id, now)
+        return self._new_request(turn, transcript, history_ids), []
 
     def prediction_received(
         self, turn_id: int, category: AMDCategory, now: float, inference_duration: float
@@ -476,6 +455,35 @@ class _AMDFSM:
             return self._resume(pending, now)
         self._supersede(turn.turn_id, now)
         return self._fallback(turn, AMDReason.REUSED, now)
+
+    def _supersede_pending(self, turn_id: int, now: float) -> None:
+        """Resolve every older turn's pending work before a new request starts."""
+        self._supersede(turn_id, now)
+        if self._pending_turn is not None:
+            self._updated_turn_ids.update(self._pending_turn.updated_turn_ids)
+            self._fallback(self._pending_turn, AMDReason.SUPERSEDED, now)
+            self._flush_reused(now, reason=AMDReason.SUPERSEDED)
+
+    def _new_request(
+        self, turn: _Turn, transcript: _Transcript, history_ids: set[int]
+    ) -> ClassifyRequest:
+        turn.updated_turn_ids = self._updated_turn_ids & history_ids
+        self._updated_turn_ids.difference_update(turn.updated_turn_ids | {turn.turn_id})
+        self._last_inference_turn_id = turn.turn_id
+        self._pending_turn = turn
+        turn.phase = _Phase.INFERRING
+        turn.deadline = turn.committed_at + self._inference_timeout
+        return ClassifyRequest(
+            stage=self._category,
+            allowed_next_categories=sorted(ALLOWED[self._category]),
+            earlier_turns=[self._turns[index].context() for index in sorted(history_ids)],
+            updated_turn_ids=sorted(turn.updated_turn_ids),
+            speech_duration=turn.speech_duration,
+            turn_id=turn.turn_id,
+            transcript=transcript.text,
+            transcript_source=transcript.source,
+            dtmf_digits=turn.dtmf_digits,
+        )
 
     def _supersede(self, turn_id: int, now: float) -> None:
         for previous in self._turns.values():

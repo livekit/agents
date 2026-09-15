@@ -158,9 +158,9 @@ async def test_none_always_inherits_the_active_agent_models(
     try:
         async with AMD(session, llm=None, stt=None) as detector:
             await eventually(lambda: detector.started)
-            assert detector._llm is model
+            assert detector._run.llm is model
             assert detector._stt is None
-            assert detector._transcript._model is None
+            assert detector._run.transcript._model is None
             await commit(detector, session, model)
             model.prediction(1, AMDCategory.HUMAN)
             assert (await detector.execute()).category == AMDCategory.HUMAN
@@ -228,7 +228,7 @@ async def test_default_falls_back_to_session_model_without_amd_credentials(
     try:
         async with AMD(session, stt=extra_stt) as detector:
             await eventually(lambda: detector.started)
-            assert detector._llm is model
+            assert detector._run.llm is model
             await commit(detector, session, model)
             model.prediction(1, AMDCategory.HUMAN)
             assert (await detector.execute()).category == AMDCategory.HUMAN
@@ -279,7 +279,7 @@ async def test_first_final_wins_for_amd_without_changing_agent_transcript(winner
         if winner == "session":
             detector._on_transcript("session transcript")
         stream.send_fake_transcript("AMD transcript")
-        await eventually(lambda: detector._transcript._texts["amd"] == "AMD transcript")
+        await eventually(lambda: detector._run.transcript._texts["amd"] == "AMD transcript")
         if winner == "amd":
             detector._on_transcript("session transcript")
 
@@ -311,10 +311,10 @@ async def test_interim_and_empty_results_do_not_win_and_final_segments_accumulat
         stream.send_fake_transcript("partial", is_final=False)
         stream.send_fake_transcript("")
         await asyncio.sleep(0)
-        assert detector._transcript.winner is None
+        assert detector._run.transcript.winner is None
         stream.send_fake_transcript("Please leave")
         stream.send_fake_transcript("a message.")
-        await eventually(lambda: detector._transcript.text == "Please leave a message.")
+        await eventually(lambda: detector._run.transcript.text == "Please leave a message.")
         detector._on_end_of_turn(end_of_turn("Leave a message."))
         request = await classifier.request()
         assert request.transcript == "Please leave a message."
@@ -396,7 +396,7 @@ async def test_late_losing_stt_is_same_turn_evidence_and_cannot_mutate_inflight_
         await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
         assert detector._fsm._turns[1].inference_text == "hello"
         assert detector._classifier_task is old_request
-        assert detector._transcript.text == ""
+        assert detector._run.transcript.text == ""
 
         detector._on_end_of_turn(end_of_turn("Newer speech"))
         request = await classifier.request()

@@ -22,6 +22,7 @@ class AMDReason(str, Enum):
     SUPERSEDED = "superseded"
     INFERENCE_TIMEOUT = "inference_timeout"
     INFERENCE_ERROR = "inference_error"
+    INTERNAL_ERROR = "internal_error"
     FINISHED = "finished"
     MAX_UNCERTAIN_TURNS = "max_uncertain_turns"
     TIMEOUT = "timeout"
