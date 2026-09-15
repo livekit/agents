@@ -78,6 +78,7 @@ from .events import (
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
+    UserTurnCommittedEvent,
 )
 from .ivr import IVRActivity
 from .keyterm_detection import (
@@ -693,6 +694,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
+        self._user_turn_id = 0
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
 
@@ -2230,9 +2232,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """End user speaking state when audio is disabled by default."""
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
-                self._activity.on_end_of_speech(None)
+                self._activity.on_end_of_speech(None, speech_end_time=time.time())
             else:
                 self._update_user_state("listening")
+
+    def _user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> int:
+        self._user_turn_id += 1
+        turn_id = self._user_turn_id
+        self.emit(
+            "user_turn_committed",
+            UserTurnCommittedEvent(
+                turn_id=turn_id, transcript=transcript, end_of_turn_delay=end_of_turn_delay
+            ),
+        )
+        return turn_id
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if ev.transcript:

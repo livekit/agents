@@ -15,7 +15,15 @@ from livekit.agents.voice.amd import AMDCategory, _inference
 
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_stt import FakeRecognizeStream, FakeSTT
-from .test_amd_detector import ClassifierLLM, commit, end_of_turn, eventually, running
+from .test_amd_detector import (
+    ClassifierLLM,
+    commit,
+    commit_turn,
+    end_of_turn,
+    eventually,
+    running,
+    transcribe,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -23,14 +31,20 @@ pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 class DrainingStream(FakeRecognizeStream):
     def __init__(self, model: DrainingSTT, conn_options: APIConnectOptions) -> None:
         super().__init__(stt=model, conn_options=conn_options)
+        self.flushed = asyncio.Event()
         self.input_ended = asyncio.Event()
         self.release = asyncio.Event()
+        self.error: Exception | None = None
         self.frames: list[rtc.AudioFrame] = []
 
     async def _run(self) -> None:
         async for frame in self._input_ch:
+            if self.error is not None:
+                raise self.error
             if isinstance(frame, rtc.AudioFrame):
                 self.frames.append(frame)
+            else:
+                self.flushed.set()
         self.input_ended.set()
         await self.release.wait()
 
@@ -160,7 +174,7 @@ async def test_none_always_inherits_the_active_agent_models(
             await eventually(lambda: detector.started)
             assert detector._run.llm is model
             assert detector._stt is None
-            assert detector._run.transcript._model is None
+            assert detector._run.stt._model is None
             await commit(detector, session, model)
             model.prediction(1, AMDCategory.HUMAN)
             assert (await detector.execute()).category == AMDCategory.HUMAN
@@ -277,18 +291,18 @@ async def test_first_final_wins_for_amd_without_changing_agent_transcript(winner
         )
         stream = push_audio(detector, stt)
         if winner == "session":
-            detector._on_transcript("session transcript")
+            transcribe(detector, "session transcript")
         stream.send_fake_transcript("AMD transcript")
-        await eventually(lambda: detector._run.transcript._texts["amd"] == "AMD transcript")
+        await eventually(lambda: detector._run.stt._current._texts["amd"] == "AMD transcript")
         if winner == "amd":
-            detector._on_transcript("session transcript")
+            transcribe(detector, "session transcript")
 
         info = end_of_turn("session transcript")
         session._activity.on_end_of_turn(info)
         request = await classifier.request()
         assert request.transcript == f"{winner if winner == 'session' else 'AMD'} transcript"
         assert request.transcript_source == winner
-        await asyncio.wait_for(stream.input_ended.wait(), 2)
+        await asyncio.wait_for(stream.flushed.wait(), 2)
         classifier.prediction(1, AMDCategory.UNCERTAIN)
         reply = await asyncio.wait_for(reply_model.calls.get(), 2)
         texts = [m.text_content for m in reply["chat_ctx"].items if m.type == "message"]
@@ -311,11 +325,11 @@ async def test_interim_and_empty_results_do_not_win_and_final_segments_accumulat
         stream.send_fake_transcript("partial", is_final=False)
         stream.send_fake_transcript("")
         await asyncio.sleep(0)
-        assert detector._run.transcript.winner is None
+        assert detector._run.stt._current.winner is None
         stream.send_fake_transcript("Please leave")
         stream.send_fake_transcript("a message.")
-        await eventually(lambda: detector._run.transcript.text == "Please leave a message.")
-        detector._on_end_of_turn(end_of_turn("Leave a message."))
+        await eventually(lambda: detector._run.stt.current_text == "Please leave a message.")
+        commit_turn(detector, end_of_turn("Leave a message."))
         request = await classifier.request()
         assert request.transcript == "Please leave a message."
         assert not hasattr(request, "alternative_transcript")
@@ -327,8 +341,8 @@ async def test_waits_for_first_nonempty_stt_result_after_eot() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, _, classifier, _):
         stream = push_audio(detector, stt)
-        detector._on_end_of_turn(end_of_turn(""))
-        await asyncio.wait_for(stream.input_ended.wait(), 2)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.wait_for(stream.flushed.wait(), 2)
         assert classifier.requests.empty()
         stream.send_fake_transcript("Hello, can you hear me?")
         request = await classifier.request()
@@ -338,85 +352,67 @@ async def test_waits_for_first_nonempty_stt_result_after_eot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_waiting_transcript_can_finish_after_history_eviction() -> None:
+async def test_transcript_received_after_eot_is_kept_in_next_request() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.wait_for(stream.flushed.wait(), 2)
+        stream.send_fake_transcript("Please state your name.")
+        first = await classifier.request()
+        classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+        prediction = await asyncio.wait_for(detector._wait_for_decision(1), 2)
+        assert prediction.transcript == first.transcript == "Please state your name."
+
+        commit_turn(detector, end_of_turn("Okay."))
+        second = await classifier.request()
+        assert second.earlier_turns[0]["transcript"] == first.transcript
+        assert second.earlier_turns[0]["transcript_source"] == first.transcript_source == "amd"
+
+
+@pytest.mark.asyncio
+async def test_late_final_after_many_empty_turns_attaches_to_the_latest_turn() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, _, classifier, _):
         stream = push_audio(detector, stt)
         detector.notify_dtmf_sent("1")
-        detector._on_end_of_turn(end_of_turn(""))
+        commit_turn(detector, end_of_turn(""))
         for _ in range(20):
-            detector._on_end_of_turn(end_of_turn(""))
+            commit_turn(detector, end_of_turn(""))
         assert len(detector._fsm._turns) == 21
         stream.send_fake_transcript("Hello, can you hear me?")
         request = await classifier.request()
-        assert request.turn_id == 1
+        assert request.turn_id == 21
         assert request.transcript == "Hello, can you hear me?"
-        assert request.dtmf_digits == "1"
-        assert request.earlier_turns == []
-        classifier.prediction(1, AMDCategory.HUMAN)
+        assert request.dtmf_digits == ""
+        assert [turn["turn_id"] for turn in request.earlier_turns] == list(range(2, 21))
+        classifier.prediction(21, AMDCategory.HUMAN)
         assert (await detector.execute()).category == AMDCategory.HUMAN
 
 
 @pytest.mark.asyncio
-async def test_late_winner_text_stays_on_original_turn_and_reaches_next_inference() -> None:
-    stt = DrainingSTT()
-    async with running(stt=stt, inference_timeout=0.02) as (detector, _, classifier, _):
-        stream = push_audio(detector, stt)
-        detector._on_end_of_turn(end_of_turn(""))
-        await eventually(lambda: detector._fsm.decision(1) is not None)
-        assert detector._fsm.decision(1).reason == "reused"
-        stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
-        assert classifier.requests.empty()
-        assert detector._fsm._turns[1].inference_text == ""
-        detector._on_end_of_turn(end_of_turn(""))
-        request = await classifier.request()
-        assert request.turn_id == 2
-        assert request.transcript == ""
-        assert request.updated_turn_ids == [1]
-        assert request.earlier_turns[0]["turn_id"] == 1
-        assert request.earlier_turns[0]["transcript"] == "Hello, can you hear me?"
-        classifier.prediction(2, AMDCategory.UNCERTAIN)
-        await eventually(lambda: detector._fsm.decision(2) is not None)
-        detector._on_end_of_turn(end_of_turn(""))
-        assert detector._fsm.decision(3).reason == "reused"
-        assert classifier.requests.empty()
-
-
-@pytest.mark.asyncio
-async def test_late_losing_stt_is_same_turn_evidence_and_cannot_mutate_inflight_context() -> None:
+async def test_final_after_the_turn_is_emitted_belongs_to_the_next_turn() -> None:
     stt = DrainingSTT()
     async with running(stt=stt) as (detector, session, classifier, _):
-        old_stream = push_audio(detector, stt)
+        stream = push_audio(detector, stt)
         await commit(detector, session, classifier)
-        old_request = detector._classifier_task
-        next_stream = push_audio(detector, stt)
-        assert next_stream is not old_stream
-        old_stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
-        assert detector._fsm._turns[1].inference_text == "hello"
-        assert detector._classifier_task is old_request
-        assert detector._run.transcript.text == ""
-
-        detector._on_end_of_turn(end_of_turn("Newer speech"))
+        stream.send_fake_transcript("Late words.")
+        await eventually(lambda: detector._run.stt.current_text == "Late words.")
+        assert detector._fsm._turns[1].transcript.alternative == ""
+        commit_turn(detector, end_of_turn("Yes."))
         request = await classifier.request()
-        assert request.transcript == "Newer speech"
-        assert request.updated_turn_ids == [1]
-        assert request.earlier_turns[0]["transcript"] == "hello"
-        assert request.earlier_turns[0]["alternative_transcript"] == "Hello, can you hear me?"
-        old_stream.send_fake_transcript("More old speech.")
-        await eventually(
-            lambda: detector._fsm._turns[1].transcript.alternative.endswith("More old speech.")
-        )
-        assert request.earlier_turns[0]["alternative_transcript"] == "Hello, can you hear me?"
+        assert request.turn_id == 2
+        assert request.transcript == "Late words."
+        assert request.transcript_source == "amd"
+        assert detector._fsm._turns[2].transcript.alternative == "Yes."
 
 
 @pytest.mark.asyncio
 async def test_superseded_inference_keeps_the_participant_transcript() -> None:
     async with running() as (detector, _, classifier, _):
-        detector._on_end_of_turn(end_of_turn("Hello, can you hear me?"))
+        commit_turn(detector, end_of_turn("Hello, can you hear me?"))
         await classifier.request()
-        detector._on_end_of_turn(end_of_turn("Yes, let's schedule that."))
+        commit_turn(detector, end_of_turn("Yes, let's schedule that."))
         request = await classifier.request()
         assert request.earlier_turns[0]["transcript"] == "Hello, can you hear me?"
         assert detector._fsm.decision(1).reason == "superseded"
@@ -430,8 +426,8 @@ async def test_empty_turns_do_not_cancel_or_count_against_pending_inference(fail
         events = []
         detector.on("amd_prediction", events.append)
         await commit(detector, session, classifier)
-        detector._on_end_of_turn(end_of_turn(""))
-        detector._on_end_of_turn(end_of_turn(""))
+        commit_turn(detector, end_of_turn(""))
+        commit_turn(detector, end_of_turn(""))
         assert not classifier.responses[1].done()
         assert detector._fsm.decision(2) is None
         classifier.respond(1, "invalid" if failed else '{"category":"uncertain"}')
@@ -449,26 +445,12 @@ async def test_empty_turns_do_not_cancel_or_count_against_pending_inference(fail
 async def test_dtmf_on_an_empty_turn_is_context_not_an_inference_trigger() -> None:
     async with running() as (detector, _, classifier, _):
         detector.notify_dtmf_sent("1")
-        detector._on_end_of_turn(end_of_turn(""))
+        commit_turn(detector, end_of_turn(""))
         assert classifier.requests.empty()
-        detector._on_end_of_turn(end_of_turn("Hello."))
+        commit_turn(detector, end_of_turn("Hello."))
         request = await classifier.request()
         assert request.dtmf_digits == ""
         assert request.earlier_turns[0]["dtmf_digits"] == "1"
-
-
-@pytest.mark.asyncio
-async def test_new_turn_carries_late_evidence_from_a_superseded_request() -> None:
-    stt = DrainingSTT()
-    async with running(stt=stt) as (detector, session, classifier, _):
-        stream = push_audio(detector, stt)
-        await commit(detector, session, classifier)
-        stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
-        detector._on_end_of_turn(end_of_turn(""))
-        assert (await classifier.request()).updated_turn_ids == [1]
-        detector._on_end_of_turn(end_of_turn("Yes."))
-        assert (await classifier.request()).updated_turn_ids == [1]
 
 
 @pytest.mark.asyncio
@@ -476,14 +458,14 @@ async def test_invalid_transition_falls_back_and_uncertain_preserves_stage() -> 
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        await detector._should_reply(first, llm.ChatContext())
+        await detector._should_reply(first.turn_id, llm.ChatContext())
         for turn_id, category, reason in (
             (2, AMDCategory.UNCERTAIN, "prediction"),
             (3, AMDCategory.MACHINE_SCREENING, "inference_error"),
         ):
             info = await commit(detector, session, classifier)
             classifier.prediction(turn_id, category)
-            await detector._should_reply(info, llm.ChatContext())
+            await detector._should_reply(info.turn_id, llm.ChatContext())
             assert detector._fsm._latest.reason == reason
             assert detector._fsm.category == AMDCategory.MACHINE_VM
             assert not detector._fsm._latest.state_changed
@@ -494,7 +476,7 @@ async def test_slow_menu_does_not_block_classification_or_next_turn() -> None:
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
-        assert await detector._should_reply(first, llm.ChatContext())
+        assert await detector._should_reply(first.turn_id, llm.ChatContext())
         menu_response = await asyncio.wait_for(classifier.menu_requests.get(), 2)
         assert not menu_response.done()
         await commit(detector, session, classifier)
@@ -504,20 +486,44 @@ async def test_slow_menu_does_not_block_classification_or_next_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_cancels_both_stt_turns_and_does_not_close_supplied_stt() -> None:
+async def test_cleanup_closes_the_run_stream_and_does_not_close_supplied_stt() -> None:
     stt = DrainingSTT()
     stt.aclose = AsyncMock()
     async with running(stt=stt) as (detector, session, classifier, _):
-        old_stream = push_audio(detector, stt)
+        stream = push_audio(detector, stt)
         await commit(detector, session, classifier)
-        current_stream = push_audio(detector, stt)
+        assert push_audio(detector, stt) is stream
         await asyncio.sleep(0)
         await detector.aclose()
-        assert old_stream._task.done()
-        assert current_stream._task.done()
+        assert stream._task.done()
+        assert len(stt.streams) == 1
         assert not detector._tasks
         assert session.amd is None
         stt.aclose.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stream_failure_releases_waiting_turns_and_falls_back_to_session_text() -> None:
+    stt = DrainingSTT()
+    async with running(stt=stt) as (detector, _, classifier, _):
+        stream = push_audio(detector, stt)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.wait_for(stream.flushed.wait(), 2)
+        await asyncio.sleep(0.05)
+        assert detector._fsm.decision(1) is None
+        stream.error = RuntimeError("connection lost")
+        detector.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+
+        async def released() -> None:
+            while detector._fsm.decision(1) is None:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(released(), 0.2)
+        assert not detector._run.stt.model_active
+        commit_turn(detector, end_of_turn("Hello, can you hear me?"))
+        request = await classifier.request()
+        assert request.transcript == "Hello, can you hear me?"
+        assert request.transcript_source == "session"
 
 
 @pytest.mark.asyncio
@@ -556,7 +562,7 @@ async def test_screening_prediction_is_forwarded_to_session_observability() -> N
         try:
             info = await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-            await detector._should_reply(info, llm.ChatContext())
+            await detector._should_reply(info.turn_id, llm.ChatContext())
             assert (
                 host._on_amd_prediction.call_args.args[0].category == AMDCategory.MACHINE_SCREENING
             )
@@ -574,7 +580,7 @@ async def test_split_screening_rollover_retains_all_turns() -> None:
             ("Feel free to leave a message.", AMDCategory.MACHINE_VM),
         ]
         for index, (text, category) in enumerate(history, start=1):
-            detector._on_end_of_turn(end_of_turn(text))
+            commit_turn(detector, end_of_turn(text))
             request = await classifier.request()
             assert [e["transcript"] for e in request.earlier_turns] == [
                 prior[0] for prior in history[: index - 1]
@@ -586,15 +592,11 @@ async def test_split_screening_rollover_retains_all_turns() -> None:
 
 
 @pytest.mark.asyncio
-async def test_nonstreaming_stt_receives_the_turn_audio() -> None:
-    stt = FakeSTT(fake_transcript="Hello, can you hear me?")
+async def test_nonstreaming_stt_is_rejected() -> None:
+    stt = FakeSTT()
     stt._capabilities.streaming = False
-    async with running(stt=stt) as (detector, _, classifier, _):
-        detector.push_audio(rtc.AudioFrame.create(16000, 1, 320))
-        detector._on_end_of_turn(end_of_turn(""))
-        request = await classifier.request()
-        assert request.transcript == "Hello, can you hear me?"
-        assert request.transcript_source == "amd"
+    with pytest.raises(ValueError, match="streaming STT"):
+        AMD(AgentSession(), llm=None, stt=stt)
 
 
 @pytest.mark.asyncio

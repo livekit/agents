@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from functools import partial
 from typing import Literal
 
 from pydantic import BaseModel
@@ -39,7 +37,6 @@ ALLOWED = {
 }
 TERMINAL = frozenset({AMDCategory.HUMAN, AMDCategory.MACHINE_UNAVAILABLE})
 _AMDEvent = AMDPredictionEvent | AMDCompletedEvent
-_Deadline = tuple[float, Callable[[float], list[_AMDEvent]]]
 _Source = Literal["session", "amd"]
 _HISTORY_LIMIT = 20
 _MAX_INFERENCE_TIMEOUTS = 3
@@ -102,7 +99,6 @@ class ClassifyRequest(BaseModel):
     stage: AMDCategory
     allowed_next_categories: list[AMDCategory]
     earlier_turns: list[TurnContext]
-    updated_turn_ids: list[int]
     speech_duration: float
     turn_id: int
     transcript: str
@@ -119,13 +115,11 @@ class _Turn:
     release_epoch: int
     silence_started_at: float
     dtmf_digits: str
-    inference_text: str = ""
     decision: AMDPredictionEvent | None = None
     phase: _Phase = _Phase.IDLE
     deadline: float | None = None
     prediction: _Prediction | None = None
     timed_out: bool = False
-    updated_turn_ids: set[int] = field(default_factory=set)
 
     def context(self) -> TurnContext:
         alternative = self.transcript.alternative
@@ -186,7 +180,6 @@ class _AMDFSM:
         self._pending_turn: _Turn | None = None
         self._last_inference_turn_id = 0
         self._reused_turns: list[_Turn] = []
-        self._updated_turn_ids: set[int] = set()
         self._pending_dtmf_digits = ""
         self._hard_deadline: float | None = None
         self._idle_deadline: float | None = None
@@ -213,7 +206,7 @@ class _AMDFSM:
 
     @property
     def turn_id(self) -> int:
-        return len(self._turns)
+        return next(reversed(self._turns), 0)
 
     @property
     def voicemail_message_played(self) -> bool:
@@ -221,7 +214,9 @@ class _AMDFSM:
 
     @property
     def next_deadline(self) -> float | None:
-        return min((at for at, _ in self._deadlines()), default=None)
+        deadlines = [self._hard_deadline, self._idle_deadline]
+        deadlines.extend(turn.deadline for turn in self._turns.values())
+        return min((at for at in deadlines if at is not None), default=None)
 
     def has_turn(self, turn_id: int | None) -> bool:
         return turn_id in self._turns
@@ -272,7 +267,9 @@ class _AMDFSM:
                 events.extend(self._resume(turn, now))
         return events
 
-    def commit_turn(self, transcript: _Transcript, now: float, eot_delay: float) -> int:
+    def commit_turn(
+        self, transcript: _Transcript, now: float, eot_delay: float, *, turn_id: int
+    ) -> None:
         if not self.started:
             raise RuntimeError("AMD must be listening before committing a turn")
         self._idle_deadline = None
@@ -281,7 +278,7 @@ class _AMDFSM:
             speech_duration += now - self._speaking_since
             self._speaking_since = now
         turn = _Turn(
-            turn_id=self.turn_id + 1,
+            turn_id=turn_id,
             committed_at=now,
             transcript=transcript,
             speech_duration=speech_duration,
@@ -290,20 +287,9 @@ class _AMDFSM:
             if self._speech_ended_at is not None
             else now - max(0, eot_delay),
             dtmf_digits=self._pending_dtmf_digits,
-            inference_text=transcript.text,
         )
         self._turns[turn.turn_id] = turn
-        self._updated_turn_ids.intersection_update(self._history_ids(self.turn_id + 1))
         self._pending_dtmf_digits = ""
-        return turn.turn_id
-
-    def transcript_updated(self, turn_id: int, transcript: _Transcript) -> None:
-        if self.finished or turn_id not in self._history_ids(self.turn_id + 1):
-            return
-        turn = self._turns[turn_id]
-        if turn.transcript != transcript:
-            turn.transcript = transcript
-            self._updated_turn_ids.add(turn_id)
 
     def transcript_ready(
         self, turn_id: int, transcript: _Transcript, now: float
@@ -311,15 +297,14 @@ class _AMDFSM:
         if self.finished:
             return None, []
         turn = self._turns[turn_id]
-        turn.inference_text = transcript.text
+        turn.transcript = transcript
         if turn_id < self._last_inference_turn_id:
             self._fallback(turn, AMDReason.SUPERSEDED, now)
             return None, []
-        history_ids = set(self._history_ids(turn_id))
-        if not turn.inference_text and not self._updated_turn_ids & history_ids:
+        if not turn.transcript.text:
             return None, self._reuse_pending(turn, now)
         self._supersede_pending(turn_id, now)
-        return self._new_request(turn, transcript, history_ids), []
+        return self._new_request(turn), []
 
     def prediction_received(
         self, turn_id: int, category: AMDCategory, now: float, inference_duration: float
@@ -345,10 +330,21 @@ class _AMDFSM:
     def tick(self, now: float) -> list[_AMDEvent]:
         """Apply every due deadline in order, even when the timer wakes late."""
         events: list[_AMDEvent] = []
-        for at, apply in sorted(self._deadlines(), key=lambda deadline: deadline[0]):
-            if at > now or self.finished:
-                break
-            events.extend(apply(now))
+        while (at := self.next_deadline) is not None and at <= now:
+            if at == self._hard_deadline:
+                return [*events, self.finish(AMDReason.TIMEOUT)]
+            if at == self._idle_deadline:
+                return [*events, self.finish(AMDReason.IDLE_TIMEOUT)]
+            for turn in self._turns.values():
+                if turn.deadline != at:
+                    continue
+                if turn.phase is _Phase.INFERRING:
+                    turn.timed_out = True
+                    self._inference_timeouts += 1
+                    events.extend(self._fallback(turn, AMDReason.INFERENCE_TIMEOUT, now))
+                    events.extend(self._flush_reused(now))
+                elif turn.phase is _Phase.HOLDING:
+                    events.extend(self._resume(turn, now))
         return events
 
     def update_idle(self, now: float, *, session_busy: bool) -> None:
@@ -401,7 +397,7 @@ class _AMDFSM:
                     turn_id=turn.turn_id,
                     category=self._category,
                     reason=reason,
-                    transcript=turn.inference_text,
+                    transcript=turn.transcript.text,
                     speech_duration=turn.speech_duration,
                     delay=0,
                 )
@@ -420,31 +416,6 @@ class _AMDFSM:
             voicemail_message_played=self._voicemail_message_played,
         )
 
-    def _history_ids(self, before: int) -> range:
-        return range(max(1, self.turn_id - _HISTORY_LIMIT + 1), before)
-
-    def _deadlines(self) -> Iterator[_Deadline]:
-        if self._hard_deadline is not None:
-            yield self._hard_deadline, partial(self._expire, AMDReason.TIMEOUT)
-        if self._idle_deadline is not None:
-            yield self._idle_deadline, partial(self._expire, AMDReason.IDLE_TIMEOUT)
-        for turn in self._turns.values():
-            if turn.deadline is None:
-                continue
-            if turn.phase is _Phase.INFERRING:
-                yield turn.deadline, partial(self._inference_timed_out, turn)
-            elif turn.phase is _Phase.HOLDING:
-                yield turn.deadline, partial(self._resume, turn)
-
-    def _expire(self, reason: AMDReason, now: float) -> list[_AMDEvent]:
-        return [self.finish(reason)]
-
-    def _inference_timed_out(self, turn: _Turn, now: float) -> list[_AMDEvent]:
-        turn.timed_out = True
-        self._inference_timeouts += 1
-        events = self._fallback(turn, AMDReason.INFERENCE_TIMEOUT, now)
-        return [*events, *self._flush_reused(now)]
-
     def _reuse_pending(self, turn: _Turn, now: float) -> list[_AMDEvent]:
         """An empty turn re-anchors the pending turn's silence instead of a new request."""
         pending = self._pending_turn
@@ -460,15 +431,10 @@ class _AMDFSM:
         """Resolve every older turn's pending work before a new request starts."""
         self._supersede(turn_id, now)
         if self._pending_turn is not None:
-            self._updated_turn_ids.update(self._pending_turn.updated_turn_ids)
             self._fallback(self._pending_turn, AMDReason.SUPERSEDED, now)
             self._flush_reused(now, reason=AMDReason.SUPERSEDED)
 
-    def _new_request(
-        self, turn: _Turn, transcript: _Transcript, history_ids: set[int]
-    ) -> ClassifyRequest:
-        turn.updated_turn_ids = self._updated_turn_ids & history_ids
-        self._updated_turn_ids.difference_update(turn.updated_turn_ids | {turn.turn_id})
+    def _new_request(self, turn: _Turn) -> ClassifyRequest:
         self._last_inference_turn_id = turn.turn_id
         self._pending_turn = turn
         turn.phase = _Phase.INFERRING
@@ -476,12 +442,15 @@ class _AMDFSM:
         return ClassifyRequest(
             stage=self._category,
             allowed_next_categories=sorted(ALLOWED[self._category]),
-            earlier_turns=[self._turns[index].context() for index in sorted(history_ids)],
-            updated_turn_ids=sorted(turn.updated_turn_ids),
+            earlier_turns=[
+                earlier.context()
+                for earlier in list(self._turns.values())[-_HISTORY_LIMIT:]
+                if earlier.turn_id < turn.turn_id
+            ],
             speech_duration=turn.speech_duration,
             turn_id=turn.turn_id,
-            transcript=transcript.text,
-            transcript_source=transcript.source,
+            transcript=turn.transcript.text,
+            transcript_source=turn.transcript.source,
             dtmf_digits=turn.dtmf_digits,
         )
 
@@ -574,7 +543,7 @@ class _AMDFSM:
             turn_id=turn.turn_id,
             category=prediction.category,
             reason=reason,
-            transcript=turn.inference_text,
+            transcript=turn.transcript.text,
             speech_duration=turn.speech_duration,
             delay=now - turn.committed_at,
             inference_duration=prediction.inference_duration,

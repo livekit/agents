@@ -76,7 +76,8 @@ class _EndOfTurnInfo:
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
-    amd_turn_id: int | None = None
+    turn_id: int | None = None
+    """Session turn ID, assigned when the activity accepts the turn."""
     user_turn_span: trace.Span | None = None
     """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
@@ -149,7 +150,7 @@ class RecognitionHooks(Protocol):
     def on_backchannel_confirmed(self) -> None: ...
     def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
-    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
+    def on_end_of_speech(self, ev: vad.VADEvent | None, *, speech_end_time: float) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
     def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
@@ -748,17 +749,13 @@ class AudioRecognition:
     def _push_audio(
         self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
     ) -> None:
-        """Forward an audio frame to STT, VAD, AMD and the interruption detector.
+        """Forward an audio frame to STT, VAD and the interruption detector.
 
         When ``stt_frame`` is provided, it is sent to the STT pipeline in place of
         ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
         speech). VAD and the interruption channel always receive ``frame``.
-        The optional AMD STT receives the same input as session STT.
         """
         self._sample_rate = frame.sample_rate
-        # Drop audio only while AMD waits for the call to be answered.
-        if (amd := self._session.amd) and amd.enabled and not amd.started:
-            return
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
             if self._stt_pipeline.input_started_at is None:
@@ -767,9 +764,6 @@ class AudioRecognition:
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
-
-        if amd:
-            amd.push_audio(stt_frame if stt_frame is not None else frame)
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
@@ -1225,9 +1219,6 @@ class AudioRecognition:
                 if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
-            if self._session.amd:
-                self._session.amd._on_transcript(transcript)
-
             extra: dict[str, Any] = {
                 "lk.pii.user_transcript": transcript,
                 "language": self._last_language,
@@ -1322,8 +1313,13 @@ class AudioRecognition:
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
+            speech_end_time = (
+                min(ev.speech_end_time, now)
+                if ev.speech_end_time is not None
+                else stt_last_speaking_time
+            )
             with tracer.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech(None)
+                self._hooks.on_end_of_speech(None, speech_end_time=speech_end_time)
 
             # STT EOT changes user state from speaking to listening without updating VAD internal states
             # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
@@ -1349,19 +1345,7 @@ class AudioRecognition:
             self._speaking = False
             self._user_turn_committed = True
 
-            # always use STT speaking time since turn detection mode is set to STT. we would want
-            # alignment here since _last_speaking_time is used for turn detection timing
-            if ev.speech_end_time is not None:
-                # clamped like the other anchors: a provider clock running ahead would
-                # otherwise push the anchor into the future and extend `extra_sleep`,
-                # delaying the turn commit by the skew
-                self._last_speaking_time = min(ev.speech_end_time, now)
-            else:
-                # use an implied version computed based on either word timestamps or current time
-                self._last_speaking_time = stt_last_speaking_time
-
-            if self._vad is None and self._session.amd:
-                self._session.amd._on_user_speech_ended(now - self._last_speaking_time)
+            self._last_speaking_time = speech_end_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
@@ -1381,8 +1365,6 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
-            if self._vad is None and self._session.amd:
-                self._session.amd._on_user_speech_started()
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -1412,9 +1394,6 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-            if self._session.amd:
-                self._session.amd._on_user_speech_started()
-
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
 
@@ -1438,13 +1417,13 @@ class AudioRecognition:
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
             vad_speech_started = self._vad_speech_started
+            speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             with tracer.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_end_of_speech(ev)
+                self._hooks.on_end_of_speech(ev, speech_end_time=speech_end_time)
 
             self._active_vad_speech_started_at = None
             self._vad_speech_started = False
             self._speaking = False
-            speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             self._last_speaking_time = speech_end_time
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
@@ -1459,9 +1438,6 @@ class AudioRecognition:
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
-
-            if self._session.amd:
-                self._session.amd._on_user_speech_ended(ev.silence_duration + ev.inference_duration)
 
     def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
         # every verdict is terminal for its overlap, including one the cooldown then ignores
@@ -1911,7 +1887,7 @@ class AudioRecognition:
             # reset the speaking state to prevent stuck user speaking state during handoff
             if self._speaking:
                 with tracer.use_span(self._ensure_user_turn_span()):
-                    self._hooks.on_end_of_speech(None)
+                    self._hooks.on_end_of_speech(None, speech_end_time=time.time())
                 self._speaking = False
                 self._vad_speech_started = False
             self._active_vad_speech_started_at = None

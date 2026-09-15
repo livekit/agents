@@ -2350,7 +2350,7 @@ class _TestRecognitionHooks:
     def on_vad_inference_done(self, ev: object) -> None:
         pass
 
-    def on_end_of_speech(self, ev: object) -> None:
+    def on_end_of_speech(self, ev: object, *, speech_end_time: float) -> None:
         pass
 
     def on_interim_transcript(self, ev: SpeechEvent, *, speaking: bool | None) -> None:

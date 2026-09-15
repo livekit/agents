@@ -13,7 +13,16 @@ from livekit.agents.voice.amd import AMDCategory, detector as detector_module
 from .fake_llm import FakeLLM
 from .fake_stt import FakeSTT
 from .fake_vad import FakeVAD
-from .test_amd_detector import CustomerAgent, commit, end_of_turn, eventually, running
+from .test_amd_detector import (
+    CustomerAgent,
+    commit,
+    commit_turn,
+    end_of_turn,
+    eventually,
+    running,
+    speech_ended,
+    speech_started,
+)
 from .test_amd_local_inference import DrainingSTT, push_audio
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent, pytest.mark.virtual_time]
@@ -24,7 +33,7 @@ def detector_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         detector_module,
         "time",
-        SimpleNamespace(monotonic=lambda: asyncio.get_running_loop().time()),
+        SimpleNamespace(monotonic=lambda: asyncio.get_running_loop().time(), time=time.time),
     )
 
 
@@ -55,8 +64,8 @@ async def test_machine_prediction_and_reply_wait_for_remaining_silence(
     ):
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
+        speech_started(detector)
+        speech_ended(detector, 0.5)
         await commit(detector, session, classifier, reply=True)
         await asyncio.sleep(0.2)
         classifier.prediction(1, category)
@@ -83,11 +92,11 @@ async def test_machine_prediction_and_reply_wait_for_remaining_silence(
 @pytest.mark.parametrize("category", [AMDCategory.HUMAN, AMDCategory.UNCERTAIN])
 async def test_human_and_initial_uncertain_do_not_wait(category: AMDCategory) -> None:
     async with running(machine_silence_threshold=1.5) as (detector, session, classifier, _):
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        speech_started(detector)
+        speech_ended(detector, 0)
         info = await commit(detector, session, classifier)
         classifier.prediction(1, category)
-        assert await detector._should_reply(info, llm.ChatContext())
+        assert await detector._should_reply(info.turn_id, llm.ChatContext())
         assert detector._fsm._latest.category == category
         assert detector._fsm._latest.delay < 0.01
 
@@ -100,12 +109,12 @@ async def test_elapsed_silence_and_slow_inference_do_not_add_another_wait() -> N
         classifier,
         _,
     ):
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
+        speech_started(detector)
+        speech_ended(detector, 0.5)
         info = await commit(detector, session, classifier)
         await asyncio.sleep(1.2)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        assert await detector._should_reply(info, llm.ChatContext())
+        assert await detector._should_reply(info.turn_id, llm.ChatContext())
         assert detector._fsm._latest.delay == pytest.approx(1.2, abs=0.01)
 
 
@@ -118,17 +127,18 @@ async def test_established_machine_stage_gates_uncertain_and_fallbacks(reason: s
         classifier,
         _,
     ):
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(1.5)
+        speech_started(detector)
+        speech_started(detector)
+        speech_ended(detector, 1.5)
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        assert await detector._should_reply(first, llm.ChatContext())
+        assert await detector._should_reply(first.turn_id, llm.ChatContext())
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
+        speech_started(detector)
+        speech_ended(detector, 0.5)
         if reason == "reused":
-            detector._on_end_of_turn(end_of_turn(""))
+            commit_turn(detector, end_of_turn(""))
         else:
             await commit(detector, session, classifier)
             if reason == "prediction":
@@ -151,21 +161,21 @@ async def test_resumed_speech_invalidates_release_and_preserves_history() -> Non
     async with running(machine_silence_threshold=1.5) as (detector, session, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
+        speech_started(detector)
+        speech_ended(detector, 0.5)
         info = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         await asyncio.sleep(0.5)
-        detector._on_user_speech_started()
+        speech_started(detector)
         await asyncio.sleep(1)
-        detector._on_user_speech_ended(0.5)
+        speech_ended(detector, 0.5)
         await asyncio.sleep(1.1)
         assert events == []
         assert detector._fsm.decision(1) is None
-        detector._on_end_of_turn(end_of_turn("Hello, can you hear me?"))
+        commit_turn(detector, end_of_turn("Hello, can you hear me?"))
         request = await classifier.request()
         assert request.earlier_turns[0]["transcript"] == "hello"
-        assert not await detector._should_reply(info, llm.ChatContext())
+        assert not await detector._should_reply(info.turn_id, llm.ChatContext())
         classifier.prediction(2, AMDCategory.HUMAN)
         assert (await detector.execute()).category == AMDCategory.HUMAN
         assert not any(event.is_machine for event in events)
@@ -179,14 +189,15 @@ async def test_late_human_prediction_replaces_a_machine_timeout_wait() -> None:
         classifier,
         _,
     ):
-        detector._on_user_speech_ended(1.5)
+        speech_started(detector)
+        speech_ended(detector, 1.5)
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        await detector._should_reply(first, llm.ChatContext())
+        await detector._should_reply(first.turn_id, llm.ChatContext())
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        speech_started(detector)
+        speech_ended(detector, 0)
         await commit(detector, session, classifier)
         await asyncio.sleep(0.3)
         assert detector._fsm._turns[2].timed_out
@@ -205,16 +216,17 @@ async def test_third_machine_timeout_waits_for_silence_before_completion() -> No
         classifier,
         _,
     ):
-        detector._on_user_speech_ended(1.5)
+        speech_started(detector)
+        speech_ended(detector, 1.5)
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        await detector._should_reply(first, llm.ChatContext())
+        await detector._should_reply(first.turn_id, llm.ChatContext())
         for turn_id in range(2, 5):
-            detector._on_user_speech_started()
-            detector._on_user_speech_ended(0.5)
+            speech_started(detector)
+            speech_ended(detector, 0.5)
             await commit(detector, session, classifier)
             await asyncio.sleep(0.3)
-            assert detector.enabled
+            assert detector.enabled, (session._recorded_events, detector._fsm.completion())
             assert detector._fsm.decision(turn_id) is None
             await asyncio.sleep(0.71)
             assert detector._fsm.decision(turn_id) is not None
@@ -234,15 +246,15 @@ async def test_empty_eot_after_resumed_speech_rearms_a_useful_prediction(
     ):
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
+        speech_started(detector)
+        speech_ended(detector, 0.5)
         await commit(detector, session, classifier)
         if inference_ready:
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.2)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0.5)
-        detector._on_end_of_turn(end_of_turn(""))
+        speech_started(detector)
+        speech_ended(detector, 0.5)
+        commit_turn(detector, end_of_turn(""))
         if not inference_ready:
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.9)
@@ -259,17 +271,17 @@ async def test_older_empty_transcript_wait_cannot_block_newer_prediction() -> No
     async with running(stt=stt, machine_silence_threshold=1.5) as (detector, _, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
-        detector._on_user_speech_started()
+        speech_started(detector)
         stream = push_audio(detector, stt)
-        detector._on_user_speech_ended(0)
-        detector._on_end_of_turn(end_of_turn(""))
-        await stream.input_ended.wait()
+        speech_ended(detector, 0)
+        commit_turn(detector, end_of_turn(""))
+        await asyncio.wait_for(stream.flushed.wait(), 2)
 
         await asyncio.sleep(0.1)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        speech_started(detector)
+        speech_ended(detector, 0)
         info = end_of_turn("Please state your name and why you are calling.")
-        detector._on_end_of_turn(info)
+        commit_turn(detector, info)
         assert (await classifier.request()).turn_id == 2
         classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
 
@@ -280,29 +292,30 @@ async def test_older_empty_transcript_wait_cannot_block_newer_prediction() -> No
             (2, AMDCategory.MACHINE_SCREENING)
         ]
         assert detector._fsm.decision(1).reason == "superseded"
-        assert await detector._should_reply(info, llm.ChatContext())
+        assert await detector._should_reply(info.turn_id, llm.ChatContext())
 
 
 @pytest.mark.asyncio
 async def test_new_inference_settles_queued_empty_turns() -> None:
     async with running(machine_silence_threshold=1.5) as (detector, session, classifier, _):
-        detector._on_user_speech_ended(1.5)
+        speech_started(detector)
+        speech_ended(detector, 1.5)
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        await detector._should_reply(first, llm.ChatContext())
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        await detector._should_reply(first.turn_id, llm.ChatContext())
+        speech_started(detector)
+        speech_ended(detector, 0)
         await commit(detector, session, classifier)
         classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.1)
-        detector._on_end_of_turn(end_of_turn(""))
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        commit_turn(detector, end_of_turn(""))
+        speech_started(detector)
+        speech_ended(detector, 0)
         fourth = await commit(detector, session, classifier)
         assert detector._fsm.decision(2) is not None
         assert detector._fsm.decision(3) is not None
         classifier.prediction(4, AMDCategory.MACHINE_SCREENING)
-        await detector._should_reply(fourth, llm.ChatContext())
+        await detector._should_reply(fourth.turn_id, llm.ChatContext())
         assert detector._fsm._idle_deadline is not None
 
 
@@ -330,11 +343,11 @@ async def test_late_machine_prediction_suspends_idle_during_silence_wait() -> No
         _,
     ):
         info = await commit(detector, session, classifier)
-        await detector._should_reply(info, llm.ChatContext())
+        await detector._should_reply(info.turn_id, llm.ChatContext())
         assert detector._fsm._idle_deadline is not None
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.2)
-        detector._rearm_idle()
+        detector._reschedule_timer()
         assert detector._fsm._idle_deadline is None
         assert detector.enabled
         await asyncio.sleep(1.31)
@@ -348,7 +361,7 @@ async def test_eot_without_speech_edges_uses_available_timing(elapsed: float | N
     async with running(machine_silence_threshold=1.5) as (detector, _, classifier, _):
         info = end_of_turn()
         info.metrics.end_of_turn_delay = elapsed
-        detector._on_end_of_turn(info)
+        commit_turn(detector, info)
         await classifier.request()
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await detector._wait_for_decision(1)
@@ -358,24 +371,26 @@ async def test_eot_without_speech_edges_uses_available_timing(elapsed: float | N
 @pytest.mark.asyncio
 async def test_eot_before_speech_end_waits_for_the_speech_end_anchor() -> None:
     async with running(machine_silence_threshold=1.5) as (detector, session, classifier, _):
-        detector._on_user_speech_started()
+        speech_started(detector)
         await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.6)
         assert detector._fsm.decision(1) is None
-        detector._on_user_speech_ended(0.5)
+        speech_ended(detector, 0.5)
         await detector._wait_for_decision(1)
         assert detector._fsm._latest.delay == pytest.approx(1.6, abs=0.01)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["vad", "stt"])
+@pytest.mark.parametrize("source", ["vad", "stt", "stt_with_vad"])
 async def test_audio_recognition_supplies_speech_edges_and_elapsed_silence(
     source: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async with running(machine_silence_threshold=1.5) as (detector, session, _, _):
         recognition = session._activity._audio_recognition
         monkeypatch.setattr(recognition, "_run_eou_detection", Mock())
+        state_events = []
+        session.on("user_state_changed", state_events.append)
         if source == "vad":
             await recognition._on_vad_event(
                 vad.VADEvent(
@@ -387,7 +402,9 @@ async def test_audio_recognition_supplies_speech_edges_and_elapsed_silence(
                 )
             )
         else:
-            monkeypatch.setattr(recognition, "_vad", None)
+            monkeypatch.setattr(
+                recognition, "_vad", FakeVAD() if source == "stt_with_vad" else None
+            )
             recognition._turn_detection_mode = "stt"
             recognition._process_stt_event(
                 stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
@@ -416,6 +433,31 @@ async def test_audio_recognition_supplies_speech_edges_and_elapsed_silence(
         assert detector._fsm._speech_ended_at == pytest.approx(
             asyncio.get_running_loop().time() - 0.7, abs=0.01
         )
+        assert state_events[-1].created_at == pytest.approx(time.time() - 0.7, abs=0.01)
+        if source == "stt_with_vad":
+            speech_ended_at = detector._fsm._speech_ended_at
+            await recognition._on_vad_event(
+                vad.VADEvent(
+                    type=vad.VADEventType.END_OF_SPEECH,
+                    samples_index=0,
+                    timestamp=0,
+                    speech_duration=0.3,
+                    silence_duration=0.1,
+                )
+            )
+            assert len(state_events) == 2
+            assert detector._fsm._speech_ended_at == speech_ended_at
+            await recognition._on_vad_event(
+                vad.VADEvent(
+                    type=vad.VADEventType.START_OF_SPEECH,
+                    samples_index=0,
+                    timestamp=0,
+                    speech_duration=0.1,
+                    silence_duration=0,
+                )
+            )
+            assert detector._fsm._speaking_since is not None
+            assert detector._fsm._speech_epoch == 2
 
 
 @pytest.mark.asyncio
@@ -433,6 +475,8 @@ async def test_untranscribed_speech_restarts_idle_timer(source: str) -> None:
             await eventually(lambda: detector.started)
             recognition = session._activity._audio_recognition
             if source == "vad":
+                # Let the empty fake stream finish before injecting VAD events.
+                await recognition._vad_atask
                 await recognition._on_vad_event(
                     vad.VADEvent(
                         type=vad.VADEventType.START_OF_SPEECH,
@@ -481,8 +525,8 @@ async def test_speech_end_does_not_start_idle_while_customer_hook_runs() -> None
         await agent.hook_started.wait()
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await detector._wait_for_decision(1)
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        speech_started(detector)
+        speech_ended(detector, 0)
         await asyncio.sleep(0.2)
         assert detector.enabled
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from typing import Literal
+from collections.abc import AsyncIterator, Coroutine
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from livekit import rtc
 
@@ -12,127 +13,160 @@ from ...types import APIConnectOptions
 from ...utils import aio
 from ._fsm import _Transcript
 
+_Source = Literal["session", "amd"]
+_MAX_TEXT = 16000
 
+
+@dataclass(frozen=True)
 class TurnTranscript:
-    """Race final transcripts without changing the Agent's STT input.
+    """A committed turn's transcript, ready for classification."""
 
-    Each optional STT stream ends at client-side EOT. Its reader can drain
-    independently, so late finals cannot be assigned to another turn.
+    turn_id: int
+    transcript: _Transcript
+
+
+class _TurnText:
+    """Race the session transcript against the AMD transcript for one turn."""
+
+    def __init__(self) -> None:
+        self.ready = asyncio.Event()
+        self.winner: _Source | None = None
+        self._texts: dict[_Source, str] = {"session": "", "amd": ""}
+
+    @property
+    def text(self) -> str:
+        return self._texts[self.winner] if self.winner else ""
+
+    def snapshot(self) -> _Transcript:
+        other = self._texts["amd" if self.winner == "session" else "session"]
+        return _Transcript(self.text, self.winner, other)
+
+    def add(self, source: _Source, text: str, *, replace: bool = False) -> None:
+        text = text.strip()
+        if not text:
+            return
+        joined = text if replace else f"{self._texts[source]} {text}".strip()
+        self._texts[source] = joined[-_MAX_TEXT:]
+        if self.winner is None:
+            self.winner = source
+            self.ready.set()
+
+
+class RacingSTT:
+    """One STT for AMD. The session transcript races an optional AMD model per turn.
+
+    Audio and session finals go in. One ``TurnTranscript`` per committed turn
+    comes out, when the first text lands or the grace period expires. The model
+    keeps one stream open for the run and each EOT flushes it. AMD finals belong
+    to the newest committed turn that is still waiting for text; anything later
+    belongs to the next turn, as with the session's own STT.
     """
 
     def __init__(
         self,
         model: stt.STT | None,
         conn_options: APIConnectOptions,
-        on_update: Callable[[TurnTranscript], None],
+        *,
+        grace_period: float,
     ) -> None:
-        self.turn_id: int | None = None
-        self.ready = asyncio.Event()
-        self.winner: Literal["session", "amd"] | None = None
-        self._texts = {"session": "", "amd": ""}
         self._model = model
         self._conn_options = conn_options
-        self._on_update = on_update
+        self._grace_period = grace_period
+        self._current = _TurnText()
+        self._waiting: dict[int, _TurnText] = {}
+        self._pending: tuple[int, _TurnText] | None = None
+        self._events = aio.Chan[TurnTranscript]()
         self._stream: stt.RecognizeStream | None = None
-        self._frames: list[rtc.AudioFrame] = []
-        self._task: asyncio.Task[None] | None = None
         self._reading = False
-        self._drain_timer: asyncio.TimerHandle | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
         self._failed = False
 
     @property
-    def text(self) -> str:
-        return self._texts[self.winner] if self.winner else ""
+    def model_active(self) -> bool:
+        """Whether the AMD model can still contribute text. Session text always can."""
+        return self._model is not None and not self._failed
 
     @property
-    def pending(self) -> bool:
-        return self._task is not None and not self._task.done()
-
-    def add_session_text(self, text: str, *, replace: bool = False) -> None:
-        if self._failed and text.strip():
-            self.winner = "session"
-        self._add_text("session", text, replace=replace)
-
-    def _add_text(
-        self, source: Literal["session", "amd"], text: str, *, replace: bool = False
-    ) -> None:
-        text = text.strip()
-        if not text:
-            return
-        self._texts[source] = (text if replace else f"{self._texts[source]} {text}".strip())[
-            -16000:
-        ]
-        if self.winner is None:
-            self.winner = source
-            self.ready.set()
-        if self.turn_id is not None:
-            self._on_update(self)
-
-    def snapshot(self) -> _Transcript:
-        other = self._texts["amd" if self.winner == "session" else "session"]
-        return _Transcript(self.text, self.winner, other)
+    def current_text(self) -> str:
+        return self._current.text
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        if self._model is None or self._failed:
-            return
-        if not self._model.capabilities.streaming:
-            self._frames.append(frame)
+        model = self._model
+        if model is None or self._failed:
             return
         try:
             if self._stream is None:
-                self._stream = self._model.stream(conn_options=self._conn_options)
-                self._task = asyncio.create_task(self._recognize())
+                self._stream = model.stream(conn_options=self._conn_options)
+                self._spawn(self._read(self._stream))
             self._stream.push_frame(frame)
         except Exception as exc:
             self._fail(exc)
 
-    def commit(self, turn_id: int, session_text: str) -> None:
-        self.add_session_text(session_text, replace=True)
-        self.turn_id = turn_id
+    def push_session_text(self, text: str) -> None:
+        self._current.add("session", text)
+
+    def end_turn(self, turn_id: int, session_text: str) -> _Transcript:
+        """Commit the open turn at client-side EOT and return its transcript so far."""
+        turn = self._current
+        turn.add("session", session_text, replace=True)
+        self._current = _TurnText()
         try:
-            if self._stream is not None and not self._failed:
-                self._stream.end_input()
-            elif self._frames:
-                self._task = asyncio.create_task(self._recognize())
+            if self._stream is not None and self.model_active:
+                self._stream.flush()
         except Exception as exc:
             self._fail(exc)
-        if self.pending:
-            # Bound the losing request without discarding text at the reply deadline.
-            assert self._task is not None
-            self._drain_timer = asyncio.get_running_loop().call_later(30, self._task.cancel)
+        if turn.ready.is_set() or not self.model_active:
+            self._pending = None
+            self._events.send_nowait(TurnTranscript(turn_id, turn.snapshot()))
+        else:
+            self._waiting[turn_id] = turn
+            self._pending = (turn_id, turn)
+            self._spawn(self._await_ready(turn_id, turn))
+        return turn.snapshot()
 
-    async def _recognize(self) -> None:
-        self._reading = True
-        try:
-            if self._stream is not None:
-                async with self._stream:
-                    async for event in self._stream:
-                        if (
-                            event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
-                            and event.alternatives
-                        ):
-                            self._add_text("amd", event.alternatives[0].text)
-            else:
-                assert self._model is not None
-                event = await self._model.recognize(self._frames, conn_options=self._conn_options)
-                if event.alternatives:
-                    self._add_text("amd", event.alternatives[0].text)
-        except Exception as exc:
-            self._fail(exc)
-        finally:
-            self._frames.clear()
-            if self._drain_timer:
-                self._drain_timer.cancel()
-
-    def _fail(self, exc: Exception) -> None:
-        self._failed = True
-        logger.warning("amd stt failed", extra={"error_type": type(exc).__name__})
+    def __aiter__(self) -> AsyncIterator[TurnTranscript]:
+        return self._events
 
     async def aclose(self) -> None:
-        if self._drain_timer:
-            self._drain_timer.cancel()
-        if self._task:
-            await aio.cancel_and_wait(self._task)
-        if self._stream and not self._reading:
+        await aio.cancel_and_wait(*self._tasks)
+        if self._stream is not None and not self._reading:
             await self._stream.aclose()
-        self._frames.clear()
+        self._events.close()
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _await_ready(self, turn_id: int, turn: _TurnText) -> None:
+        try:
+            await asyncio.wait_for(turn.ready.wait(), self._grace_period)
+        except asyncio.TimeoutError:
+            pass
+        self._emit(turn_id)
+
+    def _emit(self, turn_id: int) -> None:
+        turn = self._waiting.pop(turn_id, None)
+        if turn is None:
+            return
+        if self._pending is not None and self._pending[0] == turn_id:
+            self._pending = None
+        self._events.send_nowait(TurnTranscript(turn_id, turn.snapshot()))
+
+    async def _read(self, stream: stt.RecognizeStream) -> None:
+        self._reading = True
+        try:
+            async with stream:
+                async for event in stream:
+                    if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT and event.alternatives:
+                        target = self._pending[1] if self._pending else self._current
+                        target.add("amd", event.alternatives[0].text)
+        except Exception as exc:
+            self._fail(exc)
+
+    def _fail(self, exc: Exception) -> None:
+        """Continue with the session transcript only. Turns waiting for AMD text stop waiting."""
+        self._failed = True
+        logger.warning("amd stt failed", extra={"error_type": type(exc).__name__})
+        for turn_id in list(self._waiting):
+            self._emit(turn_id)

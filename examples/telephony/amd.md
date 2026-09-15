@@ -5,6 +5,11 @@ handle several screening, voicemail, and IVR turns before it completes.
 The SDK owns classification, stage changes, reply guards, and deadlines.
 AgentSession owns the customer hook, interruption, and playback.
 
+AMD consumes `user_state_changed`, `user_input_transcribed`, and
+`user_turn_committed` session events. The commit event carries the session turn ID,
+transcript, and EOT delay. State events carry the accepted speech-boundary time,
+including the STT timestamp when STT controls turn detection.
+
 This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
 not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each decision.
 The application still decides whether to continue or end the call.
@@ -71,10 +76,11 @@ until client-side EOT. The Agent's transcript, history, hooks, and EOT stay
 unchanged. A faster AMD transcript does not make the Agent's EOT arrive earlier.
 
 If neither source has text at EOT, AMD waits up to 500 ms within the prediction
-deadline. A non-streaming STT receives the turn's audio at EOT. A streaming STT
-uses one stream per committed turn; its reader can drain for up to 30 seconds.
-This keeps late results attached to the original turn. Both STT paths use the
-session's audio-muting guard during AEC warmup and uninterruptible speech.
+deadline. The AMD STT must support streaming. It uses one stream for the whole
+run, and each EOT flushes it. A final that arrives after the turn is classified
+belongs to the next turn, as with the session STT. The AMD STT receives the same
+audio as the session STT, including the muting guard during AEC warmup and
+uninterruptible speech.
 
 Late text updates AMD history for the next inference. It does not change an
 in-flight request or a reply that already started. Losing transcripts are marked

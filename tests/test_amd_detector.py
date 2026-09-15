@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from livekit.agents.voice.amd.detector import (
     DEFAULT_VOICEMAIL_INSTRUCTIONS,
 )
 from livekit.agents.voice.audio_recognition import _EndOfTurnInfo, _EndOfTurnMetrics
+from livekit.agents.voice.events import UserInputTranscribedEvent
 
 from .fake_io import FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse
@@ -185,6 +187,28 @@ def end_of_turn(text: str = "hello", *, skip_reply: bool = False) -> _EndOfTurnI
     )
 
 
+def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> None:
+    info.turn_id = detector._session._user_turn_committed(
+        info.new_transcript, info.metrics.end_of_turn_delay
+    )
+
+
+def speech_started(detector: AMD) -> None:
+    detector._session._update_user_state("speaking")
+
+
+def speech_ended(detector: AMD, silence_duration: float) -> None:
+    detector._session._update_user_state(
+        "listening", last_speaking_time=time.time() - silence_duration
+    )
+
+
+def transcribe(detector: AMD, text: str) -> None:
+    detector._session._user_input_transcribed(
+        UserInputTranscribedEvent(transcript=text, is_final=True)
+    )
+
+
 async def eventually(predicate: Any) -> None:
     async def wait() -> None:
         while not predicate():
@@ -229,9 +253,9 @@ async def commit(
         assert session._activity is not None
         session._activity.on_end_of_turn(info)
     else:
-        detector._on_end_of_turn(info)
+        commit_turn(detector, info)
     request = await classifier.request()
-    assert request.turn_id == info.amd_turn_id
+    assert request.turn_id == info.turn_id
     return info
 
 
@@ -245,7 +269,7 @@ async def test_fallback_prediction_has_the_current_previous_category(reason: str
         assert first.state_changed
 
         if reason == "reused":
-            detector._on_end_of_turn(end_of_turn(""))
+            commit_turn(detector, end_of_turn(""))
         else:
             await commit(detector, session, classifier)
             if reason == "inference_error":
@@ -264,8 +288,17 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
     agent.hook_release.clear()
     async with running(agent=agent) as (detector, session, classifier, model):
         completed = asyncio.create_task(detector.execute())
-        await commit(detector, session, classifier, reply=True)
+        turns = []
+        session.on("user_turn_committed", turns.append)
+        info = end_of_turn()
+        info.metrics.end_of_turn_delay = 0.5
+        session._activity.on_end_of_turn(info)
+        request = await classifier.request()
         await agent.hook_started.wait()
+        assert len(turns) == 1
+        assert turns[0].turn_id == info.turn_id == request.turn_id
+        assert turns[0].transcript == request.transcript == "hello"
+        assert turns[0].end_of_turn_delay == 0.5
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await eventually(lambda: detector._fsm.decision(1) is not None)
         assert model.calls.empty()
@@ -298,7 +331,7 @@ async def test_amd_guard_retains_the_adopted_user_turn_span(category: AMDCategor
         await session.current_agent.hook_started.wait()
         await asyncio.sleep(0)
 
-        assert info.amd_turn_id == 1
+        assert info.turn_id == 1
         assert info.user_turn_span_adopted
         span.end.assert_not_called()
         assert model.calls.empty()
@@ -374,10 +407,10 @@ async def test_late_post_voicemail_menu_uses_the_normal_ivr_idle_timeout() -> No
         await asyncio.sleep(0.06)
         assert detector.enabled
 
-        detector._on_user_speech_started()
+        speech_started(detector)
         assert timer.cancelled()
         assert detector._fsm._idle_deadline is None
-        detector._on_user_speech_ended(0)
+        speech_ended(detector, 0)
         menu = (
             "To replay your message, press 1. To continue recording, press 2. "
             "To delete and re-record your message, press 3. For delivery options, press 4. "
@@ -412,9 +445,9 @@ async def test_late_stage_change_replaces_the_idle_timer(category: AMDCategory) 
             else AMDCategory.MACHINE_VM
         )
         classifier.prediction(1, previous)
-        assert await detector._should_reply(first, llm.ChatContext())
+        assert await detector._should_reply(first.turn_id, llm.ChatContext())
         second = await commit(detector, session, classifier)
-        await detector._should_reply(second, llm.ChatContext())
+        await detector._should_reply(second.turn_id, llm.ChatContext())
         timer = detector._timer
         assert timer is not None
         classifier.prediction(2, category)
@@ -527,7 +560,7 @@ async def test_menu_is_observability_only_and_dtmf_tool_is_temporary() -> None:
         info = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
         context = llm.ChatContext()
-        assert await detector._should_reply(info, context)
+        assert await detector._should_reply(info.turn_id, context)
         before = session.current_agent.tools.copy()
         tools = detector._maybe_inject_dtmf_tool(before)
         assert any(t.id == "send_dtmf_events" for t in tools)
@@ -565,7 +598,13 @@ async def test_terminal_result_completes_once_and_releases_guard(category: AMDCa
         assert session.amd is None
         assert session._activity._authorization_allowed.is_set()
         assert not detector._tasks
-        assert await detector._should_reply(info, llm.ChatContext()) == (
+        for event, callback in (
+            ("user_state_changed", detector._on_user_state_changed),
+            ("user_input_transcribed", detector._on_user_input_transcribed),
+            ("user_turn_committed", detector._on_user_turn_committed),
+        ):
+            assert callback not in session._events[event]
+        assert await detector._should_reply(info.turn_id, llm.ChatContext()) == (
             category == AMDCategory.HUMAN
         )
         await detector.aclose()
@@ -645,7 +684,7 @@ async def test_cancelled_reply_waiter_does_not_block_other_turns() -> None:
 async def test_empty_turn_does_not_cancel_a_pending_terminal_prediction() -> None:
     async with running() as (detector, session, classifier, _):
         await commit(detector, session, classifier)
-        detector._on_end_of_turn(end_of_turn(""))
+        commit_turn(detector, end_of_turn(""))
         assert detector._fsm.decision(2) is None
         classifier.prediction(1, AMDCategory.HUMAN)
         result = await asyncio.wait_for(detector.execute(), 2)
@@ -659,7 +698,7 @@ async def test_timeout_rearms_and_late_result_cannot_change_a_newer_turn() -> No
         events = []
         detector.on("amd_prediction", events.append)
         info = await commit(detector, session, classifier)
-        assert await detector._should_reply(info, llm.ChatContext())
+        assert await detector._should_reply(info.turn_id, llm.ChatContext())
         assert events[-1].reason == "inference_timeout"
         assert detector._fsm._idle_deadline is not None
         await commit(detector, session, classifier)
@@ -693,7 +732,7 @@ async def test_invalid_model_output_falls_back_and_releases_the_reply() -> None:
     async with running() as (detector, session, classifier, _):
         info = await commit(detector, session, classifier)
         classifier.respond(1, "not JSON")
-        assert await detector._should_reply(info, llm.ChatContext())
+        assert await detector._should_reply(info.turn_id, llm.ChatContext())
         assert detector._fsm._latest.reason == "inference_error"
         assert detector._fsm.category == AMDCategory.UNCERTAIN
         assert detector.enabled
@@ -705,7 +744,7 @@ async def test_false_interruption_settlement_rearms_idle_without_a_speech_handle
     async with running(idle_timeout=0.03) as (detector, session, _, _):
         activity = session._activity
         activity._false_interruption_pending = True
-        detector._rearm_idle()
+        detector._reschedule_timer()
         assert detector._fsm._idle_deadline is None
         session.emit("agent_false_interruption", AgentFalseInterruptionEvent(resumed=False))
         activity._false_interruption_pending = False
@@ -718,19 +757,19 @@ async def test_unchanged_voicemail_rearms_idle_without_another_reply(reason: str
     async with running(voicemail_idle_timeout=0.03) as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        assert await detector._should_reply(first, llm.ChatContext())
-        detector._on_user_speech_started()
-        detector._on_user_speech_ended(0)
+        assert await detector._should_reply(first.turn_id, llm.ChatContext())
+        speech_started(detector)
+        speech_ended(detector, 0)
         if reason == "reused":
             second = end_of_turn("")
-            detector._on_end_of_turn(second)
+            commit_turn(detector, second)
         else:
             second = await commit(detector, session, classifier)
             if reason == "inference_error":
                 classifier.respond(2, "not JSON")
             else:
                 classifier.prediction(2, AMDCategory.MACHINE_VM)
-        assert not await detector._should_reply(second, llm.ChatContext())
+        assert not await detector._should_reply(second.turn_id, llm.ChatContext())
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.reason == "idle_timeout"
         assert result.category == AMDCategory.MACHINE_VM
@@ -852,14 +891,14 @@ async def test_dtmf_digits_are_ordered_and_included_once_with_the_next_eot() -> 
         assert detector._fsm.category == AMDCategory.UNCERTAIN
         assert detector._fsm.turn_id == 0
 
-        detector._on_end_of_turn(end_of_turn())
+        commit_turn(detector, end_of_turn())
         detector.notify_dtmf_sent("3")
         first = await classifier.request()
         assert first.dtmf_digits == "12#"
-        detector._on_end_of_turn(end_of_turn())
+        commit_turn(detector, end_of_turn())
         second = await classifier.request()
         assert second.dtmf_digits == "3"
-        detector._on_end_of_turn(end_of_turn())
+        commit_turn(detector, end_of_turn())
         assert (await classifier.request()).dtmf_digits == ""
 
 
@@ -870,7 +909,7 @@ async def test_dtmf_notification_rejects_invalid_digits_and_ignores_completed_ru
         for digits in ("", "x", "1 2", "1\n"):
             with pytest.raises(ValueError, match="digits must contain only"):
                 detector.notify_dtmf_sent(digits)
-        detector._on_end_of_turn(end_of_turn())
+        commit_turn(detector, end_of_turn())
         assert (await classifier.request()).dtmf_digits == "1"
 
         detector.notify_dtmf_sent("2")
@@ -915,7 +954,7 @@ async def test_dtmf_tool_reports_successful_prefix_when_a_later_digit_fails() ->
         )
         assert result.startswith("Failed to send DTMF event: 2.")
         assert publisher.await_count == 2
-        detector._on_end_of_turn(end_of_turn())
+        commit_turn(detector, end_of_turn())
         assert (await classifier.request()).dtmf_digits == "1"
 
 

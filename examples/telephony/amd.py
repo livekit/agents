@@ -1,7 +1,3 @@
-"""Multi-turn AMD. Set SIP_PHONE_NUMBER, SIP_PARTICIPANT_IDENTITY, and SIP_OUTBOUND_TRUNK_ID
-when you want the dev worker to place an outbound call.
-"""
-
 import asyncio
 import logging
 import os
@@ -43,6 +39,9 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+    }
     session = AgentSession(
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -67,6 +66,11 @@ async def entrypoint(ctx: JobContext) -> None:
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY") or NOT_GIVEN
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
+    if not session.room_io:
+        raise RuntimeError(
+            "session room_io is unavailable. Make sure you use dev or start commands"
+        )
+
     detector = AMD(
         session,
         participant_identity=participant_identity,
@@ -74,11 +78,11 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @detector.on("amd_prediction")
     def on_prediction(event: AMDPredictionEvent) -> None:
-        logger.info("amd prediction: %s", event.model_dump_json())
+        logger.info("amd prediction", extra={"lk.pii.amd.prediction": event.model_dump_json()})
 
     @detector.on("amd_menu_observed")
     def on_menu(event: AMDMenuObservedEvent) -> None:
-        logger.info("amd menu (informational): %s", event.model_dump_json())
+        logger.info("amd menu (informational)", extra={"lk.pii.amd.menu": event.model_dump_json()})
 
     async with detector:
         # Start AMD before creating the SIP participant.
@@ -105,7 +109,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 return
 
         result = await detector.execute()
-        logger.info("amd completed: %s", result.model_dump_json())
+        logger.info("amd completed", extra={"lk.pii.amd.result": result.model_dump_json()})
         # The application decides whether to continue or end the call.
 
 

@@ -1645,6 +1645,8 @@ class AgentActivity(RecognitionHooks):
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
             return
+        if (amd := self._session.amd) and amd.enabled and not amd.started:
+            return
 
         aec_warmup_active: bool = (
             self._session.agent_state == "speaking"
@@ -1669,6 +1671,9 @@ class AgentActivity(RecognitionHooks):
         stt_frame: rtc.AudioFrame | None = None
         if should_discard:
             stt_frame = utils.audio.silence_frame_like(frame)
+
+        if amd:
+            amd.push_audio(stt_frame if stt_frame is not None else frame)
 
         if self._rt_session is not None:
             self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
@@ -2257,9 +2262,6 @@ class AgentActivity(RecognitionHooks):
         )
 
         if ev.is_final:
-            if self.stt is None and ev.transcript and (amd := self._session._amd) is not None:
-                amd._on_transcript(ev.transcript)
-
             msg = llm.ChatMessage(
                 role="user",
                 content=[ev.transcript],
@@ -2415,11 +2417,8 @@ class AgentActivity(RecognitionHooks):
             self._update_paused_speech(current_speech, timeout=0)
             audio_output.pause()
 
-    def on_end_of_speech(self, ev: vad.VADEvent | None) -> None:
-        speech_end_time = time.time()
-        if ev:
-            speech_end_time = speech_end_time - ev.silence_duration - ev.inference_duration
-        else:
+    def on_end_of_speech(self, ev: vad.VADEvent | None, *, speech_end_time: float) -> None:
+        if ev is None:
             self._stt_eos_received = True
 
         if self._audio_recognition:
@@ -2639,11 +2638,6 @@ class AgentActivity(RecognitionHooks):
         # IMPORTANT: This method is sync to avoid it being cancelled by the AudioRecognition
         # We explicitly create a new task here
 
-        # TODO: @chenghao-mou replace this direct call with the public `eot_prediction`
-        # event once feat/AGT-2520-multimodal-EOU lands.
-        if amd := self._session._amd:
-            amd._on_end_of_turn(info)
-
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
             logger.warning(
@@ -2697,6 +2691,11 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
+        amd = self._session._amd
+        info.turn_id = self._session._user_turn_committed(
+            info.new_transcript, info.metrics.end_of_turn_delay
+        )
+
         # a replying turn interrupts the paused speech, so cancel the resume that would race it —
         # but the reply task returns before that in these two cases, so leave the resume armed
         if not info.skip_reply and not self._rt_turn_detection_enabled:
@@ -2710,7 +2709,7 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity._user_turn_completed_task",
         )
         if amd is not None:
-            self._user_turn_completed_atask.add_done_callback(lambda _: amd._rearm_idle())
+            self._user_turn_completed_atask.add_done_callback(lambda _: amd._reschedule_timer())
         return True
 
     @utils.log_exceptions(logger=logger)
@@ -2836,7 +2835,7 @@ class AgentActivity(RecognitionHooks):
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
         # amd already implies non-realtime model
-        if amd and not await amd._should_reply(info, temp_mutable_chat_ctx):
+        if amd and not await amd._should_reply(info.turn_id, temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2914,7 +2913,7 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.interrupt(source="user_turn")
 
         if amd:
-            amd._on_reply_created(speech_handle, info.amd_turn_id)
+            amd._on_reply_created(speech_handle, info.turn_id)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):

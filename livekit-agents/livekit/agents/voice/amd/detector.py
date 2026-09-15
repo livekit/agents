@@ -18,8 +18,8 @@ from ...utils import EventEmitter, aio, is_given
 from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _inference
-from ._fsm import _AMDFSM, ClassifyRequest, _AMDEvent
-from ._transcription import TurnTranscript
+from ._fsm import _AMDFSM, ClassifyRequest, _AMDEvent, _Transcript
+from ._transcription import RacingSTT
 from .events import (
     AMDCategory,
     AMDCompletedEvent,
@@ -31,8 +31,14 @@ from .events import (
 if TYPE_CHECKING:
     from ..agent import Agent
     from ..agent_session import AgentSession
-    from ..audio_recognition import _EndOfTurnInfo
-    from ..events import AgentFalseInterruptionEvent, AgentStateChangedEvent, SpeechCreatedEvent
+    from ..events import (
+        AgentFalseInterruptionEvent,
+        AgentStateChangedEvent,
+        SpeechCreatedEvent,
+        UserInputTranscribedEvent,
+        UserStateChangedEvent,
+        UserTurnCommittedEvent,
+    )
     from ..speech_handle import SpeechHandle
 
 MACHINE_SILENCE_THRESHOLD = 1.5
@@ -67,8 +73,7 @@ class _Run:
     agent: Agent
     llm: llm.LLM
     completion: asyncio.Future[AMDCompletedEvent]
-    transcript: TurnTranscript
-    """Transcript of the open turn. Replaced at each client-side EOT."""
+    stt: RacingSTT
 
 
 class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_observed"]]):
@@ -94,10 +99,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             available; otherwise use the current Agent's LLM. Pass None to
             always use the current Agent's LLM. A string selects a LiveKit
             Inference model. Supplied models stay open when AMD completes.
-        stt: Optional second STT model. When omitted, use ``cartesia/ink-whisper``
-            if LiveKit Cloud credentials are available; otherwise use only the
-            session transcript. Pass None to always use only the session
-            transcript. A string selects a LiveKit Inference model.
+        stt: Optional second streaming STT model. When omitted, use
+            ``cartesia/ink-whisper`` if LiveKit Cloud credentials are available;
+            otherwise use only the session transcript. Pass None to always use
+            only the session transcript. A string selects a LiveKit Inference model.
         participant_identity: Select the participant before placing an outbound call.
         wait_until_answered: Discard pre-answer audio from AMD and AgentSession
             when True. When False, listen to subscribed SIP early media.
@@ -165,6 +170,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
         self._owns_stt = isinstance(stt, str)
         self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt
+        if self._stt is not None and not self._stt.capabilities.streaming:
+            raise ValueError("amd requires a streaming STT")
         self._participant_identity = participant_identity
         self._wait_until_answered = wait_until_answered
         self._instructions = {
@@ -181,14 +188,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             machine_silence_threshold=machine_silence_threshold,
             max_uncertain_turns=max_uncertain_turns,
         )
-        self._transcript_grace_period = min(0.5, inference_timeout)
+        self._grace_period = min(0.5, inference_timeout)
         self._session_id = uuid.uuid4().hex
         self._control_prefix = f"amd_{uuid.uuid4().hex}_"
         self._voicemail_handle: SpeechHandle | None = None
         self._voicemail_audio_start = 0
         self._decision_changed = asyncio.Event()
         self._active: _Run | None = None
-        self._transcripts: dict[int, TurnTranscript] = {}
         self._classifier_task: asyncio.Task[None] | None = None
         self._menu_task: asyncio.Task[None] | None = None
         self._finishing: asyncio.Task[None] | None = None
@@ -229,11 +235,19 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             agent=activity._agent,
             llm=model,
             completion=asyncio.get_running_loop().create_future(),
-            transcript=self._new_transcript(),
+            stt=RacingSTT(
+                self._stt,
+                self._session.conn_options.stt_conn_options,
+                grace_period=self._grace_period,
+            ),
         )
         self._fsm.enter()
+        self._spawn(self._consume_transcripts())
         self._session._amd = self
         activity._pause_authorization()
+        self._session.on("user_state_changed", self._on_user_state_changed)
+        self._session.on("user_input_transcribed", self._on_user_input_transcribed)
+        self._session.on("user_turn_committed", self._on_user_turn_committed)
         self._session.on("speech_created", self._on_speech_created)
         self._session.on("agent_state_changed", self._on_agent_state_changed)
         self._session.on("agent_false_interruption", self._on_false_interruption)
@@ -316,27 +330,18 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self._fsm.finished or self.started:
             return
         self._fsm.start(time.monotonic())
-        self._rearm_idle()
+        if self._session.user_state == "speaking":
+            self._fsm.speech_started(time.monotonic())
+        self._reschedule_timer()
         logger.info("amd listening", extra={"session_id": self._session_id})
 
     def _on_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.identity == self._participant_identity:
             self._finish(AMDReason.PARTICIPANT_DISCONNECTED)
 
-    def _new_transcript(self) -> TurnTranscript:
-        return TurnTranscript(
-            self._stt,
-            self._session.conn_options.stt_conn_options,
-            self._on_transcript_update,
-        )
-
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self.started:
-            self._run.transcript.push_audio(frame)
-
-    def _on_transcript_update(self, transcript: TurnTranscript) -> None:
-        if transcript.turn_id is not None:
-            self._fsm.transcript_updated(transcript.turn_id, transcript.snapshot())
+            self._run.stt.push_audio(frame)
 
     def notify_dtmf_sent(self, digits: str) -> None:
         """Report digits after their local send succeeds, in send order.
@@ -350,58 +355,50 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         """
         self._fsm.dtmf_sent(digits)
 
-    def _on_user_speech_started(self) -> None:
-        if self.started:
-            self._fsm.speech_started(time.monotonic())
+    def _on_user_state_changed(self, event: UserStateChangedEvent) -> None:
+        if not self.started:
+            return
+        now = time.monotonic()
+        delay = max(0, time.time() - event.created_at)
+        if event.new_state == "speaking":
+            self._fsm.speech_started(now - delay)
             if activity := self._session._activity:
                 activity._pause_authorization()
-            self._rearm_idle()
+            self._reschedule_timer()
+        elif event.old_state == "speaking":
+            self._handle_events(self._fsm.speech_ended(now, delay))
 
-    def _on_user_speech_ended(self, silence_duration: float) -> None:
-        self._state_changed(self._fsm.speech_ended(time.monotonic(), silence_duration))
+    def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
+        if self.started and event.is_final:
+            self._run.stt.push_session_text(event.transcript)
 
-    def _on_transcript(self, text: str) -> None:
-        if self.started:
-            self._run.transcript.add_session_text(text)
-
-    def _on_end_of_turn(self, info: _EndOfTurnInfo) -> None:
+    def _on_user_turn_committed(self, event: UserTurnCommittedEvent) -> None:
         if not self.started:
             return
         if activity := self._session._activity:
             activity._pause_authorization()
-        run = self._run
-        transcript = run.transcript
-        transcript.commit(self._fsm.turn_id + 1, info.new_transcript)
-        turn_id = self._fsm.commit_turn(
-            transcript.snapshot(), time.monotonic(), info.metrics.end_of_turn_delay or 0
+        transcript = self._run.stt.end_turn(event.turn_id, event.transcript)
+        self._fsm.commit_turn(
+            transcript,
+            time.monotonic(),
+            event.end_of_turn_delay or 0,
+            turn_id=event.turn_id,
         )
-        info.amd_turn_id = turn_id
-        self._transcripts[turn_id] = transcript
-        run.transcript = self._new_transcript()
-        if not transcript.ready.is_set() and transcript.pending:
-            self._spawn(self._wait_for_transcript(turn_id, transcript))
-            self._rearm_idle()
-        else:
-            self._start_classification(turn_id, transcript)
+        self._reschedule_timer()
 
-    async def _wait_for_transcript(self, turn_id: int, transcript: TurnTranscript) -> None:
-        try:
-            await asyncio.wait_for(transcript.ready.wait(), self._transcript_grace_period)
-        except asyncio.TimeoutError:
-            pass
-        self._start_classification(turn_id, transcript)
+    async def _consume_transcripts(self) -> None:
+        async for turn in self._run.stt:
+            self._start_classification(turn.turn_id, turn.transcript)
 
-    def _start_classification(self, turn_id: int, transcript: TurnTranscript) -> None:
-        request, events = self._fsm.transcript_ready(
-            turn_id, transcript.snapshot(), time.monotonic()
-        )
+    def _start_classification(self, turn_id: int, transcript: _Transcript) -> None:
+        request, events = self._fsm.transcript_ready(turn_id, transcript, time.monotonic())
         if request is not None:
             if self._classifier_task is not None:
                 self._classifier_task.cancel()
             if self._menu_task is not None:
                 self._menu_task.cancel()
             self._classifier_task = self._spawn(self._classify(turn_id, request))
-        self._state_changed(events)
+        self._handle_events(events)
 
     async def _classify(self, turn_id: int, request: ClassifyRequest) -> None:
         chat_ctx = llm.ChatContext()
@@ -423,9 +420,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 "amd classification",
                 extra={"turn_id": turn_id, "raw_category": result.category.value},
             )
-        self._state_changed(events)
+        self._handle_events(events)
 
-    def _state_changed(self, events: list[_AMDEvent]) -> None:
+    def _handle_events(self, events: list[_AMDEvent]) -> None:
         completed = False
         try:
             for event in events:
@@ -448,7 +445,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._fsm.finish(AMDReason.INTERNAL_ERROR)
             completed = True
         self._decision_changed.set()
-        self._rearm_idle()
+        self._reschedule_timer()
         if completed and self._finishing is None:
             self._finishing = asyncio.create_task(self._cleanup())
 
@@ -492,9 +489,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             await self._decision_changed.wait()
         return decision
 
-    async def _should_reply(self, info: _EndOfTurnInfo, chat_ctx: llm.ChatContext) -> bool:
+    async def _should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
         """Wait for the turn's decision, then add stage instructions when a reply is allowed."""
-        turn_id = info.amd_turn_id
         if turn_id is not None and self._fsm.has_turn(turn_id):
             await self._wait_for_decision(turn_id)
             if not self._fsm.finished and self._session.current_agent is not self._run.agent:
@@ -502,7 +498,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 return False
         decision = self._fsm.authorize_reply(turn_id)
         if not decision.allow:
-            self._rearm_idle()
+            self._reschedule_timer()
             return False
         if decision.instructions_for is not None:
             self._add_instructions(chat_ctx, decision.instructions_for, turn_id)
@@ -548,7 +544,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         self._speeches.add(event.speech_handle)
         event.speech_handle.add_done_callback(self._on_speech_done)
-        self._rearm_idle()
+        self._reschedule_timer()
 
     def _on_speech_done(self, handle: SpeechHandle) -> None:
         self._speeches.discard(handle)
@@ -560,19 +556,19 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             output = self._session.output.audio
             if output and output.captured_playout_segments > self._voicemail_audio_start:
                 self._fsm.voicemail_played()
-        self._rearm_idle()
+        self._reschedule_timer()
 
     def _on_agent_state_changed(self, event: AgentStateChangedEvent) -> None:
-        self._rearm_idle()
+        self._reschedule_timer()
 
     def _on_false_interruption(self, event: AgentFalseInterruptionEvent) -> None:
         # AgentSession clears its pause state after it emits this event.
-        asyncio.get_running_loop().call_soon(self._rearm_idle)
+        asyncio.get_running_loop().call_soon(self._reschedule_timer)
 
     def _on_deadline(self) -> None:
-        self._state_changed(self._fsm.tick(time.monotonic()))
+        self._handle_events(self._fsm.tick(time.monotonic()))
 
-    def _rearm_idle(self) -> None:
+    def _reschedule_timer(self) -> None:
         activity = self._session._activity
         self._fsm.update_idle(
             time.monotonic(),
@@ -587,13 +583,12 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             )
 
     def _finish(self, reason: AMDReason) -> None:
-        self._state_changed([self._fsm.finish(reason)])
+        self._handle_events([self._fsm.finish(reason)])
 
     async def _cleanup(self) -> None:
         try:
             await aio.cancel_and_wait(*self._tasks)
-            transcripts = [*self._transcripts.values(), self._run.transcript]
-            close_tasks = [transcript.aclose() for transcript in transcripts]
+            close_tasks = [self._run.stt.aclose()]
             if self._owns_stt and self._stt is not None:
                 close_tasks.append(self._stt.aclose())
             if self._owns_llm and self._llm is not None:
@@ -603,6 +598,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     logger.warning(
                         "amd resource cleanup failed", extra={"error_type": type(error).__name__}
                     )
+            self._session.off("user_state_changed", self._on_user_state_changed)
+            self._session.off("user_input_transcribed", self._on_user_input_transcribed)
+            self._session.off("user_turn_committed", self._on_user_turn_committed)
             self._session.off("speech_created", self._on_speech_created)
             self._session.off("agent_state_changed", self._on_agent_state_changed)
             self._session.off("agent_false_interruption", self._on_false_interruption)
