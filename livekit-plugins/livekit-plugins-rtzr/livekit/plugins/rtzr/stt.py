@@ -18,6 +18,7 @@ import asyncio
 import json
 import time
 import weakref
+from collections import deque
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -189,6 +190,7 @@ class SpeechStream(stt.RecognizeStream):
             progressive=True,
         )
         self._pending_input = None
+        self._pending_audio: deque[bytes] = deque()
         self._pending_usage_audio_duration = 0.0
         self._idle_timeout = _IDLE_TIMEOUT_SECONDS
         self._last_audio_at = 0.0
@@ -278,7 +280,13 @@ class SpeechStream(stt.RecognizeStream):
                     self._failure.cancel()
         except APIError as error:
             # Retrying an exhausted input cannot recover a missing final response.
-            if self._input_ch.closed and self._input_ch.empty() and self._pending_input is None:
+            if (
+                self._input_ch.closed
+                and self._input_ch.empty()
+                and self._pending_input is None
+                and not self._pending_audio
+                and not self._audio_chunker.buffered_duration
+            ):
                 error.retryable = False
             raise
 
@@ -310,10 +318,16 @@ class SpeechStream(stt.RecognizeStream):
         self._record_sent_audio(audio)
         self._last_audio_at = time.monotonic()
 
+    async def _send_pending_audio(self) -> None:
+        """Retain queued PCM across retries until each WebSocket send succeeds."""
+        while self._pending_audio:
+            await self._send_audio(self._pending_audio[0])
+            self._pending_audio.popleft()
+
     async def _finalize_segment(self) -> None:
-        for frame in self._audio_chunker.flush():
-            await self._send_audio(frame.data.tobytes())
+        self._pending_audio.extend(frame.data.tobytes() for frame in self._audio_chunker.flush())
         self._audio_chunker.clear()
+        await self._send_pending_audio()
         if self._pending_usage_audio_duration <= 0.0:
             return
         assert self._ws is not None
@@ -327,13 +341,14 @@ class SpeechStream(stt.RecognizeStream):
         ws, recv_task = self._ws, self._recv_task
         self._closing = True
         try:
-            frames = self._audio_chunker.flush()
-            self._audio_chunker.clear()
             if ws is None:
                 return
             if graceful:
-                for frame in frames:
-                    await self._send_audio(frame.data.tobytes())
+                self._pending_audio.extend(
+                    frame.data.tobytes() for frame in self._audio_chunker.flush()
+                )
+                self._audio_chunker.clear()
+                await self._send_pending_audio()
                 try:
                     await ws.send_str("EOS")
                 except (aiohttp.ClientError, OSError):
@@ -395,6 +410,10 @@ class SpeechStream(stt.RecognizeStream):
 
     async def _send_audio_task(self) -> None:
         while True:
+            async with self._connection_lock:
+                if self._failure is not None and self._failure.done():
+                    await self._failure
+                await self._send_pending_audio()
             if self._pending_input is None:
                 try:
                     self._pending_input = await self._input_ch.__anext__()
@@ -407,13 +426,15 @@ class SpeechStream(stt.RecognizeStream):
                 if isinstance(data, rtc.AudioFrame):
                     # Keep the first frame across connection retries before consuming PCM.
                     await self._ensure_connected()
+                    self._pending_audio.extend(
+                        frame.data.tobytes()
+                        for frame in self._audio_chunker.write(data.data.tobytes())
+                    )
                     self._pending_input = None
-                    for frame in self._audio_chunker.write(data.data.tobytes()):
-                        await self._send_audio(frame.data.tobytes())
                     self._last_audio_at = time.monotonic()
                 else:
-                    self._pending_input = None
                     await self._finalize_segment()
+                    self._pending_input = None
 
     def _parse_words(self, words: list[dict], *, utterance_start: float) -> list[TimedString]:
         """Parse word timing data from RTZR response."""

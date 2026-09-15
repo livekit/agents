@@ -188,8 +188,8 @@ async def test_unexpected_disconnect_retries_and_receivers_are_closed(monkeypatc
         await asyncio.wait_for(stream._task, 2)
         assert len(sockets) == 2
         assert all(ws.closed for ws in sockets)
-        assert b"".join(data for kind, data in sockets[1].sent if kind == "bytes") == (
-            _frame(2, samples=400).data.tobytes()
+        assert b"".join(data for ws in sockets for kind, data in ws.sent if kind == "bytes") == (
+            _frame(1, samples=400).data.tobytes() + _frame(2, samples=400).data.tobytes()
         )
 
 
