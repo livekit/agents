@@ -1059,7 +1059,7 @@ async def test_audio_output_drops_a_paused_frame_from_an_interrupted_segment() -
 
 @pytest.mark.asyncio
 async def test_audio_output_waits_for_active_submission_and_source_playout() -> None:
-    # One 20ms chunk is emitted whole, so nothing stays buffered after the forwarder dequeues it.
+    # One progressive chunk leaves no buffered remainder after the forwarder dequeues it.
     frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
 
     with patch("livekit.rtc.AudioSource", _BlockingAudioSource):
