@@ -141,6 +141,7 @@ class JsonFormatter(logging.Formatter):
 
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
+        log_record.setdefault("pid", record.process)
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
