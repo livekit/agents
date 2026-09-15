@@ -1,4 +1,4 @@
-# Experimental multi-turn AMD
+# Multi-turn AMD
 
 AMD classifies the call participant at client-side end of turn (EOT). It can
 handle several screening, voicemail, and IVR turns before it completes.
@@ -60,6 +60,10 @@ AMD checks `LIVEKIT_INFERENCE_API_KEY` and `LIVEKIT_INFERENCE_API_SECRET`, with
 `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` as fallbacks. Without these settings,
 omitted values inherit the Agent's LLM and session transcript. Explicit `None`
 always inherits. AMD resolves `llm` and `stt` independently.
+
+The LLM must support required function calls. AMD uses a `record_result` tool
+for each prediction or menu result. It validates the tool arguments against the
+result schema. This tool is not added to the active Agent.
 
 The first non-empty final transcript wins each AMD turn. Empty and interim
 results cannot win. AMD collects further final segments from the winning source
@@ -165,7 +169,6 @@ Console mode does not place SIP calls.
 
 - Pipeline STT/LLM/TTS only. Realtime reply control is not implemented.
 - Agent handoff during AMD is not supported.
-- The customer Agent versus a dedicated AMD Agent remains an open API decision.
 - No audio-based hold detection. `should_wait` remains false.
 - The remote-session protocol maps screening to `AMD_UNKNOWN`. Full v2
   prediction, menu, and completion fields still need protocol support.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -8,6 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import AMD, NOT_GIVEN, Agent, AgentSession, inference, llm
+from livekit.agents.llm.tool_context import get_raw_function_info
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.amd import AMDCategory, _inference
 
@@ -317,7 +319,7 @@ async def test_interim_and_empty_results_do_not_win_and_final_segments_accumulat
         request = await classifier.request()
         assert request.transcript == "Please leave a message."
         assert not hasattr(request, "alternative_transcript")
-        assert detector._history[0]["alternative_transcript"] == "Leave a message."
+        assert detector._fsm._turns[1].transcript.alternative == "Leave a message."
 
 
 @pytest.mark.asyncio
@@ -344,7 +346,7 @@ async def test_waiting_transcript_can_finish_after_history_eviction() -> None:
         detector._on_end_of_turn(end_of_turn(""))
         for _ in range(20):
             detector._on_end_of_turn(end_of_turn(""))
-        assert detector._history[0]["turn_id"] == 2
+        assert len(detector._fsm._turns) == 21
         stream.send_fake_transcript("Hello, can you hear me?")
         request = await classifier.request()
         assert request.turn_id == 1
@@ -361,12 +363,12 @@ async def test_late_winner_text_stays_on_original_turn_and_reaches_next_inferenc
     async with running(stt=stt, inference_timeout=0.02) as (detector, _, classifier, _):
         stream = push_audio(detector, stt)
         detector._on_end_of_turn(end_of_turn(""))
-        await eventually(lambda: detector._turns[1].decision.done())
-        assert detector._turns[1].decision.result().reason == "reused"
+        await eventually(lambda: detector._fsm.decision(1) is not None)
+        assert detector._fsm.decision(1).reason == "reused"
         stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._updated_turn_ids)
+        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
         assert classifier.requests.empty()
-        assert detector._turns[1].transcript == ""
+        assert detector._fsm._turns[1].inference_text == ""
         detector._on_end_of_turn(end_of_turn(""))
         request = await classifier.request()
         assert request.turn_id == 2
@@ -375,9 +377,9 @@ async def test_late_winner_text_stays_on_original_turn_and_reaches_next_inferenc
         assert request.earlier_turns[0]["turn_id"] == 1
         assert request.earlier_turns[0]["transcript"] == "Hello, can you hear me?"
         classifier.prediction(2, AMDCategory.UNCERTAIN)
-        await eventually(lambda: detector._turns[2].decision.done())
+        await eventually(lambda: detector._fsm.decision(2) is not None)
         detector._on_end_of_turn(end_of_turn(""))
-        assert detector._turns[3].decision.result().reason == "reused"
+        assert detector._fsm.decision(3).reason == "reused"
         assert classifier.requests.empty()
 
 
@@ -391,8 +393,8 @@ async def test_late_losing_stt_is_same_turn_evidence_and_cannot_mutate_inflight_
         next_stream = push_audio(detector, stt)
         assert next_stream is not old_stream
         old_stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._updated_turn_ids)
-        assert detector._turns[1].transcript == "hello"
+        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
+        assert detector._fsm._turns[1].inference_text == "hello"
         assert detector._classifier_task is old_request
         assert detector._transcript.text == ""
 
@@ -404,7 +406,7 @@ async def test_late_losing_stt_is_same_turn_evidence_and_cannot_mutate_inflight_
         assert request.earlier_turns[0]["alternative_transcript"] == "Hello, can you hear me?"
         old_stream.send_fake_transcript("More old speech.")
         await eventually(
-            lambda: detector._history[0]["alternative_transcript"].endswith("More old speech.")
+            lambda: detector._fsm._turns[1].transcript.alternative.endswith("More old speech.")
         )
         assert request.earlier_turns[0]["alternative_transcript"] == "Hello, can you hear me?"
 
@@ -417,7 +419,7 @@ async def test_superseded_inference_keeps_the_participant_transcript() -> None:
         detector._on_end_of_turn(end_of_turn("Yes, let's schedule that."))
         request = await classifier.request()
         assert request.earlier_turns[0]["transcript"] == "Hello, can you hear me?"
-        assert detector._turns[1].decision.result().reason == "superseded"
+        assert detector._fsm.decision(1).reason == "superseded"
         assert classifier.responses[1].cancelled()
 
 
@@ -431,15 +433,15 @@ async def test_empty_turns_do_not_cancel_or_count_against_pending_inference(fail
         detector._on_end_of_turn(end_of_turn(""))
         detector._on_end_of_turn(end_of_turn(""))
         assert not classifier.responses[1].done()
-        assert not detector._turns[2].decision.done()
+        assert detector._fsm.decision(2) is None
         classifier.respond(1, "invalid" if failed else '{"category":"uncertain"}')
-        await eventually(lambda: detector._turns[3].decision.done())
+        await eventually(lambda: detector._fsm.decision(3) is not None)
         assert [(e.turn_id, e.reason) for e in events] == [
             (1, "inference_error" if failed else "prediction"),
             (2, "reused"),
             (3, "reused"),
         ]
-        assert detector._uncertain_turns == (0 if failed else 1)
+        assert detector._fsm._uncertain_turns == (0 if failed else 1)
         assert classifier.requests.empty()
 
 
@@ -462,7 +464,7 @@ async def test_new_turn_carries_late_evidence_from_a_superseded_request() -> Non
         stream = push_audio(detector, stt)
         await commit(detector, session, classifier)
         stream.send_fake_transcript("Hello, can you hear me?")
-        await eventually(lambda: 1 in detector._updated_turn_ids)
+        await eventually(lambda: 1 in detector._fsm._updated_turn_ids)
         detector._on_end_of_turn(end_of_turn(""))
         assert (await classifier.request()).updated_turn_ids == [1]
         detector._on_end_of_turn(end_of_turn("Yes."))
@@ -474,17 +476,17 @@ async def test_invalid_transition_falls_back_and_uncertain_preserves_stage() -> 
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        await detector._prepare_reply(first, llm.ChatContext())
+        await detector._should_reply(first, llm.ChatContext())
         for turn_id, category, reason in (
             (2, AMDCategory.UNCERTAIN, "prediction"),
             (3, AMDCategory.MACHINE_SCREENING, "inference_error"),
         ):
             info = await commit(detector, session, classifier)
             classifier.prediction(turn_id, category)
-            await detector._prepare_reply(info, llm.ChatContext())
-            assert detector._latest.reason == reason
-            assert detector._category == AMDCategory.MACHINE_VM
-            assert not detector._latest.state_changed
+            await detector._should_reply(info, llm.ChatContext())
+            assert detector._fsm._latest.reason == reason
+            assert detector._fsm.category == AMDCategory.MACHINE_VM
+            assert not detector._fsm._latest.state_changed
 
 
 @pytest.mark.asyncio
@@ -492,7 +494,7 @@ async def test_slow_menu_does_not_block_classification_or_next_turn() -> None:
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
-        assert await detector._prepare_reply(first, llm.ChatContext())
+        assert await detector._should_reply(first, llm.ChatContext())
         menu_response = await asyncio.wait_for(classifier.menu_requests.get(), 2)
         assert not menu_response.done()
         await commit(detector, session, classifier)
@@ -554,7 +556,7 @@ async def test_screening_prediction_is_forwarded_to_session_observability() -> N
         try:
             info = await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-            await detector._prepare_reply(info, llm.ChatContext())
+            await detector._should_reply(info, llm.ChatContext())
             assert (
                 host._on_amd_prediction.call_args.args[0].category == AMDCategory.MACHINE_SCREENING
             )
@@ -578,9 +580,9 @@ async def test_split_screening_rollover_retains_all_turns() -> None:
                 prior[0] for prior in history[: index - 1]
             ]
             classifier.prediction(index, category)
-            await eventually(lambda turn_id=index: detector._turns[turn_id].decision.done())
-        assert detector._category == AMDCategory.MACHINE_VM
-        assert detector._previous_stage == AMDCategory.MACHINE_SCREENING
+            await eventually(lambda turn_id=index: detector._fsm.decision(turn_id) is not None)
+        assert detector._fsm.category == AMDCategory.MACHINE_VM
+        assert detector._fsm._previous_stage == AMDCategory.MACHINE_SCREENING
 
 
 @pytest.mark.asyncio
@@ -596,10 +598,32 @@ async def test_nonstreaming_stt_receives_the_turn_audio() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("content", ["not JSON", "[]", '{"category":"unknown"}', "x" * 8193])
-async def test_classifier_rejects_invalid_and_oversized_provider_output(content: str) -> None:
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        "not JSON",
+        "[]",
+        '{"category":"unknown"}',
+        '```json\n{"category":"human"}\n```',
+        "x" * 8193,
+        json.dumps({"category": "human", "padding": "é" * 4096}, ensure_ascii=False),
+    ],
+)
+async def test_classifier_rejects_invalid_and_oversized_tool_arguments(arguments: str) -> None:
     model = FakeLLM(
-        fake_responses=[FakeLLMResponse(input="input", content=content, ttft=0, duration=0)]
+        fake_responses=[
+            FakeLLMResponse(
+                input="input",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    llm.FunctionToolCall(
+                        name="record_result", arguments=arguments, call_id="result"
+                    )
+                ],
+            )
+        ]
     )
     context = llm.ChatContext()
     context.add_message(role="user", content="input")
@@ -608,14 +632,80 @@ async def test_classifier_rejects_invalid_and_oversized_provider_output(content:
 
 
 @pytest.mark.asyncio
-async def test_classifier_accepts_fenced_json() -> None:
+@pytest.mark.parametrize("menu", [False, True])
+@pytest.mark.parametrize("fallback", [False, True])
+async def test_amd_uses_a_required_structured_tool(
+    monkeypatch: pytest.MonkeyPatch, menu: bool, fallback: bool
+) -> None:
+    payload = (
+        {"menu": "Main menu", "options": [{"label": "Talk to a person", "dtmf": "1"}]}
+        if menu
+        else {"category": "human"}
+    )
     model = FakeLLM(
         fake_responses=[
             FakeLLMResponse(
-                input="input", content='```json\n{"category":"human"}\n```', ttft=0, duration=0
+                input=json.dumps({"transcript": "input"}) if menu else "input",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    llm.FunctionToolCall(
+                        name="record_result", arguments=json.dumps(payload), call_id="result"
+                    )
+                ],
+            )
+        ]
+    )
+    chat = Mock(wraps=model.chat)
+    monkeypatch.setattr(model, "chat", chat)
+    adapter = llm.FallbackAdapter([model]) if fallback else model
+    try:
+        if menu:
+            result = await _inference.extract_menu(adapter, "input")
+            schema = _inference.IvrMenu
+        else:
+            context = llm.ChatContext()
+            context.add_message(role="user", content="input")
+            result = await _inference.classify(adapter, context)
+            schema = _inference.Prediction
+        assert result == schema.model_validate(payload)
+        chat.assert_called_once()
+        assert chat.call_args.kwargs["tool_choice"] == "required"
+        assert chat.call_args.kwargs["parallel_tool_calls"] is False
+        tools = chat.call_args.kwargs["tools"]
+        assert len(tools) == 1
+        assert (
+            get_raw_function_info(tools[0]).raw_schema["parameters"] == schema.model_json_schema()
+        )
+        tool_ctx = llm.ToolContext(tools)
+        assert tool_ctx.parse_function_tools("openai")
+        assert tool_ctx.parse_function_tools("google")
+        assert tool_ctx.parse_function_tools("anthropic")
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("names", [[], ["unexpected"], ["record_result", "record_result"]])
+async def test_classifier_requires_exactly_one_result_tool(names: list[str]) -> None:
+    model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="input",
+                content='{"category":"human"}',
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    llm.FunctionToolCall(
+                        name=name, arguments='{"category":"human"}', call_id=str(i)
+                    )
+                    for i, name in enumerate(names)
+                ],
             )
         ]
     )
     context = llm.ChatContext()
     context.add_message(role="user", content="input")
-    assert (await _inference.classify(model, context)).category == AMDCategory.HUMAN
+    with pytest.raises(ValueError, match="exactly one record_result"):
+        await _inference.classify(model, context)

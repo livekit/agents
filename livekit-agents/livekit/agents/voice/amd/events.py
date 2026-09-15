@@ -1,8 +1,53 @@
+from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
-from .classifier import AMDCategory
+
+class AMDCategory(str, Enum):
+    HUMAN = "human"
+    MACHINE_IVR = "machine-ivr"
+    MACHINE_SCREENING = "machine-screening"
+    MACHINE_VM = "machine-vm"
+    MACHINE_UNAVAILABLE = "machine-unavailable"
+    UNCERTAIN = "uncertain"
+
+
+class AMDPredictionEvent(BaseModel):
+    type: Literal["amd_prediction"] = "amd_prediction"
+    speech_duration: float
+    category: AMDCategory
+    reason: str
+    transcript: str
+    delay: float
+    turn_id: int = 0
+    prev_turn_category: AMDCategory | None = None
+    prev_stage_category: AMDCategory | None = None
+    inference_duration: float | None = None
+    should_wait: bool = False
+    voicemail_message_played: bool = False
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def state_changed(self) -> bool:
+        return self.category != (self.prev_turn_category or AMDCategory.UNCERTAIN)
+
+    @property
+    def detection_delay(self) -> float:
+        return self.delay
+
+    @property
+    def is_human(self) -> bool:
+        return self.category == AMDCategory.HUMAN
+
+    @property
+    def is_machine(self) -> bool:
+        return self.category in (
+            AMDCategory.MACHINE_SCREENING,
+            AMDCategory.MACHINE_IVR,
+            AMDCategory.MACHINE_VM,
+            AMDCategory.MACHINE_UNAVAILABLE,
+        )
 
 
 class AMDCompletedEvent(BaseModel):

@@ -30,7 +30,8 @@ def _make_recognition() -> AudioRecognition:
     ar._vad_ch = MagicMock()  # type: ignore[attr-defined]
     ar._interruption_ch = MagicMock()  # type: ignore[attr-defined]
     ar._session = MagicMock()  # type: ignore[attr-defined]
-    ar._session.amd._discard_pre_answer_audio = False
+    ar._session.amd.enabled = True
+    ar._session.amd.started = True
     ar._turn_detector_stream = None  # type: ignore[attr-defined]
     return ar
 
@@ -84,7 +85,7 @@ def test_push_audio_records_sample_rate_and_input_start() -> None:
 
 def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
     ar = _make_recognition()
-    ar._session.amd._discard_pre_answer_audio = True
+    ar._session.amd.started = False
     ar._turn_detector_stream = MagicMock()
 
     ar._push_audio(_make_frame())
@@ -95,3 +96,14 @@ def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
     ar._interruption_ch.send_nowait.assert_not_called()
     ar._turn_detector_stream.push_audio.assert_not_called()
     assert ar._input_started_at is None
+
+    ar._session.amd.enabled = False
+    frame = _make_frame()
+    ar._push_audio(frame)
+
+    ar._stt_pipeline.audio_ch.send_nowait.assert_called_once_with(frame)
+    ar._vad_ch.send_nowait.assert_called_once_with(frame)
+    ar._session.amd.push_audio.assert_called_once_with(frame)
+    ar._interruption_ch.send_nowait.assert_called_once_with(frame)
+    ar._turn_detector_stream.push_audio.assert_called_once_with(frame)
+    assert ar._input_started_at is not None

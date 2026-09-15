@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Literal
 
 from livekit import rtc
 
@@ -10,6 +10,7 @@ from ... import stt
 from ...log import logger
 from ...types import APIConnectOptions
 from ...utils import aio
+from ._fsm import _Transcript
 
 
 class TurnTranscript:
@@ -67,16 +68,9 @@ class TurnTranscript:
         if self.turn_id is not None:
             self._on_update(self)
 
-    def history(self) -> dict[str, Any]:
-        entry: dict[str, Any] = {
-            "turn_id": self.turn_id,
-            "transcript": self.text,
-            "transcript_source": self.winner,
-        }
+    def snapshot(self) -> _Transcript:
         other = self._texts["amd" if self.winner == "session" else "session"]
-        if other and other != self.text:
-            entry["alternative_transcript"] = other
-        return entry
+        return _Transcript(self.text, self.winner, other)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if self._model is None or self._failed:
@@ -132,7 +126,7 @@ class TurnTranscript:
 
     def _fail(self, exc: Exception) -> None:
         self._failed = True
-        logger.warning("AMD STT failed", extra={"error_type": type(exc).__name__})
+        logger.warning("amd stt failed", extra={"error_type": type(exc).__name__})
 
     async def aclose(self) -> None:
         if self._drain_timer:

@@ -756,7 +756,8 @@ class AudioRecognition:
         The optional AMD STT receives the same input as session STT.
         """
         self._sample_rate = frame.sample_rate
-        if self._session.amd is not None and self._session.amd._discard_pre_answer_audio:
+        # ponytail: disabled AMD must not discard audio during cleanup.
+        if (amd := self._session.amd) and amd.enabled and not amd.started:
             return
         if self._stt_pipeline is not None:
             # stamp the wall-clock anchor on the first frame to reach the pipeline
@@ -767,8 +768,8 @@ class AudioRecognition:
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-        if self._session.amd is not None:
-            self._session.amd.push_audio(stt_frame if stt_frame is not None else frame)
+        if amd:
+            amd.push_audio(stt_frame if stt_frame is not None else frame)
 
         if self._interruption_ch is not None:
             self._interruption_ch.send_nowait(frame)
@@ -1224,7 +1225,7 @@ class AudioRecognition:
                 if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
-            if self._session.amd is not None:
+            if self._session.amd:
                 self._session.amd._on_transcript(transcript)
 
             extra: dict[str, Any] = {
@@ -1359,7 +1360,7 @@ class AudioRecognition:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
 
-            if self._vad is None and self._session.amd is not None:
+            if self._vad is None and self._session.amd:
                 self._session.amd._on_user_speech_ended(now - self._last_speaking_time)
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
@@ -1380,7 +1381,7 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
-            if self._vad is None and self._session.amd is not None:
+            if self._vad is None and self._session.amd:
                 self._session.amd._on_user_speech_started()
 
             if self._end_of_turn_task is not None:
@@ -1411,7 +1412,7 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-            if self._session.amd is not None:
+            if self._session.amd:
                 self._session.amd._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
@@ -1459,7 +1460,7 @@ class AudioRecognition:
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 
-            if self._session.amd is not None:
+            if self._session.amd:
                 self._session.amd._on_user_speech_ended(ev.silence_duration + ev.inference_duration)
 
     def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:

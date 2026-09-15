@@ -29,7 +29,7 @@ async def send_dtmf_events(
         try:
             code = dtmf_event_to_code(event)
             await room.local_participant.publish_dtmf(code=code, digit=event.value)
-            if amd is not None and ctx.session.amd is amd:
+            if amd and ctx.session.amd is amd:
                 amd.notify_dtmf_sent(event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
         except Exception as e:

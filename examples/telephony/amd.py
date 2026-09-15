@@ -1,12 +1,5 @@
-"""Experimental client-side, multi-turn AMD. See amd.md for the design and API.
-
-Run this agent with console for local audio, or dev for a room/SIP call.
-Set SIP_PHONE_NUMBER, SIP_PARTICIPANT_IDENTITY, and SIP_OUTBOUND_TRUNK_ID
-only when you want the dev worker to place an outbound call.
-
-AMD auto-selects its default models when LiveKit Cloud credentials are available.
-Pass llm=None and stt=None to reuse this Agent's Gemma model and Ink 2 transcript.
-Realtime models are not supported yet.
+"""Multi-turn AMD. Set SIP_PHONE_NUMBER, SIP_PARTICIPANT_IDENTITY, and SIP_OUTBOUND_TRUNK_ID
+when you want the dev worker to place an outbound call.
 """
 
 import asyncio
@@ -28,7 +21,6 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.plugins import silero
 
 logger = logging.getLogger("amd-example")
 load_dotenv()
@@ -52,34 +44,41 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
-        stt=inference.STT("cartesia/ink-2", language="en"),
-        llm=inference.LLM("google/gemma-4-31b-it"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        vad=silero.VAD.load(),
-        turn_handling={
-            "turn_detection": "vad",
-            "endpointing": {"min_delay": 0.5, "max_delay": 3.0},
-            "preemptive_generation": {"enabled": True},
-        },
     )
-    await session.start(agent=MyAgent(), room=ctx.room)
+
+    await session.start(
+        agent=MyAgent(),
+        room=ctx.room,
+    )
+
+    async def hangup():
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(
+                room=ctx.room.name,
+            )
+        )
+
+    ctx.add_shutdown_callback(hangup)
 
     phone_number = os.getenv("SIP_PHONE_NUMBER")
-    participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY")
+    participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY") or NOT_GIVEN
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
     detector = AMD(
         session,
-        participant_identity=participant_identity or NOT_GIVEN,
+        participant_identity=participant_identity,
     )
 
     @detector.on("amd_prediction")
     def on_prediction(event: AMDPredictionEvent) -> None:
-        logger.info("AMD prediction: %s", event.model_dump_json())
+        logger.info("amd prediction: %s", event.model_dump_json())
 
     @detector.on("amd_menu_observed")
     def on_menu(event: AMDMenuObservedEvent) -> None:
-        logger.info("AMD menu (informational): %s", event.model_dump_json())
+        logger.info("amd menu (informational): %s", event.model_dump_json())
 
     async with detector:
         # Start AMD before creating the SIP participant.
@@ -96,12 +95,17 @@ async def entrypoint(ctx: JobContext) -> None:
                     timeout=45,
                 )
             except (api.SipCallError, asyncio.TimeoutError):
-                logger.info("SIP call was not answered")
+                logger.info("sip call was not answered")
                 ctx.shutdown("call not answered")
+                return
+            # The call may end just before wait_until_answered returns.
+            if participant_identity not in ctx.room.remote_participants:
+                logger.info("sip participant missing, ending")
+                ctx.shutdown("participant missing")
                 return
 
         result = await detector.execute()
-        logger.info("AMD completed: %s", result.model_dump_json())
+        logger.info("amd completed: %s", result.model_dump_json())
         # The application decides whether to continue or end the call.
 
 

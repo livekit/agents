@@ -1789,8 +1789,9 @@ class AgentActivity(RecognitionHooks):
                     tool_choice = "none"
 
         all_tools = self.tools.copy()
-        if self._session.amd is not None:
-            all_tools = self._session.amd._reply_tools(all_tools)
+        # inject DTMF tool if needed (IVR)
+        if self._session.amd:
+            all_tools = self._session.amd._maybe_inject_dtmf_tool(all_tools)
 
         # resolve tool names to Tool objects if tools param is given
         resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
@@ -1865,6 +1866,14 @@ class AgentActivity(RecognitionHooks):
         if self._preemptive_generation is not None:
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
+
+    def _cancel_pending_replies(self) -> None:
+        """Cancel queued and held replies while preserving active or paused playback."""
+        for _, _, speech in self._speech_q:
+            speech._cancel()
+        current = self._current_speech
+        if current and self._session.agent_state != "speaking" and self._paused_speech is None:
+            current._cancel()
 
     def _pause_authorization(self) -> None:
         self._authorization_allowed.clear()
@@ -2632,10 +2641,8 @@ class AgentActivity(RecognitionHooks):
 
         # TODO: @chenghao-mou replace this direct call with the public `eot_prediction`
         # event once feat/AGT-2520-multimodal-EOU lands.
-        if (amd := self._session._amd) is not None and amd._on_end_of_turn(info):
-            # cancel post-verdict preemptive and new generations
-            self._cancel_preemptive_generation()
-            info.skip_reply = True
+        if amd := self._session._amd:
+            amd._on_end_of_turn(info)
 
         if self._scheduling_paused or self._new_turns_blocked:
             self._cancel_preemptive_generation()
@@ -2828,7 +2835,8 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        if amd is not None and not await amd._prepare_reply(info, temp_mutable_chat_ctx):
+        # amd already implies non-realtime model
+        if amd and not await amd._should_reply(info, temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2905,7 +2913,7 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt(source="user_turn")
 
-        if amd is not None:
+        if amd:
             amd._on_reply_created(speech_handle, info.amd_turn_id)
 
         metadata: Metadata | None = None
@@ -3093,6 +3101,23 @@ class AgentActivity(RecognitionHooks):
     @property
     def _no_pending_speech(self) -> bool:
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
+
+    @property
+    def _is_busy(self) -> bool:
+        """Whether reply processing, playback, or interruption recovery is pending."""
+        audio_output = self._session.output.audio
+        return (
+            not self._no_pending_speech
+            or self._paused_speech is not None
+            or self._false_interruption_timer is not None
+            or self._false_interruption_pending
+            or self._session.agent_state in {"speaking", "thinking"}
+            or (audio_output is not None and audio_output._pending_playback_count > 0)
+            or (
+                self._user_turn_completed_atask is not None
+                and not self._user_turn_completed_atask.done()
+            )
+        )
 
     def _on_pipeline_reply_done(self, _: asyncio.Task[None]) -> None:
         if self._no_pending_speech:
