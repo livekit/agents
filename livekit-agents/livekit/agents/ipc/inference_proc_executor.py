@@ -12,6 +12,7 @@ from ..log import logger
 from ..utils import aio, log_exceptions, shortuuid
 from . import channel, proto
 from .inference_proc_lazy_main import ProcStartArgs, proc_main
+from .stdio_capture import ChildStdio
 from .supervised_proc import SupervisedProc, SupervisedProcKind
 
 
@@ -51,10 +52,13 @@ class InferenceProcExecutor(SupervisedProc):
     def process_kind(self) -> SupervisedProcKind:
         return SupervisedProcKind.INFERENCE
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process:
+    def _create_process(
+        self, cch: socket.socket, log_cch: socket.socket, stdio: ChildStdio | None
+    ) -> mp.Process:
         proc_args = ProcStartArgs(
             log_cch=log_cch,
             mp_cch=cch,
+            stdio=stdio,
             runners=self._runners,
         )
 
