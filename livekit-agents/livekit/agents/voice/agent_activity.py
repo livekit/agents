@@ -1451,6 +1451,13 @@ class AgentActivity(RecognitionHooks):
                     # inline task through a session close has always been
                     raise ToolError("the activity that awaited the inline task is closing")
 
+                if self._new_turns_blocked:
+                    raise ToolError(
+                        "An agent transition is in progress, so this tool call cannot continue. "
+                        "Wait until the transition is complete before retrying, if the tool is "
+                        "available to the new agent."
+                    )
+
                 # past the queue: a run watching a task still waiting its turn waits for
                 # the user input the task ahead of it needs
                 if (run_state := self._session._global_run_state) and not run_state.done():
