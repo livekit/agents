@@ -35,8 +35,10 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
@@ -93,6 +95,7 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
+        return_timestamps: bool = True,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
@@ -115,9 +118,16 @@ class TTS(tts.TTS):
                 stream is finalized; the next sentence starts a fresh stream. Prevents slow
                 LLM gaps from hitting the server's per-stream timeout (observed ~8-18s).
                 Defaults to 5.0.
+            return_timestamps (bool): Ask Soniox for character-level audio timestamps and
+                forward them as an aligned transcript, so an interrupted turn records the
+                text that was actually spoken instead of a speaking-rate estimate.
+                Defaults to True.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(
+                streaming=True,
+                aligned_transcript=return_timestamps,
+            ),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -143,6 +153,7 @@ class TTS(tts.TTS):
             websocket_url=websocket_url,
             api_key=api_key,
             stream_idle_timeout=stream_idle_timeout,
+            return_timestamps=return_timestamps,
         )
         self._session = http_session
         self._sentence_tokenizer = (
@@ -286,8 +297,8 @@ class _ActiveStream:
     connection: _Connection
     stream_id: str
     waiter: asyncio.Future[None]
+    data: _StreamData
     opened_at: float
-    baseline: float  # emitter duration at open; audio beyond it belongs to this stream
     attempt: int = 0
     texts: list[str] = field(default_factory=list)
 
@@ -302,6 +313,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id: str = ""
         self._connection: _Connection | None = None
         self._cancelled = asyncio.Event()
+        self._timeline = _Timeline()
 
     async def aclose(self) -> None:
         """Close the stream, signalling cancel to the server if still active.
@@ -334,6 +346,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         sentences are ever sent, so every rotation lands on a natural boundary.
         """
         request_id = utils.shortuuid()
+        # a retry restarts _run against a brand new emitter, so the timeline
+        # starts over with it
+        self._timeline = _Timeline()
 
         output_emitter.initialize(
             request_id=request_id,
@@ -417,6 +432,14 @@ class SynthesizeStream(tts.SynthesizeStream):
             if next_task is not None:
                 await utils.aio.gracefully_cancel(next_task)
             if active is not None:
+                # An interruption cancels this task outright, so the stream
+                # never settles: flush here too, or the word held back as
+                # possibly-incomplete is lost even though it was spoken. The
+                # buffer is empty unless the stream produced output, and a
+                # settled stream has already been cleared, so this cannot
+                # publish anything twice. It has to precede end_segment(),
+                # which closes the frame these words ride on.
+                _emit_timed_words(active.data, flush=True)
                 active.connection.unregister_stream(active.stream_id)
             output_emitter.end_segment()
             await utils.aio.gracefully_cancel(input_t)
@@ -444,13 +467,23 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._stream_id = stream_id = utils.shortuuid()
 
         waiter: asyncio.Future[None] = asyncio.get_event_loop().create_future()
-        connection.register_stream(stream_id, output_emitter, waiter, opts=self._opts)
+        # The emitter's duration lags the audio it has been handed, so the
+        # timeline - which counts every timestamp received - can already run
+        # past it; this stream starts from whichever is further along.
+        data = connection.register_stream(
+            stream_id,
+            output_emitter,
+            waiter,
+            opts=self._opts,
+            time_offset=max(output_emitter.pushed_duration(), self._timeline.end),
+            timeline=self._timeline,
+        )
         return _ActiveStream(
             connection=connection,
             stream_id=stream_id,
             waiter=waiter,
+            data=data,
             opened_at=time.monotonic(),
-            baseline=output_emitter.pushed_duration(),
             attempt=attempt,
         )
 
@@ -471,8 +504,16 @@ class SynthesizeStream(tts.SynthesizeStream):
         Returns None when the stream ended cleanly (everything sent was
         spoken), or a fresh stream with the batch replayed when it failed
         transiently.
+
+        A stream is replayable only while it has handed the emitter nothing.
+        ``produced_output`` says so exactly, where the emitter's own duration
+        only says so eventually: audio sits in the emitter unaccounted until it
+        becomes frames, and a stream judged replayable on that lag would repeat
+        speech the user is about to hear, and repeat the words already published
+        for it. Neither can be taken back.
         """
         failure: APIError | None = None
+        replayable = False
         try:
             await active.waiter
         except APIError as e:
@@ -480,11 +521,26 @@ class SynthesizeStream(tts.SynthesizeStream):
         except Exception as e:
             raise APIConnectionError() from e
         finally:
+            replayable = (
+                failure is not None
+                and failure.retryable
+                and not active.data.produced_output
+                and active.attempt < self._conn_options.max_retry
+                and not self._cancelled.is_set()
+            )
+            if not replayable:
+                # No more characters are coming, so the word held back as
+                # possibly-incomplete is as complete as it will get, and it
+                # describes audio already handed to the emitter. A replayable
+                # stream has nothing buffered to flush.
+                _emit_timed_words(active.data, flush=True)
             # release before any replay so only one stream is ever registered
             active.connection.unregister_stream(active.stream_id)
 
         if failure is None:
             return None
+        if not replayable:
+            raise failure
         return await self._retry_stream(active, output_emitter, request_id, failure)
 
     async def _retry_stream(
@@ -497,18 +553,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Replay the failed stream's sentences on a fresh stream_id.
 
         The framework never retries once any audio reached the user, so a
-        transient failure would otherwise mute the rest of the reply. Replaying
-        is safe only while the failed stream itself produced no audio.
+        transient failure would otherwise mute the rest of the reply. Only
+        ``_settle_stream`` judges whether replaying is safe; by the time this
+        runs the stream is known to have produced no audio, and to have
+        published no timed words that the replacement could repeat.
         """
-        can_retry = (
-            exc.retryable
-            and output_emitter.pushed_duration() == active.baseline
-            and active.attempt < self._conn_options.max_retry
-            and not self._cancelled.is_set()
-        )
-        if not can_retry:
-            raise exc
-
         retry_interval = self._conn_options._interval_for_retry(active.attempt)
         logger.warning(
             "Soniox TTS stream failed: %s, retrying in %ss",
@@ -539,6 +588,7 @@ class _TTSOptions:
     websocket_url: str
     api_key: str
     stream_idle_timeout: float
+    return_timestamps: bool
 
 
 @dataclass
@@ -563,6 +613,13 @@ _OutboundMsg = _StartConfig | _SendText | _CancelStream
 
 
 @dataclass
+class _Timeline:
+    """How far this segment's aligned transcript has reached, across streams."""
+
+    end: float = 0.0
+
+
+@dataclass
 class _StreamData:
     emitter: tts.AudioEmitter
     waiter: asyncio.Future[None]
@@ -572,6 +629,219 @@ class _StreamData:
     # This flag is how recv loop tells them apart.
     cancel_sent: bool = False
     config_sent: bool = False
+    # Soniox times characters from this stream's own first sample, but the
+    # emitter's timeline spans every stream of the segment, so each timestamp is
+    # shifted by the audio already emitted when this stream opened.
+    time_offset: float = 0.0
+    # Characters received but not yet emitted as a complete word.
+    char_text: str = ""
+    char_starts: list[float] = field(default_factory=list)
+    char_ends: list[float] = field(default_factory=list)
+    timeline: _Timeline = field(default_factory=_Timeline)
+    # Text handed to this stream. Soniox times its own preprocessed text, which
+    # has the leading whitespace normalised away; this is where the separator
+    # between two rotated streams is recovered from.
+    sent_text: str = ""
+    emitted_any: bool = False
+    # Audio or timed words handed to the emitter. Neither can be taken back, so
+    # this is what makes a stream unreplayable - and unlike the emitter's own
+    # duration it is exact, counting output the emitter has accepted but not yet
+    # turned into frames.
+    produced_output: bool = False
+    # Set when a frame had to be skipped. Its characters are still spoken, so
+    # they are held here with the broken word either side of them and published
+    # without timings once a word boundary makes the region safe to close.
+    resync_pending: bool = False
+    pending_untimed: str = ""
+
+
+def _is_word_boundary(char: str) -> bool:
+    """Whether *char* starts a word rather than continuing the one before it.
+
+    Whitespace ends a word, and scripts written without spaces - CJK, Thai -
+    give every character a word of its own. Asking ``split_words`` keeps that
+    judgement identical to the one ``_to_timed_words`` makes, instead of
+    assuming every reply is space-delimited.
+    """
+    if char.isspace():
+        return True
+    return len(split_words("a" + char, ignore_punctuation=False, split_character=True)) > 1
+
+
+def _accumulate_timestamps(stream: _StreamData, timestamps: dict[str, Any]) -> None:
+    """Fold one frame's character timings into the stream's aligned transcript."""
+    chars: list[str] | None = timestamps.get("characters")
+    starts: list[float] | None = timestamps.get("character_start_times_seconds")
+    ends: list[float] | None = timestamps.get("character_end_times_seconds")
+    if not (chars and starts and ends and len(chars) == len(starts) == len(ends)):
+        # Only the timings are unusable here - these characters were still
+        # spoken, so none of the text is dropped. They are kept with the word
+        # they interrupted and handed over untimed once a boundary closes the
+        # region: joining the two sides of the gap would invent a word ("bro" +
+        # "ps" reads as "brops") and publishing either side alone would make a
+        # word of a fragment, but carrying the whole stretch untimed does
+        # neither. The synchronizer estimates across untimed text, so this
+        # stretch loses its precision and the reply keeps its words.
+        logger.warning("Soniox TTS sent malformed timestamps for a frame, timing its text by rate")
+        _emit_timed_words(stream)
+        stream.pending_untimed += stream.char_text + "".join(chars or [])
+        stream.char_text = ""
+        stream.char_starts.clear()
+        stream.char_ends.clear()
+        stream.resync_pending = True
+        return
+
+    if stream.resync_pending:
+        boundary = next((i for i, char in enumerate(chars) if _is_word_boundary(char)), None)
+        if boundary is None:
+            stream.pending_untimed += "".join(chars)  # still inside the broken word
+            return
+        # A separator closes the untimed region and goes with it; a character
+        # that is a word in itself starts the timed text again.
+        resume = boundary + 1 if chars[boundary].isspace() else boundary
+        stream.pending_untimed += "".join(chars[:resume])
+        _publish_untimed(stream)
+        chars, starts, ends = chars[resume:], starts[resume:], ends[resume:]
+        stream.resync_pending = False
+        if not chars:
+            return
+
+    offset = stream.time_offset
+    for char, start, end in zip(chars, starts, ends, strict=False):
+        # Soniox documents one entry per codepoint; pad anyway so the timing
+        # arrays stay index-aligned with char_text whatever arrives.
+        stream.char_starts += [start + offset] * len(char)
+        stream.char_ends += [start + offset] * (len(char) - 1) + [end + offset]
+    stream.char_text += "".join(chars)
+
+    _emit_timed_words(stream)
+
+
+def _publish_untimed(stream: _StreamData) -> None:
+    """Hand over text whose timings were lost, so the reply itself stays whole.
+
+    The characters have no timings of their own, but the region's start is
+    known: it opens where the last published word ended. That anchors the text
+    before it, and the synchronizer spreads this text at an estimated rate up
+    to whatever timed word comes next.
+
+    Nothing is claimed about where the region ends, because nothing here knows.
+    The synchronizer stops trusting annotations once playback passes the last
+    one and estimates from there, then releases whatever is left when playback
+    completes - so an unbounded tail still reaches the viewer. Closing it on a
+    guess would be worse than leaving it open: the guess would have to come
+    from the emitter's duration, which lags the audio it has been handed, and
+    the tail would be spread over an interval shorter than the speech it
+    describes - captions running ahead of the voice.
+    """
+    if not stream.pending_untimed:
+        return
+
+    stream.produced_output = True
+    untimed = TimedString(text=stream.pending_untimed, start_time=stream.timeline.end)
+    if not stream.emitted_any:
+        # this is the stream's first text, so it carries the separator that
+        # opened it - leaving it for a later word would move the whitespace
+        stream.emitted_any = True
+        untimed = _with_leading_separator(untimed, stream.sent_text)
+    stream.emitter.push_timed_transcript(untimed)
+    stream.pending_untimed = ""
+
+
+def _emit_timed_words(stream: _StreamData, *, flush: bool = False) -> None:
+    """Push every word the buffered characters now complete, keeping the rest."""
+    if flush:
+        _publish_untimed(stream)
+
+    timed_words, stream.char_text = _to_timed_words(
+        stream.char_text, stream.char_starts, stream.char_ends, flush=flush
+    )
+    if timed_words:
+        if not stream.emitted_any:
+            stream.emitted_any = True
+            timed_words[0] = _with_leading_separator(timed_words[0], stream.sent_text)
+        stream.produced_output = True
+        stream.emitter.push_timed_transcript(timed_words)
+
+        # Where a rotated stream has to start from: pushed_duration() alone
+        # would place it too early, counting neither audio still queued in the
+        # emitter nor the tail frame it holds back. Only published words move
+        # it, so a stream that goes on to be replayed leaves nothing behind for
+        # its replacement to inherit - characters still buffered as a
+        # possibly-incomplete word have not been spoken for yet. A stream that
+        # ends cleanly flushes them, which is when they count.
+        last_end = timed_words[-1].end_time
+        if is_given(last_end):
+            stream.timeline.end = max(stream.timeline.end, last_end)
+
+    keep = len(stream.char_text)
+    stream.char_starts = stream.char_starts[len(stream.char_starts) - keep :]
+    stream.char_ends = stream.char_ends[len(stream.char_ends) - keep :]
+
+
+def _with_leading_separator(word: TimedString, sent_text: str) -> TimedString:
+    """Restore the whitespace that opened *sent_text* but not the aligned transcript.
+
+    A reply is spread over several streams, and the sentence tokenizer hands
+    each one its leading separator (" Then, after a long pause..."), which
+    Soniox normalises away before timing the text. Without it the last word of
+    one stream runs into the first word of the next - "one sentence.Then". The
+    separator comes from the text this stream was actually given, so scripts
+    that do not space their sentences are left alone.
+    """
+    separator = sent_text[: len(sent_text) - len(sent_text.lstrip())]
+    if not separator or str(word).startswith(separator):
+        return word
+
+    return TimedString(
+        text=separator + str(word),
+        start_time=word.start_time,
+        end_time=word.end_time,
+    )
+
+
+def _to_timed_words(
+    text: str,
+    start_times: list[float],
+    end_times: list[float],
+    *,
+    flush: bool = False,
+) -> tuple[list[TimedString], str]:
+    """Split *text* into timed words and return them with the text left over.
+
+    ``start_times`` and ``end_times`` hold one entry per character of *text*.
+    The trailing word is held back until *flush*, since the characters that
+    finish it may still arrive on a later frame.
+
+    The returned strings tile *text* without gaps - each one runs to the start
+    of the next word, so separators ride along with the word before them. The
+    SDK concatenates these chunks back into the reply that reaches chat history
+    and the transcript sinks, so dropping the separators would run the words
+    together. Timings still describe the word itself, not the separator.
+    """
+    if not text:
+        return [], ""
+
+    words = split_words(text, ignore_punctuation=False, split_character=True)
+    emitted = len(words) if flush else len(words) - 1
+    if emitted <= 0:
+        return [], text
+
+    timed_words: list[TimedString] = []
+    cursor = 0
+    for index in range(emitted):
+        _, start, end = words[index]
+        stop = words[index + 1][1] if index + 1 < len(words) else len(text)
+        timed_words.append(
+            TimedString(
+                text=text[cursor:stop],
+                start_time=start_times[start],
+                end_time=end_times[end - 1],
+            )
+        )
+        cursor = stop
+
+    return timed_words, text[cursor:]
 
 
 class _Connection:
@@ -652,18 +922,28 @@ class _Connection:
         waiter: asyncio.Future[None],
         *,
         opts: _TTSOptions,
-    ) -> None:
+        time_offset: float = 0.0,
+        timeline: _Timeline | None = None,
+    ) -> _StreamData:
         """Register a new stream and queue its config message."""
+        data = _StreamData(
+            emitter=emitter,
+            waiter=waiter,
+            opts=opts,
+            time_offset=time_offset,
+            timeline=timeline if timeline is not None else _Timeline(),
+        )
         if self._closed:
             if not waiter.done():
                 waiter.set_exception(APIConnectionError("Soniox TTS connection is closed"))
-            return
+            return data
 
         if stream_id in self._streams:
             raise ValueError(f"stream_id {stream_id} already registered")
 
         # Server starts a per-stream timeout on _StartConfig receipt; we queue it lazily in send_text.
-        self._streams[stream_id] = _StreamData(emitter=emitter, waiter=waiter, opts=opts)
+        self._streams[stream_id] = data
+        return data
 
     def unregister_stream(self, stream_id: str) -> None:
         self._streams.pop(stream_id, None)
@@ -688,6 +968,7 @@ class _Connection:
                 self._streams.pop(stream_id, None)
                 return
 
+        stream.sent_text += text
         if not stream.config_sent:
             stream.config_sent = True
             self._input_queue.send_nowait(_StartConfig(stream_id=stream_id, opts=stream.opts))
@@ -727,6 +1008,8 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.return_timestamps:
+                        config["return_timestamps"] = True
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
@@ -807,12 +1090,21 @@ class _Connection:
                         )
                     continue
 
+                # Before the audio of the same frame: the emitter attaches
+                # pending timed words to the next frame it emits.
+                if timestamps := resp.get("timestamps"):
+                    _accumulate_timestamps(stream, timestamps)
+
                 audio_b64 = resp.get("audio")
                 if audio_b64:
+                    stream.produced_output = True
                     stream.emitter.push(base64.b64decode(audio_b64))
 
                 if resp.get("audio_end"):
                     stream.audio_ended = True
+                    # The stream always ends on a sentence boundary, so the
+                    # trailing word is complete and safe to emit.
+                    _emit_timed_words(stream, flush=True)
                     # end_segment() is called from SynthesizeStream._run's finally
                     # block (covers cancel/error paths too).
 
