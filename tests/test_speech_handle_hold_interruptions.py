@@ -97,4 +97,3 @@ def test_force_interrupt_still_works_after_deferred_true_assignment() -> None:
         assert handle.allow_interruptions is False
         handle.interrupt(force=True)
         assert handle.interrupted
-
