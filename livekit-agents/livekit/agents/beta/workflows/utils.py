@@ -1,4 +1,10 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from enum import Enum
+
+from ...llm.chat_context import Instructions
+from ...types import NOT_GIVEN, NotGivenOr
 
 
 class DtmfEvent(str, Enum):
@@ -36,3 +42,21 @@ def dtmf_event_to_code(event: DtmfEvent) -> int:
 
 def format_dtmf(events: list[DtmfEvent]) -> str:
     return " ".join(event.value for event in events)
+
+
+@dataclass
+class InstructionParts:
+    """Customizable instruction sections for built-in workflow tasks.
+
+    Each field overrides that section when set; leave as ``NOT_GIVEN`` to
+    preserve the workflow's built-in default. Set to ``""`` to remove a
+    section entirely.
+
+    Args:
+        persona: Agent persona/identity — who the agent is and how it behaves.
+        extra: Extra instructions appended to the prompt. The simplest hook for
+            adding domain context without touching defaults.
+    """
+
+    persona: NotGivenOr[Instructions | str] = NOT_GIVEN
+    extra: Instructions | str = ""
