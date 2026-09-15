@@ -201,8 +201,7 @@ examples:
           - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
           - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
           - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
-          - { value: speechmatics/enhanced, label: Speechmatics Enhanced }
-          - { value: speechmatics/standard, label: Speechmatics Standard }
+          - { value: speechmatics/linden-1, label: Speechmatics Linden-1 }
           - { value: xai/stt-1, label: xAI Speech-to-Text }
       - rpc: set_llm_model
         label: LLM

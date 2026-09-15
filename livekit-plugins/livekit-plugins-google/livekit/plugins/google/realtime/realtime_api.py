@@ -74,10 +74,21 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.8-live",
+        "gemini-3.8-live-extended-thinking",
         "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
     }
 )
+
+
+# generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
+# answer that placeholder with an empty turn instead, so they must not get it.
+MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
+
+
+def _needs_reply_placeholder(model: str) -> bool:
+    return not any(tag in model for tag in MODELS_WITHOUT_REPLY_PLACEHOLDER)
 
 
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
@@ -327,7 +338,6 @@ class RealtimeModel(llm.RealtimeModel):
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
 
-        mutable = "3.1" not in model
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -336,8 +346,8 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
-                mutable_chat_context=mutable,
-                mutable_instructions=mutable,
+                mutable_chat_context=True,
+                mutable_instructions=True,
                 mutable_tools=False,
                 per_response_tool_choice=False,
             )
@@ -376,12 +386,6 @@ class RealtimeModel(llm.RealtimeModel):
 
         # Validate model/API compatibility for known models
         _validate_model_api_match(model, use_vertexai)
-
-        if "3.1" in model:
-            logger.warning(
-                f"'{model}' has limited mid-session update support. instructions, chat "
-                "context, and tool updates will not be applied until the next session."
-            )
 
         self._opts = _RealtimeOptions(
             model=model,
@@ -646,9 +650,11 @@ class RealtimeSession(llm.RealtimeSession):
                     turns=[
                         types.Content(
                             parts=[types.Part(text=instructions)],
-                            # Vertex AI ignores role=None or role="system" and only works with role="model".
-                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
-                            role="model" if self._opts.vertexai else None,
+                            # Both APIs error on role="system". This was role=None on the
+                            # Gemini API, which 2.5 accepted as the system role but 3.1 and
+                            # 3.8 reject with a 1007 close that kills the session. "model"
+                            # is accepted by all three and by Vertex.
+                            role="model",
                         )
                     ],
                     turn_complete=False,
@@ -845,12 +851,11 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
         turns = []
         if is_given(instructions):
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+        if _needs_reply_placeholder(self._opts.model):
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
