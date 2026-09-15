@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import dataclasses
 import json
 import logging
@@ -12,7 +11,6 @@ from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
-import aiohttp
 import pytest
 from multidict import CIMultiDict
 from yarl import URL
@@ -62,7 +60,6 @@ def _new_stream(
         enable_logging=True,
         previous_text=None,
     )
-    stream._active_server_vad = server_vad
     stream._language = LanguageCode(language) if language else None
     stream._event_ch = _EventSink()
     stream._speaking = False
@@ -344,6 +341,16 @@ def test_update_options_forwards_keyterms_to_active_streams() -> None:
     assert captured.get("keyterms") == ["nginx"]
 
 
+def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
+    stream = _new_stream()
+    stream._reconnect_event = asyncio.Event()
+
+    stream.update_options(keyterms=["nginx"])
+
+    assert stream._opts.keyterms == ["nginx"]
+    assert stream._reconnect_event.is_set()
+
+
 async def test_connect_ws_normalizes_the_primary_language() -> None:
     # LanguageCode keeps the region ("en-US") but the realtime API rejects it, so the primary
     # language goes on the wire through the same normalization the secondary ones get
@@ -501,15 +508,13 @@ class _FakeWS:
     def __init__(self) -> None:
         self.sent: list[dict] = []
         self._closed = asyncio.Event()
-        self.received: asyncio.Queue[dict] = asyncio.Queue()
 
     async def send_str(self, data: str) -> None:
         self.sent.append(json.loads(data))
 
     async def receive(self) -> Any:
-        return SimpleNamespace(
-            type=aiohttp.WSMsgType.TEXT, data=json.dumps(await self.received.get())
-        )
+        await self._closed.wait()
+        raise AssertionError("the test should never let recv_task resume")
 
     async def close(self) -> None:
         self._closed.set()
@@ -679,89 +684,3 @@ def test_provider_error_content_stays_in_pii_attributes(
     assert record.getMessage() == f"ElevenLabs STT error [{message_type}]"
     assert record.__dict__["lk.pii.data"] == payload
     assert record.exc_info is None
-
-
-@pytest.mark.parametrize("include_timestamps", [False, True])
-async def test_vad_update_drains_old_connection_before_sending_more_audio(
-    include_timestamps: bool,
-) -> None:
-    old_ws, new_ws = _FakeWS(), _FakeWS()
-    instance = _stt(include_timestamps=include_timestamps, language_code="en")
-    sockets = iter([old_ws, new_ws])
-    modes: list[str] = []
-
-    class Session:
-        closed = False
-
-        async def ws_connect(self, url: str, **kwargs: object) -> Any:
-            modes.append(URL(url).query["commit_strategy"])
-            return next(sockets)
-
-    instance._session = cast(Any, Session())
-    stream = instance.stream()
-    try:
-        await _wait_until(lambda: bool(modes))
-        stream.push_frame(_frame(30))
-        instance.update_options(server_vad={})
-        stream.push_frame(_frame(50))
-        await _wait_until(lambda: len(old_ws.sent) == 2)
-        assert not instance.capabilities.manual_flush
-        assert stream._server_vad is None
-        assert [msg["commit"] for msg in old_ws.sent] == [False, True]
-        assert not old_ws._closed.is_set()
-        assert not new_ws.sent
-
-        old_ws.received.put_nowait(_committed_transcript("first turn"))
-        if include_timestamps:
-            await asyncio.sleep(0.02)
-            assert not old_ws._closed.is_set()
-            old_ws.received.put_nowait(_committed_transcript("first turn", with_timestamps=True))
-        await _wait_until(lambda: bool(new_ws.sent))
-        assert old_ws._closed.is_set()
-        assert stream._server_vad == {}
-        assert modes == ["manual", "vad"]
-        assert [msg["commit"] for msg in new_ws.sent] == [False]
-        assert b"".join(base64.b64decode(msg["audio_base_64"]) for msg in old_ws.sent) == (
-            _frame(30).data.tobytes()
-        )
-        assert base64.b64decode(new_ws.sent[0]["audio_base_64"]) == _frame(50).data.tobytes()
-    finally:
-        await stream.aclose()
-
-
-async def test_option_update_without_audio_reconnects_without_empty_commit() -> None:
-    old_ws, new_ws = _FakeWS(), _FakeWS()
-    stream = _live_stream(old_ws)
-    connected: list[_FakeWS] = []
-
-    async def connect() -> Any:
-        ws = old_ws if not connected else new_ws
-        connected.append(ws)
-        return ws
-
-    stream._connect_ws = connect
-    try:
-        await _wait_until(lambda: bool(connected))
-        stream.update_options(keyterms=["nginx"])
-        await _wait_until(lambda: len(connected) == 2)
-        assert stream._opts.keyterms == ["nginx"]
-        assert not old_ws.sent
-    finally:
-        await stream.aclose()
-
-
-async def test_reconnect_reports_timeout_if_provider_never_finalizes() -> None:
-    ws = _FakeWS()
-    stream = _live_stream(ws)
-    stream._conn_options = dataclasses.replace(
-        DEFAULT_API_CONNECT_OPTIONS, max_retry=0, timeout=0.01
-    )
-    try:
-        stream.push_frame(_frame(50))
-        stream.update_options(server_vad={})
-        with pytest.raises(elevenlabs_stt.APITimeoutError, match="waiting for committed audio"):
-            await asyncio.wait_for(stream._task, timeout=1)
-        assert ws._closed.is_set()
-        assert not stream._reconnect_requested
-    finally:
-        await stream.aclose()

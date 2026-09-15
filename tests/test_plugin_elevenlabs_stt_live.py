@@ -1,4 +1,4 @@
-"""Live ElevenLabs transcription with local VAD and commit-strategy updates."""
+"""Live ElevenLabs transcription with local VAD."""
 
 from __future__ import annotations
 
@@ -19,8 +19,7 @@ from livekit.plugins import elevenlabs, silero
 pytestmark = pytest.mark.plugin("elevenlabs")
 
 
-@pytest.mark.parametrize("update_server_vad", [False, True])
-async def test_live_vad_flush_preserves_each_turn(update_server_vad: bool) -> None:
+async def test_live_vad_flush_preserves_each_turn() -> None:
     load_dotenv(Path(__file__).parents[1] / ".env")
     if not os.environ.get("ELEVEN_API_KEY"):
         pytest.skip("ELEVEN_API_KEY is required for live ElevenLabs validation")
@@ -62,10 +61,8 @@ async def test_live_vad_flush_preserves_each_turn(update_server_vad: bool) -> No
             silence = bytes(sample_rate * channels * 2 * 2)
             await feed(silence)
             assert finals.empty()
-            for segment in range(3 if update_server_vad else 2):
+            for _ in range(2):
                 await feed(audio)
-                if update_server_vad and segment < 2:
-                    stt.update_options(server_vad={} if segment == 0 else None)
                 await feed(silence)
                 transcript = await asyncio.wait_for(finals.get(), timeout=20)
                 assert "weather" in transcript.lower()
