@@ -266,7 +266,10 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         if participant.kind not in DEFAULT_PARTICIPANT_KINDS:
             return
 
-        logger.info(f"participant disconnected from caller room: {participant.identity}, closing")
+        logger.info(
+            "participant disconnected from caller room, closing",
+            extra={"lk.pii.participant_identity": participant.identity},
+        )
 
         assert self._caller_room is not None
         self._caller_room.off("participant_disconnected", self._on_caller_participant_disconnected)
@@ -393,7 +396,13 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
         # we no longer care about the human agent session. it's supposed to be over
         human_agent_room.off("disconnected", self._on_human_agent_room_close)
 
-        logger.debug(f"moving {self._human_agent_identity} to caller room {self._caller_room.name}")
+        logger.debug(
+            "moving human agent to caller room",
+            extra={
+                "lk.pii.participant_identity": self._human_agent_identity,
+                "lk.pii.room_name": self._caller_room.name,
+            },
+        )
         await job_ctx.api.room.move_participant(
             api.MoveParticipantRequest(
                 room=human_agent_room.name,
