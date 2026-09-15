@@ -35,7 +35,7 @@ The `turn_detection_mode` parameter controls how end-of-turn (endpointing) is de
 
 The earlier `FIXED`, `ADAPTIVE` and `SMART_TURN` modes each selected one of the old engine's
 service-side endpointing strategies. Agent STT exposes a single one, so all three are deprecated
-and resolve to `VAD` with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
+and resolve to `EXTERNAL` (the default) with a warning. `FIXED` additionally loses its `end_of_utterance_silence_trigger`
 timing, which Agent STT does not support.
 
 ## Usage — service-side endpointing (`VAD`)
