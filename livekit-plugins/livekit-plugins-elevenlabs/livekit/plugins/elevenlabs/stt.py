@@ -856,7 +856,10 @@ class SpeechStream(stt.SpeechStream):
                 message_type,
                 extra={"lk.pii.data": data},
             )
-            raise APIConnectionError(f"ElevenLabs STT error [{message_type}]") from None
+            raise APIConnectionError(
+                f"ElevenLabs STT error [{message_type}]",
+                retryable=message_type not in ("auth_error", "quota_exceeded", "input_error"),
+            ) from None
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",

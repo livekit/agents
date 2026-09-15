@@ -690,16 +690,28 @@ def test_provider_error_content_stays_in_pii_attributes(
 
 
 @pytest.mark.parametrize(
-    "message_type", ["auth_error", "quota_exceeded", "transcriber_error", "input_error", "error"]
+    ("message_type", "retryable"),
+    [
+        ("auth_error", False),
+        ("quota_exceeded", False),
+        ("input_error", False),
+        ("transcriber_error", True),
+        ("error", True),
+    ],
 )
-async def test_provider_error_reaches_stream_consumer(message_type: str) -> None:
+async def test_provider_error_reaches_stream_consumer(message_type: str, retryable: bool) -> None:
     ws = _FakeWS()
     stream = _live_stream(ws)
-    stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+    if retryable:
+        stream._conn_options = dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
     try:
         ws.received.put_nowait({"message_type": message_type, "message": "customer content"})
-        with pytest.raises(APIConnectionError, match=rf"ElevenLabs STT error \[{message_type}\]"):
+        with pytest.raises(
+            APIConnectionError, match=rf"ElevenLabs STT error \[{message_type}\]"
+        ) as exc:
             await asyncio.wait_for(stream.__anext__(), timeout=1)
+        assert exc.value.retryable is retryable
+        assert stream._num_retries == 0
         assert ws._closed.is_set()
     finally:
         await stream.aclose()
