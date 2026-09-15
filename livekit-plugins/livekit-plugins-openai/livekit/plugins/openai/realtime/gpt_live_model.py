@@ -76,12 +76,7 @@ GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
-class ResponsesDelegationOptions(TypedDict, total=False):
-    """The backend Responses model delegated work runs on, under ``delegation="responses"``.
-
-    A key left unset is not sent, and the service's own default applies.
-    """
-
+class _ResponsesDelegationOptionsBase(TypedDict, total=False):
     model: str
     """Responses model slug; ``gpt-5.6-luna`` when unset."""
     instructions: str
@@ -92,9 +87,14 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
     text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
-    service_tier: Literal["auto", "default", "flex", "priority"]
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
+
+
+class ResponsesDelegationOptions(_ResponsesDelegationOptionsBase, total=False):
+    """Backend Responses options for direct OpenAI GPT-Live sessions."""
+
+    service_tier: Literal["auto", "default", "flex", "priority"]
 
 
 @dataclass

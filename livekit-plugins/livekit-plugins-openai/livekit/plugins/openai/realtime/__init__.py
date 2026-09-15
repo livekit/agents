@@ -5,13 +5,16 @@ from .gpt_live_model import (
     GPTLiveVoices,
     ResponsesDelegationOptions,
 )
-from .inference_gpt_live_model import InferenceGPTLiveModel, InferenceGPTLiveSession
+from .inference_gpt_live_model import (
+    InferenceGPTLiveModel,
+    InferenceResponsesDelegationOptions,
+)
 from .inference_realtime_model import InferenceRealtimeModel
 from .realtime_model import RealtimeModel, RealtimeSession
 
 __all__ = [
     "InferenceGPTLiveModel",
-    "InferenceGPTLiveSession",
+    "InferenceResponsesDelegationOptions",
     "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",

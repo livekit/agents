@@ -9,7 +9,6 @@ from livekit.plugins.openai.realtime import (
     GPTLiveModel,
     GPTLiveSession,
     InferenceGPTLiveModel,
-    InferenceGPTLiveSession,
     gpt_live_types,
     inference_gpt_live_model as inference_gpt_live,
 )
@@ -61,6 +60,26 @@ async def test_direct_model_keeps_openai_url_and_auth(paused_gpt_live_main: None
 def test_requires_provider_prefixed_model() -> None:
     with pytest.raises(ValueError, match="provider-prefixed"):
         InferenceGPTLiveModel("gpt-live-1", api_key="key", api_secret="secret")
+
+
+@pytest.mark.parametrize("tier", ["auto", "flex", "priority", None])
+def test_rejects_unpriced_inference_service_tiers(tier: object) -> None:
+    with pytest.raises(ValueError, match="service_tier='default'"):
+        InferenceGPTLiveModel(
+            "openai/gpt-live-1",
+            responses_options={"service_tier": tier},  # type: ignore[typeddict-item]
+            api_key="key",
+            api_secret="secret",
+        )
+
+
+def test_accepts_default_inference_service_tier() -> None:
+    InferenceGPTLiveModel(
+        "openai/gpt-live-1",
+        responses_options={"service_tier": "default"},
+        api_key="key",
+        api_secret="secret",
+    )
 
 
 @pytest.mark.parametrize(
@@ -132,7 +151,7 @@ async def test_native_session_start_keeps_gateway_model_and_options(
 
     event = session._session_start_event().model_dump(exclude_none=True)
 
-    assert isinstance(session, InferenceGPTLiveSession)
+    assert isinstance(session, inference_gpt_live.InferenceGPTLiveSession)
     assert model.model == "openai/gpt-live-1"
     assert model.provider == "livekit"
     assert event["type"] == "session.start"

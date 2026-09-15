@@ -19,6 +19,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
+from livekit.agents.utils import is_given
 
 from . import gpt_live_types as types
 from .gpt_live_model import (
@@ -26,10 +27,17 @@ from .gpt_live_model import (
     GPTLiveModel,
     GPTLiveSession,
     GPTLiveVoices,
-    ResponsesDelegationOptions,
+    _ResponsesDelegationOptionsBase,
 )
 
 InferenceClass = Literal["priority", "standard", "low"]
+
+
+class InferenceResponsesDelegationOptions(_ResponsesDelegationOptionsBase, total=False):
+    """Responses options supported through LiveKit Inference."""
+
+    service_tier: Literal["default"]
+
 
 _GATEWAY_FATAL_ERROR_CODES = frozenset(
     {
@@ -54,7 +62,11 @@ class _InferenceGPTLiveOptions:
 
 
 class InferenceGPTLiveModel(GPTLiveModel):
-    """Native GPT-Live model authenticated through LiveKit Inference."""
+    """Native GPT-Live through LiveKit Inference.
+
+    Responses delegation supports function tools and the default service tier.
+    Separately priced OpenAI-hosted tools and service tiers are not available.
+    """
 
     def __init__(
         self,
@@ -63,7 +75,7 @@ class InferenceGPTLiveModel(GPTLiveModel):
         provider: str | None = None,
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
-        responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        responses_options: NotGivenOr[InferenceResponsesDelegationOptions] = NOT_GIVEN,
         base_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
@@ -74,6 +86,12 @@ class InferenceGPTLiveModel(GPTLiveModel):
     ) -> None:
         if "/" not in model:
             raise ValueError("model must be provider-prefixed, for example 'openai/gpt-live-1'")
+        if (
+            is_given(responses_options)
+            and "service_tier" in responses_options
+            and responses_options["service_tier"] != "default"
+        ):
+            raise ValueError("LiveKit Inference GPT-Live supports only service_tier='default'")
 
         resolved_api_key = api_key or os.getenv(
             "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
