@@ -130,17 +130,20 @@ class _ParticipantAudioOutput(io.AudioOutput):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
 
-        # the tail waits to fill a frame, but is flushed 20 ms before the queued audio plays out
+        # audio short of a frame waits for more, and the timer flushes it before the output
+        # runs dry; a paused output needs no frames, so no timer runs while paused
         if self._bstream_flush_timer:
             self._bstream_flush_timer.cancel()
-        queued = (
-            self._audio_source.queued_duration
-            + self._pushed_duration
-            - self._source_pushed_duration
-        )
-        self._bstream_flush_timer = asyncio.get_running_loop().call_later(
-            max(queued - 0.02, 0.0), self._flush_bstream
-        )
+            self._bstream_flush_timer = None
+        if self._playback_enabled.is_set():
+            queued = (
+                self._audio_source.queued_duration
+                + self._pushed_duration
+                - self._source_pushed_duration
+            )
+            self._bstream_flush_timer = asyncio.get_running_loop().call_later(
+                max(queued - 0.02, 0.0), self._flush_bstream
+            )
 
     def flush(self) -> None:
         super().flush()
@@ -175,6 +178,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def pause(self) -> None:
         super().pause()
         self._playback_enabled.clear()
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
         # self._audio_source.clear_queue()
 
     def resume(self) -> None:
