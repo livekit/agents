@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents.metrics import LLMMetrics, LLMModelUsage, ModelUsageCollector
+from livekit.agents.metrics import (
+    LLMMetrics,
+    LLMModelUsage,
+    ModelUsageCollector,
+    STTMetrics,
+    STTModelUsage,
+)
 from livekit.agents.metrics.base import Metadata
 
 pytestmark = pytest.mark.unit
@@ -73,3 +79,39 @@ def test_collector_aggregates_reasoning_tokens() -> None:
     assert llm_usage.output_reasoning_tokens == 72
     # reasoning is a subset of the output tokens, never added on top of them
     assert llm_usage.output_tokens == 150
+
+
+def _stt_metrics(**overrides: object) -> STTMetrics:
+    base: dict[str, object] = {
+        "label": "test.STT",
+        "request_id": "req-1",
+        "timestamp": 0.0,
+        "duration": 0.0,
+        "audio_duration": 1.0,
+        "streamed": True,
+        "metadata": Metadata(model_provider="mistralai", model_name="voxtral-mini"),
+    }
+    base.update(overrides)
+    return STTMetrics(**base)
+
+
+def test_stt_metrics_defaults_total_tokens_to_input_plus_output() -> None:
+    metrics = _stt_metrics(input_tokens=80, output_tokens=20)
+    assert metrics.total_tokens == 100
+
+
+def test_stt_metrics_keeps_an_explicit_total() -> None:
+    metrics = _stt_metrics(input_tokens=80, output_tokens=20, total_tokens=99)
+    assert metrics.total_tokens == 99
+
+
+def test_collector_aggregates_streaming_stt_token_usage() -> None:
+    collector = ModelUsageCollector()
+    collector.collect(_stt_metrics(input_tokens=80, output_tokens=20))
+
+    usage = collector.flatten()
+    assert len(usage) == 1
+    stt_usage = usage[0]
+    assert isinstance(stt_usage, STTModelUsage)
+    assert stt_usage.input_tokens == 80
+    assert stt_usage.output_tokens == 20

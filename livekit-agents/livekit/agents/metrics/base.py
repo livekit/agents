@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class Metadata(BaseModel):
@@ -66,7 +66,11 @@ class STTMetrics(_BaseMetrics):
     output_tokens: int = 0
     """Total output tokens (for token-based billing)."""
     total_tokens: int = 0
-    """Sum of input and output tokens."""
+    """Sum of input and output tokens.
+
+    When omitted at construction, this is filled in from ``input_tokens + output_tokens``
+    so streaming STT paths that only set the components still log a correct total.
+    """
     input_audio_tokens: int = 0
     """Number of audio input tokens billed by the ASR model."""
     acquire_time: float = 0.0
@@ -74,6 +78,15 @@ class STTMetrics(_BaseMetrics):
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_total_tokens(cls, data: object) -> object:
+        if isinstance(data, dict) and "total_tokens" not in data:
+            data["total_tokens"] = int(data.get("input_tokens") or 0) + int(
+                data.get("output_tokens") or 0
+            )
+        return data
 
 
 class TTSMetrics(_BaseMetrics):

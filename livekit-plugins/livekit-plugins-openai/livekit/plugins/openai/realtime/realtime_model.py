@@ -14,7 +14,7 @@ from typing import Any, Literal, overload
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import aiohttp
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, io, llm, utils
@@ -80,6 +80,10 @@ from openai.types.realtime import (
     ResponseTextDeltaEvent,
     ResponseTextDoneEvent,
     SessionUpdateEvent,
+)
+from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
+    UsageTranscriptTextUsageDuration,
+    UsageTranscriptTextUsageTokens,
 )
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 from openai.types.realtime.realtime_session_create_response import (
@@ -297,6 +301,24 @@ _FATAL_ERROR_CODES = frozenset(
 def _is_fatal_error(error: object | None) -> bool:
     code = getattr(error, "code", None) or getattr(error, "type", None)
     return isinstance(code, str) and code in _FATAL_ERROR_CODES
+
+
+_TranscriptionUsage = UsageTranscriptTextUsageTokens | UsageTranscriptTextUsageDuration
+_TRANSCRIPTION_USAGE_ADAPTER: TypeAdapter[_TranscriptionUsage] = TypeAdapter(_TranscriptionUsage)
+
+
+def _coerce_transcription_usage(usage: object) -> _TranscriptionUsage | None:
+    """Parse transcription usage from a validated SDK object or a raw websocket dict.
+
+    ``_recv_task`` builds completed events with ``construct``, which historically left nested
+    ``usage`` as a plain dict. Validate it so duration/token metrics still emit.
+    """
+    if usage is None:
+        return None
+    try:
+        return _TRANSCRIPTION_USAGE_ADAPTER.validate_python(usage)
+    except ValidationError:
+        return None
 
 
 def _server_turn_taking_enabled(
@@ -2080,12 +2102,7 @@ class RealtimeSession(
     def _emit_transcription_metrics(
         self, event: ConversationItemInputAudioTranscriptionCompletedEvent
     ) -> None:
-        from openai.types.realtime.conversation_item_input_audio_transcription_completed_event import (
-            UsageTranscriptTextUsageDuration,
-            UsageTranscriptTextUsageTokens,
-        )
-
-        usage = event.usage
+        usage = _coerce_transcription_usage(event.usage)
         if usage is None:
             return
 
