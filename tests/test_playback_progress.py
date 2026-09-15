@@ -246,29 +246,27 @@ async def test_a_cleared_queue_leaves_a_hole_rather_than_a_short_tail() -> None:
     assert h.sink._run_offset == pytest.approx(pushed)
 
 
-async def test_no_tail_timer_runs_while_paused() -> None:
-    """A paused output needs no frames; the frames or flush after the pause release the tail."""
+async def test_no_tail_timer_runs_while_paused_and_resume_arms_one() -> None:
+    """A paused output needs no frames; resume arms the timer from what survived the pause."""
     async with _Harness() as h:
+        loop = asyncio.get_running_loop()
         await h.push(0.08)  # 50 ms out, 30 ms tail with a timer
         assert h.sink._bstream_flush_timer is not None
         h.sink.pause()
         assert h.sink._bstream_flush_timer is None
 
-        await h.sink.capture_frame(_frame(0.08))  # 30 + 80 ms: one frame out, 10 ms tail
+        await h.sink.capture_frame(_frame(0.08))  # 30 + 80 ms: two frames out, 10 ms tail
         assert h.sink._bstream_flush_timer is None
         await h.settle()  # the forwarder sees the pause and drops the source queue
         assert h.source.queued_duration == 0.0
 
-        h.sink.resume()
+        h.sink.resume()  # only the two held frames stand ahead of the tail
+        assert h.sink._bstream_flush_timer.when() - loop.time() == pytest.approx(0.08, abs=0.01)
         await h.settle()
-        assert h.source.queued_duration == pytest.approx(0.1)  # the held frames, no timer
-        assert h.sink._bstream_flush_timer is None
-        h.sink.flush()  # the segment end releases the tail
+        assert h.source.queued_duration == pytest.approx(0.1)
+        h.sink._flush_bstream()  # the deadline arrives
         await h.settle()
-        assert h.source.queued_duration == pytest.approx(0.11)
-        h.source.queued_duration = 0.0  # the backlog plays out
-        for _ in range(50):
-            await asyncio.sleep(0)
+        assert h.source.queued_duration == pytest.approx(0.11)  # the tail follows, no gap
 
 
 async def test_a_pause_and_resume_report_two_runs_around_the_hole() -> None:

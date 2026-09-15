@@ -129,21 +129,7 @@ class _ParticipantAudioOutput(io.AudioOutput):
         for f in self._audio_bstream.push(frame.data):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
-
-        # audio short of a frame waits for more, and the timer flushes it before the output
-        # runs dry; a paused output needs no frames, so no timer runs while paused
-        if self._bstream_flush_timer:
-            self._bstream_flush_timer.cancel()
-            self._bstream_flush_timer = None
-        if self._playback_enabled.is_set():
-            queued = (
-                self._audio_source.queued_duration
-                + self._pushed_duration
-                - self._source_pushed_duration
-            )
-            self._bstream_flush_timer = asyncio.get_running_loop().call_later(
-                max(queued - 0.02, 0.0), self._flush_bstream
-            )
+        self._arm_bstream_flush()
 
     def flush(self) -> None:
         super().flush()
@@ -186,6 +172,24 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
+        self._arm_bstream_flush()
+
+    def _arm_bstream_flush(self, *, margin: float = 0.02) -> None:
+        # audio short of a frame waits for more, and the timer flushes it `margin` seconds before
+        # the output runs dry; a paused output needs no frames, so no timer runs while paused
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
+        if not self._playback_enabled.is_set():
+            return
+        queued = (
+            self._audio_source.queued_duration
+            + self._pushed_duration
+            - self._source_pushed_duration
+        )
+        self._bstream_flush_timer = asyncio.get_running_loop().call_later(
+            max(queued - margin, 0.0), self._flush_bstream
+        )
 
     def _flush_bstream(self, *, force: bool = False) -> None:
         if self._bstream_flush_timer:
