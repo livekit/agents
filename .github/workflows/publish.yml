@@ -210,31 +210,32 @@ jobs:
       package: ${{ matrix.package }}
       artifact_name: dist-${{ matrix.package }}
 
+  # A single publish job so the pypi environment raises one deployment review
+  # per release instead of one per package.
   publish:
-    name: Publish ${{ matrix.package }}
+    name: Publish to PyPI
     needs: [discover, build]
     if: always() && needs.discover.result == 'success'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 10
-      matrix:
-        package: ${{ fromJson(needs.discover.outputs.packages) }}
     environment: pypi
     permissions:
       id-token: write
     steps:
-      - name: Download build artifact
+      - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: dist-${{ matrix.package }}
+          pattern: dist-*
           path: dist/
+          merge-multiple: true
 
       - name: List distributions
         run: ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          # A republish must not abort on the packages that already went out.
+          skip-existing: true
 
   docs:
     name: Publish docs
