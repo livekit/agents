@@ -7,6 +7,25 @@ Real-time noise reduction for LiveKit voice agents using [Krisp's VIVA SDK](http
 - **`voice_isolation()`**: Real-time voice isolation and noise reduction `FrameProcessor`
 - **`voice_isolation_telephony()`**: Voice isolation tuned for telephony audio (for example, SIP participants)
 
+## Input audio metadata
+
+Processed frames expose an aligned copy of the audio immediately before filtering
+in `frame.userdata["lk.audio.raw"]`. This value is an `rtc.AudioFrame` with its own
+sample buffer. The filtered PCM stays in `frame.data`.
+
+`frame.userdata["lk.audio.processing"]` is `"isolated"` for the LiveKit Cloud voice
+isolation backend, or `"denoised"` for the license backend's NC session. Both fields
+are optional; frames passed through without processing do not add them.
+
+Select the desired frame at agent input before downstream resampling or batching:
+
+```python
+raw_frame = frame.userdata.get("lk.audio.raw", frame)
+```
+
+Other `FrameProcessor` plugins can expose the same userdata keys. Legacy native
+`NoiseCancellationOptions` filters do not expose raw audio through this contract.
+
 ## Installation
 
 ```bash
