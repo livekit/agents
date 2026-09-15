@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit import rtc
+from livekit.agents import AgentSession
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -82,10 +83,9 @@ def test_push_audio_records_sample_rate_and_input_start() -> None:
 def _make_activity() -> AgentActivity:
     activity = object.__new__(AgentActivity)
     activity._started = True
-    activity._session = MagicMock()
-    activity._session.agent_state = "listening"
-    activity._session.amd.enabled = True
-    activity._session.amd.started = True
+    activity._session = AgentSession(vad=None)
+    activity._session._agent_state = "listening"
+    activity._session._set_amd(MagicMock(enabled=True, started=True))
     activity._current_speech = None
     activity._rt_session = MagicMock()
     activity._audio_recognition = MagicMock()
@@ -112,14 +112,14 @@ def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
 def test_activity_sends_the_same_muted_audio_to_amd_and_session_stt(guard: str) -> None:
     activity = _make_activity()
     if guard == "aec_warmup":
-        activity._session.agent_state = "speaking"
+        activity._session._agent_state = "speaking"
         activity._session._aec_warmup_remaining = 1
         activity._session._aec_warmup_timer = object()
     else:
         activity._current_speech = SimpleNamespace(
             done=lambda: False, interrupted=False, allow_interruptions=False
         )
-        activity._session.options.interruption = {"discard_audio_if_uninterruptible": True}
+        activity._session.options.interruption["discard_audio_if_uninterruptible"] = True
     frame = _make_frame()
     activity.push_audio(frame)
     muted = activity._session.amd.push_audio.call_args.args[0]

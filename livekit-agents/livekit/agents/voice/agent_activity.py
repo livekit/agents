@@ -110,8 +110,8 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..llm import mcp
+    from ._reply_guard import ReplyGuard
     from .agent_session import AgentSession, ExpressiveOptions
-    from .amd import AMD
 
 
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
@@ -1645,7 +1645,7 @@ class AgentActivity(RecognitionHooks):
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
             return
-        if (amd := self._session.amd) and amd.enabled and not amd.started:
+        if not self._session._input_audio_allowed:
             return
 
         aec_warmup_active: bool = (
@@ -1665,15 +1665,14 @@ class AgentActivity(RecognitionHooks):
         should_discard: bool = aec_warmup_active or uninterruptible_speech_active
 
         # When discarding, substitute silence on the paths that would otherwise
-        # see contaminated/echoed audio (session/AMD STT, realtime model) so the downstream
+        # see contaminated/echoed audio (STT, realtime model) so the downstream
         # stream stays continuous. VAD and the interruption detector keep
         # receiving the real frame so they can still react to the user.
         stt_frame: rtc.AudioFrame | None = None
         if should_discard:
             stt_frame = utils.audio.silence_frame_like(frame)
 
-        if amd:
-            amd.push_audio(stt_frame if stt_frame is not None else frame)
+        self._session._on_input_audio(stt_frame if stt_frame is not None else frame)
 
         if self._rt_session is not None:
             self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
@@ -1794,9 +1793,8 @@ class AgentActivity(RecognitionHooks):
                     tool_choice = "none"
 
         all_tools = self.tools.copy()
-        # inject DTMF tool if needed (IVR)
-        if self._session.amd:
-            all_tools = self._session.amd._maybe_inject_dtmf_tool(all_tools)
+        if reply_guard := self._session._reply_guard:
+            all_tools = reply_guard.tools_for_reply(all_tools)
 
         # resolve tool names to Tool objects if tools param is given
         resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
@@ -1872,8 +1870,9 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
 
-    def _cancel_pending_replies(self) -> None:
-        """Cancel queued and held replies while preserving active or paused playback."""
+    def _cancel_pending_speech(self) -> None:
+        """Cancel preemptive, queued, and held speech; preserve active or paused playback."""
+        self._cancel_preemptive_generation()
         for _, _, speech in self._speech_q:
             speech._cancel()
         current = self._current_speech
@@ -2691,7 +2690,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        amd = self._session._amd
+        reply_guard = self._session._reply_guard
         info.turn_id = self._session._user_turn_committed(
             info.new_transcript, info.metrics.end_of_turn_delay
         )
@@ -2705,24 +2704,29 @@ class AgentActivity(RecognitionHooks):
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
         self._user_turn_completed_atask = self._create_speech_task(
-            self._user_turn_completed_task(old_task, info, amd),
+            self._user_turn_completed_task(old_task, info, reply_guard),
             name="AgentActivity._user_turn_completed_task",
         )
-        if amd is not None:
-            self._user_turn_completed_atask.add_done_callback(lambda _: amd._reschedule_timer())
+        self._user_turn_completed_atask.add_done_callback(self._session._on_user_turn_completed)
         return True
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo, amd: AMD | None = None
+        self,
+        old_task: asyncio.Task[None] | None,
+        info: _EndOfTurnInfo,
+        reply_guard: ReplyGuard | None = None,
     ) -> None:
         try:
-            await self._user_turn_completed_impl(old_task, info, amd)
+            await self._user_turn_completed_impl(old_task, info, reply_guard)
         finally:
             _end_user_turn_span(info)
 
     async def _user_turn_completed_impl(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo, amd: AMD | None = None
+        self,
+        old_task: asyncio.Task[None] | None,
+        info: _EndOfTurnInfo,
+        reply_guard: ReplyGuard | None = None,
     ) -> None:
         if old_task is not None:
             # We never cancel user code as this is very confusing.
@@ -2834,8 +2838,7 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        # amd already implies non-realtime model
-        if amd and not await amd._should_reply(info.turn_id, temp_mutable_chat_ctx):
+        if reply_guard and not await reply_guard.should_reply(info.turn_id, temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2912,8 +2915,8 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt(source="user_turn")
 
-        if amd:
-            amd._on_reply_created(speech_handle, info.turn_id)
+        if reply_guard:
+            reply_guard.on_reply_created(speech_handle, info.turn_id)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
@@ -3102,8 +3105,8 @@ class AgentActivity(RecognitionHooks):
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
 
     @property
-    def _is_busy(self) -> bool:
-        """Whether reply processing, playback, or interruption recovery is pending."""
+    def _is_agent_active(self) -> bool:
+        """Whether turn handling, speech, playback, or interruption recovery is pending."""
         audio_output = self._session.output.audio
         return (
             not self._no_pending_speech

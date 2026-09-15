@@ -232,7 +232,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if not isinstance(model, llm.LLM):
             raise ValueError("amd requires an LLM for classification")
         self._active = _Run(
-            agent=activity._agent,
+            agent=activity.agent,
             llm=model,
             completion=asyncio.get_running_loop().create_future(),
             stt=RacingSTT(
@@ -243,7 +243,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         )
         self._fsm.enter()
         self._spawn(self._consume_transcripts())
-        self._session._amd = self
+        self._session._set_amd(self)
         activity._pause_authorization()
         self._session.on("user_state_changed", self._on_user_state_changed)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
@@ -451,8 +451,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _emit_prediction(self, event: AMDPredictionEvent) -> None:
         self.emit("amd_prediction", event)
-        if (host := self._session._session_host) is not None:
-            host._on_amd_prediction(event)
+        self._session._on_amd_prediction(event)
         logger.info(
             "amd prediction",
             extra={
@@ -489,7 +488,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             await self._decision_changed.wait()
         return decision
 
-    async def _should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
+    async def should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
         """Wait for the turn's decision, then add stage instructions when a reply is allowed."""
         if turn_id is not None and self._fsm.has_turn(turn_id):
             await self._wait_for_decision(turn_id)
@@ -519,9 +518,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             extra={"amd_run": self._session_id, "amd_stage": self._fsm.category.value},
         )
 
-    def _maybe_inject_dtmf_tool(
-        self, tools: list[llm.Tool | llm.Toolset]
-    ) -> list[llm.Tool | llm.Toolset]:
+    def tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
         if self.started and self._fsm.category == AMDCategory.MACHINE_IVR:
             from ...beta.tools.send_dtmf import send_dtmf_events
 
@@ -529,7 +526,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 return [*tools, send_dtmf_events]
         return tools
 
-    def _on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
+    def on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
         if (
             self.started
             and turn_id == self._fsm.turn_id
@@ -572,7 +569,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         activity = self._session._activity
         self._fsm.update_idle(
             time.monotonic(),
-            session_busy=bool(self._speeches) or activity is None or activity._is_busy,
+            session_busy=bool(self._speeches) or activity is None or activity._is_agent_active,
         )
         if self._timer is not None:
             self._timer.cancel()
@@ -609,12 +606,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             for speech in self._speeches:
                 speech.remove_done_callback(self._on_speech_done)
             if activity := self._session._activity:
-                activity._cancel_preemptive_generation()
                 if self._fsm.category == AMDCategory.MACHINE_UNAVAILABLE:
-                    activity._cancel_pending_replies()
+                    activity._cancel_pending_speech()
+                else:
+                    activity._cancel_preemptive_generation()
                 activity._resume_authorization()
             if self._session._amd is self:
-                self._session._amd = None
+                self._session._set_amd(None)
         finally:
             result = self._fsm.completion()
             self._run.completion.set_result(result)

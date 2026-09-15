@@ -258,6 +258,7 @@ async def test_missing_llm_does_not_install_a_reply_guard() -> None:
         with pytest.raises(ValueError, match="requires an LLM"):
             await AMD(session, llm=None, stt=None).__aenter__()
         assert session.amd is None
+        assert session._reply_guard is None
         assert session._activity._authorization_allowed.is_set()
     finally:
         await session.aclose()
@@ -458,14 +459,14 @@ async def test_invalid_transition_falls_back_and_uncertain_preserves_stage() -> 
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        await detector._should_reply(first.turn_id, llm.ChatContext())
+        await detector.should_reply(first.turn_id, llm.ChatContext())
         for turn_id, category, reason in (
             (2, AMDCategory.UNCERTAIN, "prediction"),
             (3, AMDCategory.MACHINE_SCREENING, "inference_error"),
         ):
             info = await commit(detector, session, classifier)
             classifier.prediction(turn_id, category)
-            await detector._should_reply(info.turn_id, llm.ChatContext())
+            await detector.should_reply(info.turn_id, llm.ChatContext())
             assert detector._fsm._latest.reason == reason
             assert detector._fsm.category == AMDCategory.MACHINE_VM
             assert not detector._fsm._latest.state_changed
@@ -476,7 +477,7 @@ async def test_slow_menu_does_not_block_classification_or_next_turn() -> None:
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
-        assert await detector._should_reply(first.turn_id, llm.ChatContext())
+        assert await detector.should_reply(first.turn_id, llm.ChatContext())
         menu_response = await asyncio.wait_for(classifier.menu_requests.get(), 2)
         assert not menu_response.done()
         await commit(detector, session, classifier)
@@ -562,7 +563,7 @@ async def test_screening_prediction_is_forwarded_to_session_observability() -> N
         try:
             info = await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-            await detector._should_reply(info.turn_id, llm.ChatContext())
+            await detector.should_reply(info.turn_id, llm.ChatContext())
             assert (
                 host._on_amd_prediction.call_args.args[0].category == AMDCategory.MACHINE_SCREENING
             )
