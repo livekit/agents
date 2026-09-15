@@ -36,6 +36,7 @@ from .llm import (
     FunctionToolCall,
     LLMError,
     LLMStream,
+    ProviderToolCall,
 )
 from .realtime import (
     GenerationCreatedEvent,
@@ -126,6 +127,7 @@ __all__ = [
     "AudioGate",
     "AdaptiveNoiseGate",
     "FixedGate",
+    "ProviderToolCall",
     "RealtimeModel",
     "RealtimeError",
     "RealtimeModelError",

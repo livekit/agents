@@ -68,6 +68,9 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
+    ProviderToolCallEnded,
+    ProviderToolCallStarted,
+    ProviderToolExecutionUpdatedEvent,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
@@ -2127,6 +2130,27 @@ class AgentActivity(RecognitionHooks):
 
     # -- Realtime Session events --
 
+    def _on_provider_tool_call(self, call: llm.ProviderToolCall) -> None:
+        # bridge the LLM's provider-tool lifecycle onto the session, parallel to
+        # `tool_execution_updated` for locally-executed tools
+        update: ProviderToolCallStarted | ProviderToolCallEnded
+        if call.phase == "started":
+            update = ProviderToolCallStarted(
+                call_id=call.call_id, name=call.name, arguments=call.arguments
+            )
+        else:
+            update = ProviderToolCallEnded(
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.arguments,
+                result=call.result,
+                status=call.status or "done",
+            )
+        self._session.emit(
+            "provider_tool_execution_updated",
+            ProviderToolExecutionUpdatedEvent(update=update),
+        )
+
     def _on_metrics_collected(
         self,
         ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
@@ -3503,6 +3527,7 @@ class AgentActivity(RecognitionHooks):
             model_settings=model_settings,
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
+            on_provider_tool_call=self._on_provider_tool_call,
         )
         tasks.append(llm_task)
 
