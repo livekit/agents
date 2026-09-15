@@ -8,7 +8,7 @@ import time
 import typing
 import weakref
 from collections.abc import AsyncIterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, TypedDict
 
 from livekit import rtc
@@ -497,7 +497,10 @@ class RealtimeModel(llm.RealtimeModel):
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
-        self._opts = realtime_model._opts
+        # per-session copy of opts so update_options can diff against this session's own
+        # state: sessions of one model would otherwise share it, and the first update would
+        # leave every other session detecting no change and keeping its server config
+        self._opts = replace(realtime_model._opts)
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
 
