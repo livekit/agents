@@ -76,12 +76,7 @@ GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
-class ResponsesDelegationOptions(TypedDict, total=False):
-    """The backend Responses model delegated work runs on, under ``delegation="responses"``.
-
-    A key left unset is not sent, and the service's own default applies.
-    """
-
+class _ResponsesDelegationOptionsBase(TypedDict, total=False):
     model: str
     """Responses model slug; ``gpt-5.6-luna`` when unset."""
     instructions: str
@@ -92,9 +87,14 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
     text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
-    service_tier: Literal["auto", "default", "flex", "priority"]
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
+
+
+class ResponsesDelegationOptions(_ResponsesDelegationOptionsBase, total=False):
+    """Backend Responses options for direct OpenAI GPT-Live sessions."""
+
+    service_tier: Literal["auto", "default", "flex", "priority"]
 
 
 @dataclass
@@ -439,15 +439,7 @@ class GPTLiveSession(
         self._session_id = None
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": f"Bearer {self._opts.api_key}",
-        }
-        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
-        path = parsed.path.rstrip("/")
-        if not path.endswith("/live/sessions"):
-            path = f"{path}/live/sessions"
-        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+        url, headers = self._create_ws_url_and_headers()
         if lk_oai_debug:
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
@@ -463,6 +455,18 @@ class GPTLiveSession(
             raise APIConnectionError(
                 f"{self._live_model._provider_label} connection error"
             ) from None
+
+    def _create_ws_url_and_headers(self) -> tuple[str, dict[str, str]]:
+        headers = {
+            "User-Agent": "LiveKit Agents",
+            "Authorization": f"Bearer {self._opts.api_key}",
+        }
+        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
+        path = parsed.path.rstrip("/")
+        if not path.endswith("/live/sessions"):
+            path = f"{path}/live/sessions"
+        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+        return url, headers
 
     async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
         closing = False
@@ -868,7 +872,7 @@ class GPTLiveSession(
             "gpt-live returned an error",
             extra={"lk.pii.error": error.model_dump(exclude_none=True)},
         )
-        recoverable = (error.code or error.type or "") not in _FATAL_ERROR_CODES
+        recoverable = not self._is_fatal_error(error)
         api_error = APIError(
             message="GPT-Live returned an error",
             retryable=recoverable,
@@ -876,6 +880,9 @@ class GPTLiveSession(
         if not recoverable:
             raise api_error
         self._emit_error(api_error, recoverable=True)
+
+    def _is_fatal_error(self, error: types.ErrorBody) -> bool:
+        return (error.code or error.type or "") in _FATAL_ERROR_CODES
 
     def _emit_error(self, error: Exception, recoverable: bool) -> None:
         self.emit(
