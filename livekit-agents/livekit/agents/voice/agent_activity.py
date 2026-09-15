@@ -2359,6 +2359,26 @@ class AgentActivity(RecognitionHooks):
                 # schedule a resume timer if interrupted after end_of_speech
                 self._start_false_interruption_timer(timeout)
 
+        # PREFLIGHT_TRANSCRIPT is routed here too. With VAD configured the timer is
+        # cancelled on every START_OF_SPEECH, so it only runs down while VAD reports no
+        # speech. A non-empty interim in that window means the turn is still producing
+        # transcript: audio below the VAD threshold, or an STT that never sent EOT.
+        # Re-arm rather than clear, so a noisy room still resumes once interims stop.
+        if (
+            self.vad is not None
+            and ev.alternatives[0].text
+            and speaking is False
+            and self._paused_speech
+            and self._turn_detection
+            not in (
+                "manual",
+                "realtime_llm",
+            )
+            and (timeout := self._session.options.interruption["false_interruption_timeout"])
+            is not None
+        ):
+            self._start_false_interruption_timer(timeout)
+
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None:
         if isinstance(self.llm, llm.RealtimeModel) and self.llm.capabilities.user_transcription:
             # skip stt transcription if user_transcription is enabled on the realtime model
