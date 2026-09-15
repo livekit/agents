@@ -538,8 +538,15 @@ class RecognizeStream(ABC):
                 )
 
                 self._stt.emit("metrics_collected", stt_metrics)
-            elif ev.type == SpeechEventType.FINAL_TRANSCRIPT:
-                # reset the retry count after a successful recognition
+
+            if ev.type in (
+                SpeechEventType.INTERIM_TRANSCRIPT,
+                SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                SpeechEventType.FINAL_TRANSCRIPT,
+                SpeechEventType.RECOGNITION_USAGE,
+            ):
+                # START/END_OF_SPEECH can be synthesized by adapters, so only provider
+                # responses prove the underlying recognition connection has recovered.
                 self._num_retries = 0
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
