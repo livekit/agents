@@ -756,7 +756,7 @@ class AudioRecognition:
         The optional AMD STT receives the same input as session STT.
         """
         self._sample_rate = frame.sample_rate
-        # ponytail: disabled AMD must not discard audio during cleanup.
+        # Drop audio only while AMD waits for the call to be answered.
         if (amd := self._session.amd) and amd.enabled and not amd.started:
             return
         if self._stt_pipeline is not None:

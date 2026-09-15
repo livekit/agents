@@ -169,7 +169,7 @@ Console mode does not place SIP calls.
 
 - Pipeline STT/LLM/TTS only. Realtime reply control is not implemented.
 - Agent handoff during AMD is not supported.
-- No audio-based hold detection. `should_wait` remains false.
+- No audio-based hold detection.
 - The remote-session protocol maps screening to `AMD_UNKNOWN`. Full v2
   prediction, menu, and completion fields still need protocol support.
 - Classification quality needs repeated model evals. Unit tests prove routing,

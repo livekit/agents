@@ -504,7 +504,7 @@ async def test_completion_cancels_silence_wait_and_releases_waiters(reason: str)
         detector.on("amd_prediction", events.append)
         await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        await eventually(lambda: detector._fsm._turns[1].release_deadline is not None)
+        await eventually(lambda: detector._fsm._turns[1].deadline is not None)
         timer = detector._timer
         if reason == "cancelled":
             await detector.aclose()

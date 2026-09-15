@@ -13,28 +13,42 @@ class AMDCategory(str, Enum):
     UNCERTAIN = "uncertain"
 
 
+class AMDReason(str, Enum):
+    """Why a prediction was published or why the run completed."""
+
+    PREDICTION = "prediction"
+    LATE_PREDICTION = "late_prediction"
+    REUSED = "reused"
+    SUPERSEDED = "superseded"
+    INFERENCE_TIMEOUT = "inference_timeout"
+    INFERENCE_ERROR = "inference_error"
+    FINISHED = "finished"
+    MAX_UNCERTAIN_TURNS = "max_uncertain_turns"
+    TIMEOUT = "timeout"
+    IDLE_TIMEOUT = "idle_timeout"
+    CANCELLED = "cancelled"
+    PARTICIPANT_MISSING = "participant_missing"
+    PARTICIPANT_DISCONNECTED = "participant_disconnected"
+    AGENT_CHANGED = "agent_changed"
+
+
 class AMDPredictionEvent(BaseModel):
     type: Literal["amd_prediction"] = "amd_prediction"
     speech_duration: float
     category: AMDCategory
-    reason: str
+    reason: AMDReason
     transcript: str
     delay: float
     turn_id: int = 0
     prev_turn_category: AMDCategory | None = None
     prev_stage_category: AMDCategory | None = None
     inference_duration: float | None = None
-    should_wait: bool = False
     voicemail_message_played: bool = False
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def state_changed(self) -> bool:
         return self.category != (self.prev_turn_category or AMDCategory.UNCERTAIN)
-
-    @property
-    def detection_delay(self) -> float:
-        return self.delay
 
     @property
     def is_human(self) -> bool:
@@ -53,7 +67,7 @@ class AMDPredictionEvent(BaseModel):
 class AMDCompletedEvent(BaseModel):
     type: Literal["amd_completed"] = "amd_completed"
     category: AMDCategory
-    reason: str
+    reason: AMDReason
     turn_id: int
     transcript: str
     prev_turn_category: AMDCategory | None = None

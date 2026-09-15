@@ -649,7 +649,7 @@ class SessionHost:
                     speech_duration=speech_duration,
                     delay=delay,
                     category=_AMD_CATEGORY_MAP[event.category],
-                    reason=event.reason,
+                    reason=event.reason.value,
                     transcript=event.transcript,
                 )
             )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import time
 import uuid
@@ -18,9 +17,15 @@ from ...utils import EventEmitter, aio, is_given
 from ...utils.misc import is_cloud
 from ...utils.participant import wait_for_participant_attribute, wait_for_track_publication
 from . import _inference
-from ._fsm import _AMDFSM, _AMDEvent
+from ._fsm import _AMDFSM, ClassifyRequest, _AMDEvent
 from ._transcription import TurnTranscript
-from .events import AMDCategory, AMDCompletedEvent, AMDMenuObservedEvent, AMDPredictionEvent
+from .events import (
+    AMDCategory,
+    AMDCompletedEvent,
+    AMDMenuObservedEvent,
+    AMDPredictionEvent,
+    AMDReason,
+)
 
 if TYPE_CHECKING:
     from ..agent import Agent
@@ -231,7 +236,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._tasks.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error("amd task failed", exc_info=error)
-            self._finish("inference_error")
+            self._finish(AMDReason.INFERENCE_ERROR)
 
     async def execute(self) -> AMDCompletedEvent:
         if self._completion is None:
@@ -249,7 +254,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     async def aclose(self) -> None:
         if not self._fsm.entered:
             return
-        self._finish("cancelled")
+        self._finish(AMDReason.CANCELLED)
         assert self._finishing is not None
         await asyncio.shield(self._finishing)
 
@@ -276,7 +281,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 None,
             )
             if publisher is None:
-                self._finish("participant_missing")
+                self._finish(AMDReason.PARTICIPANT_MISSING)
                 return
             self._participant_identity = publisher.identity
             if (
@@ -289,7 +294,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             if not self._fsm.finished:
                 self._start_listening()
         except RuntimeError:
-            self._finish("participant_missing")
+            self._finish(AMDReason.PARTICIPANT_MISSING)
 
     def _start_listening(self) -> None:
         if self._fsm.finished or self.started:
@@ -300,7 +305,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _on_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if participant.identity == self._participant_identity:
-            self._finish("participant_disconnected")
+            self._finish(AMDReason.PARTICIPANT_DISCONNECTED)
 
     def _new_transcript(self) -> TurnTranscript:
         return TurnTranscript(
@@ -371,22 +376,22 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._start_classification(turn_id, transcript)
 
     def _start_classification(self, turn_id: int, transcript: TurnTranscript) -> None:
-        context, events = self._fsm.transcript_ready(
+        request, events = self._fsm.transcript_ready(
             turn_id, transcript.snapshot(), time.monotonic()
         )
-        if context is not None:
+        if request is not None:
             if self._classifier_task is not None:
                 self._classifier_task.cancel()
             if self._menu_task is not None:
                 self._menu_task.cancel()
-            self._classifier_task = self._spawn(self._classify(turn_id, context))
+            self._classifier_task = self._spawn(self._classify(turn_id, request))
         self._state_changed(events)
 
-    async def _classify(self, turn_id: int, context: dict[str, object]) -> None:
+    async def _classify(self, turn_id: int, request: ClassifyRequest) -> None:
         assert self._llm is not None
         chat_ctx = llm.ChatContext()
         chat_ctx.add_message(role="system", content=_inference.CLASSIFY_PROMPT)
-        chat_ctx.add_message(role="user", content=json.dumps(context))
+        chat_ctx.add_message(role="user", content=request.model_dump_json(exclude_none=True))
         started = time.monotonic()
         try:
             result = await asyncio.wait_for(_inference.classify(self._llm, chat_ctx), 30)
@@ -417,7 +422,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 if (
                     self.started
                     and event.category == AMDCategory.MACHINE_IVR
-                    and event.reason in {"prediction", "late_prediction"}
+                    and event.reason in {AMDReason.PREDICTION, AMDReason.LATE_PREDICTION}
                 ):
                     self._menu_task = self._spawn(
                         self._extract_menu(event.turn_id, event.transcript)
@@ -425,7 +430,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 self._emit_prediction(event)
         except Exception:
             logger.exception("amd prediction release failed")
-            self._fsm.finish("inference_error")
+            self._fsm.finish(AMDReason.INFERENCE_ERROR)
             completed = True
         self._decision_changed.set()
         self._rearm_idle()
@@ -474,36 +479,35 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         return decision
 
     async def _should_reply(self, info: _EndOfTurnInfo, chat_ctx: llm.ChatContext) -> bool:
-        """Prepare the turn reply: True when reply should be allowed."""
-        if self._fsm.has_turn(info.amd_turn_id):
-            assert info.amd_turn_id is not None
-            await self._wait_for_decision(info.amd_turn_id)
+        """Wait for the turn's decision, then add stage instructions when a reply is allowed."""
+        turn_id = info.amd_turn_id
+        if turn_id is not None and self._fsm.has_turn(turn_id):
+            await self._wait_for_decision(turn_id)
             if not self._fsm.finished and self._session.current_agent is not self._agent:
-                self._finish("agent_changed")
+                self._finish(AMDReason.AGENT_CHANGED)
                 return False
-        reply = self._fsm.authorize_reply(info.amd_turn_id)
-        if reply is None:
+        decision = self._fsm.authorize_reply(turn_id)
+        if not decision.allow:
             self._rearm_idle()
             return False
-        if instructions := self._instructions.get(reply):
-            chat_ctx.add_message(
-                id=f"{self._control_prefix}{info.amd_turn_id}",
-                role="user",
-                content=instructions
-                + (
-                    "\nThe voicemail message already played locally."
-                    if reply is AMDCategory.MACHINE_IVR and self._fsm.voicemail_message_played
-                    else ""
-                ),
-                extra={"amd_run": self._session_id, "amd_stage": self._fsm.category.value},
-            )
-        if (
-            self._fsm.has_turn(info.amd_turn_id)
-            and self.started
-            and (activity := self._session._activity)
-        ):
+        if decision.instructions_for is not None:
+            self._add_instructions(chat_ctx, decision.instructions_for, turn_id)
+        if self._fsm.has_turn(turn_id) and self.started and (activity := self._session._activity):
             activity._resume_authorization()
         return True
+
+    def _add_instructions(
+        self, chat_ctx: llm.ChatContext, stage: AMDCategory, turn_id: int | None
+    ) -> None:
+        content = self._instructions[stage]
+        if stage is AMDCategory.MACHINE_IVR and self._fsm.voicemail_message_played:
+            content += "\nThe voicemail message already played locally."
+        chat_ctx.add_message(
+            id=f"{self._control_prefix}{turn_id}",
+            role="user",
+            content=content,
+            extra={"amd_run": self._session_id, "amd_stage": self._fsm.category.value},
+        )
 
     def _maybe_inject_dtmf_tool(
         self, tools: list[llm.Tool | llm.Toolset]
@@ -564,12 +568,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._timer.cancel()
             self._timer = None
         if (at := self._fsm.next_deadline) is not None:
-            # ponytail: one timer wakes the FSM at its next deadline.
             self._timer = asyncio.get_running_loop().call_later(
                 max(0, at - time.monotonic()), self._on_deadline
             )
 
-    def _finish(self, reason: str) -> None:
+    def _finish(self, reason: AMDReason) -> None:
         self._state_changed([self._fsm.finish(reason)])
 
     async def _cleanup(self) -> None:

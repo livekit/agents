@@ -4,6 +4,7 @@ from .events import (
     AMDCompletedEvent,
     AMDMenuObservedEvent,
     AMDPredictionEvent,
+    AMDReason,
     IvrMenuOption,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "AMDPredictionEvent",
     "AMDCompletedEvent",
     "AMDMenuObservedEvent",
+    "AMDReason",
     "IvrMenuOption",
 ]
