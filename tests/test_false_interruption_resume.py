@@ -567,6 +567,41 @@ async def test_interim_transcript_rearm_is_bounded(monkeypatch: pytest.MonkeyPat
     assert resumed_at <= FALSE_INTERRUPTION_TIMEOUT + cap + 0.1
 
 
+async def test_clustered_interims_do_not_burn_the_deferral_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An STT revises one transcript in bursts, so several interims can land on the same
+    # deadline. Charging a whole timeout for each would spend the budget while barely moving
+    # the resume, and a later interim would be ignored mid-turn.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+
+    for _ in range(5):
+        activity.on_interim_transcript(_interim_event(), speaking=False)
+    assert activity._false_interruption_deferred == pytest.approx(0.0)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(), speaking=False)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    # the later interim still had budget left, so the resume slipped past the plain timeout
+    assert events[0][1] - t0 > FALSE_INTERRUPTION_TIMEOUT * 1.1
+
+
 async def test_deferral_budget_resets_for_the_next_pause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -589,8 +624,8 @@ async def test_deferral_budget_resets_for_the_next_pause(
     for _ in range(10):
         if activity._false_interruption_deferred >= cap:
             break
+        await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
         activity.on_interim_transcript(_interim_event(), speaking=False)
-        await asyncio.sleep(0)
     assert activity._false_interruption_deferred == pytest.approx(cap)
 
     await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)

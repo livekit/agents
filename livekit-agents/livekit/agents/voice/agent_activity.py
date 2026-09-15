@@ -4679,20 +4679,29 @@ class AgentActivity(RecognitionHooks):
         self._false_interruption_deferred = 0.0
 
     def _defer_false_interruption_timer(self, timeout: float) -> None:
-        """Re-arm the resume timer from now, within a bounded deferral budget.
+        """Re-arm the resume timer, within a bounded deferral budget.
 
         Used for interim and preflight transcripts. Interims are evidence that the turn is
         still producing text, but noise produces them too, so the pause must not be extended
         indefinitely: once the budget is spent the armed timer is left alone and fires.
+
+        Only the extension actually granted is charged against the budget, and the deadline
+        never moves in. An STT revises one transcript in bursts, so charging a whole timeout
+        per revision would spend the entire budget while shifting the deadline once.
         """
+        loop = self._session._loop
+        now = loop.time()
+        armed = self._false_interruption_timer
+        current = max(armed.when(), now) if armed is not None else now
+        target = max(now + timeout, current)
+
         budget = timeout * _FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR
-        budget -= self._false_interruption_deferred
-        if budget <= 0:
+        granted = min(target - current, budget - self._false_interruption_deferred)
+        if granted <= 0:
             return
 
-        granted = min(timeout, budget)
         deferred = self._false_interruption_deferred + granted
-        self._start_false_interruption_timer(granted)
+        self._start_false_interruption_timer(current + granted - now)
         # _start_false_interruption_timer clears the counter, so restore it after the fact
         self._false_interruption_deferred = deferred
 
