@@ -1,2 +1,0 @@
-bithuman~=0.5.3
-opencv-python

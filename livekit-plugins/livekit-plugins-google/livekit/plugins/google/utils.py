@@ -12,6 +12,7 @@ from livekit.agents.llm import utils as llm_utils
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .tools import GeminiTool
 
 __all__ = ["create_tools_config"]
@@ -21,28 +22,61 @@ def create_tools_config(
     tool_ctx: llm.ToolContext,
     *,
     tool_behavior: NotGivenOr[types.Behavior] = NOT_GIVEN,
-    _only_single_type: bool = False,
-) -> list[types.Tool]:
+    use_parameters_json_schema: bool = True,
+    allow_mixed_tools: bool = True,
+) -> tuple[list[types.Tool], bool]:
+    """Build the Gemini tools list.
+
+    Returns ``(tools, mixed)`` where ``mixed`` is True when both function tools and
+    provider (built-in) tools were emitted together — the single source of truth the
+    caller uses to enable ``include_server_side_tool_invocations``.
+    """
     gemini_tools: list[types.Tool] = []
 
     function_tools = [
         types.FunctionDeclaration.model_validate(schema)
         for schema in tool_ctx.parse_function_tools(
-            "google", tool_behavior=tool_behavior.value if tool_behavior else None
+            "google",
+            tool_behavior=tool_behavior.value if tool_behavior else None,
+            use_parameters_json_schema=use_parameters_json_schema,
         )
     ]
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
-    # Some Google LLMs do not support multiple tool types (either function tools or builtin tools).
-    if _only_single_type and gemini_tools:
-        return gemini_tools
+    provider_tools = [tool for tool in tool_ctx.provider_tools if isinstance(tool, GeminiTool)]
+    # generateContent only supports combining built-in tools with function tools on the
+    # Gemini 3 Developer API: https://ai.google.dev/gemini-api/docs/tool-combination
+    if function_tools and provider_tools and not allow_mixed_tools:
+        logger.warning(
+            "ignoring provider tools; combining them with function tools requires the "
+            "Gemini 3 Developer API (Vertex AI is not supported)"
+        )
+        return gemini_tools, False
 
-    for tool in tool_ctx.provider_tools:
-        if isinstance(tool, GeminiTool):
-            gemini_tools.append(tool.to_tool_config())
+    # only convert tools we actually send, so a dropped tool can't break the request
+    gemini_tools.extend(tool.to_tool_config() for tool in provider_tools)
+    return gemini_tools, bool(function_tools and provider_tools)
 
-    return gemini_tools
+
+def create_function_response(
+    output: llm.FunctionCallOutput,
+    *,
+    vertexai: bool = False,
+    tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+) -> types.FunctionResponse:
+    res = types.FunctionResponse(
+        name=output.name,
+        response={"error": output.output} if output.is_error else {"output": output.output},
+    )
+    if not vertexai:
+        # vertexai supports neither scheduling nor id in FunctionResponse; the gemini api
+        # defaults scheduling to WHEN_IDLE
+        # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
+        if is_given(tool_response_scheduling):
+            res.scheduling = tool_response_scheduling
+        res.id = output.call_id
+    return res
 
 
 def get_tool_results_for_realtime(
@@ -50,23 +84,25 @@ def get_tool_results_for_realtime(
     *,
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+    supports_silent_scheduling: bool = False,
 ) -> types.LiveClientToolResponse | None:
-    function_responses: list[types.FunctionResponse] = []
-    for msg in chat_ctx.items:
-        if msg.type == "function_call_output":
-            res = types.FunctionResponse(
-                name=msg.name,
-                response={"output": msg.output},
-            )
-            if is_given(tool_response_scheduling):
-                # vertexai currently doesn't support the scheduling parameter, gemini api defaults to idle
-                # it's the user's responsibility to avoid this parameter when using vertexai
-                res.scheduling = tool_response_scheduling
-            if not vertexai:
-                # vertexai does not support id in FunctionResponse
-                # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
-                res.id = msg.call_id
-            function_responses.append(res)
+    """Build the tool responses, SILENT for outputs that want no reply.
+
+    SILENT is claimed only where the session honours it; see `_RealtimeOptions.tool_behavior`.
+    """
+    function_responses = [
+        create_function_response(
+            msg,
+            vertexai=vertexai,
+            tool_response_scheduling=(
+                types.FunctionResponseScheduling.SILENT
+                if supports_silent_scheduling and not msg.reply_required
+                else tool_response_scheduling
+            ),
+        )
+        for msg in chat_ctx.items
+        if msg.type == "function_call_output"
+    ]
     return (
         types.LiveClientToolResponse(function_responses=function_responses)
         if function_responses

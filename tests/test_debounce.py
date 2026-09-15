@@ -4,6 +4,8 @@ import pytest
 
 from livekit.agents.utils.aio.debounce import Debounced, debounced
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class TestDebounce:
     """Test cases for the Debounce class."""

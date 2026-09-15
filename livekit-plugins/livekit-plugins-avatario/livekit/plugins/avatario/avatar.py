@@ -15,7 +15,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import AvatarioAPI, AvatarioException
@@ -26,7 +26,7 @@ _AVATAR_AGENT_IDENTITY = "avatario-avatar-agent"
 _AVATAR_AGENT_NAME = "avatario-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """An Avatario avatar session"""
 
     @dataclass
@@ -63,6 +63,7 @@ class AvatarSession:
                                      room. Defaults to "avatario-avatar-agent"
             conn_options: Connection options for the aiohttp session.
         """
+        super().__init__()
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         video_info = video_info if utils.is_given(video_info) else self.VideoInfo()
@@ -91,6 +92,14 @@ class AvatarSession:
             else _AVATAR_AGENT_NAME
         )
 
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "avatario"
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = utils.http_context.http_session()
@@ -107,6 +116,8 @@ class AvatarSession:
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """Entrypoint to start the video avatar session"""
+        await super().start(agent_session, room)
+
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)
         livekit_api_secret = livekit_api_secret or (os.getenv("LIVEKIT_API_SECRET") or NOT_GIVEN)
@@ -143,9 +154,11 @@ class AvatarSession:
                 },
             )
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=SAMPLE_RATE,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=SAMPLE_RATE,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )

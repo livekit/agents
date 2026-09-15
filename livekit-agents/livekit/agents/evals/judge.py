@@ -5,9 +5,30 @@ from typing import Any, Literal
 
 from ..llm import LLM, ChatContext, function_tool, utils as llm_utils
 from ..log import logger
+from ..types import APIConnectOptions
+
+_JUDGE_CONN_OPTIONS = APIConnectOptions(timeout=90.0)
 
 Verdict = Literal["pass", "fail", "maybe"]
 """The verdict of a judgment: pass, fail, or maybe (uncertain)."""
+
+
+def _judge_chat_kwargs(llm: LLM) -> dict[str, Any]:
+    """Extra ``chat()`` kwargs for a judgment call.
+
+    Judging is batch load: an eval suite fans out many judgments at once, they run
+    after the conversation they grade, and nobody is waiting on the verdict. So they
+    are pinned to the low inference class and must not compete with live traffic for
+    gateway capacity, even when the judge LLM was configured with another class.
+
+    Empty for a plugin LLM, which has no LiveKit Inference class to set.
+    """
+    from ..inference import LLM as InferenceLLM
+
+    if isinstance(llm, InferenceLLM):
+        return {"inference_class": "low"}
+
+    return {}
 
 
 @dataclass
@@ -78,7 +99,7 @@ def _get_latest_instructions(chat_ctx: ChatContext) -> str | None:
     """
     for item in reversed(chat_ctx.items):
         if item.type == "agent_config_update" and item.instructions:
-            return item.instructions
+            return str(item.instructions)
     return None
 
 
@@ -122,25 +143,20 @@ async def _evaluate_with_llm(llm: LLM, prompt: str) -> JudgmentResult:
     if not any(excluded_model in llm.model for excluded_model in excluded_models_temperature):
         extra_kwargs["temperature"] = 0.0
 
-    arguments: str | None = None
-    async for chunk in llm.chat(
+    response = await llm.chat(
         chat_ctx=eval_ctx,
         tools=[submit_verdict],
-        tool_choice={"type": "function", "function": {"name": "submit_verdict"}},
+        tool_choice="required",
+        conn_options=_JUDGE_CONN_OPTIONS,
         extra_kwargs=extra_kwargs,
-    ):
-        if not chunk.delta:
-            continue
+        **_judge_chat_kwargs(llm),
+    ).collect()
 
-        if chunk.delta.tool_calls:
-            tool = chunk.delta.tool_calls[0]
-            arguments = tool.arguments
-
-    if not arguments:
+    if not response.tool_calls:
         raise ValueError("LLM did not return verdict arguments")
 
     fnc_args, fnc_kwargs = llm_utils.prepare_function_arguments(
-        fnc=submit_verdict, json_arguments=arguments
+        fnc=submit_verdict, json_arguments=response.tool_calls[0].arguments
     )
     verdict, reasoning = await submit_verdict(*fnc_args, **fnc_kwargs)
 

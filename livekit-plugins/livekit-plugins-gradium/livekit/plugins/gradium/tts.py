@@ -54,10 +54,10 @@ class TTS(tts.TTS):
         self,
         *,
         api_key: str | None = None,
-        model_endpoint: str | None = "wss://eu.api.gradium.ai/api/speech/tts",
+        model_endpoint: str | None = None,
         model_name: str = "default",
         voice: str | None = None,
-        voice_id: str | None = "YTpq7expH9539ERJ",
+        voice_id: str | None = "4SZHfMpw-p46Ywgs",
         pronunciation_id: str | None = None,
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -90,12 +90,11 @@ class TTS(tts.TTS):
                 "or set it as the `GRADIUM_API_KEY` environment variable"
             )
 
-        model_endpoint = model_endpoint or os.environ.get("GRADIUM_MODEL_ENDPOINT")
-
-        if not model_endpoint:
-            raise ValueError(
-                "The model endpoint is required, you can find it in the Gradium dashboard"
-            )
+        model_endpoint = (
+            model_endpoint
+            or os.environ.get("GRADIUM_MODEL_ENDPOINT")
+            or "wss://api.gradium.ai/api/speech/tts"
+        )
 
         self._api_key = api_key
         self._model_endpoint = model_endpoint
@@ -142,10 +141,13 @@ class TTS(tts.TTS):
         self,
         *,
         voice: NotGivenOr[str] = NOT_GIVEN,
+        voice_id: NotGivenOr[str] = NOT_GIVEN,
         json_config: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
         if is_given(voice):
             self._opts.voice = voice
+        if is_given(voice_id):
+            self._opts.voice_id = voice_id
         if is_given(json_config):
             self._opts.json_config = json_config
 

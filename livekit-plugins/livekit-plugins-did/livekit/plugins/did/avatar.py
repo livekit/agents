@@ -14,7 +14,7 @@ from livekit.agents import (
     get_job_context,
     utils,
 )
-from livekit.agents.voice.avatar import DataStreamAudioOutput
+from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession, DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
 from .api import DIDAPI
@@ -26,7 +26,7 @@ _AVATAR_AGENT_IDENTITY = "d-id-avatar-agent"
 _AVATAR_AGENT_NAME = "d-id-avatar-agent"
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A D-ID avatar session"""
 
     def __init__(
@@ -40,6 +40,7 @@ class AvatarSession:
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         self._http_session: aiohttp.ClientSession | None = None
         self._conn_options = conn_options
         self._agent_id = agent_id
@@ -64,6 +65,14 @@ class AvatarSession:
             else _AVATAR_AGENT_NAME
         )
 
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "d-id"
+
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
             self._http_session = utils.http_context.http_session()
@@ -79,6 +88,8 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
+
         _livekit_url = livekit_url if utils.is_given(livekit_url) else os.getenv("LIVEKIT_URL")
         _livekit_api_key = (
             livekit_api_key if utils.is_given(livekit_api_key) else os.getenv("LIVEKIT_API_KEY")
@@ -118,9 +129,11 @@ class AvatarSession:
             audio_config={"sample_rate": self._audio_config.sample_rate},
         )
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            sample_rate=self._audio_config.sample_rate,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                sample_rate=self._audio_config.sample_rate,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+            ),
         )

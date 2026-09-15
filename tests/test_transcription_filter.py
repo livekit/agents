@@ -3,6 +3,29 @@ import pytest
 from livekit.agents.voice.transcription.filters import filter_emoji, filter_markdown
 from livekit.agents.voice.transcription.text_transforms import _apply_text_transforms, replace
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
+
+async def _stream_text(text: str, chunk_size: int):
+    for i in range(0, len(text), chunk_size):
+        yield text[i : i + chunk_size]
+
+
+async def _collect(stream) -> str:
+    result = ""
+    async for chunk in stream:
+        result += chunk
+    return result
+
+
+async def _collect_chunks(stream) -> list[str]:
+    return [chunk async for chunk in stream]
+
+
+async def _filtered(text: str, chunk_size: int) -> str:
+    return await _collect(filter_markdown(_stream_text(text, chunk_size)))
+
+
 MARKDOWN_INPUT = """# Mathematics and Markdown Guide
 
 Hi there~~ How are you?  # the ~~ shouldn't be removed.
@@ -109,45 +132,148 @@ This is a sentence. 这是一个中文句子。これは日本語の文章です
 
 @pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 11, 50])
 async def test_markdown_filter(chunk_size: int):
-    """Comprehensive test with mixed markdown, math operations, and regular text."""
+    """Mixed markdown, math and prose survive the streaming filter intact."""
+    assert await _filtered(MARKDOWN_INPUT, chunk_size) == MARKDOWN_EXPECTED_OUTPUT.strip()
 
-    print("=== COMPREHENSIVE MARKDOWN FILTER TEST ===")
-    print(f"Input length: {len(MARKDOWN_INPUT)} characters")
-    print(f"Expected length: {len(MARKDOWN_EXPECTED_OUTPUT)} characters")
 
-    print(f"\n--- Testing with chunk_size={chunk_size} ---")
+# --- emphasis that must be stripped ---
+#
+# One table per direction. This one covers every emphasis form the filter is
+# expected to remove: the three delimiter widths, boundaries made of punctuation
+# rather than whitespace, and delimiters flush against a word character.
 
-    # Stream the input with specified chunk size
-    async def stream_text():
-        for i in range(0, len(MARKDOWN_INPUT), chunk_size):
-            yield MARKDOWN_INPUT[i : i + chunk_size]
+EMPHASIS_CASES = [
+    # (input, expected)
+    # single and double, whitespace boundaries
+    ("He said *hello* again.", "He said hello again."),
+    ("This is **bold** text.", "This is bold text."),
+    ("_underscore italic_ here.", "underscore italic here."),
+    ("__underscore bold__ here.", "underscore bold here."),
+    # triple: bold italic
+    ("This is ***very important*** text.", "This is very important text."),
+    ("Call ***now***!", "Call now!"),
+    ("___Totally___ critical.", "Totally critical."),
+    ("Use ***both*** and **bold** and *italic*.", "Use both and bold and italic."),
+    # punctuation rather than whitespace on the boundary
+    ("Hi **Frankie**!", "Hi Frankie!"),
+    ("See **Dr. Smith**.", "See Dr. Smith."),
+    ("Scheduled for **Monday**, at 9am.", "Scheduled for Monday, at 9am."),
+    ("Press (**1**) to confirm.", "Press (1) to confirm."),
+    ('Try "**this**" first.', 'Try "this" first.'),
+    ("Options: **a**, **b**, or **c**?", "Options: a, b, or c?"),
+    ("He said *hello*!", "He said hello!"),
+    ("It was *amazing*, really.", "It was amazing, really."),
+    ("Hi ***Frankie***!", "Hi Frankie!"),
+    ("Press (***1***) to confirm.", "Press (1) to confirm."),
+    # nested delimiters, stripped by successive passes
+    ("**_mixed_** here.", "mixed here."),
+    ("_**mixed**_ here.", "mixed here."),
+    # scripts written without spaces
+    ("这是**很重要**的文本。", "这是很重要的文本。"),
+    ("这是***非常重要***的文本。", "这是非常重要的文本。"),
+    ("这是*重要*的文本。", "这是重要的文本。"),
+    ("テスト**強調**です。", "テスト強調です。"),
+    ("**中文**开头。", "中文开头。"),
+    ("นี่คือ**ข้อความ**สำคัญ", "นี่คือข้อความสำคัญ"),
+    # korean: spaced between words, but a particle follows the closing run
+    ("이것은 **중요**합니다.", "이것은 중요합니다."),
+    ("한국어**강조**입니다.", "한국어강조입니다."),
+    ("한국어***강조***입니다.", "한국어강조입니다."),
+    ("이것은 *중요*합니다.", "이것은 중요합니다."),
+]
 
-    # Process through the filter
-    result = ""
-    async for chunk in filter_markdown(stream_text()):
-        result += chunk
 
-    # Compare results
-    if result.strip() == MARKDOWN_EXPECTED_OUTPUT.strip():
-        print("✓ PASS")
-    else:
-        print("✗ FAIL")
-        print(f"Expected first 100 chars: {repr(MARKDOWN_EXPECTED_OUTPUT[:100])}")
-        print(f"Got first 100 chars:      {repr(result[:100])}")
+@pytest.mark.parametrize("text,expected", EMPHASIS_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 7, 50])
+async def test_emphasis_stripped(text: str, expected: str, chunk_size: int):
+    assert await _filtered(text, chunk_size) == expected
 
-        # Show differences
-        expected_lines = MARKDOWN_EXPECTED_OUTPUT.strip().split("\n")
-        result_lines = result.strip().split("\n")
 
-        print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
-            if exp != got:
-                print(f"Line {i + 1}:")
-                print(f"  Expected: {repr(exp)}")
-                print(f"  Got:      {repr(got)}")
-    assert result == MARKDOWN_EXPECTED_OUTPUT.strip()
+# --- text that must survive untouched ---
+#
+# Asterisks and underscores carry meaning outside markdown: arithmetic, globs,
+# exponentiation and identifiers. Delimiter runs that cannot pair up are left
+# alone rather than half-stripped.
 
-    print("\n=== TEST COMPLETE ===")
+PRESERVE_CASES = [
+    # arithmetic, globs, exponentiation
+    "2 * 3 = 6",
+    "Use *.py files",
+    "x**2 + y**2 = z**2",
+    "a ** b evaluated right-to-left",
+    "cost = a *** b",
+    # identifiers: underscores never emphasise intra-word
+    "__dunder_method__ stays",
+    "a___b and MAX___VALUE",
+    "snake___case___name",
+    "call some_function_name here",
+    # CommonMark forbids intra-word underscore emphasis, so CJK keeps its
+    # underscores even though CJK asterisk emphasis is stripped
+    "テスト__強調__です。",
+    "变量__name__的值",
+    "한국어__강조__입니다.",
+    # runs that cannot pair up
+    "****quad****",
+    "____quad____",
+    "**bold***italic*",
+    "*italic***bold**",
+    # a run of asterisks is only a rule on a line of its own
+    "see ***** here",
+    # unterminated at end of stream
+    "unterminated ***open",
+    "unterminated ___open",
+]
+
+
+@pytest.mark.parametrize("text", PRESERVE_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 3, 7, 50])
+async def test_non_markdown_preserved(text: str, chunk_size: int):
+    assert await _filtered(text, chunk_size) == text
+
+
+# --- horizontal rules ---
+#
+# A rule carries no spoken content, so the whole line goes. Dashes that are
+# part of a sentence must survive.
+
+HORIZONTAL_RULE_CASES = [
+    ("before\n---\nafter", "before\n\nafter"),
+    ("before\n***\nafter", "before\n\nafter"),
+    ("before\n___\nafter", "before\n\nafter"),
+    ("before\n-----\nafter", "before\n\nafter"),
+    ("before\n  ---  \nafter", "before\n\nafter"),
+    ("*****", ""),
+    # markers may be spaced apart, and a rule wins over a list item
+    ("before\n* * *\nafter", "before\n\nafter"),
+    ("before\n- - -\nafter", "before\n\nafter"),
+    ("before\n_ _ _\nafter", "before\n\nafter"),
+    ("before\n   - - - \nafter", "before\n\nafter"),
+    # not rules
+    ("wait --- what?", "wait --- what?"),
+    ("a -- b", "a -- b"),
+    # a fourth column of indent makes the line code, not a rule
+    ("before\n    ---\nafter", "before\n    ---\nafter"),
+    ("before\n\t---\nafter", "before\n\t---\nafter"),
+]
+
+
+@pytest.mark.parametrize("text,expected", HORIZONTAL_RULE_CASES)
+@pytest.mark.parametrize("chunk_size", [1, 3, 50])
+async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
+    assert await _filtered(text, chunk_size) == expected
+
+
+# --- streaming invariant ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [t for t, _ in EMPHASIS_CASES] + PRESERVE_CASES + [t for t, _ in HORIZONTAL_RULE_CASES],
+)
+async def test_output_independent_of_chunking(text: str):
+    """Buffering must not change the result: every chunk size yields one output."""
+    outputs = {await _filtered(text, size) for size in (1, 2, 3, 5, 7, 11, 50, 1000)}
+    assert len(outputs) == 1, f"chunk-size dependent output: {outputs}"
 
 
 # Emoji test data
@@ -202,60 +328,11 @@ End of emoji test. """  # noqa: W291
 
 @pytest.mark.parametrize("chunk_size", [1, 5, 10, 30])
 async def test_emoji_filter(chunk_size: int):
-    """Test emoji filtering with various chunk sizes."""
-
-    print("=== EMOJI FILTER TEST ===")
-    print(f"Input length: {len(EMOJI_INPUT)} characters")
-    print(f"Expected length: {len(EMOJI_EXPECTED_OUTPUT)} characters")
-
-    print(f"\n--- Testing with chunk_size={chunk_size} ---")
-
-    # Stream the input with specified chunk size
-    async def stream_text():
-        for i in range(0, len(EMOJI_INPUT), chunk_size):
-            yield EMOJI_INPUT[i : i + chunk_size]
-
-    # Process through the filter
-    result = ""
-    async for chunk in filter_emoji(stream_text()):
-        result += chunk
-
-    # Compare results
-    if result == EMOJI_EXPECTED_OUTPUT:
-        print("✓ PASS")
-    else:
-        print("✗ FAIL")
-        print(f"Expected first 100 chars: {repr(EMOJI_EXPECTED_OUTPUT[:100])}")
-        print(f"Got first 100 chars:      {repr(result[:100])}")
-
-        # Show differences
-        expected_lines = EMOJI_EXPECTED_OUTPUT.split("\n")
-        result_lines = result.split("\n")
-
-        print("\nLine-by-line differences:")
-        for i, (exp, got) in enumerate(zip(expected_lines, result_lines, strict=False)):
-            if exp != got:
-                print(f"Line {i + 1}:")
-                print(f"  Expected: {repr(exp)}")
-                print(f"  Got:      {repr(got)}")
+    result = await _collect(filter_emoji(_stream_text(EMOJI_INPUT, chunk_size)))
     assert result == EMOJI_EXPECTED_OUTPUT
-
-    print("\n=== EMOJI TEST COMPLETE ===")
 
 
 # --- text_transforms.replace tests ---
-
-
-async def _stream_text(text: str, chunk_size: int):
-    for i in range(0, len(text), chunk_size):
-        yield text[i : i + chunk_size]
-
-
-async def _collect(stream) -> str:
-    result = ""
-    async for chunk in stream:
-        result += chunk
-    return result
 
 
 @pytest.mark.parametrize("chunk_size", [1, 2, 5, 11, 50])
@@ -299,6 +376,39 @@ async def test_replace_edge_cases():
     # backslashes in replacement values are treated literally
     transform = replace({"word": r"\1 \n \t"})
     assert await _collect(transform(_stream_text("a word here", 2))) == r"a \1 \n \t here"
+
+
+async def test_replace_flushes_non_prefix_text_immediately():
+    """Text that cannot begin any key is emitted whole, not held or split mid-word."""
+    transform = replace({"LiveKit": "Lyve Kit"})
+    chunks = await _collect_chunks(transform(_stream_text("you connect.", 100)))
+    assert chunks == ["you connect."]
+
+
+async def test_replace_holds_only_potential_prefix():
+    """A trailing run that is a prefix of a key is held until it can be resolved."""
+    transform = replace({"LiveKit": "Lyve Kit"})
+    chunks = await _collect_chunks(transform(_stream_text("visit Live", 100)))
+    # "visit " flushes immediately; only "Live" (a LiveKit prefix) is held to the end
+    assert chunks[0] == "visit "
+    assert "".join(chunks) == "visit Live"
+
+
+async def test_replace_prefers_longest_overlapping_key():
+    """Overlapping keys resolve to the longest match, not dict/insertion order.
+
+    Longest-match holds when the longer key is buffered together; a key split
+    mid-token across chunks falls back to the shorter match (same as before —
+    correcting that needs incremental leftmost-longest matching).
+    """
+    transform = replace({"a": "X", "ab": "Y"})
+    assert await _collect(transform(_stream_text("ab", 100))) == "Y"
+
+
+async def test_replace_does_not_cascade():
+    """A replacement's output is not re-matched against other keys (single pass)."""
+    transform = replace({"a": "b", "b": "c"})
+    assert await _collect(transform(_stream_text("a", 100))) == "b"
 
 
 async def test_apply_text_transforms_with_callable():

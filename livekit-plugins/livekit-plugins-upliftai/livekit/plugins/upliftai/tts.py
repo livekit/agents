@@ -298,7 +298,9 @@ class WebSocketClient:
         if self.opts.phrase_replacement_config_id:
             message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
 
-        logger.debug(f"Sending synthesis request {request_id[:8]} for text: '{text[:50]}...'")
+        logger.debug(
+            f"Sending synthesis request {request_id[:8]}", extra={"lk.pii.text": text[:50]}
+        )
 
         try:
             if self.sio is not None:
@@ -509,8 +511,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             self._mark_started()
 
             # Synthesize
-            request_id = str(uuid.uuid4())
-            audio_queue = await self._tts._client.synthesize(full_text, request_id)
+            audio_queue = await self._tts._client.synthesize(full_text, segment_id)
 
             # Stream audio
             while True:

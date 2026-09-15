@@ -1,6 +1,6 @@
 # xAI plugin for LiveKit Agents
 
-Support for [xAI](https://x.ai/)'s Grok LLM, TTS, and Grok Voice Agent API.
+Support for [xAI](https://x.ai/)'s Grok LLM, STT, TTS, and Grok Voice Agent API.
 
 See the [xAI integration docs](https://docs.livekit.io/agents/integrations/xai/) for more information.
 

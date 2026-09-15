@@ -6,14 +6,14 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, TypedDict, overload
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, overload
 
 import aiohttp
 from typing_extensions import Required
 
 from livekit import rtc
 
-from .. import stt, utils
+from .. import stt, utils, vad
 from .._exceptions import (
     APIConnectionError,
     APIStatusError,
@@ -30,7 +30,15 @@ from ..types import (
     TimedString,
 )
 from ..utils import is_given
-from ._utils import create_access_token, get_default_inference_url, get_inference_headers
+from ._utils import (
+    HEADER_SESSION_ID,
+    create_access_token,
+    get_default_inference_url,
+    get_inference_headers,
+)
+
+if TYPE_CHECKING:
+    from ..voice.events import ConversationItemAddedEvent
 
 DeepgramModels = Literal[
     "deepgram/nova-3",
@@ -43,19 +51,38 @@ DeepgramModels = Literal[
 DeepgramFluxModels = Literal[
     "deepgram/flux-general",
     "deepgram/flux-general-en",
+    "deepgram/flux-general-multi",
 ]
-CartesiaModels = Literal["cartesia/ink-whisper",]
+CartesiaModels = Literal[
+    "cartesia/ink-whisper",
+    "cartesia/ink-2",
+]
 AssemblyAIModels = Literal[
     "assemblyai/universal-streaming",
     "assemblyai/universal-streaming-multilingual",
     "assemblyai/u3-rt-pro",
+    "assemblyai/universal-3-5-pro",
 ]
-ElevenlabsModels = Literal["elevenlabs/scribe_v2_realtime",]
+XaiModels = Literal["xai/stt-1",]
+SpeechmaticsModels = Literal[
+    "speechmatics/enhanced",
+    "speechmatics/standard",
+    "speechmatics/linden-1",
+]
+InworldModels = Literal["inworld/inworld-stt-1",]
+GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    min_volume: float  # default: not specified
-    max_silence_duration_secs: float  # default: not specified
+    min_volume: float  # ink-whisper only; default: not specified
+    max_silence_duration_secs: float  # ink-whisper only; default: not specified
+    # Turn-detection tuning for turn-detecting models (e.g. ink-2). The gateway
+    # validates these against Cartesia's documented ranges.
+    turn_start_threshold: float  # range 0.5-0.9, default 0.8
+    turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
+    turn_end_threshold: float  # range 0.05-0.5, default 0.2
+    turn_end_timeout_ms: int  # range 640-11200, default 5600
+    keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
@@ -70,7 +97,7 @@ class DeepgramOptions(TypedDict, total=False):
     numerals: bool
     mip_opt_out: bool  # default: False
     vad_events: bool  # default: False
-    diarize: bool
+    diarize: bool  # when True, enables speaker diarization (default off)
     dictation: bool
     detect_language: bool
     no_delay: bool  # default: True
@@ -105,23 +132,185 @@ class AssemblyaiOptions(TypedDict, total=False):
     language_detection: bool
     inactivity_timeout: float  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    speaker_labels: bool  # when True, enables speaker diarization (default off)
+    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1750 chars)
+    previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
+    voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
+    voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
+    mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
 
 
-class ElevenlabsOptions(TypedDict, total=False):
-    commit_strategy: Literal["manual", "vad"]
-    include_timestamps: bool
-    vad_silence_threshold_secs: float
-    vad_threshold: float
-    min_speech_duration_ms: int
-    min_silence_duration_ms: int
-    language_code: str
+class SpeechmaticsOptions(TypedDict, total=False):
+    domain: str  # e.g. "finance"
+    output_locale: str  # BCP-47 locale for output formatting
+    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: str  # "flexible" | "fixed"; RT only
+    diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
+    speaker_sensitivity: float  # 0.0-1.0
+    max_speakers: int
+    prefer_current_speaker: bool
+    enable_partials: bool  # default True (overridden by gateway)
+    enable_entities: bool  # RT only
+    punctuation_overrides: dict[str, Any]
+    additional_vocab: list[dict[str, Any]]  # RT only
+    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    audio_filtering_config: dict[str, Any]  # RT only
+    transcript_filtering_config: dict[str, Any]  # RT only
+
+
+class XaiOptions(TypedDict, total=False):
+    diarize: bool  # when True, enables speaker diarization (default off)
+    endpointing: int  # silence duration in ms before utterance-final (0-5000)
+    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
+    interim_results: bool  # default True; set False to opt out of interim transcripts
+
+
+class InworldOptions(TypedDict, total=False):
+    enable_voice_profile: bool  # default: True
+    voice_profile_top_n: int  # range 1-20, default 10
+    include_word_timestamps: bool  # default: True
+    audio_encoding: Literal["LINEAR16", "AUTO_DETECT"]  # default: LINEAR16
+    inactivity_timeout_seconds: int  # >= 0; 0 disables
+    end_of_turn_confidence_threshold: float  # range 0.0-1.0, default 0.5
+    min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
+    prompts: list[str]
+    vad_threshold: float  # range 0.0-1.0, default 0.5
+
+
+class GoogleOptions(TypedDict, total=False):
+    # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
+    # empty list, to let the model detect the language itself.
+    # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
+
+
+# Diarization is requested via different extra_kwargs keys across
+# providers. Keep this list in one place so adding a new provider is a
+# single-line change and there's no divergence between __init__ and
+# update_options capability inference.
+_DIARIZATION_EXTRA_KEYS: tuple[str, ...] = (
+    "diarize",  # Deepgram, xAI
+    "speaker_labels",  # AssemblyAI
+    "diarization",  # Speechmatics
+)
+
+
+def _diarization_enabled(extra_kwargs: dict[str, Any] | None) -> bool:
+    """Return True if any known provider diarization flag is truthy."""
+    if not extra_kwargs:
+        return False
+    for key in _DIARIZATION_EXTRA_KEYS:
+        value = extra_kwargs.get(key)
+        if not value:
+            continue
+        # Speechmatics' "diarization" accepts the string "none" to mean off.
+        if isinstance(value, str) and value.lower() == "none":
+            continue
+        return True
+    return False
+
+
+def _keyterms_extra_for_model(
+    model: NotGivenOr[str],
+    *,
+    extra_kwargs: dict[str, Any] | None = None,
+    session_keyterms: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return the provider's keyterm ``extra`` entry: user keyterms (from ``extra_kwargs``)
+    merged with the framework ``session_keyterms``.
+
+    None if the model has no keyterm prompting, so ``_keyterms_extra_for_model(model) is not
+    None`` is also the capability check.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return None
+
+    extra_kwargs = extra_kwargs or {}
+    session_keyterms = session_keyterms or []
+
+    if model == "speechmatics/linden-1":
+        return None
+
+    if model.startswith("speechmatics/"):
+        # keep existing entries as-is (they may carry sounds_like etc.); append new session terms
+        existing = list(extra_kwargs.get("additional_vocab", []))
+        seen = {v["content"] for v in existing}
+        additions = set(session_keyterms) - seen
+        return {"additional_vocab": existing + [{"content": term} for term in additions]}
+
+    key: str | None = None
+    if model.startswith("deepgram/"):
+        key = "keyterm"
+    elif model.startswith("assemblyai/"):
+        key = "keyterms_prompt"
+
+    if key is None:
+        return None
+    # deepgram's keyterm may be a bare string; wrap it so it isn't splat char-by-char
+    existing = extra_kwargs.get(key, [])
+    if isinstance(existing, str):
+        existing = [existing]
+    return {key: list(dict.fromkeys([*existing, *session_keyterms]))}
+
+
+_ASSEMBLYAI_CARRYOVER_MODELS = (
+    "assemblyai/u3-rt-pro",
+    "assemblyai/universal-3-5-pro",
+)
+
+_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
+
+
+def _supports_agent_context_carryover(model: NotGivenOr[STTModels | str]) -> bool:
+    """True if the model natively carries agent_context (AssemblyAI U3 Pro family)."""
+    return is_given(model) and isinstance(model, str) and model in _ASSEMBLYAI_CARRYOVER_MODELS
+
+
+# Models verified to carry word timings. Unknown models stay disabled until verified.
+_WORD_ALIGNED_MODELS = frozenset(
+    {
+        "deepgram/nova-3",
+        "deepgram/nova-3-medical",
+        "deepgram/nova-2",
+        "deepgram/nova-2-medical",
+        "deepgram/nova-2-conversationalai",
+        "deepgram/nova-2-phonecall",
+        "deepgram/flux-general",
+        "deepgram/flux-general-en",
+        "deepgram/flux-general-multi",
+        "cartesia/ink-whisper",
+        "assemblyai/universal-streaming",
+        "assemblyai/universal-streaming-multilingual",
+        "assemblyai/u3-rt-pro",
+        "assemblyai/universal-3-5-pro",
+        "xai/stt-1",
+        "speechmatics/enhanced",
+        "speechmatics/standard",
+    }
+)
+
+
+def _aligned_transcript_for_model(
+    model: NotGivenOr[STTModels | str],
+) -> Literal["word", False]:
+    """Word-level alignment, which adaptive interruption relies on to gatekeep transcripts.
+
+    False when the model sends no word timings, and for "auto", where the provider is
+    picked server-side per language and so can't be known here. Claiming alignment we
+    don't have is the costlier error: it enables adaptive interruption, which then turns
+    off the fast VAD barge-in path it can't actually replace.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    return "word" if model in _WORD_ALIGNED_MODELS else False
 
 
 STTLanguages = Literal["multi", "en", "de", "es", "fr", "ja", "pt", "zh", "hi"]
 
 
 class FallbackModel(TypedDict, total=False):
-    """A fallback model with optional extra configuration.
+    """Inference Fallback Adapter: configuration for a fallback STT model that runs server-side in LiveKit Inference, providing automatic fallback between providers.
 
     Extra fields are passed through to the provider.
 
@@ -147,6 +336,29 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+def _resolve_vad_for_model(
+    model: NotGivenOr[STTModels | str],
+    vad_instance: vad.VAD | None,
+) -> vad.VAD | None:
+    is_speechmatics_rt = (
+        is_given(model)
+        and isinstance(model, str)
+        and model.startswith("speechmatics/")
+        and model != "speechmatics/linden-1"
+    )
+    if vad_instance is not None and not is_speechmatics_rt:
+        logger.warning(
+            "`vad` will be ignored: model %r handles endpointing server-side.",
+            model,
+        )
+        return None
+    if is_speechmatics_rt and vad_instance is None:
+        from .vad import VAD
+
+        vad_instance = VAD()
+    return vad_instance
+
+
 def _normalize_fallback(
     fallback: list[FallbackModelType] | FallbackModelType,
 ) -> list[FallbackModel]:
@@ -167,7 +379,10 @@ STTModels = (
     | DeepgramFluxModels
     | CartesiaModels
     | AssemblyAIModels
-    | ElevenlabsModels
+    | XaiModels
+    | SpeechmaticsModels
+    | InworldModels
+    | GoogleModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -263,7 +478,7 @@ class STT(stt.STT):
     @overload
     def __init__(
         self,
-        model: ElevenlabsModels,
+        model: XaiModels,
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -272,7 +487,59 @@ class STT(stt.STT):
         api_key: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
-        extra_kwargs: NotGivenOr[ElevenlabsOptions] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[XaiOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: SpeechmaticsModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[SpeechmaticsOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: InworldModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[InworldOptions] = NOT_GIVEN,
+        fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
+        conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        model: GoogleModels,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
+        sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        api_key: NotGivenOr[str] = NOT_GIVEN,
+        api_secret: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        extra_kwargs: NotGivenOr[GoogleOptions] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
     ) -> None: ...
@@ -311,10 +578,14 @@ class STT(stt.STT):
             | DeepgramOptions
             | DeepgramFluxOptions
             | AssemblyaiOptions
-            | ElevenlabsOptions
+            | XaiOptions
+            | SpeechmaticsOptions
+            | InworldOptions
+            | GoogleOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
     ) -> None:
         """Livekit Cloud Inference STT
 
@@ -331,14 +602,16 @@ class STT(stt.STT):
             fallback (FallbackModelType, optional): Fallback models - either a list of model names,
                 a list of FallbackModel instances.
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
+            vad (VAD, optional): External Voice Activity Detector. When provided, each audio
+                frame is forwarded to the VAD and `session.finalize` is sent to the inference
+                gateway on end of speech. Only applicable to the Speechmatics RT models
+                (enhanced/standard); linden-1 detects turns server-side.
         """
-        super().__init__(
-            capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=True,
-                aligned_transcript="word",
-                offline_recognize=False,
-            ),
+        # Infer diarization capability from provider-specific extra_kwargs
+        # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
+        # Deepgram); AssemblyAI uses "speaker_labels".
+        diarization_enabled = _diarization_enabled(
+            dict(extra_kwargs) if is_given(extra_kwargs) else None
         )
 
         # Parse language from model string if provided: "provider/model:language"
@@ -347,6 +620,31 @@ class STT(stt.STT):
             model = parsed_model
             if is_given(parsed_language) and not is_given(language):
                 language = parsed_language
+
+        vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
+
+        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
+        if is_given(fallback):
+            fallback_models = _normalize_fallback(fallback)
+        models = [model]
+        if is_given(fallback_models):
+            models.extend(item["model"] for item in fallback_models)
+        aligned_transcript: Literal["word", False] = (
+            "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+        )
+
+        # chat_context follows the model's native support; the session decides whether to forward
+        super().__init__(
+            capabilities=stt.STTCapabilities(
+                streaming=True,
+                interim_results=True,
+                diarization=diarization_enabled,
+                aligned_transcript=aligned_transcript,
+                offline_recognize=False,
+                keyterms=_keyterms_extra_for_model(model) is not None,
+                chat_context=_supports_agent_context_carryover(model),
+            ),
+        )
 
         lk_base_url = base_url if is_given(base_url) else get_default_inference_url()
 
@@ -369,9 +667,6 @@ class STT(stt.STT):
             raise ValueError(
                 "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
             )
-        fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
-        if is_given(fallback):
-            fallback_models = _normalize_fallback(fallback)
 
         self._opts = STTOptions(
             model=model,
@@ -387,6 +682,8 @@ class STT(stt.STT):
         )
 
         self._session = http_session
+        self._vad = vad
+        self._session_keyterms: list[str] = []  # framework-managed; merged into extra_kwargs
         self._streams = weakref.WeakSet[SpeechStream]()
 
     @classmethod
@@ -434,7 +731,12 @@ class STT(stt.STT):
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         options = self._sanitize_options(language=language)
-        stream = SpeechStream(stt=self, opts=options, conn_options=conn_options)
+        stream = SpeechStream(
+            stt=self,
+            opts=options,
+            conn_options=conn_options,
+            vad_instance=self._vad,
+        )
         self._streams.add(stream)
         return stream
 
@@ -447,14 +749,79 @@ class STT(stt.STT):
     ) -> None:
         """Update STT configuration options."""
         if is_given(model):
+            # Mirror __init__: strip ":language" suffix and apply if not overridden.
+            if isinstance(model, str):
+                parsed_model, parsed_language = _parse_model_string(model)
+                model = parsed_model
+                if is_given(parsed_language) and not is_given(language):
+                    language = parsed_language
+
             self._opts.model = model
+            self._vad = _resolve_vad_for_model(model, self._vad)
+            models = [self._opts.model]
+            if is_given(self._opts.fallback):
+                models.extend(item["model"] for item in self._opts.fallback)
+            self._capabilities = replace(
+                self._capabilities,
+                keyterms=_keyterms_extra_for_model(self._opts.model) is not None,
+                chat_context=_supports_agent_context_carryover(self._opts.model),
+                aligned_transcript=(
+                    "word" if all(_aligned_transcript_for_model(item) for item in models) else False
+                ),
+            )
         if is_given(language):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._capabilities = replace(
+                self._capabilities,
+                diarization=_diarization_enabled(self._opts.extra_kwargs),
+            )
+            # re-merge the active session keyterms so a user extra update doesn't drop them
+            keyterm_extra = _keyterms_extra_for_model(
+                self._opts.model,
+                extra_kwargs=self._opts.extra_kwargs,
+                session_keyterms=self._session_keyterms,
+            )
+            if keyterm_extra is not None:
+                extra = {**extra, **keyterm_extra}
 
         for stream in self._streams:
             stream.update_options(model=model, language=language, extra=extra)
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        keyterm_extra = _keyterms_extra_for_model(
+            self._opts.model, extra_kwargs=self._opts.extra_kwargs, session_keyterms=keyterms
+        )
+        if keyterm_extra is None:
+            super()._update_session_keyterms(keyterms)  # warn-and-skip for unsupported models
+            return
+
+        self._session_keyterms = list(keyterms)
+        # inference applies extra live via session.update; defer to END_OF_SPEECH since the
+        # gateway may reconnect upstream when the keyterms change
+        for stream in self._streams:
+            if stream._speaking:
+                stream._pending_extra = keyterm_extra
+            else:
+                stream.update_options(extra=keyterm_extra)
+
+    def _push_conversation_item(self, ev: ConversationItemAddedEvent) -> None:
+        if (
+            (chat_item := ev.item).type == "message"
+            and chat_item.role == "assistant"
+            and (text := chat_item.text_content)
+        ):
+            if len(text) > _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:
+                logger.debug(
+                    "truncating agent_context carryover from %d to %d chars",
+                    len(text),
+                    _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS,
+                )
+                text = text[-_ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS:]
+            self.update_options(extra={"agent_context": text})
 
     def _sanitize_options(
         self, *, language: NotGivenOr[STTLanguages | str] = NOT_GIVEN
@@ -476,15 +843,21 @@ class SpeechStream(stt.SpeechStream):
         stt: STT,
         opts: STTOptions,
         conn_options: APIConnectOptions,
+        vad_instance: vad.VAD | None = None,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
+        self._stt: STT = stt
         self._opts = opts
-        self._session = stt._ensure_session()
         self._request_id = str(utils.shortuuid("stt_request_"))
 
         self._speaking = False
+        # keyterm extra set while the user is speaking; applied at END_OF_SPEECH (latest wins).
+        # inference applies live, but the gateway may reconnect upstream, so defer to a calm moment.
+        self._pending_extra: dict[str, Any] | None = None
         self._speech_duration: float = 0
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._vad: vad.VAD | None = vad_instance
+        self._session_update_tasks: set[asyncio.Task[None]] = set()
 
     def update_options(
         self,
@@ -505,6 +878,7 @@ class SpeechStream(stt.SpeechStream):
             self._opts.language = LanguageCode(language)
         if is_given(extra):
             self._opts.extra_kwargs.update(extra)
+            self._pending_extra = None
 
         has_update = is_given(model) or is_given(language) or is_given(extra)
         if has_update and self._ws is not None and not self._ws.closed:
@@ -519,7 +893,16 @@ class SpeechStream(stt.SpeechStream):
                 "type": "session.update",
                 "settings": settings,
             }
-            asyncio.ensure_future(self._send_session_update(update_msg))
+            # Hold the task: the loop only weakly references it, and a collected one
+            # means self._opts moved on while the server was never told.
+            task = asyncio.create_task(self._send_session_update(update_msg))
+            self._session_update_tasks.add(task)
+            task.add_done_callback(self._session_update_tasks.discard)
+
+    def _on_end_of_speech(self) -> None:
+        if self._pending_extra is not None:
+            self.update_options(extra=self._pending_extra)
+            self._pending_extra = None
 
     async def _send_session_update(self, msg: dict[str, Any]) -> None:
         try:
@@ -531,6 +914,8 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Main loop for streaming transcription."""
         closing_ws = False
+        http_session = self._stt._ensure_session()
+        vad_stream: vad.VADStream | None = self._vad.stream() if self._vad is not None else None
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -542,28 +927,53 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=self._opts.sample_rate // 20,  # 50ms
             )
 
-            async for ev in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(ev, rtc.AudioFrame):
-                    frames.extend(audio_bstream.push(ev.data))
-                elif isinstance(ev, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
+            try:
+                async for ev in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(ev, rtc.AudioFrame):
+                        if vad_stream is not None:
+                            vad_stream.push_frame(ev)
+                        frames.extend(audio_bstream.push(ev.data))
+                    elif isinstance(ev, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
 
-                for frame in frames:
-                    self._speech_duration += frame.duration
-                    audio_bytes = frame.data.tobytes()
-                    base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-                    audio_msg = {
-                        "type": "input_audio",
-                        "audio": base64_audio,
-                    }
-                    await ws.send_str(json.dumps(audio_msg))
+                    for frame in frames:
+                        self._speech_duration += frame.duration
+                        audio_bytes = frame.data.tobytes()
+                        base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                        audio_msg = {
+                            "type": "input_audio",
+                            "audio": base64_audio,
+                        }
+                        await ws.send_str(json.dumps(audio_msg))
 
-            closing_ws = True
-            finalize_msg = {
-                "type": "session.finalize",
-            }
-            await ws.send_str(json.dumps(finalize_msg))
+                if vad_stream is not None:
+                    vad_stream.end_input()
+
+                closing_ws = True
+                finalize_msg = {
+                    "type": "session.finalize",
+                }
+                await ws.send_str(json.dumps(finalize_msg))
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or http_session.closed:
+                    return
+                raise APIConnectionError(
+                    "LiveKit Inference STT connection closed unexpectedly"
+                ) from e
+
+        @utils.log_exceptions(logger=logger)
+        async def vad_task(ws: aiohttp.ClientWebSocketResponse, stream: vad.VADStream) -> None:
+            async for ev in stream:
+                if ev.type != vad.VADEventType.END_OF_SPEECH:
+                    continue
+                if ws.closed:
+                    return
+                try:
+                    await ws.send_str(json.dumps({"type": "session.finalize"}))
+                except Exception:
+                    logger.debug("failed to send session.finalize from VAD, ws may be closing")
+                    return
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -575,7 +985,7 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if closing_ws or self._session.closed:
+                    if closing_ws or http_session.closed:
                         return
                     raise APIStatusError(
                         message="LiveKit Inference STT connection closed unexpectedly"
@@ -589,6 +999,8 @@ class SpeechStream(stt.SpeechStream):
                 msg_type = data.get("type")
                 if msg_type == "session.created":
                     pass
+                elif msg_type == "start_of_speech":
+                    self._process_start_of_speech()
                 elif msg_type == "interim_transcript":
                     self._process_transcript(data, is_final=False)
                 elif msg_type == "preflight_transcript":
@@ -605,35 +1017,51 @@ class SpeechStream(stt.SpeechStream):
                         status_code=data.get("code", -1),
                         body=data,
                     )
-                else:
-                    logger.warning(
-                        "received unexpected message from LiveKit Inference STT: %s", data
-                    )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
-            ws = await self._connect_ws()
+            ws = await self._connect_ws(http_session)
             self._ws = ws
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
             ]
+            if vad_stream is not None:
+                tasks.append(asyncio.create_task(vad_task(ws, vad_stream)))
             try:
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
         finally:
             self._ws = None
+            if self._session_update_tasks:
+                await utils.aio.gracefully_cancel(*self._session_update_tasks)
+                self._session_update_tasks.clear()
             if ws is not None:
                 await ws.close()
+            if vad_stream is not None:
+                await vad_stream.aclose()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self, http_session: aiohttp.ClientSession
+    ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the LiveKit Inference STT WebSocket."""
         params: dict[str, Any] = {
             "settings": {
                 "sample_rate": str(self._opts.sample_rate),
                 "encoding": self._opts.encoding,
-                "extra": self._opts.extra_kwargs,
+                # merge the framework session keyterms into the user's extra_kwargs keyterm key
+                "extra": {
+                    **self._opts.extra_kwargs,
+                    **(
+                        _keyterms_extra_for_model(
+                            self._opts.model,
+                            extra_kwargs=self._opts.extra_kwargs,
+                            session_keyterms=self._stt._session_keyterms,
+                        )
+                        or {}
+                    ),
+                },
             },
         }
 
@@ -663,15 +1091,18 @@ class SpeechStream(stt.SpeechStream):
             **get_inference_headers(),
             "Authorization": f"Bearer {create_access_token(self._opts.api_key, self._opts.api_secret)}",
         }
+        session_id = headers.get(HEADER_SESSION_ID)
         try:
             ws = await asyncio.wait_for(
-                self._session.ws_connect(
+                http_session.ws_connect(
                     f"{base_url}/stt?model={self._opts.model}", headers=headers
                 ),
                 self._conn_options.timeout,
             )
             params["type"] = "session.create"
             await ws.send_str(json.dumps(params))
+            if session_id is not None:
+                self._request_id = session_id
         except aiohttp.ClientResponseError as e:
             raise create_api_error_from_http(e.message, status=e.status) from e
         except asyncio.TimeoutError as e:
@@ -683,12 +1114,17 @@ class SpeechStream(stt.SpeechStream):
     def _build_speech_data(self, data: dict) -> stt.SpeechData:
         language = LanguageCode(data.get("language", self._opts.language or "en"))
         words = data.get("words", []) or []
+        # The gateway carries provider-specific data on the `extra` field
+        # of the transcript message. We surface it on SpeechData.metadata
+        extra = data.get("extra")
+        metadata = extra if isinstance(extra, dict) and extra else None
         return stt.SpeechData(
             language=language,
             start_time=self.start_time_offset + data.get("start", 0),
             end_time=self.start_time_offset + data.get("start", 0) + data.get("duration", 0),
             confidence=data.get("confidence", 1.0),
             text=data.get("transcript", ""),
+            speaker_id=data.get("speaker_id"),
             words=[
                 TimedString(
                     text=word.get("word", ""),
@@ -696,9 +1132,11 @@ class SpeechStream(stt.SpeechStream):
                     end_time=word.get("end", 0) + self.start_time_offset,
                     start_time_offset=self.start_time_offset,
                     confidence=word.get("confidence", 0.0),
+                    speaker_id=word.get("speaker_id"),
                 )
                 for word in words
             ],
+            metadata=metadata,
         )
 
     def _process_preflight_transcript(self, data: dict) -> None:
@@ -715,17 +1153,24 @@ class SpeechStream(stt.SpeechStream):
         )
         self._event_ch.send_nowait(event)
 
+    def _process_start_of_speech(self) -> None:
+        """Onset reported by a provider that detects it server-side (e.g. Cartesia Ink-2).
+
+        Without this the first transcript has to stand in for onset, which lands about
+        800ms late because it waits for a word to be decoded.
+        """
+        if self._speaking:
+            return
+        self._speaking = True
+        self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH))
+
     def _process_transcript(self, data: dict, is_final: bool) -> None:
         request_id = data.get("request_id", self._request_id)
         text = data.get("transcript", "")
 
         if not text and not is_final:
             return
-        # We'll have a more accurate way of detecting when speech started when we have VAD
-        if not self._speaking:
-            self._speaking = True
-            start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
-            self._event_ch.send_nowait(start_event)
+        self._process_start_of_speech()
 
         speech_data = self._build_speech_data(data)
 
@@ -753,6 +1198,7 @@ class SpeechStream(stt.SpeechStream):
                 self._speaking = False
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
+                self._on_end_of_speech()
         else:
             event = stt.SpeechEvent(
                 type=stt.SpeechEventType.INTERIM_TRANSCRIPT,

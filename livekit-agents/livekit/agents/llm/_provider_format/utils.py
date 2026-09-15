@@ -2,11 +2,48 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from typing import Any
 
 from livekit.agents import llm
 from livekit.agents.log import logger
 
 _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE = "<instructions>\n{content}\n</instructions>"
+
+
+def parse_tool_call_arguments(fnc_call: llm.FunctionCall) -> dict[str, Any]:
+    """Parse a stored function call's arguments into a dict for JSON-object providers.
+
+    ``FunctionCall.arguments`` is only canonicalized when the model's output was
+    parsed at the time of the call; when it can't be recovered the raw string is kept
+    verbatim, and history restored via ``ChatContext.from_dict`` or produced by a
+    custom ``llm_node`` never went through that path at all. The Anthropic, Google,
+    and AWS formatters send the arguments as a JSON object, so formatting such history
+    would otherwise raise on an unrelated later turn -- and because the bad entry
+    stays in the context, every subsequent turn raises again.
+
+    :func:`~livekit.agents.llm.utils.parse_function_arguments` does the recovery
+    (strict parse, then ``json_repair``, then chat-template token stripping, then
+    unwrapping double-encoded arguments). It raises ``ValueError`` when it cannot
+    reach a dict, which is the right contract for a live call the model can retry,
+    but not for replaying history: fall back to an empty object rather than
+    fabricating arguments the model never sent, since the historical call already
+    produced its output.
+    """
+    # imported here rather than at module scope: ``llm.utils`` imports
+    # ``chat_context``, which imports this package, so a top-level import is a cycle
+    from ..utils import parse_function_arguments
+
+    arguments = fnc_call.arguments
+    if not arguments:
+        return {}
+    try:
+        return parse_function_arguments(arguments)
+    except ValueError:
+        logger.warning(
+            "could not parse stored tool call arguments as a JSON object, using empty arguments",
+            extra={"call_id": fnc_call.call_id, "tool_name": fnc_call.name},
+        )
+        return {}
 
 
 def convert_mid_conversation_instructions(
@@ -17,35 +54,40 @@ def convert_mid_conversation_instructions(
 ) -> llm.ChatContext:
     """Convert mid-conversation system messages to the given role to preserve their position.
 
-    Preamble system messages (before any user/assistant turn) are kept as-is.
-    Later ones are converted using the given role and template.
+    A system/developer message is kept as the base preamble only when it
+    is the first one and no conversation content (messages, tool calls)
+    precedes it. Every other system/developer message is rewritten with
+    the given role, wrapped in ``template``; ones without text content
+    are dropped so they can't shadow the preamble. This covers both
+    mid-conversation instructions and per-turn instructions appended by
+    ``generate_reply`` — including on the very first turn, when the
+    preamble is the only other item. Without this, providers like Gemini,
+    Anthropic, and AWS fall back to ``inject_dummy_user_message``
+    (a literal ``"."`` user turn the model frequently responds to with
+    "you didn't say anything").
     """
-    seen_non_system = False
+    preamble_allowed = True
     items: list[llm.ChatItem] = []
 
     for item in chat_ctx.items:
-        if (
-            item.type == "message"
-            and item.role in ("system", "developer")
-            and seen_non_system
-            and (text := item.text_content)
-        ):
-            items.append(
-                llm.ChatMessage(
-                    id=item.id,
-                    role=role,
-                    content=[template.format(content=text)],
-                    created_at=item.created_at,
+        if item.type == "message" and item.role in ("system", "developer"):
+            if preamble_allowed:
+                preamble_allowed = False
+                items.append(item)
+            elif text := item.raw_text_content:
+                items.append(
+                    llm.ChatMessage(
+                        id=item.id,
+                        role=role,
+                        content=[template.format(content=text)],
+                        created_at=item.created_at,
+                    )
                 )
-            )
-        else:
-            if not seen_non_system and (
-                item.type in ("function_call", "function_call_output")
-                or (item.type == "message" and item.role in ("assistant", "user"))
-            ):
-                seen_non_system = True
+            continue
 
-            items.append(item)
+        if item.type in ("message", "function_call", "function_call_output"):
+            preamble_allowed = False
+        items.append(item)
 
     return llm.ChatContext(items)
 

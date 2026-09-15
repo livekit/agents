@@ -365,7 +365,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         output_emitter.end_segment()
                         break
                 else:
-                    logger.error("Unexpected Resemble message %s", data)
+                    logger.error("Unexpected Resemble message", extra={"lk.pii.data": data})
 
         async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
             self._acquire_time = self._tts._pool.last_acquire_time

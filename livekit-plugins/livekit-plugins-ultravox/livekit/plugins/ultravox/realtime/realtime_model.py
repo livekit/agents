@@ -12,7 +12,7 @@ import json
 import os
 import time
 import weakref
-from collections.abc import Iterator
+from collections.abc import AsyncIterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -34,6 +34,7 @@ from .events import (
     ClientToolInvocationEvent,
     ClientToolResultEvent,
     DebugEvent,
+    ForcedAgentMessageEvent,
     PingEvent,
     PlaybackClearBufferEvent,
     PongEvent,
@@ -62,6 +63,7 @@ class _UltravoxOptions:
 
     model_id: str
     voice: str
+    external_voice: NotGivenOr[dict[str, Any]]
     api_key: str
     base_url: str
     system_prompt: str
@@ -117,6 +119,7 @@ class RealtimeModel(llm.RealtimeModel):
         *,
         model: UltravoxModel | str = DEFAULT_MODEL,
         voice: UltravoxVoice | str = DEFAULT_VOICE,
+        external_voice: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: str | None = None,
         system_prompt: str = "You are a helpful assistant.",
@@ -139,6 +142,8 @@ class RealtimeModel(llm.RealtimeModel):
             The Ultravox model to use.
         voice : str | UltravoxVoice
             The voice to use for TTS.
+        external_voice : dict[str, Any], optional
+            The Ultravox configuration for an external TTS provider. Mutually exclusive with ``voice``.
         api_key : str, optional
             The Ultravox API key. If None, will try to use environment variables.
         base_url : str, optional
@@ -177,6 +182,7 @@ class RealtimeModel(llm.RealtimeModel):
                 audio_output=output_medium == "voice",
                 manual_function_calls=False,
                 per_response_tool_choice=False,
+                supports_say=True,
             )
         )
 
@@ -187,9 +193,22 @@ class RealtimeModel(llm.RealtimeModel):
                 "Provide it via api_key parameter or ULTRAVOX_API_KEY environment variable."
             )
 
+        if is_given(external_voice):
+            if not external_voice:
+                raise ValueError(
+                    "external_voice must be a non-empty dict. "
+                    "Omit it to use the built-in `voice` instead."
+                )
+            if voice != DEFAULT_VOICE:
+                logger.warning(
+                    "both `voice` and `external_voice` were provided; "
+                    "`external_voice` takes precedence and `voice` will be ignored."
+                )
+
         self._opts = _UltravoxOptions(
             model_id=model,
             voice=voice,
+            external_voice=external_voice,
             api_key=ultravox_api_key,
             base_url=base_url or ULTRAVOX_BASE_URL,
             system_prompt=system_prompt,
@@ -224,7 +243,7 @@ class RealtimeModel(llm.RealtimeModel):
             self._http_session = utils.http_context.http_session()
         return self._http_session
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Create a new Ultravox real-time session.
 
         Returns
@@ -232,6 +251,7 @@ class RealtimeModel(llm.RealtimeModel):
         RealtimeSession
             An instance of the Ultravox real-time session.
         """
+        # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(realtime_model=self)
         self._sessions.add(sess)
         return sess
@@ -279,6 +299,9 @@ class RealtimeSession(
         self._pending_generation_fut: asyncio.Future[llm.GenerationCreatedEvent] | None = None
         self._current_generation: _ResponseGeneration | None = None
         self._chat_ctx = llm.ChatContext.empty()
+
+        # Prevent GC of in-flight say() tasks; cancelled on close.
+        self._say_tasks: set[asyncio.Task[None]] = set()
 
         # Server-event gating for generate_reply race condition fix
         self._pending_generation_epoch: float | None = None
@@ -375,19 +398,19 @@ class RealtimeSession(
                 continue
 
             if item.type == "message" and item.role in ("system", "developer"):
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
                         UserTextMessageEvent(
-                            text=f"<instruction>{item.text_content}</instruction>",
+                            text=f"<instruction>{item.raw_text_content}</instruction>",
                             defer_response=True,
                         )
                     )
 
             elif item.type == "message" and item.role == "user":
                 # Inject user message as context; do not trigger an immediate response
-                if item.text_content:
+                if item.raw_text_content:
                     self._send_client_event(
-                        UserTextMessageEvent(text=item.text_content, defer_response=True)
+                        UserTextMessageEvent(text=item.raw_text_content, defer_response=True)
                     )
             elif item.type == "function_call_output":
                 # Bridge tool result back to Ultravox using the original invocationId
@@ -400,7 +423,8 @@ class RealtimeSession(
 
                 tool_result = ClientToolResultEvent(
                     invocationId=item.call_id,
-                    agent_reaction="speaks",
+                    # a result that wants no reply is recorded without speech
+                    agent_reaction="speaks" if item.reply_required else "listens",
                 )
 
                 if getattr(item, "is_error", False):
@@ -490,7 +514,11 @@ class RealtimeSession(
             logger.warning(
                 "generate_reply called while another generation is pending, cancelling previous."
             )
-            self._pending_generation_fut.cancel("Superseded by new generate_reply call")
+            # clear the slot before cancelling so the done callback doesn't treat it
+            # as an external cancellation and signal the server.
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by new generate_reply call")
 
         # Record epoch for server-event gating
         self._pending_generation_epoch = time.perf_counter()
@@ -522,9 +550,87 @@ class RealtimeSession(
                     self._pending_generation_epoch = None
 
         timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: timeout_handle.cancel())
+
+        def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            timeout_handle.cancel()
+            is_current = self._pending_generation_fut is fut
+            if is_current:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if f.cancelled() and is_current:
+                # external cancel: send a deferred barge-in so Ultravox does not
+                # produce a response (or interrupts one already in progress).
+                self._send_client_event(
+                    UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+                )
+
+        fut.add_done_callback(_on_fut_done)
 
         return fut
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Speak verbatim text via Ultravox ``ForcedAgentMessage``.
+
+        The server speaks the exact text without LLM processing and enforces
+        ``uninterruptible: true`` so user speech cannot barge in.
+        """
+        if self._pending_generation_fut and not self._pending_generation_fut.done():
+            old_fut = self._pending_generation_fut
+            self._pending_generation_fut = None
+            old_fut.cancel("Superseded by say()")
+
+        fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        self._pending_generation_fut = fut
+        # Without this, a leftover timestamp from the generation we just superseded would let say() resolve before its text goes out.
+        self._pending_generation_epoch = None
+
+        task = asyncio.create_task(self._say_task(text, fut), name="ultravox-say")
+        self._say_tasks.add(task)
+        task.add_done_callback(self._say_tasks.discard)
+        return fut
+
+    async def _say_task(
+        self,
+        text: str | AsyncIterable[str],
+        fut: asyncio.Future[llm.GenerationCreatedEvent],
+    ) -> None:
+        """Collect the text, send the ForcedAgentMessage, then wait for the response."""
+        try:
+            collected = text if isinstance(text, str) else "".join([c async for c in text])
+            # Superseded or cancelled while draining? Never speak stale (and uninterruptible) text.
+            if self._pending_generation_fut is not fut or fut.cancelled():
+                return
+            self._pending_generation_epoch = time.perf_counter()
+            self._send_forced_agent_message(collected)
+        except Exception as exc:
+            if self._pending_generation_fut is fut:
+                self._pending_generation_fut = None
+                self._pending_generation_epoch = None
+            if not fut.done():
+                fut.set_exception(exc)
+            return
+
+        done, _ = await asyncio.wait({fut}, timeout=5.0)
+        is_current = self._pending_generation_fut is fut
+        if is_current:
+            self._pending_generation_fut = None
+            self._pending_generation_epoch = None
+        if not done:
+            if not fut.done():
+                fut.set_exception(
+                    llm.RealtimeError("say() timed out waiting for generation_created event.")
+                )
+        elif fut.cancelled() and is_current:
+            # The message was sent and then cancelled: barge in so Ultravox stops.
+            self._send_client_event(
+                UserTextMessageEvent(text="", urgency="immediate", defer_response=True)
+            )
+
+    def _send_forced_agent_message(self, text: str) -> None:
+        self._send_client_event(ForcedAgentMessageEvent(content=text, uninterruptible=True))
 
     def interrupt(self) -> None:
         """Interrupt the current generation."""
@@ -560,6 +666,9 @@ class RealtimeSession(
         self._closed = True
         self._msg_ch.close()
         self._session_should_close.set()
+
+        if self._say_tasks:
+            await utils.aio.cancel_and_wait(*self._say_tasks)
 
         await utils.aio.cancel_and_wait(self._main_atask)
 
@@ -604,7 +713,6 @@ class RealtimeSession(
                 payload: dict[str, Any] = {
                     "systemPrompt": self._realtime_model._opts.system_prompt,
                     "model": self._realtime_model._opts.model_id,
-                    "voice": self._realtime_model._opts.voice,
                     "medium": {
                         "serverWebSocket": {
                             "inputSampleRate": self._realtime_model._opts.input_sample_rate,
@@ -614,6 +722,11 @@ class RealtimeSession(
                     },
                     "selectedTools": parse_tools(list(self._tools.function_tools.values())),
                 }
+
+                if is_given(self._realtime_model._opts.external_voice):
+                    payload["externalVoice"] = self._realtime_model._opts.external_voice
+                else:
+                    payload["voice"] = self._realtime_model._opts.voice
 
                 # Add optional parameters only if specified
                 if is_given(self._realtime_model._opts.temperature):
@@ -733,13 +846,13 @@ class RealtimeSession(
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.debug(f">>> {msg_dict}")
+                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
                 else:
                     msg_dict = msg.model_dump(by_alias=True, exclude_none=True, mode="json")
                     self.emit("ultravox_client_event_queued", msg_dict)
                     await ws_conn.send_str(json.dumps(msg_dict))
                     if lk_ultravox_debug:
-                        logger.debug(f">>> {msg_dict}")
+                        logger.debug(">>>", extra={"lk.pii.event": msg_dict})
             except Exception as e:
                 logger.error(f"Error sending message: {e}", exc_info=True)
                 break
@@ -762,7 +875,7 @@ class RealtimeSession(
                     data = json.loads(msg.data)
                     self.emit("ultravox_server_event_received", data)
                     if lk_ultravox_debug:
-                        logger.debug(f"<<< {data}")
+                        logger.debug("<<<", extra={"lk.pii.event": data})
                     event = parse_ultravox_event(data)
                     self._handle_ultravox_event(event)
 
@@ -865,7 +978,7 @@ class RealtimeSession(
         elif isinstance(event, DebugEvent):
             self._handle_debug_event(event)
         else:
-            logger.warning(f"Unhandled Ultravox event: {event}")
+            logger.warning("Unhandled Ultravox event", extra={"lk.pii.event": event})
 
     def _handle_transcript_event(self, event: TranscriptEvent) -> None:
         """Handle transcript events from Ultravox."""
@@ -1109,7 +1222,7 @@ class RealtimeSession(
     def _handle_debug_event(self, event: DebugEvent) -> None:
         """Handle debug events from Ultravox."""
         if lk_ultravox_debug:
-            logger.debug(f"[ultravox] Debug: {event.message}")
+            logger.debug("[ultravox] Debug", extra={"lk.pii.message": event.message})
 
     def _handle_audio_data(self, audio_data: bytes) -> None:
         """Handle binary audio data from Ultravox."""
@@ -1170,7 +1283,9 @@ class RealtimeSession(
             preview = (
                 (result[:200] + "...") if isinstance(result, str) and len(result) > 200 else result
             )
-            logger.debug(f"[ultravox] send_tool_result: call_id={call_id} preview={preview!r}")
+            logger.debug(
+                f"[ultravox] send_tool_result: call_id={call_id}", extra={"lk.pii.result": preview}
+            )
 
         event = ClientToolResultEvent(
             invocationId=call_id,

@@ -8,7 +8,11 @@ from typing import Any, Literal
 from livekit.agents import llm
 from livekit.agents.log import logger
 
-from .utils import convert_mid_conversation_instructions, group_tool_calls
+from .utils import (
+    convert_mid_conversation_instructions,
+    group_tool_calls,
+    parse_tool_call_arguments,
+)
 
 
 @dataclass
@@ -30,7 +34,7 @@ def to_chat_ctx(
     parts: list[dict] = []
 
     for msg in itertools.chain(*(group.flatten() for group in group_tool_calls(chat_ctx))):
-        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
             system_messages.append(text)
             continue
 
@@ -51,18 +55,21 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for content in msg.content:
-                if content and isinstance(content, str):
-                    parts.append({"text": content})
+                if isinstance(content, llm.ImageContent):
+                    parts.append(_to_image_part(content))
+                elif isinstance(content, llm.AudioContent):
+                    pass
                 elif content and isinstance(content, dict):
                     parts.append({"text": json.dumps(content)})
-                elif isinstance(content, llm.ImageContent):
-                    parts.append(_to_image_part(content))
+                elif content:
+                    # str or Instructions
+                    parts.append({"text": str(content)})
         elif msg.type == "function_call":
             fc_part: dict[str, Any] = {
                 "function_call": {
                     "id": msg.call_id,
                     "name": msg.name,
-                    "args": json.loads(msg.arguments or "{}"),
+                    "args": parse_tool_call_arguments(msg),
                 }
             }
             # Inject thought_signature if available (Gemini 3 multi-turn function calling)
@@ -121,6 +128,7 @@ def to_fnc_ctx(
     tool_ctx: llm.ToolContext,
     *,
     tool_behavior: TOOL_BEHAVIOR | None = None,
+    use_parameters_json_schema: bool = True,
 ) -> list[dict[str, Any]]:
     tools: list[dict[str, Any]] = []
     for tool in tool_ctx.function_tools.values():
@@ -129,8 +137,18 @@ def to_fnc_ctx(
             schema = {
                 "name": info.name,
                 "description": info.raw_schema.get("description", ""),
-                "parameters_json_schema": info.raw_schema.get("parameters", {}),
             }
+            if use_parameters_json_schema:
+                schema["parameters_json_schema"] = info.raw_schema.get("parameters", {})
+            else:
+                # Gemini Live doesn't support parameters_json_schema, use the simplified JSON Schema instead
+                # see: https://github.com/googleapis/python-genai/issues/1147
+                from livekit.plugins.google.utils import _GeminiJsonSchema
+
+                schema["parameters"] = (
+                    _GeminiJsonSchema(info.raw_schema.get("parameters", {})).simplify() or None
+                )
+
             if tool_behavior is not None:
                 schema["behavior"] = tool_behavior
             tools.append(schema)

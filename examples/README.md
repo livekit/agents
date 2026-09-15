@@ -1,5 +1,7 @@
 # LiveKit Agents Examples
 
+> **Looking for examples and guides?** Most examples now live in the [LiveKit docs](https://docs.livekit.io/agents/). Browse the full collection of runnable examples and recipes on the [Recipes page](https://docs.livekit.io/reference/recipes).
+
 This directory contains various examples demonstrating different capabilities and use cases for LiveKit agents. Each example showcases specific features, integrations, or workflows that can be built with the LiveKit Agents framework.
 
 ## Model Configuration
@@ -11,7 +13,7 @@ from livekit.agents import inference
 
 session = AgentSession(
     stt=inference.STT("deepgram/nova-3"),
-    llm=inference.LLM("openai/gpt-4.1-mini"),
+    llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
     tts=inference.TTS("cartesia/sonic-3"),
 )
 ```
@@ -20,21 +22,27 @@ session = AgentSession(
 
 ## 📁 Example Categories
 
+### 🏠 [Homepage](./homepage/)
+
+A product knowledge agent demonstrating progressive disclosure with a Markdown-backed
+knowledge base, generated tool schemas, centralized prompt templates, session behaviors,
+streaming TTS filters, and a split unit/eval test suite.
+
 ### 🎙️ [Voice Agents](./voice_agents/)
 
-A comprehensive collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, and advanced features like multi-agent workflows and push-to-talk agents.
-
-### 🖼️ [Avatar Agents](./avatar_agents/)
-
-Examples showing how to integrate visual avatars with voice agents, including integrations with various avatar providers like Anam, Avatario, Bey, BitHuman, Hedra, Simli, and Tavus.
+A collection of voice-based agent examples, including basic voice interactions, tool integrations, RAG implementations, real-time models, and tracing.
 
 ### 🔄 [Warm Transfer](./warm-transfer/)
 
 Demonstrates supervisor escalation workflows for call centers, showing how to implement warm transfers where agents can brief supervisors before connecting them to customers.
 
-### 🚗 [Drive-Thru](./drive-thru/)
+### 🚗 [Drive-Thru](./drive_thru/)
 
 A complete drive-thru ordering system example that showcases interactive voice agents for food ordering with database integration and order management.
+
+### 🎭 [Expressive Agent](./expressive_agent/)
+
+A free-form companion agent running Expressive Mode. Tell it good news or bad news and hear the delivery change: emotion, pacing, and non-verbal sounds, all chosen from context.
 
 ### 🏢 [Front Desk](./frontdesk/)
 
@@ -54,7 +62,7 @@ To run the examples, you'll need:
 
 - A [LiveKit Cloud](https://cloud.livekit.io) account or a local [LiveKit server](https://github.com/livekit/livekit)
 - API keys for the model providers you want to use in a `.env` file
-- Python 3.9 or higher
+- Python 3.10 or higher
 - [uv](https://docs.astral.sh/uv/)
 
 ### Environment file
@@ -91,6 +99,20 @@ uv run examples/voice_agents/basic_agent.py console
 ```
 
 Your agent is now running in the console.
+
+### Taking an example with you
+
+Each example directory stands on its own: copy it anywhere, and
+
+```bash
+uv sync
+uv run agent.py console
+```
+
+installs from PyPI without the rest of the repo. `lk agent deploy .` works the
+same way, off the `Dockerfile` in the directory. Inside this repo the same
+directories are uv workspace members, so they run against your local SDK
+changes instead.
 
 For frontend support, use the [Agents playground](https://agents-playground.livekit.io) or the [starter apps](https://docs.livekit.io/agents/start/frontend/#starter-apps).
 

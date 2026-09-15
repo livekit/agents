@@ -44,8 +44,9 @@ NoiseCancellationSelector: TypeAlias = Callable[
 
 
 async def _default_text_input_cb(sess: AgentSession, ev: TextInputEvent) -> None:
-    await sess.interrupt()
-    sess.generate_reply(user_input=ev.text)
+    async with sess._claim_user_turn():
+        await sess.interrupt()
+        sess.generate_reply(user_input=ev.text)
 
 
 @dataclass
@@ -65,8 +66,10 @@ class AudioInputOptions:
         | rtc.FrameProcessor[rtc.AudioFrame]
         | None
     ) = None
-    auto_gain_control: bool = True
-    """Enable automatic gain control (AGC) on the input audio. Enabled by default."""
+    auto_gain_control: NotGivenOr[bool] = NOT_GIVEN
+    """Enable automatic gain control (AGC) on the input audio.
+    If not given, disabled when noise cancellation is configured directly.
+    Set explicitly when using a noise cancellation selector."""
     pre_connect_audio: bool = True
     """Pre-connect audio enabled or not."""
     pre_connect_audio_timeout: float = 3.0
@@ -99,6 +102,8 @@ class TextOutputOptions:
     Only effective if `sync_transcription` is True."""
     next_in_chain: TextOutput | None = None
     """The next text output in the chain for the agent. If provided, the agent's transcription will be passed to it."""
+    json_format: bool = False
+    """Send the transcription as JSON dict for each chunk, including start and end timestamps if it's a TimedString."""
 
 
 @dataclass

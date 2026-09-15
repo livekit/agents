@@ -14,10 +14,9 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
-from typing_extensions import Self
+from typing_extensions import Self, TypedDict
 
 from ..log import logger
-from .tool_context import Toolset
 
 try:
     import httpx
@@ -34,9 +33,14 @@ except ImportError as e:
     ) from e
 
 
+from ..voice.events import RunContext
+from .async_toolset import AsyncToolset
 from .tool_context import (
+    DuplicateMode,
+    DuplicateScope,
     RawFunctionTool,
     ToolError,
+    ToolFlag,
     function_tool,
     get_function_info,
     get_raw_function_info,
@@ -45,6 +49,38 @@ from .tool_context import (
 )
 
 MCPTool = RawFunctionTool
+
+
+class MCPToolOptions(TypedDict, total=False):
+    """Per-tool behavior for MCP tools exposed by an :class:`MCPToolset`."""
+
+    flags: ToolFlag
+    """Flags passed to the @function_tool decorator, e.g. ToolFlag.CANCELLABLE."""
+
+    on_duplicate: DuplicateMode
+    """Behavior when a tool is called multiple times in the same context."""
+
+    duplicate_scope: DuplicateScope
+    """What counts as a duplicate, e.g. ``"name_and_args"`` to compare arguments too."""
+
+    report_progress: bool
+    """Whether to forward the tool's progress notifications to ctx.update()."""
+
+
+# default for tools not listed in tool_options
+_DEFAULT_TOOL_OPTIONS: MCPToolOptions = {
+    "flags": ToolFlag.NONE,
+    "on_duplicate": "allow",
+    "duplicate_scope": "name",
+    "report_progress": False,
+}
+
+
+def _resolve_tool_options(config: MCPToolOptions | None = None) -> MCPToolOptions:
+    """Fill in defaults for missing keys."""
+    if config is None:
+        return MCPToolOptions(**_DEFAULT_TOOL_OPTIONS)
+    return MCPToolOptions(**{**_DEFAULT_TOOL_OPTIONS, **config})
 
 
 @dataclass
@@ -86,7 +122,7 @@ class MCPServer(ABC):
         )
 
         self._cache_dirty = True
-        self._lk_tools: list[MCPTool] | None = None
+        self._raw_tools: list[mcp.types.Tool] | None = None
 
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
@@ -137,25 +173,35 @@ class MCPServer(ABC):
                 raise
         finally:
             self._client = None
-            self._lk_tools = None
+            self._raw_tools = None
             self._closing_ev.clear()
 
-    async def list_tools(self) -> list[MCPTool]:
+    async def _list_raw_tools(self) -> list[mcp.types.Tool]:
         if self._client is None:
             raise RuntimeError("MCPServer isn't initialized")
 
-        if not self._cache_dirty and self._lk_tools is not None:
-            return self._lk_tools
+        if not self._cache_dirty and self._raw_tools is not None:
+            return self._raw_tools
 
-        tools = await self._client.list_tools()
-        lk_tools = [
-            self._make_function_tool(tool.name, tool.description, tool.inputSchema, tool.meta)
-            for tool in tools.tools
-        ]
-
-        self._lk_tools = lk_tools
+        result = await self._client.list_tools()
+        self._raw_tools = result.tools
         self._cache_dirty = False
-        return lk_tools
+        return self._raw_tools
+
+    async def list_tools(
+        self, *, tool_options: dict[str, MCPToolOptions] | None = None
+    ) -> list[MCPTool]:
+        options = tool_options or {}
+        return [
+            self._make_function_tool(
+                tool.name,
+                tool.description,
+                tool.inputSchema,
+                tool.meta,
+                options=_resolve_tool_options(options.get(tool.name)),
+            )
+            for tool in await self._list_raw_tools()
+        ]
 
     def _make_function_tool(
         self,
@@ -163,17 +209,12 @@ class MCPServer(ABC):
         description: str | None,
         input_schema: dict[str, Any],
         meta: dict[str, Any] | None,
+        *,
+        options: MCPToolOptions,
     ) -> MCPTool:
-        async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
-            # In case (somehow), the tool is called after the MCPServer aclose.
-            if self._client is None:
-                raise ToolError(
-                    "Tool invocation failed: internal service is unavailable. "
-                    "Please check that the MCPServer is still running."
-                )
-
-            tool_result = await self._client.call_tool(name, raw_arguments)
-
+        async def _resolve(
+            tool_result: mcp.types.CallToolResult, raw_arguments: dict[str, Any]
+        ) -> Any:
             if tool_result.isError:
                 error_str = "\n".join(
                     part.text if hasattr(part, "text") else str(part)
@@ -187,6 +228,54 @@ class MCPServer(ABC):
                 resolved = await resolved
             return resolved
 
+        if options["report_progress"]:
+            # forward MCP progress as ctx.update(); the first update frees the reply loop
+            async def _tool_called_nonblocking(
+                ctx: RunContext, raw_arguments: dict[str, Any]
+            ) -> Any:
+                if self._client is None:
+                    raise ToolError(
+                        "Tool invocation failed: internal service is unavailable. "
+                        "Please check that the MCPServer is still running."
+                    )
+
+                async def _on_progress(
+                    progress: float, total: float | None, message: str | None
+                ) -> None:
+                    if not message:
+                        return
+                    logger.debug(
+                        "MCPTool progress",
+                        extra={
+                            "tool_name": name,
+                            "progress": progress,
+                            "total": total,
+                            "lk.pii.progress_message": message,
+                        },
+                    )
+                    await ctx.update(message)
+
+                tool_result = await self._client.call_tool(
+                    name, raw_arguments, progress_callback=_on_progress
+                )
+                return await _resolve(tool_result, raw_arguments)
+
+            impl: Callable[..., Awaitable[Any]] = _tool_called_nonblocking
+        else:
+
+            async def _tool_called(raw_arguments: dict[str, Any]) -> Any:
+                # in case the tool is called after the MCPServer aclose.
+                if self._client is None:
+                    raise ToolError(
+                        "Tool invocation failed: internal service is unavailable. "
+                        "Please check that the MCPServer is still running."
+                    )
+
+                tool_result = await self._client.call_tool(name, raw_arguments)
+                return await _resolve(tool_result, raw_arguments)
+
+            impl = _tool_called
+
         raw_schema = {
             "name": name,
             "description": description,
@@ -195,7 +284,13 @@ class MCPServer(ABC):
         if meta:
             raw_schema["meta"] = meta
 
-        return function_tool(_tool_called, raw_schema=raw_schema)
+        return function_tool(
+            impl,
+            raw_schema=raw_schema,
+            flags=options["flags"],
+            on_duplicate=options["on_duplicate"],
+            duplicate_scope=options["duplicate_scope"],
+        )
 
     async def aclose(self) -> None:
         self._closing_ev.set()
@@ -262,7 +357,7 @@ class MCPServerHTTP(MCPServer):
             tool_result_resolver=tool_result_resolver,
         )
         self.url = url
-        self.headers = headers
+        self._headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
         self._allowed_tools = set(allowed_tools) if allowed_tools else None
@@ -277,6 +372,37 @@ class MCPServerHTTP(MCPServer):
         else:
             # Fall back to URL-based detection for backward compatibility
             self._use_streamable_http = self._should_use_streamable_http(url)
+
+        self._http_client: httpx.AsyncClient | None = None
+
+    @property
+    def headers(self) -> dict[str, Any]:
+        return self._headers
+
+    @headers.setter
+    def headers(self, headers: dict[str, Any]) -> None:
+        self._headers = headers
+        if self._http_client is not None:
+            self._http_client.headers = headers
+
+    def _create_http_client(
+        self,
+        headers: dict[str, Any] | None = None,
+        timeout: httpx.Timeout | None = None,
+        auth: httpx.Auth | None = None,
+    ) -> httpx.AsyncClient:
+        # ported from mcp.shared._httpx_utils.create_mcp_http_client
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "timeout": timeout
+            if timeout is not None
+            else httpx.Timeout(self._timeout, read=self._sse_read_timeout),
+            "headers": headers if headers is not None else self._headers,
+        }
+        if auth is not None:
+            kwargs["auth"] = auth
+        self._http_client = httpx.AsyncClient(**kwargs)
+        return self._http_client
 
     def _should_use_streamable_http(self, url: str) -> bool:
         """
@@ -306,10 +432,7 @@ class MCPServerHTTP(MCPServer):
 
             @asynccontextmanager
             async def _streamable_http_with_client():  # type: ignore[no-untyped-def]
-                async with httpx.AsyncClient(
-                    headers=self.headers or {},
-                    timeout=httpx.Timeout(self._timeout, read=self._sse_read_timeout),
-                ) as http_client:
+                async with self._create_http_client() as http_client:
                     async with streamable_http_client(
                         url=self.url, http_client=http_client
                     ) as streams:
@@ -319,16 +442,19 @@ class MCPServerHTTP(MCPServer):
         else:
             return sse_client(  # type: ignore[no-any-return]
                 url=self.url,
-                headers=self.headers,
+                headers=self._headers,
                 timeout=self._timeout,
                 sse_read_timeout=self._sse_read_timeout,
+                httpx_client_factory=self._create_http_client,
             )
 
-    async def list_tools(self) -> list[MCPTool]:
+    async def list_tools(
+        self, *, tool_options: dict[str, MCPToolOptions] | None = None
+    ) -> list[MCPTool]:
         """
         List tools from the MCP server, filtered by allowed_tools if specified.
         """
-        all_tools = await super().list_tools()
+        all_tools = await super().list_tools(tool_options=tool_options)
 
         # If no filter is set, return all tools
         if self._allowed_tools is None:
@@ -402,17 +528,37 @@ class MCPServerStdio(MCPServer):
         return f"MCPServerStdio(command={self.command}, args={self.args}, cwd={self.cwd})"
 
 
-class MCPToolset(Toolset):
+class MCPToolset(AsyncToolset):
     """A toolset that exposes tools from a Model Context Protocol (MCP) server.
 
-    MCPToolset wraps an ``MCPServer`` instance and makes its tools available for
-    use by an ``Agent``. On ``setup()``, it connects to the MCP server (if not
-    already connected), fetches the available tools, and caches them locally.
+    Wraps an ``MCPServer`` and makes its tools available to an ``Agent``; ``setup()``
+    connects to the server and fetches the tools. Per-tool behavior is set with
+    :class:`MCPToolOptions` via ``tool_options`` (keyed by tool name); unlisted tools
+    are plain blocking calls.
+
+    Example::
+
+        MCPToolset(
+            id="mcp",
+            mcp_server=MCPServerHTTP(url="...", client_session_timeout_seconds=120),
+            tool_options={
+                "book_flight": MCPToolOptions(
+                    flags=ToolFlag.CANCELLABLE, on_duplicate="confirm", report_progress=True
+                ),
+            },
+        )
     """
 
-    def __init__(self, *, id: str, mcp_server: MCPServer) -> None:
+    def __init__(
+        self,
+        *,
+        id: str,
+        mcp_server: MCPServer,
+        tool_options: dict[str, MCPToolOptions] | None = None,
+    ) -> None:
         super().__init__(id=id)
         self._mcp_server = mcp_server
+        self._tool_options = dict(tool_options or {})
         self._initialized = False
         self._lock = asyncio.Lock()
 
@@ -437,8 +583,8 @@ class MCPToolset(Toolset):
             elif reload:
                 self._mcp_server.invalidate_cache()
 
-            tools = await self._mcp_server.list_tools()
-            self._tools = tools
+            tools = await self._mcp_server.list_tools(tool_options=self._tool_options)
+            self._tools = list(tools)
             self._initialized = True
             return self
 

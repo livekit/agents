@@ -17,7 +17,15 @@
 See https://docs.livekit.io/agents/integrations/avatar/bithuman/ for more information.
 """
 
-from .avatar import AvatarSession, BitHumanException
+from .log import print_unsupported_python
+
+try:
+    # outside 3.11-3.13 the third-party packages avatar.py reaches through bithuman are gone too
+    from .avatar import AvatarSession, BitHumanException
+except ImportError:
+    print_unsupported_python()
+    raise
+
 from .version import __version__
 
 __all__ = [

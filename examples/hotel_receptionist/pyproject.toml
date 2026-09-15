@@ -1,0 +1,19 @@
+[project]
+name = "livekit-example-hotel-receptionist"
+version = "0"
+requires-python = ">=3.10"
+dependencies = [
+    "livekit-agents>=1.6.0",
+    "livekit-plugins-silero>=1.6.0",
+    "livekit-plugins-turn-detector>=1.6.0",
+    "python-dotenv>=1.0.0",
+    "apsw>=3.46",
+    "tzdata>=2024.1",
+]
+
+[tool.uv]
+# an example is a script collection, not an installable distribution
+package = false
+# No [tool.uv.sources] here: the workspace root repoints the livekit-* deps at
+# the in-repo copies for members, and staying free of workspace-only references
+# is what lets a copy of this directory resolve on its own, outside the repo.

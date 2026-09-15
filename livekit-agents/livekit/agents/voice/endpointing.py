@@ -36,7 +36,7 @@ class BaseEndpointing:
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
         self._overlapping = overlapping
 
-    def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
+    def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
         self._overlapping = False
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
@@ -52,11 +52,12 @@ class DynamicEndpointing(BaseEndpointing):
         Dynamically adjust the endpointing delay based on the speech activity.
 
         Args:
-            min_delay: Minimum delay in seconds.
-            max_delay: Maximum delay in seconds.
+            min_delay: Minimum delay in seconds (the learned floor).
+            max_delay: Maximum delay in seconds (a fixed ceiling).
             alpha: Exponential moving average coefficient. The higher the value, the more weight is given to the history. Defaults to 0.9.
 
-        The endpointing delay is adjusted based on the following information:
+        ``min_delay`` is learned from the user's pausing behavior so we don't cut
+        off a user who pauses mid-turn. It adapts from the following pauses:
 
         1. Pauses between utterances:
 
@@ -67,39 +68,30 @@ class DynamicEndpointing(BaseEndpointing):
         [utterance] [   pause   ] [immediate interruption] (<- this should be a false EOT, and min delay should cover this)
                         [agent speech interrupted]
 
-        3. Pauses between a user utterance and agent speech:
-
-        [utterance] [pause]                  (<- max delay should cover this)
-                           [agent speech]    (this could be interrupted later, but that would be the next turn)
-        """
+        ``max_delay`` is a fixed ceiling, not learned. There is no natural "lower" max_delay to observe
+        in a session. It only clamps the learned ``min_delay`` from above."""
 
         super().__init__(min_delay=min_delay, max_delay=max_delay)
 
         self._utterance_pause = ExpFilter(
             alpha=alpha, initial=min_delay, min_val=min_delay, max_val=max_delay
         )
-        self._turn_pause = ExpFilter(
-            alpha=alpha, initial=max_delay, min_val=min_delay, max_val=max_delay
-        )
 
         self._utterance_started_at: float | None = None
         self._utterance_ended_at: float | None = None
         self._agent_speech_started_at: float | None = None
         self._agent_speech_ended_at: float | None = None
+        self._agent_speaking = False
         self._speaking = False
 
     @property
     def min_delay(self) -> float:
-        return (
+        return min(
             self._utterance_pause.value
             if self._utterance_pause.value is not None
-            else self._min_delay
+            else self._min_delay,
+            self.max_delay,
         )
-
-    @property
-    def max_delay(self) -> float:
-        turn_val = self._turn_pause.value if self._turn_pause.value is not None else self._max_delay
-        return max(turn_val, self.min_delay)
 
     @property
     def between_utterance_delay(self) -> float:
@@ -137,19 +129,33 @@ class DynamicEndpointing(BaseEndpointing):
         )
 
     def on_start_of_agent_speech(self, started_at: float) -> None:
+        # Agent speech started before the current user utterance ended, so the stored
+        # end still belongs to the previous utterance. Move it just before agent speech
+        # to exclude this overlap from dynamic endpointing statistics.
+        if (
+            not self._agent_speaking
+            and self._speaking
+            and self._utterance_started_at is not None
+            and self._utterance_ended_at is not None
+            and self._utterance_ended_at < self._utterance_started_at
+        ):
+            self._utterance_ended_at = started_at - 1e-3
+            logger.trace(
+                "utterance ended at adjusted: %s",
+                self._utterance_ended_at,
+            )
+
         self._agent_speech_started_at = started_at
         self._agent_speech_ended_at = None
-        self._overlapping = False
+        self._agent_speaking = True
+        self._overlapping = self._speaking
 
     def on_end_of_agent_speech(self, ended_at: float) -> None:
-        # NOTE: intentionally keep _agent_speech_started_at so that
-        # between_turn_delay can be computed in the normal end-of-speech path
-        # NOTE: we also guard against duplicate calls from pipeline reply and pipeline reply done
-        if self._agent_speech_started_at is not None and (
-            self._agent_speech_ended_at is None
-            or self._agent_speech_ended_at < self._agent_speech_started_at
-        ):
+        # Keep the agent speech timestamps until the next user utterance ends so
+        # the pause across an agent turn is not learned as an intra-user pause.
+        if self._agent_speaking:
             self._agent_speech_ended_at = ended_at
+        self._agent_speaking = False
         self._overlapping = False
 
     def on_start_of_speech(self, started_at: float, overlapping: bool = False) -> None:
@@ -157,29 +163,14 @@ class DynamicEndpointing(BaseEndpointing):
             # duplicate calls from _interrupt_by_audio_activity and on_start_of_speech
             return
 
-        # VAD interrupt by audio activity is triggered before end of speech is detected
-        # adjust the utterance ended time to be just before the agent speech started
-        if (
-            self._utterance_started_at is not None
-            and self._utterance_ended_at is not None
-            and self._agent_speech_started_at is not None
-            and self._utterance_ended_at < self._utterance_started_at
-            and overlapping
-        ):
-            self._utterance_ended_at = self._agent_speech_started_at - 1e-3
-            logger.trace(
-                "utterance ended at adjusted: %s",
-                self._utterance_ended_at,
-            )
-
         self._utterance_started_at = started_at
         self._overlapping = overlapping
         self._speaking = True
 
-    def on_end_of_speech(self, ended_at: float, should_ignore: bool = False) -> None:
-        if should_ignore and self._overlapping:
+    def on_end_of_speech(self, ended_at: float, interruption: NotGivenOr[bool] = NOT_GIVEN) -> None:
+        if is_given(interruption) and not interruption and self._overlapping:
             # If user speech started within _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD of agent speech,
-            # don't ignore — TTS leading silence can cause the agent speech timestamp
+            # don't skip — TTS leading silence can cause the agent speech timestamp
             # to precede actual audible audio, making this look like a backchannel
             # when it's really the user speaking before hearing the agent.
             if (
@@ -189,13 +180,14 @@ class DynamicEndpointing(BaseEndpointing):
                 < _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD
             ):
                 logger.trace(
-                    "ignoring should_ignore=True: user speech started within %.3fs of agent speech "
+                    "overriding non-interruption verdict: user speech started within %.3fs of "
+                    "agent speech "
                     "(within grace period of %.3fs)",
                     abs(self._utterance_started_at - self._agent_speech_started_at),
                     _AGENT_SPEECH_LEADING_SILENCE_GRACE_PERIOD,
                 )
             else:
-                # skip update because it might be a backchannel
+                # skip update for a confirmed non-interruption, such as a backchannel
                 self._overlapping = False
                 self._speaking = False
                 self._utterance_started_at = None
@@ -227,40 +219,10 @@ class DynamicEndpointing(BaseEndpointing):
                         "min_delay": self.min_delay,
                     },
                 )
-            # If this is not an immediate interruption, update the max delay (case 3)
-            elif (pause := self.between_turn_delay) > 0:
-                prev_val = self.max_delay
-                self._turn_pause.apply(1.0, pause)
-                logger.debug(
-                    "max endpointing delay updated: %s -> %s",
-                    prev_val,
-                    self.max_delay,
-                    extra={
-                        "reason": "new turn (interruption)",
-                        "pause": pause,
-                        "max_delay": self.max_delay,
-                        "min_delay": self.min_delay,
-                        "between_utterance_delay": self.between_utterance_delay,
-                        "between_turn_delay": self.between_turn_delay,
-                    },
-                )
 
-        else:  # this is a normal end of speech
-            if (pause := self.between_turn_delay) > 0:
-                prev_val = self.max_delay
-                self._turn_pause.apply(1.0, pause)
-                logger.debug(
-                    "max endpointing delay updated due to pause: %s -> %s",
-                    prev_val,
-                    self.max_delay,
-                    extra={
-                        "reason": "new turn",
-                        "pause": pause,
-                        "max_delay": self.max_delay,
-                        "min_delay": self.min_delay,
-                    },
-                )
-            elif (
+        else:
+            # Only learn an intra-user pause when no agent turn occurred between utterances.
+            if (
                 (pause := self.between_utterance_delay) > 0
                 and self._agent_speech_ended_at is None
                 and self._agent_speech_started_at is None
@@ -280,8 +242,10 @@ class DynamicEndpointing(BaseEndpointing):
                 )
 
         self._utterance_ended_at = ended_at
-        self._agent_speech_started_at = None
-        self._agent_speech_ended_at = None
+        # Preserve an active agent interval until its end is recorded.
+        if not self._agent_speaking:
+            self._agent_speech_started_at = None
+            self._agent_speech_ended_at = None
         self._speaking = False
         self._overlapping = False
 
@@ -290,16 +254,18 @@ class DynamicEndpointing(BaseEndpointing):
         *,
         min_delay: NotGivenOr[float] = NOT_GIVEN,
         max_delay: NotGivenOr[float] = NOT_GIVEN,
+        alpha: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(min_delay):
             self._min_delay = min_delay
             self._utterance_pause.reset(initial=self._min_delay, min_val=self._min_delay)
-            self._turn_pause.reset(min_val=self._min_delay)
 
         if is_given(max_delay):
             self._max_delay = max_delay
-            self._turn_pause.reset(initial=self._max_delay, max_val=self._max_delay)
             self._utterance_pause.reset(max_val=self._max_delay)
+
+        if is_given(alpha):
+            self._utterance_pause.reset(alpha=alpha)
 
 
 def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
@@ -308,6 +274,7 @@ def create_endpointing(options: EndpointingOptions) -> BaseEndpointing:
             return DynamicEndpointing(
                 min_delay=options["min_delay"],
                 max_delay=options["max_delay"],
+                alpha=options["alpha"],
             )
         case _:
             return BaseEndpointing(

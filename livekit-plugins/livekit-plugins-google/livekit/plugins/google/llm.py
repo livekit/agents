@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -42,12 +43,44 @@ from .version import __version__
 
 def _is_gemini_3_model(model: str) -> bool:
     """Check if model is Gemini 3 series"""
-    return "gemini-3" in model.lower() or model.lower().startswith("gemini-3")
+    return "gemini-3" in model.lower()
+
+
+def _is_gemma_4_model(model: str) -> bool:
+    """Check if model is Gemma 4 series"""
+    return "gemma-4-" in model.lower()
+
+
+def _supports_thinking_level(model: str) -> bool:
+    """Check if model configures thinking with a level instead of a token budget"""
+    return _is_gemini_3_model(model) or _is_gemma_4_model(model)
+
+
+def _function_calling_config(
+    tool_choice: NotGivenOr[ToolChoice], function_tools: Iterable[str]
+) -> types.FunctionCallingConfig | None:
+    """Map a LiveKit `tool_choice` to Gemini's FunctionCallingConfig (None if unset)."""
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=[tool_choice["function"]["name"]],
+        )
+    if tool_choice == "required":
+        return types.FunctionCallingConfig(
+            mode=types.FunctionCallingConfigMode.ANY,
+            allowed_function_names=list(function_tools) or None,
+        )
+    if tool_choice == "auto":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.AUTO)
+    if tool_choice == "none":
+        return types.FunctionCallingConfig(mode=types.FunctionCallingConfigMode.NONE)
+    return None
 
 
 def _is_gemini_3_flash_model(model: str) -> bool:
     """Check if model is Gemini 3 Flash"""
-    return "gemini-3-flash" in model.lower() or model.lower().startswith("gemini-3-flash")
+    m = model.lower()
+    return "gemini-3" in m and "flash" in m
 
 
 def _requires_thought_signatures(model: str) -> bool:
@@ -81,6 +114,9 @@ class _LLMOptions:
     http_options: NotGivenOr[types.HttpOptions]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
+    service_tier: NotGivenOr[types.ServiceTier]
+    cached_content: NotGivenOr[str]
+    media_resolution: NotGivenOr[types.MediaResolution]
 
 
 BLOCKED_REASONS = [
@@ -117,6 +153,9 @@ class LLM(llm.LLM):
         http_options: NotGivenOr[types.HttpOptions] = NOT_GIVEN,
         seed: NotGivenOr[int] = NOT_GIVEN,
         safety_settings: NotGivenOr[list[types.SafetySettingOrDict]] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
+        cached_content: NotGivenOr[str] = NOT_GIVEN,
+        media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
     ) -> None:
         """
@@ -148,6 +187,9 @@ class LLM(llm.LLM):
             http_options (HttpOptions, optional): The HTTP options to use for the session.
             seed (int, optional): Random seed for reproducible generation. Defaults to None.
             safety_settings (list[SafetySettingOrDict], optional): Safety settings for content filtering. Defaults to None.
+            service_tier (types.ServiceTier, optional): The service tier for the request (e.g. types.ServiceTier.PRIORITY). Defaults to None.
+            cached_content (str, optional): Resource name of an explicit context cache to attach to every request from this LLM instance, e.g. ``"cachedContents/abc123"`` for the Gemini API or ``"projects/<project>/locations/<location>/cachedContents/abc123"`` for VertexAI. The cache must already exist — create it via ``client.caches.create(...)`` and pass the returned ``name``. Gemini rejects ``generateContent`` requests that combine ``cached_content`` with ``system_instruction``, ``tools``, or ``tool_config``, so when this option is set the plugin bakes those fields out of every outgoing request; the cache resource itself must contain whichever of them the model needs (typically the system prompt and the tool schemas). Useful for long-lived static prefixes where implicit caching is unreliable. See https://ai.google.dev/gemini-api/docs/caching for details and minimum prefix-token requirements. Defaults to None.
+            media_resolution (types.MediaResolution, optional): The media resolution for the request. Defaults to None.
         """  # noqa: E501
         super().__init__()
         gcp_project = project if is_given(project) else os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -196,11 +238,25 @@ class LLM(llm.LLM):
                 _thinking_level = thinking_config.get("thinking_level")
             elif isinstance(thinking_config, types.ThinkingConfig):
                 _thinking_budget = thinking_config.thinking_budget
-                _thinking_level = getattr(thinking_config, "thinking_level", None)
+                _thinking_level = thinking_config.thinking_level
 
             if _thinking_budget is not None:
                 if not isinstance(_thinking_budget, int):
                     raise ValueError("thinking_budget inside thinking_config must be an integer")
+
+            # gemma 4 toggles thinking on and off with nothing in between, and answers any other
+            # level with 400 INVALID_ARGUMENT
+            # https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api
+            if (
+                _thinking_level is not None
+                and _is_gemma_4_model(model)
+                and _thinking_level.upper()
+                not in (types.ThinkingLevel.MINIMAL, types.ThinkingLevel.HIGH)
+            ):
+                raise ValueError(
+                    f"Model {model} only supports thinking_level 'minimal' (thinking off) "
+                    f"or 'high' (thinking on), got {_thinking_level!r}."
+                )
 
         self._opts = _LLMOptions(
             model=model,
@@ -220,6 +276,9 @@ class LLM(llm.LLM):
             http_options=http_options,
             seed=seed,
             safety_settings=safety_settings,
+            service_tier=service_tier,
+            cached_content=cached_content,
+            media_resolution=media_resolution,
         )
         self._client = Client(
             api_key=gemini_api_key,
@@ -230,6 +289,10 @@ class LLM(llm.LLM):
         )
         # Store thought_signatures for Gemini 2.5+ multi-turn function calling
         self._thought_signatures: dict[str, bytes] = {}
+
+    async def _prewarm_impl(self) -> None:
+        # also fetches auth tokens ahead of time on vertexai
+        await self._client.aio.models.list(config={"page_size": 1})
 
     @property
     def model(self) -> str:
@@ -261,57 +324,48 @@ class LLM(llm.LLM):
             extra.update(extra_kwargs)
 
         tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
-        retrieval_config = (
-            self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
-        )
-        if isinstance(retrieval_config, dict):
-            retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+        tool_ctx = llm.ToolContext(tools or [])
+        # Mixing built-in (provider) tools with function tools is only supported on the
+        # Gemini 3 Developer API (not Vertex).
+        # https://ai.google.dev/gemini-api/docs/tool-combination
+        is_gemini_3_api = _is_gemini_3_model(self._opts.model) and not self._client.vertexai
 
-        if is_given(tool_choice):
-            gemini_tool_choice: types.ToolConfig
-            if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=[tool_choice["function"]["name"]],
-                    ),
-                    retrieval_config=retrieval_config,
+        # cached_content may arrive from the constructor or via extra_kwargs; `_run()` keys
+        # off the merged request, so match it here.
+        using_cache = is_given(self._opts.cached_content) or "cached_content" in extra
+        if using_cache:
+            # tools/tool_config/system_instruction must be baked into the CachedContent
+            # resource, not sent on the request. Don't build them here, and drop any the
+            # caller passed directly via extra_kwargs.
+            dropped = [k for k in ("tools", "tool_config") if k in extra]
+            for key in dropped:
+                extra.pop(key, None)
+            if tool_ctx.function_tools or tool_ctx.provider_tools or dropped:
+                logger.warning(
+                    "gemini llm: ignoring tools; bake them into the CachedContent resource",
+                    extra={"model": self._opts.model},
                 )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "required":
-                tool_names = []
-                for tool in tools or []:
-                    if isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool)):
-                        tool_names.append(tool.info.name)
-
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.ANY,
-                        allowed_function_names=tool_names or None,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "auto":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.AUTO,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-            elif tool_choice == "none":
-                gemini_tool_choice = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode=types.FunctionCallingConfigMode.NONE,
-                    ),
-                    retrieval_config=retrieval_config,
-                )
-                extra["tool_config"] = gemini_tool_choice
-        elif retrieval_config:
-            extra["tool_config"] = types.ToolConfig(
-                retrieval_config=retrieval_config,
+        else:
+            retrieval_config = (
+                self._opts.retrieval_config if is_given(self._opts.retrieval_config) else None
             )
+            if isinstance(retrieval_config, dict):
+                retrieval_config = types.RetrievalConfig.model_validate(retrieval_config)
+
+            # create_tools_config is the single authority on whether built-in and function
+            # tools are actually combined; `mixed` gates the server-side invocation flag.
+            tools_config, mixed = create_tools_config(tool_ctx, allow_mixed_tools=is_gemini_3_api)
+            fcc = _function_calling_config(tool_choice, tool_ctx.function_tools)
+
+            if fcc is not None or retrieval_config or mixed:
+                extra["tool_config"] = types.ToolConfig(
+                    function_calling_config=fcc,
+                    retrieval_config=retrieval_config,
+                    include_server_side_tool_invocations=mixed or None,
+                )
+
+            if tools_config:
+                extra["tools"] = tools_config
 
         if is_given(response_format):
             extra["response_schema"] = to_response_format(response_format)
@@ -334,35 +388,35 @@ class LLM(llm.LLM):
 
         # Handle thinking_config based on model version
         if is_given(self._opts.thinking_config):
-            is_gemini_3 = _is_gemini_3_model(self._opts.model)
-            is_gemini_3_flash = _is_gemini_3_flash_model(self._opts.model)
             thinking_cfg = self._opts.thinking_config
 
-            # Extract both parameters
+            # Extract the parameters
             _budget = None
             _level: str | types.ThinkingLevel | None = None
+            _include_thoughts: bool | None = None
             if isinstance(thinking_cfg, dict):
                 _budget = thinking_cfg.get("thinking_budget")
                 _level = thinking_cfg.get("thinking_level")
+                _include_thoughts = thinking_cfg.get("include_thoughts")
             elif isinstance(thinking_cfg, types.ThinkingConfig):
                 _budget = thinking_cfg.thinking_budget
-                _level = getattr(thinking_cfg, "thinking_level", None)
+                _level = thinking_cfg.thinking_level
+                _include_thoughts = thinking_cfg.include_thoughts
 
-            if is_gemini_3:
-                # Gemini 3: only support thinking_level
+            if _supports_thinking_level(self._opts.model):
+                # Gemini 3 and Gemma 4 configure thinking with a level, not a token budget
                 if _budget is not None and _level is None:
                     logger.warning(
-                        f"Model {self._opts.model} is Gemini 3 which does not support thinking_budget. "
-                        "Please use thinking_level ('low' or 'high') instead. Ignoring thinking_budget."
+                        f"Model {self._opts.model} does not support thinking_budget. "
+                        "Please use thinking_level instead. Ignoring thinking_budget."
                     )
-                if _level is None:
-                    # If no thinking_level is provided, use the fastest thinking level
-                    if is_gemini_3_flash:
-                        _level = "minimal"
-                    else:
-                        _level = "low"
-                # Use thinking_level only (pass as dict since SDK may not have this field yet)
-                extra["thinking_config"] = {"thinking_level": _level}
+                if _level is None and _is_gemini_3_model(self._opts.model):
+                    # only default the level where the accepted levels are known
+                    _level = "minimal" if _is_gemini_3_flash_model(self._opts.model) else "low"
+                # the level passes through as given, checked against the model in __init__
+                extra["thinking_config"] = types.ThinkingConfig(
+                    thinking_level=_level, include_thoughts=_include_thoughts
+                )
 
             else:
                 # Gemini 2.5 and earlier: only support thinking_budget
@@ -384,6 +438,15 @@ class LLM(llm.LLM):
         if is_given(self._opts.safety_settings):
             extra["safety_settings"] = self._opts.safety_settings
 
+        if is_given(self._opts.service_tier):
+            extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.cached_content):
+            extra["cached_content"] = self._opts.cached_content
+
+        if is_given(self._opts.media_resolution):
+            extra["media_resolution"] = self._opts.media_resolution
+
         return LLMStream(
             self,
             client=self._client,
@@ -393,6 +456,15 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
         )
+
+    async def aclose(self) -> None:
+        """Close the LLM and release its GenAI HTTP clients."""
+        await super().aclose()
+
+        try:
+            await self._client.aio.aclose()
+        except Exception:
+            logger.warning("failed to close the genai client", exc_info=True)
 
 
 class LLMStream(llm.LLMStream):
@@ -428,21 +500,29 @@ class LLMStream(llm.LLMStream):
             )
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
-            tool_context = llm.ToolContext(self._tools)
-            tools_config = create_tools_config(tool_context, _only_single_type=True)
-            if tools_config:
-                self._extra_kwargs["tools"] = tools_config
-            http_options = self._llm._opts.http_options or types.HttpOptions(
-                timeout=int(self._conn_options.timeout * 1000)
-            )
-            if not http_options.headers:
-                http_options.headers = {}
-            http_options.headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            # Request shaping (tools/tool_config) is done in `chat()`. When a cache is
+            # attached, `system_instruction` must also live inside the CachedContent
+            # resource, so it's dropped from the outgoing request below.
+            using_cache = "cached_content" in self._extra_kwargs
+            if is_given(self._llm._opts.http_options):
+                http_options = self._llm._opts.http_options.model_copy()
+                if http_options.timeout is None:
+                    http_options.timeout = int(self._conn_options.timeout * 1000)
+            else:
+                http_options = types.HttpOptions(timeout=int(self._conn_options.timeout * 1000))
+
+            headers = dict(http_options.headers or {})
+            headers["x-goog-api-client"] = f"livekit-agents/{__version__}"
+            http_options.headers = headers
             config = types.GenerateContentConfig(
                 system_instruction=(
-                    [types.Part(text=content) for content in extra_data.system_messages]
-                    if extra_data.system_messages
-                    else None
+                    None
+                    if using_cache
+                    else (
+                        [types.Part(text=content) for content in extra_data.system_messages]
+                        if extra_data.system_messages
+                        else None
+                    )
                 ),
                 http_options=http_options,
                 **self._extra_kwargs,
@@ -502,8 +582,12 @@ class LLMStream(llm.LLMStream):
 
                 for part in candidate.content.parts:
                     chat_chunk = self._parse_part(request_id, part)
-                    response_generated = True
                     if chat_chunk is not None:
+                        # Only count parts that actually produce output. Thought
+                        # summaries (dropped in _parse_part) must not mark the
+                        # response as generated, otherwise a thought-only turn would
+                        # be treated as successful and skip the retry below.
+                        response_generated = True
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
@@ -574,6 +658,12 @@ class LLMStream(llm.LLMStream):
             return chat_chunk
 
         if not part.text:
+            return None
+
+        # Drop thought summaries: when include_thoughts is enabled Gemini streams its
+        # reasoning back as parts flagged part.thought=True. These must not reach
+        # ChoiceDelta.content, otherwise TTS would speak the model's internal reasoning.
+        if part.thought:
             return None
 
         return llm.ChatChunk(

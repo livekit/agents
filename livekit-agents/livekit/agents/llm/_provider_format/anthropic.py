@@ -7,7 +7,11 @@ from typing import Any
 
 from livekit.agents import llm
 
-from .utils import convert_mid_conversation_instructions, group_tool_calls
+from .utils import (
+    convert_mid_conversation_instructions,
+    group_tool_calls,
+    parse_tool_call_arguments,
+)
 
 
 @dataclass
@@ -33,7 +37,7 @@ def to_chat_ctx(
         chat_items.extend(group.flatten())
 
     for msg in chat_items:
-        if msg.type == "message" and msg.role == "system" and (text := msg.text_content):
+        if msg.type == "message" and msg.role == "system" and (text := msg.raw_text_content):
             system_messages.append(text)
             continue
 
@@ -52,17 +56,20 @@ def to_chat_ctx(
 
         if msg.type == "message":
             for c in msg.content:
-                if c and isinstance(c, str):
-                    content.append({"text": c, "type": "text"})
-                elif isinstance(c, llm.ImageContent):
+                if isinstance(c, llm.ImageContent):
                     content.append(_to_image_content(c))
+                elif isinstance(c, llm.AudioContent):
+                    pass
+                elif c:
+                    # str or Instructions
+                    content.append({"text": str(c), "type": "text"})
         elif msg.type == "function_call":
             content.append(
                 {
                     "id": msg.call_id,
                     "type": "tool_use",
                     "name": msg.name,
-                    "input": json.loads(msg.arguments or "{}"),
+                    "input": parse_tool_call_arguments(msg),
                 }
             )
         elif msg.type == "function_call_output":
@@ -98,7 +105,7 @@ def to_chat_ctx(
     # Claude 4.6+ does not support prefilling (trailing assistant messages).
     # Append a dummy user message so the request ends with a user turn.
     if inject_trailing_user_message and messages and messages[-1]["role"] == "assistant":
-        messages.append({"role": "user", "content": [{"text": " ", "type": "text"}]})
+        messages.append({"role": "user", "content": [{"text": ".", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
 

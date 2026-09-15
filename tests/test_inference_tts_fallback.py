@@ -7,6 +7,8 @@ from livekit.agents.inference.tts import (
     _parse_model_string,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _make_tts(**kwargs):
     """Helper to create TTS with required credentials."""
@@ -48,7 +50,7 @@ class TestParseModelString:
     @pytest.mark.parametrize(
         "model_str,expected_model,expected_voice",
         [
-            ("elevenlabs/eleven_flash_v2:voice123", "elevenlabs/eleven_flash_v2", "voice123"),
+            ("deepgram/aura-2:voice123", "deepgram/aura-2", "voice123"),
             ("rime:speaker-a", "rime", "speaker-a"),
             ("rime/mistv2:narrator", "rime/mistv2", "narrator"),
             ("inworld/inworld-tts-1:character", "inworld/inworld-tts-1", "character"),
@@ -87,43 +89,43 @@ class TestNormalizeFallback:
 
     def test_list_of_string_models(self):
         """List of string models becomes list of FallbackModels."""
-        result = _normalize_fallback(["cartesia/sonic", "elevenlabs/eleven_flash_v2"])
+        result = _normalize_fallback(["cartesia/sonic", "deepgram/aura-2"])
         assert result == [
             {"model": "cartesia/sonic", "voice": ""},
-            {"model": "elevenlabs/eleven_flash_v2", "voice": ""},
+            {"model": "deepgram/aura-2", "voice": ""},
         ]
 
     def test_list_of_string_models_with_voices(self):
         """List of string models with voice suffixes."""
-        result = _normalize_fallback(["cartesia/sonic:voice1", "elevenlabs:voice2"])
+        result = _normalize_fallback(["cartesia/sonic:voice1", "deepgram:voice2"])
         assert result == [
             {"model": "cartesia/sonic", "voice": "voice1"},
-            {"model": "elevenlabs", "voice": "voice2"},
+            {"model": "deepgram", "voice": "voice2"},
         ]
 
     def test_list_of_fallback_model_dicts(self):
         """List of FallbackModel dicts is preserved."""
         fallbacks = [
             FallbackModel(model="cartesia/sonic", voice="narrator"),
-            FallbackModel(model="elevenlabs", voice=""),
+            FallbackModel(model="deepgram", voice=""),
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
             {"model": "cartesia/sonic", "voice": "narrator"},
-            {"model": "elevenlabs", "voice": ""},
+            {"model": "deepgram", "voice": ""},
         ]
 
     def test_mixed_list_strings_and_dicts(self):
         """Mixed list of strings and FallbackModel dicts."""
         fallbacks = [
             "cartesia/sonic:voice1",
-            FallbackModel(model="elevenlabs/eleven_flash_v2", voice="custom"),
+            FallbackModel(model="deepgram/aura-2", voice="custom"),
             "rime/mist",
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
             {"model": "cartesia/sonic", "voice": "voice1"},
-            {"model": "elevenlabs/eleven_flash_v2", "voice": "custom"},
+            {"model": "deepgram/aura-2", "voice": "custom"},
             {"model": "rime/mist", "voice": ""},
         ]
 
@@ -147,13 +149,13 @@ class TestNormalizeFallback:
         """List with FallbackModels containing extra_kwargs."""
         fallbacks = [
             FallbackModel(model="cartesia/sonic", voice="v1", extra_kwargs={"speed": "slow"}),
-            "elevenlabs:voice2",
+            "deepgram:voice2",
             FallbackModel(model="rime/mist", voice="", extra_kwargs={"custom": True}),
         ]
         result = _normalize_fallback(fallbacks)
         assert result == [
             {"model": "cartesia/sonic", "voice": "v1", "extra_kwargs": {"speed": "slow"}},
-            {"model": "elevenlabs", "voice": "voice2"},
+            {"model": "deepgram", "voice": "voice2"},
             {"model": "rime/mist", "voice": "", "extra_kwargs": {"custom": True}},
         ]
 

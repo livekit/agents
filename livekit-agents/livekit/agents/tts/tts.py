@@ -6,7 +6,7 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
 
@@ -20,10 +20,17 @@ from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
 from ..telemetry import trace_types, tracer, utils as telemetry_utils
-from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    USERDATA_TIMED_TRANSCRIPT,
+    USERDATA_TTS_STARTED_TIME,
+    APIConnectOptions,
+)
 from ..utils import aio, audio, codecs, log_exceptions, shortuuid
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
+    from ..voice.agent_session import SpeechSteeringOptions
     from ..voice.io import TimedString
 
 lk_dump_tts = int(os.getenv("LK_DUMP_TTS", 0))
@@ -51,6 +58,14 @@ class TTSCapabilities:
     """Whether this TTS supports aligned transcripts with word timestamps"""
 
 
+@dataclass
+class MarkupInfo:
+    """What the expressive markup pipeline can do with a given voice."""
+
+    nonverbals: dict[str, list[str]] = field(default_factory=dict)
+    """``NonverbalOptions`` field -> the labels it governs; an absent field is a no-op"""
+
+
 class TTSError(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["tts_error"] = "tts_error"
@@ -68,6 +83,67 @@ class TTS(
     rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
     Generic[TEvent],
 ):
+    class Markup:
+        """Declares TTS markup capabilities for the expressive pipeline.
+
+        Plugins override this inner class to declare which markup dialect the TTS speaks:
+        what the LLM is taught to write, and how those markers are normalized and lowered
+        to the provider's native syntax before synthesis. Stripping markup back out is not
+        here — the transcript sinks do it provider-agnostically (see
+        ``_provider_format.split_all_markup``).
+        """
+
+        def __init__(self, tts: TTS) -> None:
+            self._tts = tts
+
+        def _provider_key(self) -> str:
+            """Key into the shared ``_provider_format`` markup tables, or "" for none.
+
+            Plugins override this to opt into markup support; the default ("") means
+            no markup instructions, normalization, or conversion are applied. The other
+            markup methods delegate through this key, so a plugin only needs to override
+            ``_provider_key``.
+            """
+            return ""
+
+        @property
+        def info(self) -> MarkupInfo:
+            """The queryable markup matrix for this voice."""
+            from ._provider_format import supported_nonverbals
+
+            return MarkupInfo(nonverbals=supported_nonverbals(self._provider_key()))
+
+        def llm_instructions(
+            self, *, speech_steering: SpeechSteeringOptions | None = None
+        ) -> str | None:
+            """Return instructions for the LLM describing available markup tags.
+
+            The framework injects this into the LLM system prompt when expressive mode
+            is active. Returns ``None`` if this TTS has no markup support. When
+            *speech_steering* is given, sounds it disables are omitted from the
+            advertised vocabulary.
+            """
+            from ._provider_format import llm_instructions
+
+            return llm_instructions(self._provider_key(), speech_steering)
+
+        def normalize(self, text: str) -> str:
+            """Fix common LLM markup mistakes (e.g. unclosed self-closing tags)."""
+            from ._provider_format import normalize_markup
+
+            return normalize_markup(self._provider_key(), text)
+
+        def convert(self, text: str) -> str:
+            """Convert framework-standard markup to the provider's native format.
+
+            Called before text is sent to the TTS; a no-op when the provider declares
+            no markup. Plugins that use non-XML formats (e.g. square brackets) opt in
+            via ``_provider_key`` so ``<expression value="..."/>`` becomes native syntax.
+            """
+            from ._provider_format import convert_markup
+
+            return convert_markup(self._provider_key(), text)
+
     def __init__(
         self,
         *,
@@ -80,6 +156,26 @@ class TTS(
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._label = f"{type(self).__module__}.{type(self).__name__}"
+        self._markup = self.Markup(self)
+        # Whether expressive is active for the current turn, set by the framework
+        # before each synthesis. TTS implementations that tokenize their own input
+        # read this to batch into larger chunks (continuous prosody); False (the
+        # default) means per-sentence chunking. See `_set_expressive`.
+        self._expressive: bool = False
+
+    @property
+    def markup(self) -> Markup:
+        """Access TTS markup capabilities (instructions for LLM, text stripping)."""
+        return self._markup
+
+    def _set_expressive(self, enabled: bool) -> None:
+        """Framework-internal: mark whether expressive is active for this turn.
+
+        Called by the voice pipeline before each synthesis. TTS implementations widen
+        their input chunking when enabled; a no-op for TTS that don't tokenize their
+        own input.
+        """
+        self._expressive = enabled
 
     @property
     def label(self) -> str:
@@ -108,6 +204,11 @@ class TTS(
             Plugins should override this property to provide their provider information.
         """
         return "unknown"
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this TTS instance."""
+        return {"model_name": self.model, "model_provider": self.provider}
 
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -181,6 +282,8 @@ class ChunkedStream(ABC):
         self._input_text = input_text
         self._tts = tts
         self._conn_options = conn_options
+        # the full text is submitted to the provider at creation time
+        self._started_time: float = time.perf_counter()
         self._event_ch = aio.Chan[SynthesizedAudio]()
         self._input_tokens = 0
         self._output_tokens = 0
@@ -308,16 +411,29 @@ class ChunkedStream(ABC):
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
 
-                retry_interval = self._conn_options._interval_for_retry(i)
-                if self._conn_options.max_retry == 0 or self._conn_options.max_retry == i:
+                # settle the emitter so no frames from this attempt are delivered after
+                # the retry starts; the retry restarts the synthesis under a fresh
+                # request_id, signaling downstream that any partial audio is stale
+                await output_emitter.aclose()
+
+                should_retry = (
+                    e.retryable
+                    and self._conn_options.max_retry > 0
+                    and i < self._conn_options.max_retry
+                )
+
+                if not should_retry:
                     self._emit_error(e, recoverable=False)
                     raise
-                else:
-                    self._emit_error(e, recoverable=True)
-                    logger.warning(
-                        f"failed to synthesize speech: {e}, retrying in {retry_interval}s",
-                        extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
-                    )
+
+                retry_interval = self._conn_options._interval_for_retry(i)
+                self._emit_error(e, recoverable=True)
+                logger.warning(
+                    "failed to synthesize speech: %s, retrying in %ss",
+                    e,
+                    retry_interval,
+                    extra={"tts": self._tts._label, "attempt": i + 1, "streamed": False},
+                )
 
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
@@ -356,6 +472,7 @@ class ChunkedStream(ABC):
 
             raise StopAsyncIteration from None
 
+        val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
@@ -694,6 +811,10 @@ class SynthesizeStream(ABC):
 
             raise StopAsyncIteration from None
 
+        # _started_time is 0 until _mark_started() (first text sent to the provider);
+        # it is also reset to 0 between segments after metrics are emitted
+        if self._started_time:
+            val.frame.userdata[USERDATA_TTS_STARTED_TIME] = self._started_time
         return val
 
     def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
@@ -739,6 +860,7 @@ class AudioEmitter:
         self._started = False
         self._num_segments = 0
         self._audio_durations: list[float] = []  # track durations per segment
+        self._provider_request_ids: list[str] = []  # deduped provider-known segment ids
 
     def pushed_duration(self, idx: int = -1) -> float:
         return (
@@ -803,7 +925,26 @@ class AudioEmitter:
                 "with stream=True"
             )
 
+        self._note_provider_request_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
+
+    def _note_provider_request_id(self, context_id: str) -> None:
+        """Record a provider-known id for this stream on the current span.
+
+        Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
+        can correlate traces with the provider's server-side logs for debugging.
+        `start_segment()` calls this automatically; plugins can also call it when
+        the provider-known id becomes available later (e.g. from a response
+        message's `request_id`/`session_id` field after start_segment).
+        """
+        if not context_id or context_id in self._provider_request_ids:
+            return
+        self._provider_request_ids.append(context_id)
+        current_span = trace.get_current_span()
+        if current_span.is_recording():
+            current_span.set_attribute(
+                trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
+            )
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:
@@ -1172,11 +1313,17 @@ class AudioEmitter:
                         audio_decoder.push(data)
                     elif decode_atask:
                         if isinstance(data, AudioEmitter._FlushSegment):
-                            if audio_decoder:
-                                audio_decoder.end_input()
-                                await decode_atask
-                                _flush_frame()
-                                audio_decoder = None
+                            # don't tear the decoder down here. flush_if_delayed
+                            # can fire mid-stream while a stateful codec
+                            # (WAV/OGG/MP3) is in the middle of a file; ending
+                            # input would discard the parser, and the next
+                            # bytes — a pure PCM/Opus packet continuation
+                            # without a fresh container header — would fail to
+                            # parse against a freshly-created decoder. The only
+                            # purpose of FlushSegment here is to release the
+                            # held-back tail so a slow upstream doesn't starve
+                            # the consumer.
+                            _flush_frame()
 
                         elif isinstance(data, AudioEmitter._EndSegment) and segment_ctx:
                             if audio_decoder:
