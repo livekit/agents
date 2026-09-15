@@ -409,11 +409,14 @@ async def test_provider_content_is_only_logged_under_pii_fields(
                 },
             )
         )
-        for status in ("incomplete", private):
-            event = _function_call_done(private, name=private)
+        # call ids, function names and statuses are identifiers and are logged plain; the
+        # arguments are the customer's content
+        for status in ("incomplete", "in_progress"):
+            event = _function_call_done("call_1")
             event["item"]["status"] = status
+            event["item"]["arguments"] = private
             session._handle_event(_response_event("d1", event))
-        event = _function_call_done(private, name=private)
+        event = _function_call_done("call_1")
         del event["item"]["arguments"]
         session._handle_event(_response_event("d1", event))
         session._handle_event({"type": "error", "error": {"message": private}})
