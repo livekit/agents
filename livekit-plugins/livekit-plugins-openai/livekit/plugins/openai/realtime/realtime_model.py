@@ -2085,6 +2085,10 @@ class RealtimeSession(
             UsageTranscriptTextUsageTokens,
         )
 
+        usage = event.usage
+        if usage is None:
+            return
+
         transcription_opts = self._realtime_model._opts.input_audio_transcription
         transcription_model = transcription_opts.model if transcription_opts else None
         metadata = Metadata(
@@ -2092,7 +2096,6 @@ class RealtimeSession(
             model_provider=self._realtime_model.provider,
         )
 
-        usage = event.usage
         if isinstance(usage, UsageTranscriptTextUsageTokens):
             details = usage.input_token_details
             input_audio_tokens = (
