@@ -11,6 +11,7 @@ import pytest
 
 import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
+from livekit.agents.inference import FallbackActivatedEvent
 from livekit.agents.inference._utils import HEADER_SESSION_ID
 from livekit.agents.inference.tts import TTS
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
@@ -133,3 +134,129 @@ async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPa
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+@pytest.mark.parametrize(
+    ("fallback_type", "cause", "expected_fallback_type", "expected_cause"),
+    [
+        ("fallback", "quota_exceeded", "fallback", "quota_exceeded"),
+        ("future_type", "future_cause", "unknown", "unknown"),
+    ],
+)
+async def test_emits_fallback_activated_event(
+    fallback_type: str,
+    cause: str,
+    expected_fallback_type: str,
+    expected_cause: str,
+) -> None:
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {
+                "type": "fallback_activated",
+                "session_id": "session-1",
+                "fallback_type": fallback_type,
+                "provider": "deepgram",
+                "model": "deepgram/aura-2",
+                "voice": "asteria",
+                "cause": cause,
+            },
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="cartesia/sonic-3",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("fallback_activated", fallback_events.append)
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text("hello")
+        stream.end_input()
+        audio_events = [event async for event in stream]
+
+    assert fallback_events == [
+        FallbackActivatedEvent(
+            session_id="session-1",
+            fallback_type=expected_fallback_type,
+            provider="deepgram",
+            model="deepgram/aura-2",
+            voice="asteria",
+            cause=expected_cause,
+        )
+    ]
+    assert audio_events
+
+
+async def test_malformed_fallback_notice_does_not_interrupt_audio() -> None:
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {
+                "type": "fallback_activated",
+                "session_id": "session-1",
+                "fallback_type": "fallback",
+                "model": "deepgram/aura-2",
+                "voice": "asteria",
+                "cause": "provider_error",
+            },
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="cartesia/sonic-3",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+    fallback_events: list[FallbackActivatedEvent] = []
+    tts.on("fallback_activated", fallback_events.append)
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text("hello")
+        stream.end_input()
+        audio_events = [event async for event in stream]
+
+    assert fallback_events == []
+    assert audio_events
+
+
+async def test_unknown_gateway_message_remains_harmless() -> None:
+    websocket = _FakeWebSocket(
+        [
+            {"type": "session.created", "session_id": "session-1"},
+            {"type": "future_message", "session_id": "session-1", "data": "ignored"},
+            {
+                "type": "output_audio",
+                "audio": base64.b64encode(b"\0\0" * 2400).decode(),
+            },
+            {"type": "done"},
+        ]
+    )
+    tts = TTS(
+        model="cartesia/sonic-3",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+    )
+    tts._pool = _FakePool(websocket)  # type: ignore[assignment]
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0)) as stream:
+        stream.push_text("hello")
+        stream.end_input()
+        audio_events = [event async for event in stream]
+
+    assert audio_events
