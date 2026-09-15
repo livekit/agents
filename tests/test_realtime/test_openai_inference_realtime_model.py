@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from types import SimpleNamespace
@@ -368,3 +369,77 @@ def test_xai_explicit_turn_detection_is_preserved() -> None:
     assert model._opts.turn_detection == turn_detection
     assert model.capabilities.turn_detection is False
     assert model.capabilities.can_disable_turn_detection is False
+
+
+async def test_inference_openai_models_support_targeted_cancellation(
+    paused_realtime_main: None,
+) -> None:
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _ResponseGeneration,
+    )
+
+    model = InferenceRealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret" * 8,
+    )
+    assert model._supports_targeted_cancellation is True
+
+    session = model.session()
+    sent: list[object] = []
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id == "resp_123"
+
+    await session.aclose()
+
+
+async def test_inference_xai_models_omit_response_id_on_cancel(
+    paused_realtime_main: None,
+) -> None:
+    from livekit.agents import utils
+    from livekit.plugins.openai.realtime.realtime_model import (
+        ResponseCancelEvent,
+        _ResponseGeneration,
+    )
+
+    model = InferenceRealtimeModel(
+        "xai/grok-voice-latest",
+        api_key="key",
+        api_secret="secret" * 8,
+    )
+    assert model._supports_targeted_cancellation is False
+
+    session = model.session()
+    sent: list[object] = []
+    session.send_event = lambda ev: sent.append(ev)  # type: ignore
+
+    gen = _ResponseGeneration(
+        message_ch=utils.aio.Chan(),
+        function_ch=utils.aio.Chan(),
+        messages={},
+        _created_timestamp=0.0,
+        _done_fut=asyncio.Future(),
+        response_id="resp_123",
+    )
+    session._current_generation = gen
+    session.interrupt()
+    assert len(sent) == 1
+    assert isinstance(sent[0], ResponseCancelEvent)
+    assert sent[0].response_id is None
+
+    await session.aclose()

@@ -208,14 +208,17 @@ def _normalize_azure_client_event(event: dict[str, Any]) -> None:
     """In-place normalization of client event dicts for legacy Azure compatibility.
 
     The legacy Azure Realtime API uses "text" for assistant content parts,
-    while the newer OpenAI API uses "output_text".
+    while the newer OpenAI API uses "output_text". Additionally, the legacy
+    Azure beta response.cancel schema does not support response_id.
     """
     item = event.get("item")
-    if item is None:
-        return
-    for content_part in item.get("content", ()):
-        if content_part.get("type") == "output_text":
-            content_part["type"] = "text"
+    if item is not None:
+        for content_part in item.get("content", ()):
+            if content_part.get("type") == "output_text":
+                content_part["type"] = "text"
+
+    if event.get("type") == "response.cancel":
+        event.pop("response_id", None)
 
 
 @dataclass
@@ -264,6 +267,7 @@ class _ResponseGeneration:
     """timestamp when the response was created"""
     _first_token_timestamp: float | None = None
     """timestamp when the first token was received"""
+    response_id: str | None = None
 
     def _close(self) -> None:
         for msg in self.messages.values():
@@ -546,6 +550,7 @@ class RealtimeModel(llm.RealtimeModel):
         self._http_session_owned = False
         self._sessions = weakref.WeakSet[RealtimeSession]()
         self._provider_label = "OpenAI Realtime API"
+        self._supports_targeted_cancellation: bool = not (is_azure and api_version is not None)
 
     @property
     def model(self) -> str:
@@ -1747,10 +1752,45 @@ class RealtimeSession(
     def has_active_generation(self) -> bool:
         return self._current_generation is not None or len(self._response_created_futures) > 0
 
+    @property
+    def _supports_targeted_cancellation(self) -> bool:
+        """Whether this session's provider supports response.cancel with response_id.
+
+        Only OpenAI Realtime API (including non-legacy Azure and LiveKit Inference
+        OpenAI routes) supports targeted cancellation with response_id. Legacy
+        Azure Realtime (with api_version) and subclasses such as xAI Realtime API
+        use the bare response.cancel schema.
+        """
+        if (
+            getattr(self._opts, "is_azure", False)
+            and getattr(self._opts, "api_version", None) is not None
+        ):
+            return False
+        if hasattr(self, "_xai_model"):
+            return False
+        model = getattr(self, "_realtime_model", None)
+        if model is not None:
+            if getattr(model, "_provider_label", None) == "xAI Realtime API":
+                return False
+            return getattr(model, "_supports_targeted_cancellation", True)
+        return True
+
     def interrupt(self) -> None:
         if not self.has_active_generation:
             return
-        self.send_event(ResponseCancelEvent(type="response.cancel"))
+        if (
+            isinstance(self._current_generation, _ResponseGeneration)
+            and self._current_generation.response_id
+            and self._supports_targeted_cancellation
+        ):
+            self.send_event(
+                ResponseCancelEvent(
+                    type="response.cancel",
+                    response_id=self._current_generation.response_id,
+                )
+            )
+        else:
+            self.send_event(ResponseCancelEvent(type="response.cancel"))
 
     def truncate(
         self,
@@ -1877,9 +1917,12 @@ class RealtimeSession(
             # interrupted or timed out before the server created it: cancel by id and mark it
             # discarded so its trailing events are skipped, instead of surfacing it
             self._discarded_event_ids.discard(client_event_id)
-            self.send_event(
-                ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
-            )
+            if self._supports_targeted_cancellation:
+                self.send_event(
+                    ResponseCancelEvent(type="response.cancel", response_id=event.response.id)
+                )
+            else:
+                self.send_event(ResponseCancelEvent(type="response.cancel"))
             self._current_generation = _DiscardedGeneration()
             logger.warning("discarding response that arrived after it was timed out or interrupted")
             return
@@ -1890,6 +1933,7 @@ class RealtimeSession(
             messages={},
             _created_timestamp=time.time(),
             _done_fut=asyncio.Future(),
+            response_id=event.response.id,
         )
 
         generation_ev = llm.GenerationCreatedEvent(

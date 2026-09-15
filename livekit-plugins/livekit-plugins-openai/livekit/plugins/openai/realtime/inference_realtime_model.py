@@ -137,6 +137,9 @@ class InferenceRealtimeModel(RealtimeModel):
         self._opts.api_version = None
         if is_xai:
             self._capabilities.can_disable_turn_detection = can_disable_turn_detection
+            self._supports_targeted_cancellation = False
+        else:
+            self._supports_targeted_cancellation = True
         self._inference_opts = _InferenceOptions(
             provider=provider,
             api_key=resolved_api_key,

@@ -666,3 +666,14 @@ def test_pending_say_ids_are_consumed_fifo() -> None:
 
     assert tagged == ["say_first", "say_second"]
     assert list(session._pending_say_event_ids) == []
+
+
+def test_xai_realtime_model_disables_targeted_cancellation() -> None:
+    model = RealtimeModel(api_key="fake")
+    assert model._supports_targeted_cancellation is False
+
+    session = RealtimeSession.__new__(RealtimeSession)
+    session._opts = SimpleNamespace(is_azure=False, api_version=None)
+    session._xai_model = model
+    session._realtime_model = model
+    assert session._supports_targeted_cancellation is False
