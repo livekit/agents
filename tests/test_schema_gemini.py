@@ -55,7 +55,7 @@ async def test_json_def_replaced():
                 "items": {
                     "properties": {
                         "lat": {"type": types.Type.NUMBER},
-                        "lng": {"type": types.Type.NUMBER},
+                        "lng": {"default": 1.1, "type": types.Type.NUMBER},
                     },
                     "required": ["lat"],
                     "type": types.Type.OBJECT,
@@ -94,6 +94,7 @@ async def test_json_def_replaced_any_of():
                 "required": ["lat", "lng"],
                 "type": types.Type.OBJECT,
                 "nullable": True,
+                "default": None,
             }
         },
         "type": types.Type.OBJECT,
@@ -185,3 +186,27 @@ async def test_json_def_date():
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
+
+
+async def test_default_is_kept():
+    """Gemini's Schema has a `default` field, and a dropped default changes the call.
+
+    A tool argument the caller pre-filled is the model's only record of the value; with the
+    default stripped it has nothing to send, omits the argument, and the tool is invoked
+    without it.
+    """
+
+    class Params(BaseModel):
+        automation_id: str = "auto-42"
+        version: int = 3
+        name: str
+
+    gemini_schema = utils._GeminiJsonSchema(Params.model_json_schema()).simplify()
+    assert gemini_schema is not None
+    assert gemini_schema["properties"] == {
+        "automation_id": {"default": "auto-42", "type": types.Type.STRING},
+        "version": {"default": 3, "type": types.Type.INTEGER},
+        "name": {"type": types.Type.STRING},
+    }
+    # the surviving default must still be a value Gemini accepts on its Schema
+    types.Schema(**gemini_schema["properties"]["automation_id"])
