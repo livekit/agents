@@ -26,6 +26,7 @@ from ..utils import aio, log_exceptions, time_ms
 from ..utils.aio import duplex_unix
 from . import channel, proto
 from .log_queue import LogQueueListener
+from .stdio_capture import ChildStdio, StdioReader, capture_enabled, create_stdio_pairs
 
 _mask_ctrl_c_refcount = 0
 _mask_ctrl_c_original: Callable[[int, FrameType | None], Any] | int | None = signal.SIG_DFL
@@ -137,9 +138,12 @@ class SupervisedProc(ABC):
         self._lock = asyncio.Lock()
         self._shutdown_ack_fut = asyncio.Future[None]()
         self._shutting_down_fut = asyncio.Future[None]()
+        self._stdio_readers: list[StdioReader] = []
 
     @abstractmethod
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket) -> mp.Process: ...
+    def _create_process(
+        self, cch: socket.socket, log_cch: socket.socket, stdio: ChildStdio | None
+    ) -> mp.Process: ...
 
     @abstractmethod
     async def _main_task(self, ipc_ch: aio.ChanReceiver[channel.Message]) -> None: ...
@@ -196,8 +200,19 @@ class SupervisedProc(ABC):
         async with self._lock:
             mp_pch, mp_cch = socket.socketpair()
             mp_log_pch, mp_log_cch = socket.socketpair()
+            stdio_parent: ChildStdio | None = None
+            stdio_child: ChildStdio | None = None
+            if capture_enabled():
+                stdio_parent, stdio_child = create_stdio_pairs()
 
-            sockets = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
+            sockets: tuple[socket.socket, ...] = (mp_pch, mp_cch, mp_log_pch, mp_log_cch)
+            if stdio_parent is not None and stdio_child is not None:
+                sockets += (
+                    stdio_parent.stdout,
+                    stdio_parent.stderr,
+                    stdio_child.stdout,
+                    stdio_child.stderr,
+                )
             pch: duplex_unix._AsyncDuplex | None = None
             log_listener: LogQueueListener | None = None
             try:
@@ -208,7 +223,7 @@ class SupervisedProc(ABC):
                 log_listener = LogQueueListener(log_pch, _add_proc_ctx_log)
                 log_listener.start()
 
-                self._proc = self._create_process(mp_cch, mp_log_cch)
+                self._proc = self._create_process(mp_cch, mp_log_cch, stdio_child)
 
                 # Set SIG_IGN process-wide before forking so the child inherits it
                 # (SIG_IGN is preserved across exec per POSIX). This prevents
@@ -232,6 +247,15 @@ class SupervisedProc(ABC):
 
             mp_log_cch.close()
             mp_cch.close()
+            if stdio_child is not None:
+                stdio_child.close()
+            if stdio_parent is not None:
+                self._stdio_readers = [
+                    StdioReader(stdio_parent.stdout, "stdout", self.logging_extra, self._loop),
+                    StdioReader(stdio_parent.stderr, "stderr", self.logging_extra, self._loop),
+                ]
+                for reader in self._stdio_readers:
+                    reader.start()
 
             self._pid = self._proc.pid
             self._spawn_time = time.monotonic()
@@ -459,6 +483,8 @@ class SupervisedProc(ABC):
         await self._join_fut
         self._exitcode = self._proc.exitcode
         self._proc.close()
+        for reader in self._stdio_readers:
+            await reader.aclose()
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
         if memory_monitor_task is not None:
