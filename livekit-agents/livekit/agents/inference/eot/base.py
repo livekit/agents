@@ -9,6 +9,7 @@ template-method-across-packages.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
@@ -29,18 +30,34 @@ from .languages import ThresholdOptions, TurnDetectorModels
 
 DEFAULT_SAMPLE_RATE: int = 16000
 
-MIN_SILENCE_DURATION_MS = 200
+MIN_SILENCE_DURATION_MS: int = 200
 """Minimum VAD silence the audio EOT detector needs before it sends
 an inference request. Enforced against the caller-supplied VAD's
 ``min_silence_duration`` in ``AudioRecognition``."""
 
 DEFAULT_PREDICTION_TIMEOUT = 1.0
 
+__all__ = [
+    "DEFAULT_SAMPLE_RATE",
+    "MIN_SILENCE_DURATION_MS",
+    "ThresholdOptions",
+    "TurnDetectorModels",
+    "TurnDetectorOptions",
+    "_BaseStreamingTurnDetector",
+    "_BaseStreamingTurnDetectorStream",
+    "_StreamingTurnDetectionTransport",
+]
+
 
 @dataclass
 class TurnDetectorOptions:
     sample_rate: int
     thresholds: ThresholdOptions
+    min_silence_duration: float = MIN_SILENCE_DURATION_MS / 1000
+
+    def __post_init__(self) -> None:
+        if not (math.isfinite(self.min_silence_duration) and self.min_silence_duration > 0):
+            raise ValueError("min_silence_duration must be positive")
 
 
 @runtime_checkable
@@ -59,9 +76,23 @@ class _StreamingTurnDetectionTransport(Protocol):
 
 
 class _BaseStreamingTurnDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
-    def __init__(self, *, opts: TurnDetectorOptions) -> None:
+    def __init__(
+        self,
+        *,
+        opts: TurnDetectorOptions,
+        min_silence_duration: float | None = None,
+    ) -> None:
         super().__init__()
         self._opts = opts
+        self._min_silence_duration = (
+            min_silence_duration if min_silence_duration is not None else opts.min_silence_duration
+        )
+        if not (math.isfinite(self._min_silence_duration) and self._min_silence_duration > 0):
+            raise ValueError("min_silence_duration must be positive")
+
+    @property
+    def min_silence_duration(self) -> float:
+        return self._min_silence_duration
 
     @property
     def model(self) -> TurnDetectorModels:
@@ -143,6 +174,10 @@ class _BaseStreamingTurnDetectorStream:
     @property
     def provider(self) -> str:
         return self._detector.provider
+
+    @property
+    def min_silence_duration(self) -> float:
+        return self._detector.min_silence_duration
 
     @property
     def is_fallback(self) -> bool:

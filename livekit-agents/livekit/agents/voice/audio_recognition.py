@@ -419,10 +419,10 @@ class AudioRecognition:
         turn_detector_stream: _StreamingTurnDetectorStream | None = None,
     ) -> None:
         self._update_stt(self._stt, pipeline=stt_pipeline)
-        self._update_vad(self._vad)
-        self._update_interruption_detection(self._interruption_detection)
         if isinstance(self._turn_detector, _StreamingTurnDetector) or self._turn_detector is None:
             self._update_turn_detector(self._turn_detector, stream=turn_detector_stream)
+        self._update_vad(self._vad)
+        self._update_interruption_detection(self._interruption_detection)
 
     def _stop(self) -> None:
         self._update_stt(None)
@@ -878,10 +878,26 @@ class AudioRecognition:
                 self._tasks.add(task)
                 self._stt_pipeline = None
 
+    @property
+    def _turn_detector_min_silence_duration(self) -> float:
+        val: float | None = None
+        if self._turn_detector is not None:
+            raw_val = getattr(self._turn_detector, "min_silence_duration", None)
+            if raw_val is not None:
+                val = float(raw_val)
+        if val is None and self._turn_detector_stream is not None:
+            raw_val = getattr(self._turn_detector_stream, "min_silence_duration", None)
+            if raw_val is not None:
+                val = float(raw_val)
+        if val is not None and math.isfinite(val) and val > 0:
+            return val
+        return MIN_SILENCE_DURATION_MS / 1000
+
     def _check_vad_silence_requirement(
         self,
         detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+        stream: NotGivenOr[_StreamingTurnDetectorStream | None] = NOT_GIVEN,
     ) -> None:
         if not is_given(detector):
             detector = self._turn_detector
@@ -891,7 +907,17 @@ class AudioRecognition:
             return
         if (current := getattr(target_vad, "min_silence_duration", None)) is None:
             return
-        required = (MIN_SILENCE_DURATION_MS + 50) / 1000
+        target_stream = stream if is_given(stream) else self._turn_detector_stream
+        detector_min_silence = getattr(detector, "min_silence_duration", None)
+        if detector_min_silence is None and target_stream is not None:
+            detector_min_silence = getattr(target_stream, "min_silence_duration", None)
+        if detector_min_silence is not None:
+            silence_val = float(detector_min_silence)
+            if not (math.isfinite(silence_val) and silence_val > 0):
+                raise ValueError("min_silence_duration must be positive")
+            required = silence_val
+        else:
+            required = MIN_SILENCE_DURATION_MS / 1000
         if current < required:
             raise ValueError(
                 f"vad min_silence_duration={current}s is too low for the TurnDetector. "
@@ -974,19 +1000,38 @@ class AudioRecognition:
         opening a fresh stream on *detector*; the live transport stream — and its
         per-session cloud->local fallback state — survives the handoff.
         """
-        self._check_vad_silence_requirement(detector)
+        if stream is not None or getattr(detector, "min_silence_duration", None) is not None:
+            self._check_vad_silence_requirement(detector, stream=stream)
+
+        new_stream = stream
+        created_stream = False
+        if new_stream is None and isinstance(detector, _StreamingTurnDetector):
+            new_stream = detector.stream()
+            created_stream = True
+
+        try:
+            self._check_vad_silence_requirement(detector, stream=new_stream)
+        except Exception:
+            if created_stream and new_stream is not None:
+                try:
+                    task = asyncio.create_task(new_stream.aclose())
+                    task.add_done_callback(lambda _: self._tasks.discard(task))
+                    self._tasks.add(task)
+                except RuntimeError:
+                    pass
+            raise
+
         self._turn_detector = detector
 
-        if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
+        if (old_stream := self._turn_detector_stream) is not None and old_stream is not new_stream:
             task = asyncio.create_task(old_stream.aclose())
             task.add_done_callback(lambda _: self._tasks.discard(task))
             self._tasks.add(task)
-        if stream is None:
-            stream = detector.stream() if isinstance(detector, _StreamingTurnDetector) else None
-        if self._turn_detector_stream is not stream:
+
+        if self._turn_detector_stream is not new_stream:
             self._turn_detector_prediction_fut = None
             self._turn_detector_flushed = False
-        self._turn_detector_stream = stream
+        self._turn_detector_stream = new_stream
 
     def _detach_turn_detector(self) -> _StreamingTurnDetectorStream | None:
         """Detach the turn detector stream for handoff to another AudioRecognition.
@@ -1419,7 +1464,11 @@ class AudioRecognition:
                         self._turn_detector_stream.cancel_inference()
                     self._turn_detector_prediction_fut = None
 
-            if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
+            if (
+                ev.raw_accumulated_silence > 0
+                and ev.raw_accumulated_silence >= self._turn_detector_min_silence_duration
+                and self._speaking
+            ):
                 if (
                     self._turn_detector_stream is not None
                     and self._turn_detector_prediction_fut is None
@@ -1447,6 +1496,16 @@ class AudioRecognition:
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
+                # Start a missing prediction if the silence threshold was never
+                # crossed during INFERENCE_DONE events (can happen when the VAD
+                # min_silence_duration equals the detector minimum due to the
+                # pre-increment event ordering in the VAD loop).
+                if (
+                    vad_speech_started
+                    and self._turn_detector_stream is not None
+                    and self._turn_detector_prediction_fut is None
+                ):
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
                 self._run_eou_detection(chat_ctx, trigger="vad")
 
