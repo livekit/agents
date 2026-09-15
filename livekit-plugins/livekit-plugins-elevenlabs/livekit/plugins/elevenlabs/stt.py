@@ -20,7 +20,7 @@ import json
 import math
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import quote
 
@@ -434,6 +434,9 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     """Streaming speech recognition using ElevenLabs Scribe v2 realtime API"""
 
+    class _ReconnectSentinel(stt.SpeechStream._FlushSentinel):
+        pass
+
     def __init__(
         self,
         *,
@@ -444,10 +447,12 @@ class SpeechStream(stt.SpeechStream):
         http_session: aiohttp.ClientSession,
     ) -> None:
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
-        self._opts = opts
+        self._opts = replace(opts)
+        self._active_server_vad = opts.server_vad
         self._language = language
         self._session = http_session
         self._reconnect_event = asyncio.Event()
+        self._reconnect_requested = False
         self._speaking = False  # Track if we're currently in a speech segment
         self._last_partial_text = ""
         self._audio_duration_collector = PeriodicCollector(
@@ -467,22 +472,31 @@ class SpeechStream(stt.SpeechStream):
 
         Set server_vad to None to disable server VAD and use manual commits.
         Pass {} to enable server VAD with defaults, or a VADOptions dict to configure it.
-        Changing server_vad reconnects the stream.
+        Changes reconnect the stream after queued audio has been committed and its final
+        transcript received. Audio queued after the change uses the new connection.
         """
         if is_given(server_vad):
             self._opts.server_vad = server_vad
-            self._reconnect_event.set()
         if is_given(no_verbatim):
             self._opts.no_verbatim = no_verbatim
-            self._reconnect_event.set()
         if is_given(keyterms):
             self._opts.keyterms = keyterms
-            self._reconnect_event.set()
         if is_given(secondary_languages):
             self._opts.secondary_languages = [
                 LanguageCode(language) for language in secondary_languages
             ]
-            self._reconnect_event.set()
+
+        if any(
+            is_given(value) for value in (server_vad, no_verbatim, keyterms, secondary_languages)
+        ):
+            self._request_reconnect()
+
+    def _request_reconnect(self) -> None:
+        if self._reconnect_requested or self._input_ch.closed or self._event_ch.closed:
+            return
+        self._reconnect_requested = True
+        self.flush()
+        self._input_ch.send_nowait(self._ReconnectSentinel())
 
     def _on_audio_duration_report(self, duration: float) -> None:
         usage_event = stt.SpeechEvent(
@@ -494,7 +508,7 @@ class SpeechStream(stt.SpeechStream):
 
     @property
     def _server_vad(self) -> VADOptions | None:
-        return self._opts.server_vad if is_given(self._opts.server_vad) else None
+        return self._active_server_vad if is_given(self._active_server_vad) else None
 
     @property
     def _language_detection(self) -> bool:
@@ -522,6 +536,9 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Run the streaming transcription session"""
         closing_ws = False
+        pending_commits = 0
+        commits_drained = asyncio.Event()
+        commits_drained.set()
 
         async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             try:
@@ -543,7 +560,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, pending_commits
 
             # Buffer audio into chunks (50ms chunks)
             samples_50ms = self._opts.sample_rate // 20
@@ -554,15 +571,33 @@ class SpeechStream(stt.SpeechStream):
             )
 
             has_ended = False
+            has_audio = False
             try:
                 async for data in self._input_ch:
+                    if isinstance(data, self._ReconnectSentinel):
+                        try:
+                            await asyncio.wait_for(
+                                commits_drained.wait(), self._conn_options.timeout
+                            )
+                        except asyncio.TimeoutError:
+                            raise APITimeoutError(
+                                "ElevenLabs STT timed out waiting for committed audio"
+                            ) from None
+                        finally:
+                            self._reconnect_requested = False
+                        self._reconnect_event.set()
+                        await asyncio.Future[
+                            None
+                        ]()  # leave subsequent audio for the new connection
+
                     # Write audio bytes to buffer and get 50ms frames
                     frames: list[rtc.AudioFrame] = []
                     if isinstance(data, rtc.AudioFrame):
+                        has_audio = True
                         frames.extend(audio_bstream.write(data.data.tobytes()))
                     elif isinstance(data, self._FlushSentinel):
                         frames.extend(audio_bstream.flush())
-                        has_ended = True
+                        has_ended = has_audio
 
                     for frame in frames:
                         self._audio_duration_collector.push(frame.duration)
@@ -579,6 +614,8 @@ class SpeechStream(stt.SpeechStream):
                         )
 
                     if has_ended:
+                        pending_commits += 1
+                        commits_drained.clear()
                         self._audio_duration_collector.flush()
                         await ws.send_str(
                             json.dumps(
@@ -591,6 +628,7 @@ class SpeechStream(stt.SpeechStream):
                             )
                         )
                         has_ended = False
+                        has_audio = False
 
                 closing_ws = True
             except (aiohttp.ClientError, ConnectionError) as e:
@@ -600,7 +638,7 @@ class SpeechStream(stt.SpeechStream):
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            nonlocal closing_ws
+            nonlocal closing_ws, pending_commits
 
             while True:
                 msg = await ws.receive()
@@ -625,6 +663,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                    if parsed.get("message_type") == self._final_message_type and pending_commits:
+                        pending_commits -= 1
+                        if pending_commits == 0:
+                            commits_drained.set()
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
@@ -633,6 +675,8 @@ class SpeechStream(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                pending_commits = 0
+                commits_drained.set()
                 self._last_partial_text = ""
                 if self._opts.previous_text:
                     # Must be the first input_audio_chunk on the connection.
@@ -679,6 +723,7 @@ class SpeechStream(stt.SpeechStream):
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         """Establish WebSocket connection to ElevenLabs Scribe v2 API"""
+        self._active_server_vad = self._opts.server_vad
         commit_strategy = "vad" if self._server_vad is not None else "manual"
         params = [
             f"model_id={self._opts.model_id}",
@@ -845,16 +890,12 @@ class SpeechStream(stt.SpeechStream):
             "input_error",
             "error",
         ):
-            error_msg = data.get("message", "Unknown error")
-            error_details = data.get("details", "")
-            details_suffix = " - " + error_details if error_details else ""
             logger.error(
-                "ElevenLabs STT error [%s]: %s%s",
+                "ElevenLabs STT error [%s]",
                 message_type,
-                error_msg,
-                details_suffix,
+                extra={"lk.pii.data": data},
             )
-            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
+            raise APIConnectionError(f"ElevenLabs STT error [{message_type}]") from None
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",
