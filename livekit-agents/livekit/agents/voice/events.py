@@ -31,6 +31,7 @@ from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .filler_scheduler import _FillerScheduler, _FillerSource
+from .served_request import DirectiveKind
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -325,6 +326,8 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
+    "delegation_directive",
+    "delegation_directive",
     "error",
     "close",
     "debug_message",
@@ -545,6 +548,21 @@ class ToolReplyUpdated(BaseModel):
     """Id of the reply speech; ``speech_created`` carries its handle."""
 
 
+class DelegationDirectiveEvent(BaseModel):
+    """A delegate asked the conversation to act once it has said the answer.
+
+    Advice, not an action: the answer is spoken first, and what to do about the kind is the
+    application's decision.
+    """
+
+    type: Literal["delegation_directive"] = "delegation_directive"
+    kind: DirectiveKind
+    reason: str = ""
+    call_id: str
+    """The ``lk_agents_delegate`` call this came back from."""
+    created_at: float = Field(default_factory=time.time)
+
+
 class ToolExecutionUpdatedEvent(BaseModel):
     """One flat tool-lifecycle update. Discriminate on ``update.type``: ``tool_call_started``
     → ``tool_call_updated`` → ``tool_call_ended`` → ``tool_reply_updated``."""
@@ -623,6 +641,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
+    | DelegationDirectiveEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,
