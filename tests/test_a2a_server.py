@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import pathlib
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -16,6 +17,7 @@ from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
 from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
+from livekit.agents.http import _proxied_endpoints
 
 from .fake_llm import FakeLLM
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -119,6 +121,32 @@ async def _drain_sse_watcher() -> None:
 async def _collect(client: Any, task_input: TaskInput) -> list[TaskUpdate]:
     async with client.send(task_input) as stream:
         return [update async for update in stream]
+
+
+def test_the_shipped_example_still_wires_up() -> None:
+    """The example is the only thing a reader copies, so it must not rot silently."""
+    import importlib.util
+
+    path = (
+        pathlib.Path(__file__).parent.parent
+        / "examples"
+        / "voice_agents"
+        / "delegation"
+        / "expert.py"
+    )
+    spec = importlib.util.spec_from_file_location("_delegation_example_expert", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    paths = {getattr(route, "path", "") for route in module.server.http.routes}
+    assert f"/fare-desk{AGENT_CARD_PATH}" in paths
+    assert "/fare-desk/v1/message:stream" in paths
+    # the card route is registered before the binding's catch-all mount, which would shadow it
+    ordered = [getattr(route, "path", "") for route in module.server.http.routes]
+    assert ordered.index(f"/fare-desk{AGENT_CARD_PATH}") < ordered.index("/{tenant}")
+    # a parameterised first segment names no endpoint, and the real one is advertised
+    assert "fare-desk" in _proxied_endpoints(module.server.http)
 
 
 async def test_the_card_names_the_endpoint_and_offers_the_extension() -> None:

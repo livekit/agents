@@ -57,7 +57,7 @@ def _proxied_endpoints(app: FastAPI) -> list[str]:
     for route in app.routes:
         path: str = getattr(route, "path", "")
         first = path.lstrip("/").split("/", 1)[0]
-        if not first or first in endpoints:
+        if not first or first in endpoints or first.startswith("{"):
             continue
         if not _URL_SAFE.fullmatch(first):
             logger.warning(f"route {path!r} cannot be reached through the cloud")

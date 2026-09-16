@@ -26,6 +26,7 @@ from ._extension import (
     VERBATIM,
     agent_card,
 )
+from ._server import TextSessionContext, TextSessionHandler
 from ._types import TaskInput, TaskState, TaskUpdate
 
 __all__ = [
@@ -39,6 +40,8 @@ __all__ = [
     "Directive",
     "TaskInput",
     "TaskState",
+    "TextSessionContext",
+    "TextSessionHandler",
     "TaskStream",
     "TaskUpdate",
     "agent_card",
