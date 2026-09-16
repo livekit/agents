@@ -9,6 +9,7 @@ whole of it.
 Needs the ``a2a`` extra: ``pip install 'livekit-agents[a2a]'``.
 """
 
+from ._client import A2AClient, TaskStream
 from ._codec import (
     from_a2a_events,
     from_a2a_request,
@@ -33,9 +34,11 @@ __all__ = [
     "KIND",
     "REASON",
     "VERBATIM",
+    "A2AClient",
     "Directive",
     "TaskInput",
     "TaskState",
+    "TaskStream",
     "TaskUpdate",
     "agent_card",
     "from_a2a_events",
