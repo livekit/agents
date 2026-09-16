@@ -180,6 +180,51 @@ def test_timeout_resolves_reply_but_late_result_can_change_stage(fsm: _AMDFSM) -
     assert fsm.prediction_received(1, AMDCategory.MACHINE_VM, 4, 3) == []
 
 
+def test_late_inference_failure_preserves_the_timeout_decision(fsm: _AMDFSM) -> None:
+    turn_id = request(fsm, 1)
+    decision = fsm.tick(2)[0]
+    assert decision.reason == AMDReason.INFERENCE_TIMEOUT
+    assert fsm.inference_failed(turn_id, 2.1) == []
+    assert fsm.decision(turn_id) == decision
+    assert fsm.authorize_reply(turn_id) == ReplyDecision(True)
+    assert fsm.next_deadline == 120
+
+
+@pytest.mark.parametrize("pending", ["inferring", "holding", "inference_error"])
+def test_new_request_silently_supersedes_pending_and_empty_turns(pending: str) -> None:
+    fsm = new_fsm(silence=1.5)
+    fsm.enter()
+    fsm.start(0)
+    first = request(fsm, 0)
+    fsm.prediction_received(first, AMDCategory.MACHINE_SCREENING, 0.1, 0.1)
+    fsm.tick(1.5)
+
+    previous = request(fsm, 2)
+    empty = _Transcript("", None)
+    empty_turn = fsm.turn_id + 1
+    fsm.commit_turn(empty, 2.2, 0, turn_id=empty_turn)
+    assert fsm.transcript_ready(empty_turn, empty, 2.2) == (None, [])
+    if pending == "holding":
+        assert fsm.prediction_received(previous, AMDCategory.MACHINE_VM, 2.25, 0.25) == []
+    elif pending == "inference_error":
+        assert fsm.inference_failed(previous, 2.25) == []
+
+    transcript = _Transcript("new turn", "session")
+    current = fsm.turn_id + 1
+    fsm.commit_turn(transcript, 2.3, 0, turn_id=current)
+    context, events = fsm.transcript_ready(current, transcript, 2.3)
+    assert context is not None and context.turn_id == current
+    assert events == []
+    for turn_id in (previous, empty_turn):
+        assert fsm.decision(turn_id).reason == AMDReason.SUPERSEDED
+        assert not fsm.authorize_reply(turn_id).allow
+
+    assert fsm.prediction_received(current, AMDCategory.MACHINE_SCREENING, 2.4, 0.1) == []
+    assert fsm.tick(3.7) == []
+    assert [event.turn_id for event in fsm.tick(3.8)] == [current]
+    assert fsm.authorize_reply(current) == ReplyDecision(True, AMDCategory.MACHINE_SCREENING)
+
+
 def test_superseded_request_and_timer_cannot_change_newer_turn(fsm: _AMDFSM) -> None:
     request(fsm, 1)
     second = request(fsm, 1.1)

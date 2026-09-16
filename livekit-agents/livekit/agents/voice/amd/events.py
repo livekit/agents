@@ -17,20 +17,44 @@ class AMDReason(str, Enum):
     """Why a prediction was published or why the run completed."""
 
     PREDICTION = "prediction"
+    """A model prediction was released without an earlier inference timeout."""
     LATE_PREDICTION = "late_prediction"
+    """A model prediction was released after the turn's inference timeout.
+
+    It can update the stage without replacing the turn's saved decision.
+    """
     REUSED = "reused"
+    """An empty transcript used pending classification or the current stage without a new request."""
     SUPERSEDED = "superseded"
+    """Internal decision for a turn made obsolete by a newer turn.
+
+    Not emitted through ``amd_prediction``.
+    """
     INFERENCE_TIMEOUT = "inference_timeout"
+    """The turn's inference deadline passed, so the prediction uses the current stage.
+
+    Repeated inference timeouts can also complete the run.
+    """
     INFERENCE_ERROR = "inference_error"
+    """Classification failed or returned unusable output; the prediction uses the current stage."""
     INTERNAL_ERROR = "internal_error"
+    """An internal task or prediction handler failed, ending the run."""
     FINISHED = "finished"
+    """AMD reached a human or machine-unavailable category."""
     MAX_UNCERTAIN_TURNS = "max_uncertain_turns"
+    """The limit of consecutive uncertain predictions was reached."""
     TIMEOUT = "timeout"
+    """The time limit since listening started was reached."""
     IDLE_TIMEOUT = "idle_timeout"
+    """The call stayed silent and inactive for the current stage's idle interval."""
     CANCELLED = "cancelled"
+    """The caller closed AMD or its session before detection completed."""
     PARTICIPANT_MISSING = "participant_missing"
+    """The target participant or audio track was unavailable during listening setup."""
     PARTICIPANT_DISCONNECTED = "participant_disconnected"
+    """The target participant disconnected before detection completed."""
     AGENT_CHANGED = "agent_changed"
+    """The session switched agents during AMD."""
 
 
 class AMDPredictionEvent(BaseModel):

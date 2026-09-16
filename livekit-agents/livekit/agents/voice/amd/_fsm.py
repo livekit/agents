@@ -50,7 +50,7 @@ class _Lifecycle(Enum):
 
 
 class _Phase(Enum):
-    """Prediction pipeline of one turn. Reply authorization lives in ``_Turn.decision``."""
+    """Prediction progress for one turn, separate from its saved decision."""
 
     IDLE = auto()
     """No model result is pending."""
@@ -118,7 +118,7 @@ class _Turn:
     decision: AMDPredictionEvent | None = None
     phase: _Phase = _Phase.IDLE
     deadline: float | None = None
-    prediction: _Prediction | None = None
+    pending_prediction: _Prediction | None = None
     timed_out: bool = False
 
     def context(self) -> TurnContext:
@@ -133,17 +133,23 @@ class _Turn:
             else None,
         )
 
-    def settle(self) -> None:
+    def clear_pending_prediction(self) -> None:
         self.phase = _Phase.IDLE
         self.deadline = None
-        self.prediction = None
+        self.pending_prediction = None
 
 
 class _AMDFSM:
     """AMD state and policy, with explicit timestamps and no async resources.
 
-    A turn can release a fallback reply while its inference still runs.
-    Its decision and prediction pipeline therefore have separate lifetimes.
+    Only the latest accepted turn can reply. Newer inference supersedes older work.
+    Normal path: commit -> transcript ready -> inferring -> [holding] -> release -> apply stage.
+    Holding waits for participant silence before releasing a pending prediction.
+    Release saves the turn's first decision; ReplyDecision selects its reply behavior.
+    Empty turns reuse pending inference or the current stage without a new request.
+    Timeouts and failures produce fallback predictions that keep the current stage.
+    A late model prediction can update the stage without replacing the saved decision.
+    Superseded turns get internal decisions to unblock waiters; no event is emitted.
     """
 
     def __init__(
@@ -264,7 +270,7 @@ class _AMDFSM:
         for turn in self._turns.values():
             if turn.release_epoch == self._speech_epoch:
                 turn.silence_started_at = self._speech_ended_at
-                events.extend(self._resume(turn, now))
+                events.extend(self._release(turn, now))
         return events
 
     def commit_turn(
@@ -299,11 +305,32 @@ class _AMDFSM:
         turn = self._turns[turn_id]
         turn.transcript = transcript
         if turn_id < self._last_inference_turn_id:
-            self._fallback(turn, AMDReason.SUPERSEDED, now)
+            self._supersede(turn, now)
             return None, []
+
+        pending = self._pending_turn
+        if (
+            not turn.transcript.text
+            and pending is not None
+            and (pending.decision is None or pending.phase is _Phase.HOLDING)
+        ):
+            self._reused_turns.append(turn)
+            pending.release_epoch = turn.release_epoch
+            pending.silence_started_at = turn.silence_started_at
+            return None, self._release(pending, now)
+
+        for previous in self._turns.values():
+            if previous.turn_id < turn_id and previous.phase is _Phase.HOLDING:
+                self._supersede(previous, now)
         if not turn.transcript.text:
-            return None, self._reuse_pending(turn, now)
-        self._supersede_pending(turn_id, now)
+            turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.REUSED)
+            return None, self._release(turn, now)
+
+        if pending is not None:
+            self._supersede(pending, now)
+            for reused in self._reused_turns:
+                self._supersede(reused, now)
+            self._reused_turns.clear()
         return self._new_request(turn), []
 
     def prediction_received(
@@ -316,14 +343,15 @@ class _AMDFSM:
         if category not in ALLOWED[self._category]:
             raise ValueError("invalid amd stage transition")
         self._inference_timeouts = 0
-        return self._release(
-            turn, _Prediction(category, inference_duration=inference_duration), now
-        )
+        turn.pending_prediction = _Prediction(category, inference_duration=inference_duration)
+        return self._release(turn, now)
 
     def inference_failed(self, turn_id: int, now: float) -> list[_AMDEvent]:
         if self.finished or self._pending_turn is None or self._pending_turn.turn_id != turn_id:
             return []
-        events = self._fallback(self._pending_turn, AMDReason.INFERENCE_ERROR, now)
+        turn = self._pending_turn
+        turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.INFERENCE_ERROR)
+        events = self._release(turn, now)
         self._pending_turn = None
         return [*events, *self._flush_reused(now)]
 
@@ -341,10 +369,13 @@ class _AMDFSM:
                 if turn.phase is _Phase.INFERRING:
                     turn.timed_out = True
                     self._inference_timeouts += 1
-                    events.extend(self._fallback(turn, AMDReason.INFERENCE_TIMEOUT, now))
+                    turn.pending_prediction = _Prediction(
+                        self._category, fallback=AMDReason.INFERENCE_TIMEOUT
+                    )
+                    events.extend(self._release(turn, now))
                     events.extend(self._flush_reused(now))
                 elif turn.phase is _Phase.HOLDING:
-                    events.extend(self._resume(turn, now))
+                    events.extend(self._release(turn, now))
         return events
 
     def update_idle(self, now: float, *, session_busy: bool) -> None:
@@ -391,7 +422,7 @@ class _AMDFSM:
         self._hard_deadline = self._idle_deadline = None
         self._pending_dtmf_digits = ""
         for turn in self._turns.values():
-            turn.settle()
+            turn.clear_pending_prediction()
             if turn.decision is None:
                 turn.decision = self._latest or AMDPredictionEvent(
                     turn_id=turn.turn_id,
@@ -416,24 +447,6 @@ class _AMDFSM:
             voicemail_message_played=self._voicemail_message_played,
         )
 
-    def _reuse_pending(self, turn: _Turn, now: float) -> list[_AMDEvent]:
-        """An empty turn re-anchors the pending turn's silence instead of a new request."""
-        pending = self._pending_turn
-        if pending is not None and (pending.decision is None or pending.phase is _Phase.HOLDING):
-            self._reused_turns.append(turn)
-            pending.release_epoch = turn.release_epoch
-            pending.silence_started_at = turn.silence_started_at
-            return self._resume(pending, now)
-        self._supersede(turn.turn_id, now)
-        return self._fallback(turn, AMDReason.REUSED, now)
-
-    def _supersede_pending(self, turn_id: int, now: float) -> None:
-        """Resolve every older turn's pending work before a new request starts."""
-        self._supersede(turn_id, now)
-        if self._pending_turn is not None:
-            self._fallback(self._pending_turn, AMDReason.SUPERSEDED, now)
-            self._flush_reused(now, reason=AMDReason.SUPERSEDED)
-
     def _new_request(self, turn: _Turn) -> ClassifyRequest:
         self._last_inference_turn_id = turn.turn_id
         self._pending_turn = turn
@@ -454,38 +467,30 @@ class _AMDFSM:
             dtmf_digits=turn.dtmf_digits,
         )
 
-    def _supersede(self, turn_id: int, now: float) -> None:
-        for previous in self._turns.values():
-            if previous.turn_id < turn_id and previous.phase is _Phase.HOLDING:
-                self._fallback(previous, AMDReason.SUPERSEDED, now)
+    def _supersede(self, turn: _Turn, now: float) -> None:
+        turn.clear_pending_prediction()
+        if turn.decision is None:
+            turn.decision = self._event(
+                turn, _Prediction(self._category, fallback=AMDReason.SUPERSEDED), now
+            )
 
-    def _flush_reused(self, now: float, *, reason: AMDReason = AMDReason.REUSED) -> list[_AMDEvent]:
+    def _flush_reused(self, now: float) -> list[_AMDEvent]:
         turns, self._reused_turns = self._reused_turns, []
         events: list[_AMDEvent] = []
         for turn in turns:
-            events.extend(self._fallback(turn, reason, now))
+            turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.REUSED)
+            events.extend(self._release(turn, now))
         return events
 
-    def _fallback(self, turn: _Turn, reason: AMDReason, now: float) -> list[_AMDEvent]:
-        turn.settle()
-        if turn.decision is not None:
+    def _release(self, turn: _Turn, now: float) -> list[_AMDEvent]:
+        """Publish the pending prediction, or hold it until enough participant silence."""
+        prediction = turn.pending_prediction
+        if prediction is None:
             return []
-        prediction = _Prediction(self._category, fallback=reason)
-        if reason is AMDReason.SUPERSEDED:
-            turn.decision = self._event(turn, prediction, now)
-            return []
-        return self._release(turn, prediction, now)
-
-    def _resume(self, turn: _Turn, now: float) -> list[_AMDEvent]:
-        if turn.phase is not _Phase.HOLDING:
-            return []
-        assert turn.prediction is not None
-        return self._release(turn, turn.prediction, now)
-
-    def _release(self, turn: _Turn, prediction: _Prediction, now: float) -> list[_AMDEvent]:
-        """Publish a prediction, or hold it until the participant has been silent long enough."""
-        turn.settle()
+        turn.clear_pending_prediction()
         if self.finished:
+            return []
+        if prediction.fallback is not None and turn.decision is not None:
             return []
         if prediction.category not in {AMDCategory.HUMAN, AMDCategory.UNCERTAIN} and (
             self._machine_silence_threshold > 0
@@ -495,7 +500,7 @@ class _AMDFSM:
             release_at = turn.silence_started_at + self._machine_silence_threshold
             if speaking or now < release_at:
                 turn.phase = _Phase.HOLDING
-                turn.prediction = prediction
+                turn.pending_prediction = prediction
                 turn.deadline = None if speaking else release_at
                 return []
         event = self._event(turn, prediction, now)
