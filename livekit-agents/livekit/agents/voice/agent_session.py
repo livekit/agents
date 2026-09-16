@@ -43,6 +43,7 @@ from ..llm import (
     RealtimeModel,
 )
 from ..llm.chat_context import Instructions
+from ..llm.tool_context import ToolError
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
 from ..telemetry import (
@@ -1699,6 +1700,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 activity = self._activity
                 speaking = activity is not None and not activity._user_silence_event.is_set()
                 self._update_user_state("speaking" if speaking else "listening")
+
+    async def cancel_tool_call(self, call_id: str) -> bool:
+        """Cancel one tool call running in this session.
+
+        Returns ``True`` when the call was cancelled. ``False`` when nothing by that
+        call id is running, when the tool does not allow cancellation, or when the
+        speech that issued it disallows interruptions.
+        """
+        task = _RunningTasks.get(self, {}).get(call_id)
+        if task is None:
+            return False
+
+        try:
+            return await task.executor.cancel(call_id)
+        except ToolError:
+            return False
 
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn
