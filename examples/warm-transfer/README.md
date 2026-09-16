@@ -55,6 +55,12 @@ python warm_transfer.py dev
 supervisor through Twilio's Calls API and connect their audio to the consultation
 room. This path requires LiveKit Cloud and the optional `twilio` Python package.
 
+Passing `twilio_call_token` requires `twilio>=6.55.0`, which
+[added CallToken to the Calls API client](https://github.com/twilio/twilio-python/releases/tag/6.55.0).
+Install or upgrade with `pip install 'twilio>=6.55.0'`. If an older SDK lacks
+this parameter, the task raises an upgrade error before contacting the connector
+or dialing. Transfers without a token retain the existing behavior.
+
 To show an inbound customer's phone number to the supervisor, capture `From` and
 `CallToken` from that call's validated Twilio voice webhook. Keep them together in
 your server-side state, keyed by the inbound `CallSid`, and supply them to the task

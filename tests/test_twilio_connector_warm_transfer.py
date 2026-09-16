@@ -1,6 +1,6 @@
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, create_autospec
 from xml.etree import ElementTree
 
 import pytest
@@ -18,6 +18,14 @@ CALL_TOKEN = "opaque-call-token+with/encoding=="
 CONNECT_URL = "wss://connector.example.test/stream?one=1&two=2"
 
 
+def legacy_create(*, to: str, from_: str, twiml: str) -> None:
+    pass
+
+
+def token_create(*, to: str, from_: str, twiml: str, call_token: str = "") -> None:
+    pass
+
+
 @pytest.fixture(autouse=True)
 def mock_background_audio(monkeypatch: pytest.MonkeyPatch) -> None:
     # These tests exercise call origination without starting a room or an audio mixer.
@@ -27,6 +35,7 @@ def mock_background_audio(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def twilio_client(monkeypatch: pytest.MonkeyPatch) -> Mock:
     client = Mock()
+    client.calls.create = create_autospec(token_create)
     client.calls.create.return_value = SimpleNamespace(sid="CA_test_transfer")
     rest = SimpleNamespace(Client=Mock(return_value=client))
     monkeypatch.setitem(sys.modules, "twilio", SimpleNamespace(rest=rest))
@@ -42,6 +51,39 @@ def connector(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     )
     monkeypatch.setattr(warm_transfer, "get_job_context", lambda: ctx)
     return connect
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_call_token", [False, True])
+async def test_legacy_sdk_compatibility(
+    monkeypatch: pytest.MonkeyPatch, twilio_client: Mock, connector: AsyncMock, use_call_token: bool
+) -> None:
+    twilio_client.calls.create = create_autospec(
+        legacy_create, return_value=SimpleNamespace(sid="CA_test_transfer")
+    )
+    options = {"twilio_call_token": CALL_TOKEN} if use_call_token else {}
+    task = TwilioConnectorWarmTransferTask(
+        HUMAN_NUMBER,
+        twilio_from_number=CALLER_NUMBER if use_call_token else TWILIO_NUMBER,
+        twilio_account_sid="AC_test_account",
+        twilio_auth_token="test_auth_token",
+        **options,
+    )
+    wait_for_answer = AsyncMock()
+    monkeypatch.setattr(task, "_wait_for_human_agent", wait_for_answer)
+    room = Mock(spec=rtc.Room)
+
+    if use_call_token:
+        with pytest.raises(RuntimeError, match=r"pip install 'twilio>=6\.55\.0'"):
+            await task._originate_human_agent(room_name="consult-room", identity="human", room=room)
+        connector.assert_not_awaited()
+        twilio_client.calls.create.assert_not_called()
+        wait_for_answer.assert_not_awaited()
+    else:
+        await task._originate_human_agent(room_name="consult-room", identity="human", room=room)
+        twilio_client.calls.create.assert_called_once()
+        assert "call_token" not in twilio_client.calls.create.call_args.kwargs
+        wait_for_answer.assert_awaited_once_with(room=room, identity="human")
 
 
 @pytest.mark.asyncio

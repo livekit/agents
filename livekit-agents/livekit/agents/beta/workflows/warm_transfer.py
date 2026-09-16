@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -470,7 +471,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 together with that call's ``From`` as ``twilio_from_number``.
                 Retrieve the token from server-side state for that specific call;
                 do not include it in prompts or participant attributes. When omitted,
-                no CallToken is sent to Twilio.
+                no CallToken is sent to Twilio. Requires ``twilio>=6.55.0`` when set.
 
         Other arguments have the same meaning as in ``WarmTransferTask``.
         """
@@ -523,6 +524,16 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 "but is not installed. To fix this, run: pip install twilio"
             ) from e
 
+        client = Client(self._twilio_account_sid, self._twilio_auth_token)
+        call_options: dict[str, str] = {}
+        if is_given(self._twilio_call_token):
+            if "call_token" not in inspect.signature(client.calls.create).parameters:
+                raise RuntimeError(
+                    "Using twilio_call_token requires twilio>=6.55.0. "
+                    "To upgrade, run: pip install 'twilio>=6.55.0'"
+                )
+            call_options["call_token"] = self._twilio_call_token
+
         job_ctx = get_job_context()
         resp = await job_ctx.api.connector.connect_twilio_call(
             api.ConnectTwilioCallRequest(
@@ -535,10 +546,6 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             f"<Response><Connect><Stream url={quoteattr(resp.connect_url)}/></Connect></Response>"
         )
 
-        client = Client(self._twilio_account_sid, self._twilio_auth_token)
-        call_options: dict[str, str] = {}
-        if is_given(self._twilio_call_token):
-            call_options["call_token"] = self._twilio_call_token
         call = await asyncio.to_thread(
             client.calls.create,
             to=self._phone_number,
