@@ -166,5 +166,5 @@ class InferenceGPTLiveSession(GPTLiveSession):
     def _is_fatal_error(self, error: types.ErrorBody) -> bool:
         code = error.code or error.type or ""
         return (
-            self._session_id is None and code in _GATEWAY_FATAL_ERROR_CODES
+            not self._session_started_fut.done() and code in _GATEWAY_FATAL_ERROR_CODES
         ) or super()._is_fatal_error(error)

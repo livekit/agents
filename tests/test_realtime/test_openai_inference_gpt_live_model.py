@@ -269,7 +269,12 @@ async def test_transient_provider_error_remains_recoverable(
     session = model.session()
 
     assert not session._is_fatal_error(gpt_live_types.ErrorBody(code="server_error"))
-    session._session_id = "live_test"
+    session._handle_session_started(
+        gpt_live_types.SessionStartedEvent.construct(
+            session=gpt_live_types.SessionResource.construct(id=None)
+        )
+    )
+    assert session._session_id is None
     assert not session._is_fatal_error(gpt_live_types.ErrorBody(code="unsupported_delegated_model"))
 
     await session.aclose()
