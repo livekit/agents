@@ -93,6 +93,30 @@ async def test_a_request_is_answered_by_the_turn_it_opened() -> None:
     assert [(u.state, u.text) for u in updates] == [("completed", "The change fee is $75.")]
 
 
+async def test_each_item_travels_once() -> None:
+    """generate_reply emits speech_created before returning, so its handle is an orphan
+    first and the turn's own second; claiming it twice would double every item."""
+
+    @function_tool
+    async def check_fares(ctx: RunContext) -> str:
+        """Check the fares."""
+        return "fare is 240 USD"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("what is the fare", "", calls=[_tool_call("check_fares", "cf1")])],
+        fallbacks=["It is 240 USD."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
+
+    updates = await _collect(
+        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
+    )
+    await _close(session, runner)
+
+    calls = [u.item for u in updates if u.item is not None and u.item.type == "function_call"]
+    assert [item.call_id for item in calls] == ["cf1"]
+
+
 async def test_a_tools_report_is_relayed_as_written_and_draws_no_reply() -> None:
     """ctx.update() releases the turn, so the answer comes from the return, not the report."""
     finished: list[str] = []
@@ -184,7 +208,7 @@ async def test_a_directive_rides_the_answer() -> None:
     @function_tool
     async def say_goodbye(ctx: RunContext) -> str:
         """Called when the caller is done."""
-        request = ctx.session.request
+        request = ctx.request
         assert request is not None
         request.set_directive("end_session", reason="user_request")
         return "wrapped up"
@@ -211,7 +235,7 @@ async def test_a_tool_sees_the_callers_metadata() -> None:
     @function_tool
     async def look_up(ctx: RunContext) -> str:
         """Look something up."""
-        request = ctx.session.request
+        request = ctx.request
         assert request is not None
         seen.append(dict(request.metadata))
         return "found it"
@@ -233,6 +257,101 @@ async def test_a_tool_sees_the_callers_metadata() -> None:
     assert seen == [{"customer_id": "c-42"}]
 
 
+async def test_one_reply_covering_two_requests_is_carried_by_the_newest() -> None:
+    """The coalescer says one thing about several results. One request carries it; the
+    earlier one is being superseded and ends with what it had already said."""
+    released = asyncio.Event()
+    resume = asyncio.Event()
+
+    @function_tool
+    async def slow_lookup(ctx: RunContext) -> str:
+        """Slow work that reports and then keeps going."""
+        await ctx.update("looking")
+        released.set()
+        await resume.wait()
+        return "the first fact"
+
+    @function_tool
+    async def quick_lookup(ctx: RunContext) -> str:
+        """Work that reports and returns."""
+        await ctx.update("also looking")
+        return "the second fact"
+
+    llm = _AnsweringLLM(
+        fake_responses=[
+            _says("first", "", calls=[_tool_call("slow_lookup", "sl1")]),
+            _says("second", "", calls=[_tool_call("quick_lookup", "ql1")]),
+        ],
+        fallbacks=["Both facts together."],
+    )
+    session, runner = await _serve(
+        Agent(instructions="fare desk", tools=[slow_lookup, quick_lookup]), llm=llm
+    )
+
+    first = runner.submit(TaskInput(instruction="first"), request_id="r1")
+    reading_first = asyncio.create_task(_collect(first))
+    await asyncio.wait_for(released.wait(), timeout=10.0)
+
+    second = runner.submit(TaskInput(instruction="second"), request_id="r2")
+    reading_second = asyncio.create_task(_collect(second))
+    resume.set()
+
+    first_updates = await asyncio.wait_for(reading_first, timeout=30.0)
+    second_updates = await asyncio.wait_for(reading_second, timeout=30.0)
+    await _close(session, runner)
+
+    # the merged reply is said once, by the request that is still live
+    assert "Both facts together." in _texts(second_updates)
+    assert "Both facts together." not in _texts(first_updates)
+    # and the earlier request still ends, with what it had
+    assert [u.state for u in first_updates if u.state != "working"]
+
+
+async def test_a_released_tool_still_reads_its_own_request() -> None:
+    """The supersede path: a tool that released the floor keeps running while the next
+    request is already under way, and must not read the one that overtook it."""
+    seen: list[dict[str, Any]] = []
+    released = asyncio.Event()
+    resume = asyncio.Event()
+
+    @function_tool
+    async def slow_lookup(ctx: RunContext) -> str:
+        """Slow work that reports and then keeps going."""
+        await ctx.update("looking")
+        released.set()
+        await resume.wait()
+        request = ctx.request
+        assert request is not None
+        seen.append(dict(request.metadata))
+        return "found it"
+
+    llm = _AnsweringLLM(
+        fake_responses=[
+            _says("first", "", calls=[_tool_call("slow_lookup", "sl1")]),
+            _says("second", "done second"),
+        ],
+        fallbacks=["done first."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[slow_lookup]), llm=llm)
+
+    first = runner.submit(TaskInput(instruction="first", metadata={"n": 1}), request_id="r1")
+    reading_first = asyncio.create_task(_collect(first))
+    await asyncio.wait_for(released.wait(), timeout=10.0)
+
+    # the second request starts while the first request's tool is still running, and is held
+    # open so it is still the newest when that tool reads
+    second = runner.submit(TaskInput(instruction="second", metadata={"n": 2}), request_id="r2")
+    await asyncio.wait_for(second.__anext__(), timeout=10.0)
+
+    resume.set()
+    await asyncio.wait_for(reading_first, timeout=30.0)
+    await asyncio.wait_for(second.aclose(), timeout=10.0)
+    await _close(session, runner)
+
+    # the tool belongs to the first request, whatever has happened since
+    assert seen == [{"n": 1}]
+
+
 async def test_an_ordinary_session_has_no_request_to_direct() -> None:
     """The same tool body runs in a session nobody is waiting on."""
     branch: list[str] = []
@@ -240,7 +359,7 @@ async def test_an_ordinary_session_has_no_request_to_direct() -> None:
     @function_tool
     async def say_goodbye(ctx: RunContext) -> str:
         """Called when the caller is done."""
-        if (request := ctx.session.request) is not None:
+        if (request := ctx.request) is not None:
             request.set_directive("end_session")
             branch.append("directive")
         else:

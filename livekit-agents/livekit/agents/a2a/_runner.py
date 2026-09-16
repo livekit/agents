@@ -123,8 +123,12 @@ class RequestRun:
     # -- lineage
 
     def claim(self, handle: SpeechHandle) -> None:
+        if handle.id in self.speeches:
+            # generate_reply emits speech_created before it returns, so its handle is parked
+            # as an orphan and then claimed again as the turn's own
+            return
         self.speeches[handle.id] = handle
-        self._runner._by_speech[handle.id] = self
+        handle.request = self._served
         self._runner._orphans.pop(handle.id, None)
         for item in handle.chat_items:
             self.on_item(item, handle)
@@ -190,17 +194,19 @@ class RequestRun:
             self._push(TaskUpdate(item=output))
         self.maybe_finish()
 
-    def on_reply_updated(self, update: ToolReplyUpdated, handle: SpeechHandle | None) -> None:
-        if update.status == "scheduled":
-            for call_id in update.call_ids:
-                if self._runner._by_call.get(call_id) is self:
-                    self.awaiting_reply ^= {call_id}
-            self.pending_replies.add(update.speech_id)
-            if handle is not None:
-                self.claim(handle)
-        else:
-            self.pending_replies.discard(update.speech_id)
-            self.maybe_finish()
+    def on_result_delivered(self, call_id: str) -> None:
+        """This call's result reached the coalescer's reply, whoever ends up saying it."""
+        self.awaiting_reply ^= {call_id}
+        self.maybe_finish()
+
+    def on_reply_scheduled(self, update: ToolReplyUpdated, handle: SpeechHandle | None) -> None:
+        self.pending_replies.add(update.speech_id)
+        if handle is not None:
+            self.claim(handle)
+
+    def on_reply_done(self, update: ToolReplyUpdated) -> None:
+        self.pending_replies.discard(update.speech_id)
+        self.maybe_finish()
 
     # -- completion
 
@@ -267,7 +273,6 @@ class SessionRunner:
     def __init__(self, session: AgentSession) -> None:
         self._session = session
         self._by_call: dict[str, RequestRun] = {}
-        self._by_speech: dict[str, RequestRun] = {}
         self._orphans: dict[str, SpeechHandle] = {}
         """speeches nothing has claimed: a deferred reply before its event, or on_enter."""
         self._seen_items: set[str] = set()
@@ -301,7 +306,6 @@ class SessionRunner:
     def submit(self, task_input: TaskInput, *, request_id: str) -> RequestRun:
         run = RequestRun(self, task_input, request_id)
         self._live.append(run)
-        self._session._served_request = run.served
         return run
 
     async def _feed(self, run: RequestRun) -> None:
@@ -334,8 +338,6 @@ class SessionRunner:
         with contextlib.suppress(ValueError):
             self._live.remove(run)
         self._by_call = {k: v for k, v in self._by_call.items() if v is not run}
-        self._by_speech = {k: v for k, v in self._by_speech.items() if v is not run}
-        self._session._served_request = self._live[-1].served if self._live else None
 
     # -- routing: every session event reaches the request it belongs to
 
@@ -343,7 +345,7 @@ class SessionRunner:
         from ..voice.agent import _get_activity_task_info
 
         handle = ev.speech_handle
-        if handle.id in self._by_speech:
+        if handle.request is not None:
             return
         # a line said, or a reply drawn, from inside a tool belongs to the request that
         # called the tool, wherever its turn has got to by then
@@ -362,9 +364,21 @@ class SessionRunner:
         if update.type == "tool_call_started":
             return  # the call reached us through its speech
         if update.type == "tool_reply_updated":
-            handle = self._orphans.get(update.speech_id)
-            for reply_owner in {self._by_call[c] for c in update.call_ids if c in self._by_call}:
-                reply_owner.on_reply_updated(update, handle)
+            owners = [(c, self._by_call[c]) for c in update.call_ids if c in self._by_call]
+            if not owners:
+                return
+            # one reply says one thing about several results, so one request carries it. The
+            # newest is the one still live — an earlier request whose work this covers is
+            # being superseded, and ends with what it had already said
+            newest = owners[-1][1]
+            if update.status == "scheduled":
+                # the reply is registered before the results are cleared, or the request
+                # carrying it would see no work left and finish without it
+                newest.on_reply_scheduled(update, self._orphans.get(update.speech_id))
+                for call_id, reply_owner in owners:
+                    reply_owner.on_result_delivered(call_id)
+            else:
+                newest.on_reply_done(update)
             return
         if (owner := self._by_call.get(update.call_id)) is None:
             return
@@ -374,7 +388,7 @@ class SessionRunner:
             owner.on_tool_call_ended(update)
 
     def _on_error(self, ev: ErrorEvent) -> None:
-        for run in list(self._by_speech.values()):
+        for run in list(self._live):
             run._push(TaskUpdate(state="failed", text=str(ev.error)))
 
     async def aclose(self) -> None:
@@ -383,7 +397,6 @@ class SessionRunner:
             await run.aclose()
         if self._chores:
             await asyncio.gather(*self._chores, return_exceptions=True)
-        self._session._served_request = None
 
 
 __all__ = ["REQUEST_ID_KEY", "RequestRun", "SessionRunner"]

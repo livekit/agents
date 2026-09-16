@@ -31,7 +31,7 @@ from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .filler_scheduler import _FillerScheduler, _FillerSource
-from .served_request import DirectiveKind
+from .served_request import DirectiveKind, ServedRequest
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -95,6 +95,20 @@ class RunContext(Generic[Userdata_T]):
     @property
     def function_call(self) -> FunctionCall:
         return self._function_call
+
+    @property
+    def request(self) -> ServedRequest | None:
+        """The caller's request this tool call belongs to, or None when nobody asked.
+
+        Read from the speech that issued the call, so a tool that released the floor keeps
+        reading its own request even after a later one has started::
+
+            if (request := ctx.request) is not None:
+                request.set_directive("end_session", reason="user_request")
+            else:
+                await ctx.session.aclose()
+        """
+        return self._speech_handle.request
 
     @property
     def userdata(self) -> Userdata_T:
@@ -326,7 +340,6 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
-    "delegation_directive",
     "delegation_directive",
     "error",
     "close",
