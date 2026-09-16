@@ -121,8 +121,11 @@ async def test_a_tools_report_is_relayed_as_written_and_draws_no_reply() -> None
     assert "checking the fare rules" in _texts(updates)
     # the report was relayed, and the model was never asked to restate it
     assert "nothing left to say" not in _texts(updates)
-    assert [(u.state, u.text) for u in updates if u.state != "working"] == [
-        ("completed", "It is 240 USD.")
+    # the answer lands on the deferred reply speech, which must not count as open work
+    # against itself and announce the answer as progress first
+    assert [(u.state, u.text) for u in updates if u.text] == [
+        ("working", "checking the fare rules"),
+        ("completed", "It is 240 USD."),
     ]
 
 

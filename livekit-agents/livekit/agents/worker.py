@@ -64,6 +64,7 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 if TYPE_CHECKING:
+    from .a2a._server import TextSessionHandler
     from .tunnel import Tunnel
 
 
@@ -419,6 +420,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # built here and not in run(): the @server.http decorators run at import time
         self._http = FastAPI()
         self._http.state.agent_server = self
+        self._text_sessions: list[Any] = []
 
         self._lock = asyncio.Lock()
 
@@ -434,6 +436,41 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         of your own replaces.
         """
         return self._http
+
+    def text_session(
+        self, *, endpoint: str, description: str, name: str | None = None
+    ) -> Callable[[TextSessionHandler], TextSessionHandler]:
+        """Serve an ``AgentSession`` at ``/<endpoint>`` on :attr:`http`, speaking A2A.
+
+        The handler runs once per conversation. It builds the session, starts it, and hands
+        it over; the framework feeds each incoming request through it as a turn::
+
+            @server.text_session(endpoint="fare-desk", description="Answers fare questions.")
+            async def fare_desk(ctx: TextSessionContext) -> None:
+                session = AgentSession(llm="openai/gpt-4.1")
+                await session.start(agent=FareDesk())
+                ctx.attach(session)
+
+        Needs the ``a2a`` extra. The endpoint serves its card at
+        ``/<endpoint>/.well-known/agent-card.json`` and the binding's methods under
+        ``/<endpoint>/v1``.
+        """
+
+        def decorator(handler: TextSessionHandler) -> TextSessionHandler:
+            from .a2a._server import mount
+
+            self._text_sessions.append(
+                mount(
+                    self._http,
+                    endpoint=endpoint,
+                    handler=handler,
+                    description=description,
+                    name=name,
+                )
+            )
+            return handler
+
+        return decorator
 
     @property
     def http_tunnel(self) -> Tunnel | None:
@@ -1118,6 +1155,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # let in-flight availability tasks finish launching their jobs
             # before closing the proc pool (they accepted before shutdown)
             await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
+            for text_session in self._text_sessions:
+                with contextlib.suppress(Exception):
+                    await text_session.aclose()
 
             await self._proc_pool.aclose()
 

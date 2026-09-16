@@ -127,11 +127,11 @@ class RequestRun:
         self._runner._by_speech[handle.id] = self
         self._runner._orphans.pop(handle.id, None)
         for item in handle.chat_items:
-            self.on_item(item)
-        handle.add_item_added_callback(self.on_item)
+            self.on_item(item, handle)
+        handle.add_item_added_callback(lambda item: self.on_item(item, handle))
         handle.add_done_callback(lambda _: self.maybe_finish())
 
-    def on_item(self, item: ChatItem) -> None:
+    def on_item(self, item: ChatItem, handle: SpeechHandle) -> None:
         if item.type == "function_call":
             item.extra.setdefault(REQUEST_ID_KEY, self._request_id)
             self._runner._by_call[item.call_id] = self
@@ -157,7 +157,8 @@ class RequestRun:
             return
 
         self.last_word, self.concluded_at = text, time.monotonic()
-        if self.open_work(besides=None):
+        # the speech this arrived on does not count against itself
+        if self.open_work(besides=handle.id):
             # a conclusion with work still open announces that work
             self._push(TaskUpdate(text=text, item=item))
         else:
