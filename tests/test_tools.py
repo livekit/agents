@@ -2193,6 +2193,34 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
     )
 
 
+class TestSpeechHandleItemCallbacks:
+    """A caller watching what a speech records, item by item."""
+
+    def test_callback_fires_on_each_item_until_removed(self):
+        from livekit.agents.llm import ChatContext
+        from livekit.agents.voice.speech_handle import SpeechHandle
+
+        handle = SpeechHandle.create()
+        seen: list[str] = []
+        chat_ctx = ChatContext.empty()
+
+        handle.add_item_added_callback(lambda item: seen.append(item.id))
+        first = chat_ctx.add_message(role="assistant", content="one", id="m1")
+        handle._item_added([first])
+        assert seen == ["m1"]
+
+        def _record(item):
+            seen.append(item.id)
+
+        handle.add_item_added_callback(_record)
+        handle.remove_item_added_callback(_record)
+        second = chat_ctx.add_message(role="assistant", content="two", id="m2")
+        handle._item_added([second])
+        assert seen == ["m1", "m2"]
+        # both items stay readable after the fact
+        assert [item.id for item in handle.chat_items] == ["m1", "m2"]
+
+
 class TestToolCallEvents:
     """tool_execution_updated emission across the executor lifecycle."""
 
