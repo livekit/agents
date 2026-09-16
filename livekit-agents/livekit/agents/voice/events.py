@@ -253,14 +253,18 @@ class RunContext(Generic[Userdata_T]):
             ),
         )
 
+        # the event above carries what the tool asked for; a session that never answers
+        # progress drops the model round on top of it
+        reply = not silent and self._session._reply_to_tool_updates
+
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
-            self._suppress_reply = silent
+            self._suppress_reply = not reply
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], silent=silent)
+        await self._executor._enqueue_reply(self, [pair[0], pair[1]], silent=not reply)
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

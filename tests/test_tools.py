@@ -2634,6 +2634,51 @@ class TestToolCallEvents:
         assert [r.speech_id for r in scheduled] == ["reply_1", "reply_2"]
 
     @pytest.mark.asyncio
+    async def test_session_that_never_replies_to_progress(self):
+        from livekit.agents.voice.events import RunContext, ToolCallUpdated, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            await ctx.update("step two")
+            return "all done"
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        session._reply_to_tool_updates = False
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c12", name="progress_tool")
+
+        first = await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        assert "step one" in first
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        if executor._reply_task is not None:
+            await executor._reply_task
+
+        items = _emitted_items(session)
+        # every report still goes out, flagged as the tool wrote it
+        assert [i.id for i in items if isinstance(i, ToolCallUpdated)] == ["c12", "c12_update_1"]
+        assert [i.silent for i in items if isinstance(i, ToolCallUpdated)] == [False, False]
+        # only the tool's return is answered; the reports are recorded, not voiced
+        scheduled = [i for i in items if isinstance(i, ToolReplyUpdated)]
+        assert [i.update_ids for i in scheduled if i.status == "scheduled"] == [["c12_final"]]
+
+    @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):
         from livekit.agents.voice.events import RunContext, ToolReplyUpdated
         from livekit.agents.voice.tool_executor import _ToolExecutor
