@@ -150,7 +150,6 @@ class _GeminiJsonSchema:
 
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         schema.pop("title", None)
-        schema.pop("default", None)
         schema.pop("additionalProperties", None)
         schema.pop("$schema", None)
 
