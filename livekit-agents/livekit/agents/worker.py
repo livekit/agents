@@ -94,6 +94,11 @@ def _default_setup_fnc(proc: JobProcess) -> Any:
     return
 
 
+async def _unreachable_entrypoint(ctx: JobContext) -> None:
+    """Stands in where no RTC session was registered; nothing can dispatch a job to it."""
+    raise RuntimeError("this agent server has no RTC session entrypoint")
+
+
 async def _default_request_fnc(ctx: JobRequest) -> None:
     await ctx.accept()
 
@@ -406,6 +411,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
+        self._close_future: asyncio.Future[None] | None = None
         self._closed, self._draining, self._connecting, self._connection_failed = (
             True,
             False,
@@ -416,6 +422,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._worker_load: float = 0.0
 
         self._http_server: _HttpRunner | None = None
+        # COMMENT: Remove the http tunel for now, defer it after the protocol settled
         self._http_tunnel: Tunnel | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = FastAPI()
@@ -686,13 +693,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise Exception("worker is already running")
 
             if self._entrypoint_fnc is None:
-                raise RuntimeError(
-                    "No RTC session entrypoint has been registered.\n"
-                    "Define one using the @server.rtc_session() decorator, for example:\n"
-                    '    @server.rtc_session(agent_name="my_agent")\n'
-                    "    async def my_agent(ctx: JobContext):\n"
-                    "        ...\n"
-                )
+                if not self._text_sessions:
+                    raise RuntimeError(
+                        "No RTC session entrypoint has been registered.\n"
+                        "Define one using the @server.rtc_session() decorator, for example:\n"
+                        '    @server.rtc_session(agent_name="my_agent")\n'
+                        "    async def my_agent(ctx: JobContext):\n"
+                        "        ...\n"
+                        "Or serve text sessions alone with @server.text_session().\n"
+                    )
+                # nothing here answers a room, so no job can ever be dispatched: serve the
+                # HTTP app, stay out of the job dispatcher, and warm no processes for it
+                unregistered = True
+                self._entrypoint_fnc = _unreachable_entrypoint
+                self._num_idle_processes = 0
 
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
@@ -724,7 +738,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
-            self._close_future: asyncio.Future[None] | None = None
+            self._close_future = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
             self._inference_executor = None
