@@ -22,7 +22,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from camb.realtime import (
     AudioDeltaEvent,
@@ -181,7 +181,9 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
 
     async def _run(self) -> None:
         try:
-            overrides = {"base_url": self._opts.base_url} if self._opts.base_url else {}
+            overrides: dict[str, Any] = (
+                {"base_url": self._opts.base_url} if self._opts.base_url else {}
+            )
             session = await camb_connect(
                 self._opts.api_key,
                 **overrides,
