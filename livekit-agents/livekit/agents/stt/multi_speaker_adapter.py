@@ -139,9 +139,14 @@ class MultiSpeakerAdapterWrapper(RecognizeStream):
         # the wrapped stream already reports usage for this audio and the adapter re-emits it,
         # so measuring the forwarded events here would count every recognition twice. the
         # retry-count reset still has to happen, otherwise hiccups spread over a long call
-        # accumulate instead of being forgiven by a successful transcript.
+        # accumulate instead of being forgiven by a successful provider response.
         async for ev in event_aiter:
-            if ev.type == SpeechEventType.FINAL_TRANSCRIPT:
+            if ev.type in (
+                SpeechEventType.INTERIM_TRANSCRIPT,
+                SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                SpeechEventType.FINAL_TRANSCRIPT,
+                SpeechEventType.RECOGNITION_USAGE,
+            ):
                 self._num_retries = 0
 
     async def _run(self) -> None:
