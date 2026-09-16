@@ -573,112 +573,104 @@ class _ToolExecutor:
         pending = self._pending_updates[:]
         self._pending_updates.clear()
 
-        # one reply per turn that issued the calls: a reply answering two turns' work would
-        # belong to both and to neither
-        groups: dict[str, list[_PendingUpdate]] = {}
-        for update in pending:
-            groups.setdefault(update.ctx.speech_handle.id, []).append(update)
+        # one reply covering everything buffered, which is one thing said about several
+        # results rather than several things said at once
+        updates = pending
+        pending_items = [item for u in updates for item in u.items]
+        if not pending_items:
+            return
 
-        for updates in groups.values():
-            pending_items = [item for u in updates for item in u.items]
-            if not pending_items:
-                continue
+        # only insert again if delivery target differs (session-scoped handoff)
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
+        items_to_insert = [
+            item for u in updates for item in u.items if u.target is not target_agent
+        ]
+        if items_to_insert:
+            logger.warning(
+                "agent handoff happened while tool waiting for reply delivering",
+                extra={
+                    "tools": [
+                        u.ctx.function_call.name for u in updates if u.target is not target_agent
+                    ],
+                },
+            )
+            chat_ctx = target_agent.chat_ctx.copy()
+            chat_ctx.insert(items_to_insert)
 
-            # only insert again if delivery target differs (session-scoped handoff)
-            chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN
-            items_to_insert = [
-                item for u in updates for item in u.items if u.target is not target_agent
-            ]
-            if items_to_insert:
-                logger.warning(
-                    "agent handoff happened while tool waiting for reply delivering",
-                    extra={
-                        "tools": [
-                            u.ctx.function_call.name
-                            for u in updates
-                            if u.target is not target_agent
-                        ],
-                    },
+        # if the update is still the tail, the agent hasn't spoken since — summarize
+        # directly; otherwise let the LLM decide whether it already covered this
+        tail = target_agent.chat_ctx.items
+        at_tail = bool(tail) and tail[-1].id == pending_items[-1].id
+        template = (
+            self._tool_options["reply_at_tail_template"]
+            if at_tail
+            else self._tool_options["reply_maybe_covered_template"]
+        )
+
+        update_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        call_ids = list(dict.fromkeys(u.ctx.function_call.call_id for u in updates))
+        speech = session.generate_reply(
+            instructions=_render(template, {"call_ids": update_ids}),
+            tool_choice="none",
+            chat_ctx=chat_ctx,
+        )
+        session._tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolReplyUpdated(
+                    update_ids=update_ids,
+                    call_ids=call_ids,
+                    status="scheduled",
+                    speech_id=speech.id,
                 )
-                chat_ctx = target_agent.chat_ctx.copy()
-                chat_ctx.insert(items_to_insert)
+            ),
+        )
+        logger.debug(
+            "generate async tool reply",
+            extra={
+                "speech_id": speech.id,
+                "items": [
+                    (item.name, item.call_id)
+                    for item in pending_items
+                    if item.type == "function_call_output"
+                ],
+                "updates_at_tail": at_tail,
+            },
+        )
 
-            # if the update is still the tail, the agent hasn't spoken since — summarize
-            # directly; otherwise let the LLM decide whether it already covered this
-            tail = target_agent.chat_ctx.items
-            at_tail = bool(tail) and tail[-1].id == pending_items[-1].id
-            template = (
-                self._tool_options["reply_at_tail_template"]
-                if at_tail
-                else self._tool_options["reply_maybe_covered_template"]
-            )
+        def _on_speech_done(
+            speech: SpeechHandle,
+            *,
+            update_ids: list[str] = update_ids,
+            call_ids: list[str] = call_ids,
+        ) -> None:
+            reply_status: Literal["completed", "interrupted", "skipped"]
+            if speech.interrupted:
+                reply_status = "interrupted"
+            elif not speech.chat_items:
+                # the LLM judged the content already covered and produced no output
+                reply_status = "skipped"
+            else:
+                reply_status = "completed"
 
-            update_ids = [
-                item.call_id for item in pending_items if item.type == "function_call_output"
-            ]
-            call_ids = list(dict.fromkeys(u.ctx.function_call.call_id for u in updates))
-            speech = session.generate_reply(
-                instructions=_render(template, {"call_ids": update_ids}),
-                tool_choice="none",
-                chat_ctx=chat_ctx,
-            )
+            if not speech.chat_items:
+                logger.debug(
+                    "async tool reply was done without outputs",
+                    extra={"speech_id": speech.id, "interrupted": speech.interrupted},
+                )
+                # TODO(long): reschedule interrupted replies?
+
             session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(
                     update=ToolReplyUpdated(
                         update_ids=update_ids,
                         call_ids=call_ids,
-                        status="scheduled",
+                        status=reply_status,
                         speech_id=speech.id,
                     )
                 ),
             )
-            logger.debug(
-                "generate async tool reply",
-                extra={
-                    "speech_id": speech.id,
-                    "items": [
-                        (item.name, item.call_id)
-                        for item in pending_items
-                        if item.type == "function_call_output"
-                    ],
-                    "updates_at_tail": at_tail,
-                },
-            )
 
-            def _on_speech_done(
-                speech: SpeechHandle,
-                *,
-                update_ids: list[str] = update_ids,
-                call_ids: list[str] = call_ids,
-            ) -> None:
-                reply_status: Literal["completed", "interrupted", "skipped"]
-                if speech.interrupted:
-                    reply_status = "interrupted"
-                elif not speech.chat_items:
-                    # the LLM judged the content already covered and produced no output
-                    reply_status = "skipped"
-                else:
-                    reply_status = "completed"
-
-                if not speech.chat_items:
-                    logger.debug(
-                        "async tool reply was done without outputs",
-                        extra={"speech_id": speech.id, "interrupted": speech.interrupted},
-                    )
-                    # TODO(long): reschedule interrupted replies?
-
-                session._tool_execution_updated(
-                    ToolExecutionUpdatedEvent(
-                        update=ToolReplyUpdated(
-                            update_ids=update_ids,
-                            call_ids=call_ids,
-                            status=reply_status,
-                            speech_id=speech.id,
-                        )
-                    ),
-                )
-
-            speech.add_done_callback(_on_speech_done)
+        speech.add_done_callback(_on_speech_done)
 
     async def _check_duplicate(
         self,

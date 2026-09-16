@@ -404,9 +404,11 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
 
 
-def test_an_ordinary_session_answers_nobody() -> None:
+def test_a_speech_nobody_asked_for_answers_nobody() -> None:
     """The accessor is also the check: no caller, no request to set a directive on."""
-    assert AgentSession().request is None
+    from livekit.agents.voice import SpeechHandle
+
+    assert SpeechHandle.create().request is None
 
 
 def test_a_directive_is_advice_carried_with_the_answer() -> None:

@@ -2623,59 +2623,6 @@ class TestToolCallEvents:
         await _drain_executor(executor)
 
     @pytest.mark.asyncio
-    async def test_two_turns_buffered_together_get_a_reply_each(self):
-        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
-        from livekit.agents.voice.tool_executor import _ToolExecutor
-
-        @function_tool
-        async def progress_tool(ctx: RunContext) -> str:
-            """p"""
-            await ctx.update("on it")
-            return "done"
-
-        import asyncio as _asyncio
-        from unittest.mock import MagicMock
-
-        replies = [_make_fake_speech(), _make_fake_speech()]
-        replies[0].id = "reply_1"
-        replies[1].id = "reply_2"
-        session = _make_reply_session(replies[0])
-        session.generate_reply = MagicMock(side_effect=replies)
-
-        # hold delivery until both turns have buffered, so one pass sees them together
-        idle_event = _asyncio.Event()
-        activity = session.wait_for_idle.return_value
-
-        async def _wait_for_idle():
-            await idle_event.wait()
-            return activity
-
-        session.wait_for_idle = _wait_for_idle
-
-        executor = _ToolExecutor()
-        for call_id, speech_id in (("c8", "turn_1"), ("c9", "turn_2")):
-            run_ctx = _make_run_context_with_session(session, call_id=call_id, name="progress_tool")
-            run_ctx.speech_handle.id = speech_id
-            await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
-
-        while executor.has_running_tasks:
-            await _asyncio.sleep(0)
-        idle_event.set()
-        assert executor._reply_task is not None
-        await executor._reply_task
-
-        scheduled = [
-            item
-            for item in _emitted_items(session)
-            if isinstance(item, ToolReplyUpdated) and item.status == "scheduled"
-        ]
-        assert [(r.call_ids, r.update_ids) for r in scheduled] == [
-            (["c8"], ["c8_final"]),
-            (["c9"], ["c9_final"]),
-        ]
-        assert [r.speech_id for r in scheduled] == ["reply_1", "reply_2"]
-
-    @pytest.mark.asyncio
     async def test_session_that_never_replies_to_progress(self):
         from livekit.agents.voice.events import RunContext, ToolCallUpdated, ToolReplyUpdated
         from livekit.agents.voice.tool_executor import _ToolExecutor
@@ -2811,7 +2758,6 @@ class TestToolCallEvents:
         executor = _ToolExecutor()
         ctx_a = _make_run_context_with_session(session, call_id="a", name="progress_tool")
         ctx_b = _make_run_context_with_session(session, call_id="b", name="progress_tool")
-        ctx_a.speech_handle.id = ctx_b.speech_handle.id = "one_turn"
 
         await executor.execute(tool=progress_tool, run_ctx=ctx_a, raw_arguments={})
         await executor.execute(tool=progress_tool, run_ctx=ctx_b, raw_arguments={})
