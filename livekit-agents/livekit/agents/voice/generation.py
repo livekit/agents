@@ -192,20 +192,23 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.flatten()
 
-    attrs: dict[str, Any] = {
-        trace_types.ATTR_CHAT_CTX: json.dumps(
-            chat_ctx.to_dict(
-                exclude_audio=True,
-                exclude_image=True,
-                exclude_timestamp=True,
-                exclude_metrics=True,
-            )
-        ),
-        trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
-        trace_types.ATTR_PROVIDER_TOOLS: [type(tool).__name__ for tool in tool_ctx.provider_tools],
-        trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
-    }
-    current_span.set_attributes(attrs)
+    if current_span.is_recording():
+        attrs: dict[str, Any] = {
+            trace_types.ATTR_CHAT_CTX: json.dumps(
+                chat_ctx.to_dict(
+                    exclude_audio=True,
+                    exclude_image=True,
+                    exclude_timestamp=True,
+                    exclude_metrics=True,
+                )
+            ),
+            trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
+            trace_types.ATTR_PROVIDER_TOOLS: [
+                type(tool).__name__ for tool in tool_ctx.provider_tools
+            ],
+            trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
+        }
+        current_span.set_attributes(attrs)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
     # provider call the convention describes — setting them here as well would make a
@@ -391,17 +394,18 @@ def _record_uninstrumented_inference(
     gen_ai_telemetry.set_response_attributes(
         span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
     )
-    gen_ai_telemetry.set_content_attributes(
-        span,
-        system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
-        input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
-        tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
-        output_messages=gen_ai_telemetry.to_output_messages(
-            text=data.generated_text,
-            function_calls=data.generated_functions,
-            finish_reason=finish_reason,
-        ),
-    )
+    if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+        gen_ai_telemetry.set_content_attributes(
+            span,
+            system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
+            input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+            tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
+            output_messages=gen_ai_telemetry.to_output_messages(
+                text=data.generated_text,
+                function_calls=data.generated_functions,
+                finish_reason=finish_reason,
+            ),
+        )
     if usage is not None:
         gen_ai_telemetry.set_usage_attributes(span, usage)
 

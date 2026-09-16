@@ -80,6 +80,7 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         extra = extra_instructions if extra_instructions else ""
 
         self._current_phone_number = ""
+        self._spell_read_back = False
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -152,9 +153,15 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         current_tools.append(confirm_tool)
         await self.update_tools(current_tools)
 
+        read_back = (
+            f"Read the number back digit by digit: {' '.join(cleaned)}"
+            if self._spell_read_back
+            else "Read the number back to the user in groups."
+        )
+        self._spell_read_back = True
         return (
             f"The phone number has been updated to {cleaned}\n"
-            f"Read the number back to the user in groups.\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_phone_number` directly"
         )
 
