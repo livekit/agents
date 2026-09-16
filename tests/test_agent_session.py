@@ -46,7 +46,12 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
+from livekit.agents.voice.events import (
+    MESSAGE_SOURCE_KEY,
+    AgentState,
+    FunctionToolsExecutedEvent,
+    UserState,
+)
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
@@ -396,6 +401,44 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+async def test_assistant_messages_carry_their_source() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("Northwind Air, how can I help?")
+
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Northwind Air, how can I help?")
+    actions.add_user_speech(1.5, 3.5, "What's the weather in Tokyo?")
+    actions.add_llm(
+        content="Let me check the weather for you.",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1")
+        ],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(content="Sunny today.", input="The weather in Tokyo is sunny today.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant = [
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "assistant"
+    ]
+    assert [item.text_content for item in assistant] == [
+        "Northwind Air, how can I help?",
+        "Let me check the weather for you.",
+        "Sunny today.",
+    ]
+    assert [item.extra[MESSAGE_SOURCE_KEY] for item in assistant] == [
+        "say",
+        "tool_call",
+        "turn_end",
+    ]
 
 
 async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:

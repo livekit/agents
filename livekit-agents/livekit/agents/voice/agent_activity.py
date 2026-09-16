@@ -61,6 +61,7 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
+    MESSAGE_SOURCE_KEY,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -3348,6 +3349,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
+                extra={MESSAGE_SOURCE_KEY: "say"},
             )
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
@@ -3855,9 +3857,15 @@ class AgentActivity(RecognitionHooks):
             # forwarded_text carries the raw LLM output including any expressive markup
             # (the transcript forwarder strips it only for the room transcript), so the
             # markup lives directly on the stored assistant message.
-            extra_kwargs: dict = {}
-            if llm_gen_data.generated_extra:
-                extra_kwargs["extra"] = llm_gen_data.generated_extra
+            # the llm stream is drained by now, so this step's tool calls are known
+            extra_kwargs: dict = {
+                "extra": {
+                    **llm_gen_data.generated_extra,
+                    MESSAGE_SOURCE_KEY: "tool_call"
+                    if llm_gen_data.generated_functions
+                    else "turn_end",
+                }
+            }
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -4075,6 +4083,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                said=True,
             )
             return
 
@@ -4180,6 +4189,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        said: bool = False,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4193,6 +4203,7 @@ class AgentActivity(RecognitionHooks):
                     generation_ev=generation_ev,
                     model_settings=model_settings,
                     instructions=instructions,
+                    said=said,
                     inference_span=inference_span,
                 )
             finally:
@@ -4205,6 +4216,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        said: bool = False,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
@@ -4513,6 +4525,13 @@ class AgentActivity(RecognitionHooks):
                 content=[forwarded_text],
                 id=message_id,
                 interrupted=interrupted,
+                # a model with `supports_say` serves say() from here, and a said line ends
+                # no model turn
+                extra={
+                    MESSAGE_SOURCE_KEY: "say"
+                    if said
+                    else ("tool_call" if function_calls else "turn_end")
+                },
             )
             if started_speaking_at is not None:
                 msg.created_at = started_speaking_at

@@ -10,6 +10,7 @@ from .agent_session import (
 )
 from .audio_recognition import AudioRecognition
 from .events import (
+    MESSAGE_SOURCE_KEY,
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
@@ -59,6 +60,7 @@ __all__ = [
     "ModelSettings",
     "AgentTask",
     "SpeechHandle",
+    "MESSAGE_SOURCE_KEY",
     "RunContext",
     "UserInputTranscribedEvent",
     "AgentEvent",

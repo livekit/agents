@@ -41,6 +41,15 @@ if TYPE_CHECKING:
 
 Userdata_T = TypeVar("Userdata_T")
 
+MESSAGE_SOURCE_KEY = "message_source"
+"""``ChatMessage.extra`` key on an assistant message: what produced it.
+
+``turn_end`` for a model turn that called nothing, ``tool_call`` for one that ended in
+tool calls, ``say`` for text handed to :meth:`AgentSession.say`.
+"""
+
+MessageSource = Literal["turn_end", "tool_call", "say"]
+
 
 class RunContext(Generic[Userdata_T]):
     # private ctor
