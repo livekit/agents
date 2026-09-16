@@ -6,6 +6,8 @@ import pytest
 from livekit import rtc
 from livekit.agents.utils.audio import AudioArrayBuffer
 
+pytestmark = pytest.mark.unit
+
 
 def _frame(samples: list[int], *, sr: int = 16000, ch: int = 1) -> rtc.AudioFrame:
     data = np.array(samples, dtype=np.int16).tobytes()
@@ -198,6 +200,26 @@ class TestSampleRates:
         buf.push_frame(_frame(list(range(frame_samples)), sr=frame_sr))
         expected = buf_sr * 50 // 1000
         assert abs(len(buf.read()) - expected) <= 10  # QUICK quality resampler may round
+
+    def test_upsampled_too_large_raises(self) -> None:
+        """A frame that only overflows once upsampled blames the resampling, not the caller."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        with pytest.raises(ValueError, match="after resampling 8000Hz to 16000Hz"):
+            buf.push_frame(_frame(list(range(900)), sr=8000))
+
+    def test_downsampled_fits_buffer(self) -> None:
+        """A frame that only fits once downsampled is accepted."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=8000)
+        written = buf.push_frame(_frame(list(range(1800)), sr=16000))
+        assert abs(written - 900) <= 10  # QUICK quality resampler may round
+        assert len(buf) == written
+
+    def test_frame_shorter_than_resampler_output(self) -> None:
+        """A frame the resampler holds back writes nothing instead of raising."""
+        buf = AudioArrayBuffer(buffer_size=1000, sample_rate=16000)
+        assert buf.push_frame(_frame([1], sr=8000)) == 0
+        assert len(buf) == 0
+        assert buf.push_frame(_frame([2, 3, 4, 5], sr=8000)) > 0
 
 
 class TestPerformance:

@@ -22,14 +22,15 @@ import json
 import os
 import ssl
 import weakref
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import aiohttp
 import numpy as np
 
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     LanguageCode,
@@ -41,7 +42,9 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
+from . import qwen3_stt
 from .log import logger
+from .models import STTModels
 
 STTEncoding = Literal["pcm_s16le", "pcm_mulaw"]
 
@@ -60,6 +63,7 @@ class STTOptions:
     buffer_size_seconds: float = 0.032
     encoding: str = "pcm_s16le"
     language: LanguageCode = LanguageCode("en")
+    language_options: list[LanguageCode] = field(default_factory=list)
 
     # Streaming params – controls how transcripts are delivered
     enable_partial_transcripts: bool = True
@@ -82,6 +86,7 @@ class STT(stt.STT):
     def __init__(
         self,
         *,
+        model: STTModels = "whisper",
         api_key: str | None = None,
         model_endpoint: str | None = None,
         model_id: str | None = None,
@@ -89,14 +94,15 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         encoding: NotGivenOr[STTEncoding] = NOT_GIVEN,
         buffer_size_seconds: float = 0.032,
-        language: str = "en",
+        language: NotGivenOr[str] = NOT_GIVEN,
+        language_options: list[str] | None = None,
         enable_partial_transcripts: bool = True,
-        partial_transcript_interval_s: float = 1.0,
+        partial_transcript_interval_s: NotGivenOr[float] = NOT_GIVEN,
         final_transcript_max_duration_s: int = 30,
-        show_word_timestamps: bool = True,
+        show_word_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_threshold: float = 0.5,
-        vad_min_silence_duration_ms: int = 300,
-        vad_speech_pad_ms: int = 30,
+        vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+        vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
     ):
         """Baseten Speech-to-Text provider.
@@ -129,20 +135,75 @@ class STT(stt.STT):
             sample_rate: Audio sample rate in Hz (default ``16000``).
             encoding: Audio encoding – ``pcm_s16le`` (default) or ``pcm_mulaw``.
             buffer_size_seconds: Audio buffer size in seconds.
-            language: BCP-47 language code (default ``en``).  Use ``auto`` for
-                automatic language detection.
+            language: For ``whisper``, a BCP-47 code (default ``en``); use
+                ``auto`` for detection. For ``qwen3-asr``, a Qwen3-ASR canonical
+                language name (``English``, ``Cantonese``) or ``auto``
+                (the default) — forcing one also sets the *output* language and
+                can translate, so use it only to pin what is actually spoken.
+            language_options: Restrict automatic detection to this set of
+                language codes, e.g. ``["en", "de"]``.  Detection across all
+                supported languages is unreliable on the one- to two-second
+                utterances typical of telephony, so scoping it to the languages
+                an agent actually supports is usually more accurate than
+                ``auto``.  Requires Baseten Whisper runtime v0.5.0 or newer;
+                empty (the default) leaves detection unrestricted.
             enable_partial_transcripts: Emit interim transcripts while the speaker
                 is still talking.  Defaults to ``True``.
             partial_transcript_interval_s: Interval (seconds) between partial
-                transcript updates.
+                transcript updates. Defaults to 1.0 for ``whisper`` and 0.5 for
+                ``qwen3-asr``, matching each deployment's own default.
             final_transcript_max_duration_s: Maximum seconds of audio before the
                 server forces a final transcript.
-            show_word_timestamps: Include word-level timestamps in results.
+            show_word_timestamps: Include word-level timestamps. Defaults to
+                on for ``whisper``; off for ``qwen3-asr``, whose aligner is
+                opt-in on the deployment (``STREAM_ALIGNER=mms``).
             vad_threshold: Server-side VAD threshold (0.0–1.0).
-            vad_min_silence_duration_ms: Minimum silence (ms) to end an utterance.
-            vad_speech_pad_ms: Padding (ms) around detected speech.
+            vad_min_silence_duration_ms: Minimum silence (ms) to end an
+                utterance. Defaults to 300 (``whisper``) / 500 (``qwen3-asr``).
+            vad_speech_pad_ms: Padding (ms) around detected speech. Defaults to
+                30 (``whisper``) / 100 (``qwen3-asr``).
             http_session: Optional :class:`aiohttp.ClientSession` to reuse.
         """
+        self._model_name = model
+        self._qwen3: qwen3_stt._Qwen3Backend | None = None
+
+        if model == "qwen3-asr":
+            self._qwen3 = qwen3_stt._Qwen3Backend(
+                model_endpoint=model_endpoint,
+                model_id=model_id,
+                chain_id=chain_id,
+                api_key=api_key,
+                language=language if is_given(language) else "auto",
+                interim_results=enable_partial_transcripts,
+                partial_transcript_interval_s=(
+                    partial_transcript_interval_s
+                    if is_given(partial_transcript_interval_s)
+                    else 0.5
+                ),
+                final_transcript_max_duration_s=final_transcript_max_duration_s,
+                vad_threshold=vad_threshold,
+                vad_min_silence_duration_ms=(
+                    vad_min_silence_duration_ms if is_given(vad_min_silence_duration_ms) else 500
+                ),
+                vad_speech_pad_ms=vad_speech_pad_ms if is_given(vad_speech_pad_ms) else 100,
+                # Off unless asked for: the aligner is opt-in on the deployment
+                # (STREAM_ALIGNER), so defaulting it on would advertise a
+                # capability the server may silently not honour.
+                word_timestamps=show_word_timestamps if is_given(show_word_timestamps) else False,
+                http_session=http_session,
+            )
+            super().__init__(
+                capabilities=stt.STTCapabilities(
+                    streaming=True,
+                    interim_results=enable_partial_transcripts,
+                    aligned_transcript="word" if show_word_timestamps else False,
+                    offline_recognize=True,
+                )
+            )
+            self._session = http_session
+            self._streams = weakref.WeakSet[stt.SpeechStream]()
+            return
+
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
@@ -187,25 +248,30 @@ class STT(stt.STT):
         self._opts = STTOptions(
             sample_rate=sample_rate,
             buffer_size_seconds=buffer_size_seconds,
-            language=LanguageCode(language),
+            language=LanguageCode(language if is_given(language) else "en"),
+            language_options=[LanguageCode(lang) for lang in language_options or []],
             enable_partial_transcripts=enable_partial_transcripts,
-            partial_transcript_interval_s=partial_transcript_interval_s,
+            partial_transcript_interval_s=(
+                partial_transcript_interval_s if is_given(partial_transcript_interval_s) else 1.0
+            ),
             final_transcript_max_duration_s=final_transcript_max_duration_s,
-            show_word_timestamps=show_word_timestamps,
+            show_word_timestamps=(show_word_timestamps if is_given(show_word_timestamps) else True),
             vad_threshold=vad_threshold,
-            vad_min_silence_duration_ms=vad_min_silence_duration_ms,
-            vad_speech_pad_ms=vad_speech_pad_ms,
+            vad_min_silence_duration_ms=(
+                vad_min_silence_duration_ms if is_given(vad_min_silence_duration_ms) else 300
+            ),
+            vad_speech_pad_ms=vad_speech_pad_ms if is_given(vad_speech_pad_ms) else 30,
         )
 
         if is_given(encoding):
             self._opts.encoding = encoding
 
         self._session = http_session
-        self._streams = weakref.WeakSet[SpeechStream]()
+        self._streams = weakref.WeakSet[stt.SpeechStream]()
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._model_name
 
     @property
     def provider(self) -> str:
@@ -224,6 +290,10 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
     ) -> stt.SpeechEvent:
+        if self._qwen3 is not None:
+            return await self._qwen3.recognize_via_stream(
+                self, buffer, language=language, conn_options=conn_options
+            )
         raise NotImplementedError("Not implemented")
 
     def stream(
@@ -231,7 +301,14 @@ class STT(stt.STT):
         *,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-    ) -> SpeechStream:
+    ) -> stt.SpeechStream:
+        if self._qwen3 is not None:
+            qwen3_stream = self._qwen3.make_stream(
+                self, language=language, conn_options=conn_options
+            )
+            self._streams.add(qwen3_stream)
+            return qwen3_stream
+
         config = dataclasses.replace(self._opts)
         stream = SpeechStream(
             stt=self,
@@ -251,8 +328,26 @@ class STT(stt.STT):
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        language_options: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
+        if self._qwen3 is not None:
+            self._qwen3.update_options(
+                language=language,
+                vad_threshold=vad_threshold,
+                vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+                vad_speech_pad_ms=vad_speech_pad_ms,
+            )
+            # These are Whisper-only; say so rather than dropping them quietly.
+            for name, value in (
+                ("language_options", language_options),
+                ("buffer_size_seconds", buffer_size_seconds),
+            ):
+                if is_given(value):
+                    logger.warning(
+                        "%s does not apply to model=%r and was ignored", name, self._model_name
+                    )
+            return
         if is_given(vad_threshold):
             self._opts.vad_threshold = vad_threshold
         if is_given(vad_min_silence_duration_ms):
@@ -261,15 +356,22 @@ class STT(stt.STT):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(language_options):
+            self._opts.language_options = [LanguageCode(lang) for lang in language_options]
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
         for stream in self._streams:
+            # Only the Whisper stream carries these knobs; a qwen3-asr stream
+            # cannot be in here, since that path returns above.
+            if not isinstance(stream, SpeechStream):
+                continue
             stream.update_options(
                 vad_threshold=vad_threshold,
                 vad_min_silence_duration_ms=vad_min_silence_duration_ms,
                 vad_speech_pad_ms=vad_speech_pad_ms,
                 language=language,
+                language_options=language_options,
                 buffer_size_seconds=buffer_size_seconds,
             )
 
@@ -309,6 +411,7 @@ class SpeechStream(stt.SpeechStream):
         vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_speech_pad_ms: NotGivenOr[int] = NOT_GIVEN,
         language: NotGivenOr[str] = NOT_GIVEN,
+        language_options: NotGivenOr[list[str]] = NOT_GIVEN,
         buffer_size_seconds: NotGivenOr[float] = NOT_GIVEN,
     ) -> None:
         if is_given(vad_threshold):
@@ -319,6 +422,8 @@ class SpeechStream(stt.SpeechStream):
             self._opts.vad_speech_pad_ms = vad_speech_pad_ms
         if is_given(language):
             self._opts.language = LanguageCode(language)
+        if is_given(language_options):
+            self._opts.language_options = [LanguageCode(lang) for lang in language_options]
         if is_given(buffer_size_seconds):
             self._opts.buffer_size_seconds = buffer_size_seconds
 
@@ -341,18 +446,23 @@ class SpeechStream(stt.SpeechStream):
                 samples_per_channel=samples_per_buffer,
             )
 
-            async for data in self._input_ch:
-                if isinstance(data, self._FlushSentinel):
-                    frames = audio_bstream.flush()
-                else:
-                    frames = audio_bstream.write(data.data.tobytes())
+            try:
+                async for data in self._input_ch:
+                    if isinstance(data, self._FlushSentinel):
+                        frames = audio_bstream.flush()
+                    else:
+                        frames = audio_bstream.write(data.data.tobytes())
 
-                for frame in frames:
-                    if len(frame.data) % 2 != 0:
-                        logger.warning("Frame data size not aligned to float32 (multiple of 4)")
+                    for frame in frames:
+                        if len(frame.data) % 2 != 0:
+                            logger.warning("Frame data size not aligned to float32 (multiple of 4)")
 
-                    int16_array = np.frombuffer(frame.data, dtype=np.int16)
-                    await ws.send_bytes(int16_array.tobytes())
+                        int16_array = np.frombuffer(frame.data, dtype=np.int16)
+                        await ws.send_bytes(int16_array.tobytes())
+            except (aiohttp.ClientError, ConnectionError) as e:
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("Baseten connection closed unexpectedly") from e
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
@@ -528,7 +638,7 @@ class SpeechStream(stt.SpeechStream):
 
         # Build metadata matching Baseten's StreamingWhisperInput schema.
         # See: https://docs.baseten.co/reference/inference-api/predict-endpoints/streaming-transcription-api
-        metadata = {
+        metadata: dict[str, dict[str, Any]] = {
             "whisper_params": {
                 "audio_language": self._opts.language,
                 "show_word_timestamps": self._opts.show_word_timestamps,
@@ -546,6 +656,13 @@ class SpeechStream(stt.SpeechStream):
                 "speech_pad_ms": self._opts.vad_speech_pad_ms,
             },
         }
+
+        if self._opts.language_options:
+            # Omitted unless set: older Whisper runtimes (< v0.5.0) reject
+            # unknown whisper_params fields.
+            metadata["whisper_params"]["language_options"] = [
+                str(lang) for lang in self._opts.language_options
+            ]
 
         await ws.send_str(json.dumps(metadata))
         return ws

@@ -204,6 +204,7 @@ EndpointingSensitivity = Literal[
 Gender = Literal["male", "female", "neutral"]
 
 ChatModels = Literal[
+    "gemini-3.5-flash",
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
     "gemini-2.5-flash",

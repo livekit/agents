@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -29,9 +28,9 @@ from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
 from ._utils import (
-    HEADER_INFERENCE_PRIORITY,
     HEADER_INFERENCE_PROVIDER,
     create_access_token,
+    extract_quota_usage,
     get_default_inference_url,
     get_inference_headers,
 )
@@ -73,6 +72,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
+_MODEL_THINK_TAGS = {
+    "google/gemma-4-31b-it": ("<|channel>thought", "<channel|>"),
+}
+
 
 def drop_unsupported_params(
     model: str, params: dict[str, Any], tools: list[Any] | None = None
@@ -94,6 +97,27 @@ def drop_unsupported_params(
     return params
 
 
+# lowest supported reasoning effort per model; "none" requires gpt-5.1+
+_MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
+    "gpt-5.1": "none",
+    "gpt-5.2": "none",
+    "gpt-5.4": "none",
+    "gpt-5.4-mini": "none",
+    "gpt-5": "minimal",
+    "gpt-5-mini": "minimal",
+    "gpt-5-nano": "minimal",
+}
+
+
+def min_reasoning_effort(model: str) -> ReasoningEffort | None:
+    """Lowest reasoning effort the model supports, or None if the model has no
+    reasoning-effort control.
+
+    Strips any provider prefix (e.g. ``openai/gpt-5`` -> ``gpt-5``) before matching.
+    """
+    return _MIN_REASONING_EFFORT.get(model.split("/")[-1])
+
+
 OpenAIModels = Literal[
     "openai/gpt-4o",
     "openai/gpt-4o-mini",
@@ -110,23 +134,33 @@ OpenAIModels = Literal[
     "openai/gpt-5.3-chat-latest",
     "openai/gpt-5.4",
     "openai/gpt-5.4-mini",
+    "openai/gpt-5.4-nano",
+    "openai/gpt-5.5",
+    "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
 
 GoogleModels = Literal[
-    "google/gemini-3-pro",
+    "google/gemini-3.1-pro",
     "google/gemini-3-flash",
+    "google/gemini-3.1-flash-lite",
+    "google/gemini-3.5-flash",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
 ]
 
-KimiModels = Literal["moonshotai/kimi-k2-instruct"]
+KimiModels = Literal[
+    "moonshotai/kimi-k2.5",
+    "moonshotai/kimi-k2.6",
+]
 
 DeepSeekModels = Literal[
     "deepseek-ai/deepseek-v3",
     "deepseek-ai/deepseek-v3.2",
 ]
+
+ZAIModels = Literal["zai/glm-5.1"]
 
 XAIModels = Literal[
     "xai/grok-4-1-fast-non-reasoning",
@@ -134,11 +168,15 @@ XAIModels = Literal[
     "xai/grok-4.20-0309-non-reasoning",
     "xai/grok-4.20-0309-reasoning",
     "xai/grok-4.20-multi-agent-0309",
+    "xai/grok-4.3",
+    "xai/grok-4.5",
 ]
 
-LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | XAIModels
+LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
-InferenceClass = Literal["priority", "standard"]
+InferenceClass = Literal["priority", "standard", "low"]
+"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
+appropriate for work no caller is waiting on."""
 
 
 class ChatCompletionOptions(TypedDict, total=False):
@@ -233,6 +271,7 @@ class LLM(llm.LLM):
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
             base_url=self._opts.base_url,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
                 follow_redirects=True,
@@ -242,13 +281,35 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         await self._client.close()
 
     @classmethod
     def from_model_string(cls, model: str) -> LLM:
         """Create a LLM instance from a model string"""
         return cls(model)
+
+    def update_options(
+        self,
+        *,
+        model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
+        extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+    ) -> None:
+        """Update LLM configuration options.
+
+        Each option is read on the next ``chat()`` call, so a swap
+        takes effect on the agent's next turn without recreating the
+        LLM. ``extra_kwargs`` *replaces* the persistent kwargs dict
+        rather than merging — pass ``{}`` to clear it.
+        """
+        if is_given(model):
+            self._opts.model = model
+        if is_given(extra_kwargs):
+            self._opts.extra_kwargs = dict(extra_kwargs)
 
     @property
     def model(self) -> str:
@@ -374,7 +435,7 @@ class LLMStream(llm.LLMStream):
                     extra={
                         "fnc_ctx": tool_schemas,
                         "tool_choice": tool_choice,
-                        "chat_ctx": chat_ctx,
+                        "lk.pii.chat_ctx": chat_ctx,
                     },
                 )
             if not self._tools:
@@ -382,11 +443,9 @@ class LLMStream(llm.LLMStream):
                 self._extra_kwargs.pop("tool_choice", None)
 
             extra_headers = self._extra_kwargs.setdefault("extra_headers", {})
-            extra_headers.update(get_inference_headers())
+            extra_headers.update(get_inference_headers(inference_class=self._inference_class))
             if self._provider:
                 extra_headers[HEADER_INFERENCE_PROVIDER] = self._provider
-            if self._inference_class:
-                extra_headers[HEADER_INFERENCE_PRIORITY] = self._inference_class
 
             self._oai_stream = stream = await self._client.chat.completions.create(
                 messages=cast(list[ChatCompletionMessageParam], chat_ctx),
@@ -398,26 +457,35 @@ class LLMStream(llm.LLMStream):
                 **self._extra_kwargs,
             )
 
-            thinking = asyncio.Event()
+            thinking_filter = llm_utils.ThinkingTokenFilter(
+                *_MODEL_THINK_TAGS.get(
+                    self._model, (llm_utils.THINK_TAG_START, llm_utils.THINK_TAG_END)
+                )
+            )
             async with stream:
                 async for chunk in stream:
                     for choice in chunk.choices:
-                        chat_chunk = self._parse_choice(chunk.id, choice, thinking)
+                        chat_chunk = self._parse_choice(chunk.id, choice, thinking_filter)
                         if chat_chunk is not None:
-                            retryable = False
+                            if chat_chunk.has_response():
+                                retryable = False
                             self._event_ch.send_nowait(chat_chunk)
 
                     if chunk.usage is not None:
-                        retryable = False
                         tokens_details = chunk.usage.prompt_tokens_details
                         cached_tokens = tokens_details.cached_tokens if tokens_details else 0
+                        completion_details = chunk.usage.completion_tokens_details
+                        reasoning_tokens = (
+                            completion_details.reasoning_tokens if completion_details else 0
+                        )
                         usage_chunk = llm.ChatChunk(
                             id=chunk.id,
                             usage=llm.CompletionUsage(
-                                completion_tokens=chunk.usage.completion_tokens,
-                                prompt_tokens=chunk.usage.prompt_tokens,
+                                completion_tokens=chunk.usage.completion_tokens or 0,
+                                prompt_tokens=chunk.usage.prompt_tokens or 0,
                                 prompt_cached_tokens=cached_tokens or 0,
-                                total_tokens=chunk.usage.total_tokens,
+                                reasoning_tokens=reasoning_tokens or 0,
+                                total_tokens=chunk.usage.total_tokens or 0,
                                 service_tier=getattr(chunk, "service_tier", None),
                             ),
                         )
@@ -425,7 +493,13 @@ class LLMStream(llm.LLMStream):
 
         except openai.APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except httpx.TimeoutException as e:
+            # Only the request call runs inside the openai client's error mapping, so a
+            # timeout waiting on the stream body arrives as the raw httpx exception.
+            raise APITimeoutError(retryable=retryable) from e
         except openai.APIStatusError as e:
+            if e.status_code == 429:
+                self._log_rate_limited(e)
             raise APIStatusError(
                 e.message,
                 status_code=e.status_code,
@@ -436,8 +510,18 @@ class LLMStream(llm.LLMStream):
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 
+    def _log_rate_limited(self, e: openai.APIStatusError) -> None:
+        """Log the gateway's quota snapshot when a request is rejected with 429.
+
+        The gateway stamps X-LiveKit-Inference-{RPM,TPM,Credits}-{Limit,Used}
+        on rejections so customers can see which limit they hit and by how much.
+        """
+        extra: dict[str, Any] = {"model": self._model, "request_id": e.request_id}
+        extra.update(extract_quota_usage(e.response.headers))
+        logger.warning("LLM request rate limited by inference gateway", extra=extra)
+
     def _parse_choice(
-        self, id: str, choice: Choice, thinking: asyncio.Event
+        self, id: str, choice: Choice, thinking_filter: llm_utils.ThinkingTokenFilter
     ) -> llm.ChatChunk | None:
         delta = choice.delta
 
@@ -445,6 +529,10 @@ class LLMStream(llm.LLMStream):
         # the delta can be None when using Azure OpenAI (content filtering)
         if delta is None:
             return None
+
+        delta.content = llm_utils.strip_thinking_tokens(
+            delta.content, thinking_filter, final=choice.finish_reason is not None
+        )
 
         if delta.tool_calls:
             for tool in delta.tool_calls:
@@ -505,8 +593,6 @@ class LLMStream(llm.LLMStream):
             self._tool_call_id = self._fnc_name = self._fnc_raw_arguments = None
             self._tool_extra = None
             return call_chunk
-
-        delta.content = llm_utils.strip_thinking_tokens(delta.content, thinking)
 
         # Extract extra from delta (e.g., Google thought signatures on text parts)
         delta_extra = getattr(delta, "extra_content", None)

@@ -9,7 +9,7 @@ Environment variables used:
 from livekit.agents import Plugin
 
 from .log import logger
-from .models import LatencyMode, OutputFormat, TTSModels
+from .models import LatencyMode, MP3Bitrate, OpusBitrate, OutputFormat, TTSModels
 from .tts import TTS
 from .version import __version__
 
@@ -18,6 +18,8 @@ __all__ = [
     "TTSModels",
     "OutputFormat",
     "LatencyMode",
+    "MP3Bitrate",
+    "OpusBitrate",
     "__version__",
 ]
 

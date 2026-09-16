@@ -30,8 +30,7 @@ export LK_ULTRAVOX_DEBUG=true
 
 ```python
 import asyncio
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
-from livekit.plugins import silero
+from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, inference
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 async def entrypoint(ctx: JobContext):
@@ -39,7 +38,7 @@ async def entrypoint(ctx: JobContext):
     
     session: AgentSession[None] = AgentSession(
         allow_interruptions=True,
-        vad=ctx.proc.userdata["vad"],
+        vad=inference.VAD(),
         llm=RealtimeModel(
             model_id="fixie-ai/ultravox",
             voice="Mark",
@@ -53,18 +52,14 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 ```
 
 ### Voice Assistant with Tools
 
 ```python
-from livekit.agents import function_tool, Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli
-from livekit.plugins import silero
+from livekit.agents import function_tool, Agent, AgentSession, JobContext, WorkerOptions, cli, inference
 from livekit.plugins.ultravox.realtime import RealtimeModel
 
 @function_tool
@@ -82,7 +77,7 @@ async def entrypoint(ctx: JobContext):
     
     session: AgentSession[None] = AgentSession(
         allow_interruptions=True,
-        vad=ctx.proc.userdata["vad"],
+        vad=inference.VAD(),
         llm=RealtimeModel(model_id="fixie-ai/ultravox"),
     )
     
@@ -94,11 +89,8 @@ async def entrypoint(ctx: JobContext):
         room=ctx.room,
     )
 
-def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
-
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
 ```
 
 

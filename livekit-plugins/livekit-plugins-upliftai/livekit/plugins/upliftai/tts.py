@@ -298,7 +298,9 @@ class WebSocketClient:
         if self.opts.phrase_replacement_config_id:
             message["phraseReplacementConfigId"] = self.opts.phrase_replacement_config_id
 
-        logger.debug(f"Sending synthesis request {request_id[:8]} for text: '{text[:50]}...'")
+        logger.debug(
+            f"Sending synthesis request {request_id[:8]}", extra={"lk.pii.text": text[:50]}
+        )
 
         try:
             if self.sio is not None:

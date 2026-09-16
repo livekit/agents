@@ -3,15 +3,17 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import context as otel_context
+
 from livekit import api, rtc
 
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
+from ...telemetry import rpc as rpc_tracing, trace_types, tracer, utils as telemetry_utils
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
-    ATTRIBUTE_SIMULATOR,
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
     TOPIC_CHAT,
@@ -76,6 +78,7 @@ class RoomIO:
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
         self._room_connected_fut = asyncio.Future[None]()
 
+        self._ready_fut: asyncio.Future[None] = asyncio.Future()
         self._init_atask: asyncio.Task[None] | None = None
         self._user_transcript_ch: utils.aio.Chan[UserInputTranscribedEvent] | None = None
         self._user_transcript_atask: asyncio.Task[None] | None = None
@@ -85,7 +88,6 @@ class RoomIO:
         self._delete_room_task: asyncio.Future[api.DeleteRoomResponse] | None = None
 
         self._pre_connect_audio_handler: PreConnectAudioHandler | None = None
-
         self._text_input_cb: TextInputCallback | None = None
         self._chat_handler_registered = False
 
@@ -101,7 +103,11 @@ class RoomIO:
                     f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
                 )
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
+        """``trace_context`` is the parent for the startup spans (``wait_for_participant``,
+        ``wait_for_audio_track``, ``publish_audio_output``); it is never made current here,
+        since the tasks started below live for the whole session."""
+        self._start_trace_context = trace_context
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
@@ -122,7 +128,14 @@ class RoomIO:
                 num_channels=input_audio_options.num_channels,
                 frame_size_ms=input_audio_options.frame_size_ms,
                 noise_cancellation=input_audio_options.noise_cancellation,
-                auto_gain_control=input_audio_options.auto_gain_control,
+                auto_gain_control=(
+                    input_audio_options.auto_gain_control
+                    if utils.is_given(input_audio_options.auto_gain_control)
+                    else (
+                        input_audio_options.noise_cancellation is None
+                        or callable(input_audio_options.noise_cancellation)
+                    )
+                ),
                 pre_connect_audio_handler=self._pre_connect_audio_handler,
             )
 
@@ -323,6 +336,14 @@ class RoomIO:
         if self._user_tr_output:
             self._user_tr_output.set_participant(participant_identity)
 
+        logger.info(
+            "RoomIO linked to participant",
+            extra={
+                trace_types.ATTR_PARTICIPANT_IDENTITY: participant_identity,
+                trace_types.ATTR_ROOM_NAME: self._room.name,
+            },
+        )
+
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
@@ -338,37 +359,45 @@ class RoomIO:
     async def _init_task(self) -> None:
         await self._room_connected_fut
 
-        # check existing participants
-        for participant in self._room.remote_participants.values():
-            self._on_participant_connected(participant)
+        with tracer.detached_span(
+            "wait_for_participant",
+            context=self._start_trace_context,
+            attributes={
+                trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: self._participant_identity is not None
+            },
+        ) as wait_span:
+            # check existing participants
+            for participant in self._room.remote_participants.values():
+                self._on_participant_connected(participant)
 
-        participant = await self._participant_available_fut
-        self.set_participant(participant.identity)
+            participant = await self._participant_available_fut
+            wait_span.set_attributes(telemetry_utils.participant_attributes(participant))
 
-        # check if participant is a simulator - disable audio I/O for faster testing
-        if participant.attributes.get(ATTRIBUTE_SIMULATOR) == "true":
-            logger.info(
-                "simulator participant detected, disabling audio I/O",
-                extra={"participant": participant.identity},
-            )
-            # disable audio input
-            if self._audio_input:
-                await self._audio_input.aclose()
-                self._audio_input = None
-                self._agent_session.input.audio = None
-
-            # disable audio output
-            if self._audio_output:
-                await self._audio_output.aclose()
-                self._audio_output = None
-                self._agent_session.output.audio = None
+        # the initial track wait belongs to the startup bar; later participant switches don't
+        for stream in (self._audio_input, self._video_input):
+            if stream is not None:
+                stream.set_trace_context(self._start_trace_context)
+        try:
+            self.set_participant(participant.identity)
+        finally:
+            for stream in (self._audio_input, self._video_input):
+                if stream is not None:
+                    stream.set_trace_context(None)
 
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
-            await self._audio_output.start()
+            await self._audio_output.start(trace_context=self._start_trace_context)
+        self._start_trace_context = None
+
+        if not self._ready_fut.done():
+            self._ready_fut.set_result(None)
+
+    async def wait_for_ready(self) -> None:
+        """Wait until participant detection and audio setup are complete."""
+        await self._ready_fut
 
     @utils.log_exceptions(logger=logger)
     async def _forward_user_transcript(
@@ -382,9 +411,23 @@ class RoomIO:
             if ev.is_final:
                 self._user_tr_output.flush()
 
+    def _emit_session_event(self, name: str, attributes: dict[str, Any]) -> None:
+        """Timestamped marker on the agent_session span (the tests' session stand-ins have none)."""
+        add_event = getattr(self._agent_session, "_add_session_event", None)
+        if add_event is not None:
+            add_event(name, attributes)
+
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if self._room.isconnected() and not self._room_connected_fut.done():
-            self._room_connected_fut.set_result(None)
+        self._emit_session_event(
+            "connection_state_changed",
+            {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
+        )
+        if self._room.isconnected():
+            # on every connect and reconnect; install is idempotent (one interceptor
+            # instance, deduped by the SDK), so JobContext.connect() installing too is fine
+            rpc_tracing.install(self._room.local_participant)
+            if not self._room_connected_fut.done():
+                self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
@@ -406,10 +449,20 @@ class RoomIO:
             return
 
         self._participant_available_fut.set_result(participant)
+        self._agent_session._on_room_io_participant_linked(participant)
 
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
+        self._emit_session_event(
+            "participant_disconnected",
+            {
+                **telemetry_utils.participant_attributes(participant),
+                trace_types.ATTR_DISCONNECT_REASON: rtc.DisconnectReason.Name(
+                    participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                ),
+            },
+        )
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
 
         if (

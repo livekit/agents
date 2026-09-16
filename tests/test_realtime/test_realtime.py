@@ -15,6 +15,8 @@ from livekit import rtc
 from livekit.agents import RunContext, function_tool, llm, utils
 from livekit.plugins import openai, xai
 
+pytestmark = pytest.mark.realtime
+
 TESTS_DIR = Path(__file__).parent
 SAMPLE_RATE = 24000
 
@@ -53,10 +55,16 @@ REALTIME_MODELS: list = [
     pytest.param(_xai_model, id="xai", marks=_skip_xai),
 ]
 
-# xAI doesn't support conversation.item.delete or sequential response.create
+# sequential response.create races are flaky on xAI; history delete works on current API
 OPENAI_AND_AZURE: list = [
     pytest.param(_openai_model, id="openai"),
     pytest.param(_azure_model, id="azure"),
+]
+
+OPENAI_AZURE_AND_XAI: list = [
+    pytest.param(_openai_model, id="openai"),
+    pytest.param(_azure_model, id="azure"),
+    pytest.param(_xai_model, id="xai", marks=_skip_xai),
 ]
 
 
@@ -112,7 +120,12 @@ async def _push_speech(session: llm.RealtimeSession, wav_name: str = "hello_worl
     for frame in _load_wav(wav_name):
         session.push_audio(frame)
         await asyncio.sleep(0.02)
-    session.push_audio(_silence())
+    # stream trailing silence in real time so server VAD can observe speech_stopped
+    # (a single multi-second frame floods appends and often never ends the turn on xAI)
+    silence_chunk = _silence(0.02)
+    for _ in range(100):  # ~2s
+        session.push_audio(silence_chunk)
+        await asyncio.sleep(0.02)
 
 
 # -- Basic generation --
@@ -226,18 +239,20 @@ async def test_vad_speech_events(rt_session: llm.RealtimeSession):
 @pytest.mark.parametrize("rt_session", REALTIME_MODELS, indirect=True)
 async def test_input_audio_transcription(rt_session: llm.RealtimeSession):
     transcripts: list[str] = []
-    transcript_received = asyncio.Event()
+    final_received = asyncio.Event()
 
     def on_transcript(ev: llm.InputTranscriptionCompleted):
         transcripts.append(ev.transcript)
-        transcript_received.set()
+        if ev.is_final:
+            final_received.set()
 
     rt_session.on("input_audio_transcription_completed", on_transcript)
     await _push_speech(rt_session, "weather_question")
     rt_session.commit_audio()
 
-    await asyncio.wait_for(transcript_received.wait(), timeout=15)
-    full = " ".join(transcripts).lower()
+    await asyncio.wait_for(final_received.wait(), timeout=15)
+    assert transcripts, "no transcript received"
+    full = transcripts[-1].lower()
     assert "weather" in full or "paris" in full
 
 
@@ -272,8 +287,7 @@ async def test_chat_ctx_populated_after_reply(rt_session: llm.RealtimeSession):
     assert any(item.type == "message" and item.role == "assistant" for item in ctx.items)
 
 
-# xAI doesn't support conversation.item.delete
-@pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
+@pytest.mark.parametrize("rt_session", OPENAI_AZURE_AND_XAI, indirect=True)
 async def test_update_chat_ctx_replaces_history(rt_session: llm.RealtimeSession):
     ctx1 = llm.ChatContext()
     ctx1.add_message(role="user", content="Remember: color is red")
@@ -310,6 +324,49 @@ async def test_interrupt(rt_session: llm.RealtimeSession):
             break
         break
     assert got_chunk
+
+
+@_skip_xai
+async def test_xai_say_force_message() -> None:
+    """xAI force_message / say() produces audio without an extra response.create."""
+    model = _xai_model()
+    session = model.session()
+    try:
+        gen_ev = await asyncio.wait_for(session.say("Hello from force message."), timeout=15)
+        assert gen_ev.user_initiated
+        got_audio = False
+        async for msg_gen in gen_ev.message_stream:
+            async for frame in msg_gen.audio_stream:
+                assert len(frame.data) > 0
+                got_audio = True
+                break
+            break
+        assert got_audio
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize("rt_session", OPENAI_AND_AZURE, indirect=True)
+async def test_generate_reply_cancellation(rt_session: llm.RealtimeSession):
+    """Cancelling the generate_reply future before response.created arrives
+    should cancel the in-flight response server-side so a subsequent
+    generate_reply does not conflict with an active response."""
+    fut = rt_session.generate_reply(
+        instructions="Write a very long essay about the history of computing."
+    )
+    fut.cancel()
+    assert fut.cancelled()
+
+    # Brief wait so the response.cancel reaches the server before the next call.
+    await asyncio.sleep(1.0)
+
+    gen_ev = await asyncio.wait_for(
+        rt_session.generate_reply(instructions="Say exactly: pineapple"),
+        timeout=15,
+    )
+    text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
+    assert "pineapple" in text.lower()
 
 
 # -- Function tools --

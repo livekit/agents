@@ -41,7 +41,7 @@ from livekit.agents.voice.avatar import (
 from .log import logger
 
 if TYPE_CHECKING:
-    from bithuman import AsyncBithuman  # type: ignore
+    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -158,6 +158,7 @@ class AvatarSession(BaseAvatarSession):
                  * "essence" for predefined actions and expressions
                - Allows flexibility in choosing the interaction style
         """
+        super().__init__()
         self._api_url = (
             api_url
             or os.getenv("BITHUMAN_API_URL")
@@ -210,7 +211,19 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime = runtime
+        self._runtime: AsyncBithuman | None = runtime or None
+
+    @property
+    def avatar_identity(self) -> str:
+        # In local mode the avatar video is published by the local agent participant,
+        # so the avatar identity is the local participant's identity.
+        if self._mode == "local" and self._room is not None:
+            return self._room.local_participant.identity
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "bithuman"
 
     async def start(
         self,
@@ -245,17 +258,12 @@ class AvatarSession(BaseAvatarSession):
             logger.debug("new transaction id: %s", runtime.transaction_id)
             await runtime._initialize_token()
         else:
-            kwargs = {
-                "model_path": self._model_path,
-            }
-            if self._api_secret:
-                kwargs["api_secret"] = self._api_secret
-            if self._api_token:
-                kwargs["token"] = self._api_token
-            if self._api_url:
-                kwargs["api_url"] = self._api_url
-
-            runtime = await AsyncBithuman.create(**kwargs)
+            runtime = await AsyncBithuman.create(
+                model_path=self._model_path,
+                api_secret=self._api_secret,
+                token=self._api_token,
+                api_url=self._api_url,
+            )
             self._runtime = runtime
 
         video_generator = BithumanGenerator(runtime)
@@ -282,7 +290,7 @@ class AvatarSession(BaseAvatarSession):
         )
         await self._avatar_runner.start()
 
-        agent_session.output.audio = audio_buffer
+        agent_session.output.replace_audio_tail(audio_buffer)
 
     async def _start_cloud(
         self,
@@ -336,10 +344,12 @@ class AvatarSession(BaseAvatarSession):
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_playback_start=False,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_playback_start=False,
+            ),
         )
 
     async def _start_cloud_agent(
@@ -608,7 +618,8 @@ class AvatarSession(BaseAvatarSession):
         return self._runtime
 
     async def aclose(self) -> None:
-        if self._mode == "local" and utils.is_given(self._runtime) and self._runtime is not None:
+        await super().aclose()
+        if self._mode == "local" and self._runtime is not None:
             self._runtime.cleanup()
 
 
@@ -625,11 +636,11 @@ class BithumanGenerator(VideoGenerator):
 
     @property
     def video_fps(self) -> int:
-        return self._runtime.settings.FPS  # type: ignore
+        return self._runtime.settings.FPS
 
     @property
     def audio_sample_rate(self) -> int:
-        return self._runtime.settings.INPUT_SAMPLE_RATE  # type: ignore
+        return self._runtime.settings.INPUT_SAMPLE_RATE
 
     @utils.log_exceptions(logger=logger)
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
