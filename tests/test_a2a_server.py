@@ -1,0 +1,273 @@
+"""text_session over the real wire: our client and a stock one, against a loopback port."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+import pytest
+import uvicorn
+from fastapi import FastAPI
+
+from livekit.agents import Agent, AgentSession, RunContext, function_tool
+from livekit.agents.a2a import TaskInput, TaskUpdate
+from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
+from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
+
+from .fake_llm import FakeLLM
+from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
+
+pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
+
+
+@function_tool
+async def check_fares(ctx: RunContext) -> str:
+    """Check the fare rules, slowly, reporting as it goes."""
+    await ctx.update("checking the fare rules")
+    await asyncio.sleep(0.05)
+    return "fare is 240 USD"
+
+
+@function_tool
+async def say_goodbye(ctx: RunContext) -> str:
+    """Called when the caller is done."""
+    request = ctx.session.request
+    assert request is not None
+    request.set_directive("end_session", reason="user_request")
+    return "wrapped up"
+
+
+def _fare_desk_llm() -> FakeLLM:
+    return _AnsweringLLM(
+        fake_responses=[
+            _says("what is the change fee", "The change fee is $75."),
+            _says("what is the fare", "", calls=[_tool_call("check_fares", "cf1")]),
+            _says("that is all", "", calls=[_tool_call("say_goodbye", "sg1")]),
+        ],
+        fallbacks=["It is 240 USD.", "Thanks for calling."],
+    )
+
+
+class _Served:
+    """A text session endpoint on a real loopback port."""
+
+    def __init__(self, base_url: str, executor: Any) -> None:
+        self.base_url = base_url
+        self.executor = executor
+        self.sessions: list[AgentSession] = []
+
+
+@contextlib.asynccontextmanager
+async def _serving(endpoint: str = "fare-desk") -> AsyncIterator[_Served]:
+    app = FastAPI()
+    served: _Served = _Served("", None)  # filled once the port is known
+
+    async def fare_desk(ctx: TextSessionContext) -> None:
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk", tools=[check_fares, say_goodbye]))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    executor = mount(
+        app, endpoint=endpoint, handler=fare_desk, description="Answers fare questions."
+    )
+    served.executor = executor
+
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_config=None, access_log=False)
+    server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            if serve_task.done():
+                serve_task.result()
+                raise RuntimeError("the test server stopped before it started")
+            await asyncio.sleep(0.01)
+        port = next(s.getsockname()[1] for srv in server.servers for s in srv.sockets)
+        served.base_url = f"http://127.0.0.1:{port}"
+        yield served
+    finally:
+        with contextlib.suppress(Exception):
+            await executor.aclose()
+        server.should_exit = True
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(serve_task, timeout=10.0)
+        await _drain_sse_watcher()
+
+
+async def _drain_sse_watcher() -> None:
+    """sse-starlette watches for shutdown on a poll, and outlives the response it served."""
+    from sse_starlette.sse import AppStatus
+
+    watchers = [
+        task
+        for task in asyncio.all_tasks()
+        if "_shutdown_watcher" in getattr(task.get_coro(), "__qualname__", "")
+    ]
+    if not watchers:
+        return
+    AppStatus.should_exit = True
+    try:
+        await asyncio.wait(watchers, timeout=10.0)
+    finally:
+        # the next test serves its own stream, and a latched flag would stop it dead
+        AppStatus.should_exit = False
+
+
+async def _collect(client: Any, task_input: TaskInput) -> list[TaskUpdate]:
+    async with client.send(task_input) as stream:
+        return [update async for update in stream]
+
+
+async def test_the_card_names_the_endpoint_and_offers_the_extension() -> None:
+    async with _serving() as served, httpx.AsyncClient(timeout=10.0) as http:
+        response = await http.get(f"{served.base_url}/fare-desk{AGENT_CARD_PATH}")
+
+    assert response.status_code == 200
+    card = response.json()
+    assert card["name"] == "fare-desk"
+    # the card is not shadowed by the binding's own catch-all mount
+    assert card["supportedInterfaces"][0]["url"].endswith("/fare-desk/v1")
+    assert [e["uri"] for e in card["capabilities"]["extensions"]] == [EXTENSION_URI]
+    # proto3 omits a false bool, so the offer is "not required" by saying nothing
+    assert card["capabilities"]["extensions"][0].get("required", False) is False
+
+
+async def test_our_client_gets_progress_then_the_answer() -> None:
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            updates = await _collect(client, TaskInput(instruction="what is the fare"))
+        finally:
+            await client.aclose()
+
+    assert client.extension_active is True
+    assert [(u.state, u.text) for u in updates if u.text] == [
+        ("working", "checking the fare rules"),
+        ("completed", "It is 240 USD."),
+    ]
+
+
+async def test_a_directive_reaches_the_caller_with_the_answer() -> None:
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            updates = await _collect(client, TaskInput(instruction="that is all"))
+        finally:
+            await client.aclose()
+
+    (answer,) = [u for u in updates if u.state == "completed"]
+    assert answer.directive is not None
+    assert (answer.directive.kind, answer.directive.reason) == ("end_session", "user_request")
+
+
+async def test_two_requests_share_one_conversation() -> None:
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            first = await _collect(client, TaskInput(instruction="what is the change fee"))
+            second = await _collect(client, TaskInput(instruction="what is the fare"))
+        finally:
+            await client.aclose()
+
+    assert [u.text for u in first if u.state == "completed"] == ["The change fee is $75."]
+    assert [u.text for u in second if u.state == "completed"] == ["It is 240 USD."]
+    # one context, one handler run, one session
+    assert len(served.sessions) == 1
+
+
+async def test_a_stock_client_reads_the_same_endpoint() -> None:
+    """A vanilla a2a-sdk client, with no extension header and no LiveKit code."""
+    from a2a.client import ClientConfig, ClientFactory
+    from a2a.client.card_resolver import A2ACardResolver
+    from a2a.types import a2a_pb2 as pb
+    from a2a.utils.constants import TransportProtocol
+
+    async with _serving() as served, httpx.AsyncClient(timeout=30.0) as http:
+        card = await A2ACardResolver(http, f"{served.base_url}/fare-desk").get_agent_card()
+        client = ClientFactory(
+            ClientConfig(
+                httpx_client=http,
+                streaming=True,
+                supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+                accepted_output_modes=["text/plain"],
+            )
+        ).create(card)
+
+        request = pb.SendMessageRequest(
+            message=pb.Message(
+                message_id="m1",
+                role=pb.Role.ROLE_USER,
+                parts=[pb.Part(text="what is the fare")],
+            )
+        )
+        events = [event async for event in client.send_message(request)]
+        await client.close()
+
+    payloads = [getattr(e, e.WhichOneof("payload")) for e in events]
+    # the acknowledgment carries the server's task id, before any status event
+    assert isinstance(payloads[0], pb.Task)
+    assert payloads[0].id
+
+    artifacts = [p for p in payloads if isinstance(p, pb.TaskArtifactUpdateEvent)]
+    assert [a.artifact.parts[0].text for a in artifacts] == ["It is 240 USD."]
+
+    statuses = [p for p in payloads if isinstance(p, pb.TaskStatusUpdateEvent)]
+    assert statuses[-1].status.state == pb.TaskState.TASK_STATE_COMPLETED
+    # the progress is plain text a client that ignores our parts still reads
+    working = [s for s in statuses if s.status.state == pb.TaskState.TASK_STATE_WORKING]
+    assert "checking the fare rules" in [
+        part.text for s in working for part in s.status.message.parts if part.text
+    ]
+
+
+async def test_the_typed_item_rides_beside_the_relayed_text() -> None:
+    """What the extension adds on top of what a vanilla client already sees."""
+    from a2a.client import ClientConfig, ClientFactory
+    from a2a.client.card_resolver import A2ACardResolver
+    from a2a.types import a2a_pb2 as pb
+    from a2a.utils.constants import TransportProtocol
+
+    async with _serving() as served, httpx.AsyncClient(timeout=30.0) as http:
+        card = await A2ACardResolver(http, f"{served.base_url}/fare-desk").get_agent_card()
+        client = ClientFactory(
+            ClientConfig(
+                httpx_client=http,
+                streaming=True,
+                supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+                accepted_output_modes=["text/plain"],
+            )
+        ).create(card)
+        request = pb.SendMessageRequest(
+            message=pb.Message(
+                message_id="m1", role=pb.Role.ROLE_USER, parts=[pb.Part(text="what is the fare")]
+            )
+        )
+        events = [event async for event in client.send_message(request)]
+        await client.close()
+
+    data_parts = [
+        as_dict(part.data)
+        for e in events
+        if (p := getattr(e, e.WhichOneof("payload"))) and isinstance(p, pb.TaskStatusUpdateEvent)
+        for part in p.status.message.parts
+        if part.WhichOneof("content") == "data"
+    ]
+    kinds = [
+        as_dict(part.metadata).get(KIND)
+        for e in events
+        if (p := getattr(e, e.WhichOneof("payload"))) and isinstance(p, pb.TaskStatusUpdateEvent)
+        for part in p.status.message.parts
+        if part.WhichOneof("content") == "data"
+    ]
+    assert set(kinds) == {"chat_item"}
+    # the report names the call it reports for
+    assert any(d.get("update_of") == "cf1" for d in data_parts)
