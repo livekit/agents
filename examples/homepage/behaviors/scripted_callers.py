@@ -2,10 +2,15 @@
 
 Two fixed question banks are run against the public homepage agent by
 automated callers. Their opening lines are known (``scripted_questions.txt``),
-so the check is an exact match on the caller's first few final transcripts,
-after normalizing away case and punctuation. On a match the room is deleted,
-which disconnects the caller and ends the job. Only the first
-``MAX_TURNS_CHECKED`` caller turns are checked; the scripts open with a bank
+so the check is an exact match on the caller's first few turns, after
+normalizing away case and punctuation. On a match the room is deleted, which
+disconnects the caller and ends the job.
+
+A turn here is the user message the session commits to the chat context at
+end of turn, which carries the whole utterance. Final STT transcripts are not
+used: Deepgram can finalize one utterance as several segments, and a segment
+neither equals a bank line nor marks a turn boundary. Only the first
+``MAX_TURNS_CHECKED`` turns are checked; the scripts open with a bank
 question, and a real conversation that has got past its opening should never
 be cut off by this.
 """
@@ -14,7 +19,12 @@ import logging
 import re
 from pathlib import Path
 
-from livekit.agents import AgentSession, UserInputTranscribedEvent, get_job_context
+from livekit.agents import (
+    AgentSession,
+    ChatMessage,
+    ConversationItemAddedEvent,
+    get_job_context,
+)
 
 logger = logging.getLogger("agent")
 
@@ -50,19 +60,21 @@ def disconnect_scripted_callers(
 ) -> None:
     checked = 0
 
-    @session.on("user_input_transcribed")
-    def _on_user_input_transcribed(ev: UserInputTranscribedEvent) -> None:
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
         nonlocal checked
-        if not ev.is_final or checked >= max_turns:
+        item = ev.item
+        if not isinstance(item, ChatMessage) or item.role != "user" or checked >= max_turns:
             return
         checked += 1
-        if not is_scripted(ev.transcript, questions):
+        text = item.text_content or ""
+        if not is_scripted(text, questions):
             return
 
         turn, checked = checked, max_turns
         logger.info(
             "disconnecting scripted caller",
-            extra={"transcript": ev.transcript, "caller_turn": turn},
+            extra={"lk.pii.user_input": text, "caller_turn": turn},
         )
         get_job_context().delete_room()
         try:

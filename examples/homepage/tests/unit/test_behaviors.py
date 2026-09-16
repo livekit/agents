@@ -10,7 +10,13 @@ from behaviors.scripted_callers import (
 )
 from behaviors.user_away import CHECK_IN_INSTRUCTIONS, check_in_when_user_away
 
-from livekit.agents import AgentSession, UserInputTranscribedEvent, UserStateChangedEvent
+from livekit.agents import (
+    AgentSession,
+    ChatMessage,
+    ConversationItemAddedEvent,
+    UserInputTranscribedEvent,
+    UserStateChangedEvent,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -87,23 +93,35 @@ def _attach(monkeypatch: pytest.MonkeyPatch) -> tuple[AgentSession, list[int], _
     return session, interrupts, ctx
 
 
-def _transcript(text: str, *, is_final: bool = True) -> UserInputTranscribedEvent:
-    return UserInputTranscribedEvent(transcript=text, is_final=is_final)
+def _user_turn(text: str) -> ConversationItemAddedEvent:
+    """The committed user message the session adds to the chat context at end of turn."""
+    return ConversationItemAddedEvent(item=ChatMessage(role="user", content=[text]))
+
+
+def _agent_turn(text: str) -> ConversationItemAddedEvent:
+    return ConversationItemAddedEvent(item=ChatMessage(role="assistant", content=[text]))
+
+
+def _stt_segment(text: str) -> UserInputTranscribedEvent:
+    """One finalized STT segment; an utterance may produce several before the turn commits."""
+    return UserInputTranscribedEvent(transcript=text, is_final=True)
 
 
 @pytest.mark.asyncio
-async def test_scripted_opening_line_deletes_the_room_once(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_scripted_opening_turn_deletes_the_room_once(monkeypatch: pytest.MonkeyPatch) -> None:
     session, interrupts, ctx = _attach(monkeypatch)
     scripted = next(iter(SCRIPTED_QUESTIONS))
 
-    session.emit("user_input_transcribed", _transcript(scripted, is_final=False))
+    session.emit(
+        "conversation_item_added", _agent_turn("Hi there! How familiar are you with LiveKit?")
+    )
     assert ctx.deleted == 0
 
-    session.emit("user_input_transcribed", _transcript(scripted))
+    session.emit("conversation_item_added", _user_turn(scripted))
     assert ctx.deleted == 1
     assert interrupts == [1]
 
-    session.emit("user_input_transcribed", _transcript(scripted))
+    session.emit("conversation_item_added", _user_turn(scripted))
     assert ctx.deleted == 1
 
 
@@ -111,7 +129,7 @@ async def test_scripted_opening_line_deletes_the_room_once(monkeypatch: pytest.M
 async def test_real_caller_is_never_disconnected(monkeypatch: pytest.MonkeyPatch) -> None:
     session, interrupts, ctx = _attach(monkeypatch)
     for line in ("Hello?", "I want to build a voice agent.", "Which STT should I use?"):
-        session.emit("user_input_transcribed", _transcript(line))
+        session.emit("conversation_item_added", _user_turn(line))
     assert ctx.deleted == 0
     assert interrupts == []
 
@@ -120,7 +138,39 @@ async def test_real_caller_is_never_disconnected(monkeypatch: pytest.MonkeyPatch
 async def test_only_the_opening_turns_are_checked(monkeypatch: pytest.MonkeyPatch) -> None:
     session, _, ctx = _attach(monkeypatch)
     for line in ("Hello?", "I have a question.", "About pricing."):
-        session.emit("user_input_transcribed", _transcript(line))
+        session.emit("conversation_item_added", _user_turn(line))
 
-    session.emit("user_input_transcribed", _transcript("What is one plus one?"))
+    session.emit("conversation_item_added", _user_turn("What is one plus one?"))
     assert ctx.deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_turns_do_not_use_up_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    session, _, ctx = _attach(monkeypatch)
+    for _ in range(5):
+        session.emit("conversation_item_added", _agent_turn("Sure, let me explain."))
+
+    session.emit("conversation_item_added", _user_turn("What is one plus one?"))
+    assert ctx.deleted == 1
+
+
+@pytest.mark.asyncio
+async def test_stt_segments_neither_match_nor_count_as_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deepgram can finalize one utterance as several segments before the turn commits."""
+    session, _, ctx = _attach(monkeypatch)
+    question = (
+        "Please list a few environmental actions that you think help protect the earth. "
+        "Please limit your answers to about forty words."
+    )
+    for segment in (
+        "Please list a few environmental actions",
+        "that you think help protect the earth.",
+        "Please limit your answers to about forty words.",
+    ):
+        session.emit("user_input_transcribed", _stt_segment(segment))
+    assert ctx.deleted == 0
+
+    session.emit("conversation_item_added", _user_turn(question))
+    assert ctx.deleted == 1
