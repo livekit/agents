@@ -185,3 +185,7 @@ examples/dev/*
 test_install.py
 test_new.json
 test_services.py
+
+# Test artifacts
+logs/
+tts_output.wav
