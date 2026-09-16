@@ -611,7 +611,7 @@ class TranscriptSynchronizer:
         # using a while loop in case rotate_segment is called twice (this should not happen, but
         # just in case, we do log a warning if it does)
         while not self._rotate_segment_atask.done():
-            await self._rotate_segment_atask
+            await asyncio.shield(self._rotate_segment_atask)
 
 
 class _SyncedAudioOutput(io.AudioOutput):
