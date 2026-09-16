@@ -45,6 +45,7 @@ from .room_io import (
     _ParticipantTranscriptionOutput,
 )
 from .run_result import RunOutputOptions
+from .served_request import Directive, DirectiveKind, ServedRequest
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
@@ -61,7 +62,10 @@ __all__ = [
     "AgentTask",
     "SpeechHandle",
     "MESSAGE_SOURCE_KEY",
+    "Directive",
+    "DirectiveKind",
     "RunContext",
+    "ServedRequest",
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",

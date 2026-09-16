@@ -48,6 +48,7 @@ from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnI
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import MESSAGE_SOURCE_KEY, FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.served_request import Directive
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_session import FakeActions, create_session, run_session
@@ -396,6 +397,24 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+def test_an_ordinary_session_answers_nobody() -> None:
+    """The accessor is also the check: no caller, no request to set a directive on."""
+    assert AgentSession().request is None
+
+
+def test_a_directive_is_advice_carried_with_the_answer() -> None:
+    from livekit.agents import ServedRequest
+
+    request = ServedRequest(metadata={"customer_id": "c-42"})
+    assert request.directive is None
+
+    request.set_directive("escalate", reason="policy_exception")
+    assert request.directive == Directive("escalate", "policy_exception")
+    # the last call before the answer is the one that travels
+    request.set_directive("end_session", reason="user_request")
+    assert request.directive == Directive("end_session", "user_request")
 
 
 async def test_assistant_messages_carry_their_source() -> None:

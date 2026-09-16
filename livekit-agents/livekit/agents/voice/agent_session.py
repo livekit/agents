@@ -91,6 +91,7 @@ from .keyterm_detection import (
 from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
+from .served_request import ServedRequest
 from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
 from .turn import (
@@ -654,6 +655,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # a session that relays a tool's progress verbatim records the report for its model
         # without answering it; the report is the fact, and a reply would only restate it
         self._reply_to_tool_updates = True
+        self._served_request: ServedRequest | None = None
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
@@ -776,6 +778,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @userdata.setter
     def userdata(self, value: Userdata_T) -> None:
         self._userdata = value
+
+    @property
+    def request(self) -> ServedRequest | None:
+        """The caller's request this session is answering, or None when nobody asked.
+
+        A session driven by a room answers a person and never has one. A session serving
+        another agent or a chat client has one for as long as it is working on it, so this
+        is also how code tells the two apart::
+
+            if (request := session.request) is not None:
+                request.set_directive("end_session", reason="user_request")
+            else:
+                await session.aclose()
+        """
+        return self._served_request
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
