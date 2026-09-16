@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
@@ -24,8 +24,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.responses import ResponseTextConfigParam
-from openai.types.responses.response_input_item import FunctionCallOutput
+from openai.types.responses import ResponseInputImage, ResponseInputText, ResponseTextConfigParam
+from openai.types.responses.response_input_item import FunctionCallOutput, Message
 from openai.types.shared_params import Reasoning
 
 from ..log import logger
@@ -57,6 +57,13 @@ _SPEAK_NOW = "Do not wait for the caller to speak first. After that, pause and l
 _ASK_INSTRUCTED = f"Immediately follow the instruction below. {_SPEAK_NOW}"
 _ASK_TYPED = f"Reply to the caller now, don't repeat what they said. {_SPEAK_NOW}"
 _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
+
+# what a queued event is written against. audio belongs to one session's input stream, and a
+# backend item or run to one backend's state, so neither can be replayed into a later session;
+# everything else is context the voice model is just as happy to hear on the next connection
+_CONNECTION_BOUND = frozenset(
+    {"session.input_audio.append", "response.item.create", "response.create"}
+)
 
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
@@ -264,7 +271,10 @@ class GPTLiveSession(
         self._tools = llm.ToolContext.empty()
         # the agent's instructions, set by _update_session before session.start and immutable after
         self._instructions: str | None = None
-        self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
+        # each connection is its own session, so a queued event is stamped with the one it was
+        # written against and the connection-bound kinds are dropped rather than replayed
+        self._connection_epoch = 0
+        self._msg_ch = utils.aio.Chan[tuple[int, types.ClientEvent | dict[str, Any]]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -288,6 +298,8 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        # video arrives frame after frame; one warning for a session that cannot look at any
+        self._warned_no_image_channel = False
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -302,7 +314,7 @@ class GPTLiveSession(
 
     def send_event(self, event: types.ClientEvent | dict[str, Any]) -> None:
         with contextlib.suppress(utils.aio.channel.ChanClosed):
-            self._msg_ch.send_nowait(event)
+            self._msg_ch.send_nowait((self._connection_epoch, event))
 
     def _build_delegation(self) -> types.Delegation:
         if self._opts.delegation == "client":
@@ -426,6 +438,7 @@ class GPTLiveSession(
     def _reset_for_reconnect(self) -> None:
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
+        self._connection_epoch += 1
         self._bstream.clear()
         self._input_resampler = None
         self._session_started_fut = asyncio.Future()
@@ -494,7 +507,9 @@ class GPTLiveSession(
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
 
-            async for msg in self._msg_ch:
+            async for epoch, msg in self._msg_ch:
+                if epoch != self._connection_epoch and not self._keep_stale_event(msg):
+                    continue
                 # the protocol asks for session.started before any audio or command goes out
                 if not self._session_started_fut.done():
                     await self._session_started_fut
@@ -555,6 +570,18 @@ class GPTLiveSession(
         finally:
             await utils.aio.cancel_and_wait(*tasks)
             await ws_conn.close()
+
+    def _keep_stale_event(self, event: types.ClientEvent | dict[str, Any]) -> bool:
+        """Whether an event queued for an earlier connection may still go out on this one."""
+        etype = event.get("type", "") if isinstance(event, dict) else event.type
+        if etype not in _CONNECTION_BOUND:
+            return True
+        if etype != "session.input_audio.append":
+            # backend work is the caller's to redo: it was written against a backend that is gone
+            logger.warning(
+                "gpt-live dropped an item queued for a session that ended", extra={"type": etype}
+            )
+        return False
 
     async def _ws_send(
         self, ws_conn: aiohttp.ClientWebSocketResponse, event: types.ClientEvent | dict[str, Any]
@@ -925,6 +952,43 @@ class GPTLiveSession(
                     types.InputAudioAppendEvent(audio=base64.b64encode(nf.data).decode("utf-8"))
                 )
 
+    def push_video(self, frame: rtc.VideoFrame) -> None:
+        """Give the backend model a frame to look at; the voice model has no eyes of its own.
+
+        Nothing runs on its own: the frame waits in the backend's input until the voice model
+        next delegates, or until a typed turn or a tool result continues the backend. It belongs
+        to this connection, so a frame queued for a session that ends is dropped rather than
+        replayed into the next one.
+
+        Frames arrive on their own, so this never raises: under ``delegation="client"`` nothing
+        can look at one, and the frame is dropped with one warning for the session. An image with
+        words around it goes in the chat context instead, as an ``llm.ImageContent``.
+        """
+        if self._opts.delegation != "responses":
+            if not self._warned_no_image_channel:
+                self._warned_no_image_channel = True
+                logger.warning(
+                    "gpt-live client delegation has no backend model to look at a video frame, "
+                    'so frames are dropped. Pass delegation="responses" to send them, or leave '
+                    "the agent's video input off."
+                )
+            return
+        self._send_backend_input([_to_input_image(llm.ImageContent(image=frame))], label="image_")
+
+    def _send_backend_input(
+        self, content: list[ResponseInputText | ResponseInputImage], *, label: str
+    ) -> bool:
+        """Queue one user input item for the backend; a response.create is what runs it."""
+        if self._opts.delegation != "responses" or not content:
+            return False
+        self.send_event(
+            types.ResponseItemCreateEvent(
+                event_id=utils.shortuuid(label),
+                item=Message(type="message", role="user", content=content),
+            )
+        )
+        return True
+
     def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
         """Add a standing rule to the model's instructions, capped at 500 tokens."""
         self._append(types.InstructionsAppendEvent, text, delegation_id)
@@ -1002,8 +1066,9 @@ class GPTLiveSession(
             return  # startup history, rendered into session.start
 
         # a system or developer message is a standing rule for the voice model, a tool result
-        # answering a call the backend delegated goes back on the backend's channel, and everything
-        # else is context for the voice model, as one append
+        # answering a call the backend delegated goes back on the backend's channel, an image is
+        # the backend's to look at, and everything else is context for the voice model, as one
+        # append
         backend_outputs: list[llm.FunctionCallOutput] = []
         lines: list[str] = []
         for item in items:
@@ -1015,6 +1080,9 @@ class GPTLiveSession(
                 or any(item.call_id in c for c in self._backend_running_responses.values())
             ):
                 backend_outputs.append(item)
+            elif isinstance(item, llm.ChatMessage) and item.role == "user":
+                if (line := self._route_user_message(item)) is not None:
+                    lines.append(line)
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
@@ -1048,6 +1116,27 @@ class GPTLiveSession(
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
         # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
 
+    def _route_user_message(self, item: llm.ChatMessage) -> str | None:
+        """Send an image to the backend; returns the line the voice model still needs."""
+        text = item.text_content
+        line = f"user: {text}" if text else None
+        if not (images := [c for c in item.content if isinstance(c, llm.ImageContent)]):
+            return line
+
+        # an image has nowhere else to go, since the voice model has no image channel, and text
+        # that arrives with one rides along so the caption reaches the model that can see it
+        content: list[ResponseInputText | ResponseInputImage] = []
+        if text:
+            content.append(ResponseInputText(type="input_text", text=text))
+        content.extend(_to_input_image(image) for image in images)
+        if not self._send_backend_input(content, label="image_"):
+            logger.warning(
+                "gpt-live client delegation has no backend model to look at an image, so it was "
+                'dropped. Pass delegation="responses" to send images.',
+                extra={"images": len(images)},
+            )
+        return line
+
     def _generate_reply(
         self,
         *,
@@ -1080,6 +1169,21 @@ class GPTLiveSession(
             self._send_delegation_update(
                 types.ResponsesConfig(tool_choice=_to_tool_choice(tool_choice))
             )
+
+
+def _to_input_image(image: llm.ImageContent) -> ResponseInputImage:
+    """An image as the Responses input part the backend reads; a url is passed through as it is."""
+    img = llm.utils.serialize_image(image)
+    if img.external_url:
+        url = img.external_url
+    else:
+        assert img.data_bytes is not None
+        url = f"data:{img.mime_type};base64,{base64.b64encode(img.data_bytes).decode()}"
+    return ResponseInputImage(
+        type="input_image",
+        image_url=url,
+        detail=cast(Literal["low", "high", "auto"], img.inference_detail),
+    )
 
 
 def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:

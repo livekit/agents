@@ -34,6 +34,26 @@ The backend model calls the agent's `@function_tool` the usual way, so this read
 
 The example also seeds a prior conversation as startup history and adds `WebSearch()`, a hosted tool the backend runs with no client round trip.
 
+### Images
+
+The voice model has no eyes, so an image goes to the backend model. There are two ways in, and they are the ordinary ones.
+
+An `llm.ImageContent` in the chat context — a data URL, an external URL, or a `VideoFrame` — becomes a Responses image input item, with the message's own words as its caption. This is the path for a screenshot the caller is about to ask about, and the one that keeps the chat context and the backend's input telling the same story.
+
+```python
+chat_ctx.add_message(role="user", content=["what is on my screen?", ImageContent(image=shot)])
+```
+
+`push_video(frame)` sends a single frame and records nothing, exactly as on `RealtimeModel`. `RoomInputOptions(video_enabled=True)` feeds the room's video track through it at the session's `video_sampler` rate, about 1 fps while the caller speaks — every one of those frames is input the backend keeps, so a track left on for a whole call costs far more than one image sent when it is wanted.
+
+Either way nothing runs on its own: the image waits in the backend's input until the voice model next delegates, or until a tool result continues the backend. So send the screenshot, then let the caller ask about it.
+
+An image belongs to the connection it was queued on. If that session ends before the image goes out, it is dropped and logged rather than replayed into the next session, whose backend knows nothing about it — send it again.
+
+`delegation="client"` has no backend to look at anything. An image in the chat context is dropped with a warning while its words still reach the voice model, and `push_video` drops the frame with one warning per session, since video arrives on its own and must not break its own forwarding.
+
+Asks that are not the caller's words — `generate_reply()` with no input, or `generate_reply(instructions=...)` — stay the voice model's under either setting.
+
 ## Client delegation — `client_delegation.py`
 
 The model hands the work over as a `delegation_created` event and waits. Nothing on the wire can reach a framework tool, so the agent carries no tools at all — passing any raises `RealtimeError` when the session starts, rather than leaving an agent whose tools silently never run.
