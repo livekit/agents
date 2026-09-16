@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -19,6 +19,7 @@ from ..llm.tool_context import (
     RawFunctionTool,
     StopResponse,
     Tool,
+    ToolChoice,
     ToolError,
     ToolFlag,
     ToolResult,
@@ -255,6 +256,21 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: Agent  # agent that received the eager chat_ctx insert
+    tool_choice: ToolChoice | None
+    """What the reply may call: an update's request, or None for a result to act on."""
+
+
+def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
+    """The tool choice of one reply step answering several tool outputs.
+
+    Each entry states what the reply to it may call. The step honours a single shared
+    request, and is otherwise unconstrained: outputs that disagree cannot all be satisfied,
+    and one of them wanting the tools is enough to need them.
+    """
+    distinct = set(requests)
+    if len(distinct) == 1 and (only := distinct.pop()) is not None:
+        return only
+    return None
 
 
 class _ToolExecutor:
@@ -405,7 +421,7 @@ class _ToolExecutor:
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice="none")
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -521,7 +537,12 @@ class _ToolExecutor:
         await self.cancel_all(cancellable_only=True)
 
     async def _enqueue_reply(
-        self, ctx: RunContext, items: list[ChatItem], *, silent: bool = False
+        self,
+        ctx: RunContext,
+        items: list[ChatItem],
+        *,
+        silent: bool = False,
+        tool_choice: ToolChoice | None = None,
     ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
@@ -541,7 +562,9 @@ class _ToolExecutor:
         ):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, tool_choice=tool_choice)
+        )
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
@@ -609,9 +632,10 @@ class _ToolExecutor:
 
         update_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
         call_ids = list(dict.fromkeys(u.ctx.function_call.call_id for u in updates))
+        tool_choice = _reply_tool_choice(u.tool_choice for u in updates)
         speech = session.generate_reply(
             instructions=_render(template, {"call_ids": update_ids}),
-            tool_choice="none",
+            tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
         )
         session._tool_execution_updated(

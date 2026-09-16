@@ -34,7 +34,6 @@ from livekit.agents import (
     RunContext,
     ToolExecutionUpdatedEvent,
     cli,
-    inference,
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
@@ -116,7 +115,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # one delegate per conversation: the session closes it when the call ends, which is
         # what tells the desk it can drop this conversation rather than wait for it to idle
         delegate=A2ADelegate(FARE_DESK_URL),
-        llm=openai.realtime.RealtimeModel(model="gpt-realtime-2"),
+        delegation_options={"announce": False},
+        llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
         # llm=inference.LLM("openai/gpt-4.1-mini"),
         # stt=inference.STT("deepgram/nova-3", language="multi"),
         # llm=inference.LLM("google/gemma-4-31b-it"),
