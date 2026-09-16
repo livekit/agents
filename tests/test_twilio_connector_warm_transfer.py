@@ -54,6 +54,9 @@ def twilio_client(monkeypatch: pytest.MonkeyPatch) -> Mock:
         "twilio.base.exceptions",
         SimpleNamespace(TwilioRestException=FakeTwilioRestException),
     )
+    monkeypatch.setitem(
+        sys.modules, "twilio.http.http_client", SimpleNamespace(TwilioHttpClient=Mock())
+    )
     return client
 
 
@@ -383,3 +386,83 @@ async def test_cancellation_during_call_creation_retains_cleanup(
         if not dial.done():
             dial.cancel()
             await asyncio.gather(dial, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", ["create", "unanswered_cancel"])
+async def test_stalled_cleanup_has_deadline_and_retains_late_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_client: Mock,
+    connector: AsyncMock,
+    stall: str,
+) -> None:
+    monkeypatch.setattr(warm_transfer, "_TWILIO_CLEANUP_TIMEOUT", 0.03)
+    task = TwilioConnectorWarmTransferTask(
+        HUMAN_NUMBER,
+        twilio_from_number=TWILIO_NUMBER,
+        original_caller_number=CALLER_NUMBER,
+        twilio_call_token=CALL_TOKEN,
+        twilio_account_sid="AC_test",
+        twilio_auth_token="test",
+    )
+    started = asyncio.Event()
+    release = threading.Event()
+    cleaned = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    attempts = 0
+
+    def block() -> None:
+        loop.call_soon_threadsafe(started.set)
+        if not release.wait(timeout=3):
+            raise RuntimeError("worker not released")
+
+    def create(**kwargs: str) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise FakeTwilioRestException(400, 21210)
+        if stall == "create":
+            block()
+        return SimpleNamespace(sid="CA_late")
+
+    def cancel(**kwargs: str) -> None:
+        if stall != "create":
+            block()
+        loop.call_soon_threadsafe(cleaned.set)
+
+    twilio_client.calls.create.side_effect = create
+    twilio_client.calls.return_value.update.side_effect = cancel
+    wait = AsyncMock(side_effect=ToolError("no answer"))
+    monkeypatch.setattr(task, "_wait_for_human_agent", wait)
+    dial = asyncio.create_task(
+        task._originate_human_agent(
+            room_name="consult",
+            identity="human",
+            room=Mock(),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if stall == "create":
+            dial.cancel()
+        # For cancel stalls, the answer failure already initiated cleanup.
+        for _ in range(3):
+            await asyncio.sleep(0)
+            if not dial.done():
+                dial.cancel()
+        done, _ = await asyncio.wait({dial}, timeout=0.5)
+        assert dial in done, "teardown exceeded its cleanup deadline"
+        with pytest.raises(asyncio.CancelledError if stall == "create" else ToolError):
+            dial.result()
+        assert not release.is_set()
+        assert warm_transfer._twilio_cleanup_tasks
+        release.set()
+        await asyncio.wait_for(cleaned.wait(), timeout=1)
+        await asyncio.gather(*warm_transfer._twilio_cleanup_tasks)
+        await asyncio.sleep(0)
+        assert not warm_transfer._twilio_cleanup_tasks
+        twilio_client.calls.assert_called_once_with("CA_late")
+        assert attempts == 2
+    finally:
+        release.set()
+        await asyncio.gather(dial, *warm_transfer._twilio_cleanup_tasks, return_exceptions=True)

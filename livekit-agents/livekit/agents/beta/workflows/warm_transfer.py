@@ -433,6 +433,27 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 # Twilio reports no-answer/failure only via async status webhooks (not consumed here),
 # so cap the wait to keep an unanswered transfer from hanging the caller
 _TWILIO_RINGING_TIMEOUT = 30.0
+_TWILIO_HTTP_TIMEOUT = 10.0
+_TWILIO_CLEANUP_TIMEOUT = 5.0
+# Strong ownership after a transfer stops waiting; late call SIDs still need cleanup.
+_twilio_cleanup_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _wait_for_twilio_cleanup(task: asyncio.Task[None]) -> None:
+    _twilio_cleanup_tasks.add(task)
+    task.add_done_callback(_twilio_cleanup_tasks.discard)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _TWILIO_CLEANUP_TIMEOUT
+    while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning("Twilio cleanup deadline exceeded; continuing cleanup in background")
+            return
+        # asyncio.wait does not cancel the owned task on timeout or cancellation.
+        # Repeated cancellation must not reset the absolute teardown deadline.
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait({task}, timeout=remaining)
+    task.result()
 
 
 class TwilioConnectorWarmTransferTask(WarmTransferTask):
@@ -474,6 +495,10 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 attributes. On HTTP 400 / Twilio error 21210 (unverified caller ID), retry
                 once using ``twilio_from_number`` without the token. Other failures are
                 propagated without retrying to avoid duplicate calls.
+
+        Cleanup waits at most five seconds before continuing in the background while
+        the worker is alive. Twilio HTTP requests use a ten-second socket timeout;
+        cleanup is best-effort if the provider fails or the worker exits.
 
         Other arguments have the same meaning as in ``WarmTransferTask``.
         """
@@ -524,6 +549,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         # optional dep; keep SIP path import-free
         try:
             from twilio.base.exceptions import TwilioRestException  # type: ignore
+            from twilio.http.http_client import TwilioHttpClient  # type: ignore
             from twilio.rest import Client  # type: ignore
         except ImportError as e:
             raise ImportError(
@@ -531,7 +557,11 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 "but is not installed. To fix this, run: pip install twilio"
             ) from e
 
-        client = Client(self._twilio_account_sid, self._twilio_auth_token)
+        client = Client(
+            self._twilio_account_sid,
+            self._twilio_auth_token,
+            http_client=TwilioHttpClient(timeout=_TWILIO_HTTP_TIMEOUT),
+        )
         call_options: dict[str, str] = {}
         from_number = self._twilio_from_number
         if is_given(self._twilio_call_token) and self._twilio_call_token:
@@ -571,17 +601,13 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
 
                 async def cleanup() -> None:
                     # Cancelling an await cannot stop the synchronous HTTP request.
-                    # Retain its result and cancel any call it creates before teardown.
+                    # Retain its result and cancel any call it creates, even after
+                    # the transfer stops waiting for cleanup.
                     with contextlib.suppress(Exception):
                         sid = await pending
                         await asyncio.to_thread(client.calls(sid).update, status="canceled")
 
-                cleanup_task = asyncio.create_task(cleanup())
-                while not cleanup_task.done():
-                    # Repeated cancellation must not detach the cleanup either.
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await asyncio.shield(cleanup_task)
-                cleanup_task.result()
+                await _wait_for_twilio_cleanup(asyncio.create_task(cleanup()))
                 raise
 
         try:
@@ -598,8 +624,11 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
             # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(client.calls(call_sid).update, status="canceled")
+            async def cancel_call() -> None:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(client.calls(call_sid).update, status="canceled")
+
+            await _wait_for_twilio_cleanup(asyncio.create_task(cancel_call()))
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
