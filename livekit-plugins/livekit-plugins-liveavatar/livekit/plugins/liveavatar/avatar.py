@@ -329,20 +329,7 @@ class AvatarSession(BaseAvatarSession):
                             message="LiveAvatar connection closed unexpectedly."
                         )
                 event = json.loads(msg.data)
-                event_type = event.get("type")
-                if event_type == "session.state_updated":
-                    state = event.get("state")
-                    logger.debug(f"LiveAvatar session state: {state}")
-                    if state == "connected":
-                        self._session_connected.set()
-                elif event_type == "agent.speak_interrupted":
-                    self._handle_agent_speak_interrupted(event)
-                elif event_type == "agent.speak_ended":
-                    self._handle_agent_speak_ended(event)
-                elif event_type == "agent.speak_started":
-                    self._handle_agent_speak_started(event)
-                else:
-                    logger.debug(f"Unhandled LiveAvatar event: {event_type}")
+                self._handle_server_event(event)
 
         io_tasks = [
             asyncio.create_task(_forward_audio(), name="_forward_audio_task"),
@@ -370,10 +357,50 @@ class AvatarSession(BaseAvatarSession):
             await self._audio_buffer.aclose()
             await ws_conn.close()
 
+    def _handle_server_event(self, event: dict) -> None:
+        event_type = event.get("type")
+        if event_type == "session.state_updated":
+            state = event.get("state")
+            logger.debug(f"LiveAvatar session state: {state}")
+            if state == "connected":
+                self._session_connected.set()
+        elif event_type == "agent.speak_interrupted":
+            self._handle_agent_speak_interrupted(event)
+        elif event_type == "agent.speak_ended":
+            self._handle_agent_speak_ended(event)
+        elif event_type == "agent.speak_started":
+            self._handle_agent_speak_started(event)
+        elif event_type == "agent.state_updated":
+            self._handle_agent_state_updated(event)
+        elif event_type == "agent.audio_buffer_cleared":
+            self._handle_agent_speak_interrupted(event)
+        elif event_type in (
+            "agent.audio_buffer_appended",
+            "agent.audio_buffer_committed",
+        ):
+            # command acks; playback follows speak_* / agent.state_updated
+            logger.debug(f"LiveAvatar {event_type}")
+        elif event_type == "error":
+            logger.error(f"LiveAvatar error: {event.get('error', event)}")
+        elif event_type == "warning":
+            logger.warning(f"LiveAvatar warning: {event.get('warning', event)}")
+        else:
+            logger.debug(f"Unhandled LiveAvatar event: {event_type}")
+
+    def _handle_agent_state_updated(self, event: dict) -> None:
+        new_state = event.get("new_state", event.get("state"))
+        logger.debug(f"LiveAvatar agent state: {event.get('previous_state')} -> {new_state}")
+        if new_state == "talking":
+            self._handle_agent_speak_started(event)
+        elif new_state in ("idle", "listening") and self._avatar_speaking:
+            self._handle_agent_speak_ended(event)
+
     def _handle_agent_speak_interrupted(self, event: dict) -> None:
         self._avatar_interrupted = True
 
     def _handle_agent_speak_ended(self, event: dict) -> None:
+        if not self._avatar_speaking and not self._audio_playing:
+            return
         self._avatar_speaking = False
         if not self._avatar_interrupted:
             self._audio_buffer.notify_playback_finished(
@@ -384,6 +411,8 @@ class AvatarSession(BaseAvatarSession):
             self._audio_playing = False
 
     def _handle_agent_speak_started(self, event: dict) -> None:
+        already_speaking = self._avatar_speaking
         self._avatar_speaking = True
         self._avatar_interrupted = False
-        self._audio_buffer.notify_playback_started()
+        if not already_speaking:
+            self._audio_buffer.notify_playback_started()
