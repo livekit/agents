@@ -197,6 +197,31 @@ class DetectionMonitorPolicyTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(monitor._force_pending)
                 self.assertTrue(stream.closed)
 
+    async def test_first_n_serves_check_now_after_budget_is_spent(self) -> None:
+        window = b"\x01\x00" * 32000
+        transport = _FakeTransport(0.1, 0.1, 0.95)
+        monitor = DetectionMonitor(
+            transport=transport,
+            mode="first_n",
+            window_seconds=2.0,
+            analysis_budget_seconds=4.0,
+            silence_rms_threshold=0,
+        )
+        verdicts = []
+        monitor.on("verdict", verdicts.append)
+        # two ambient windows spend the 4 s budget; the third is skipped, then an
+        # on-demand check arrives and the fourth window must still be analyzed
+        stream = _ScriptedAudioStream(window, window, window, monitor.check_now, window)
+
+        await monitor._consume(stream, "caller")  # type: ignore[arg-type]
+
+        self.assertEqual([result.forced for result in monitor.results], [False, False, True])
+        self.assertEqual(monitor.results[-1].score, 0.95)
+        self.assertFalse(monitor._force_pending)
+        self.assertEqual(len(verdicts), 1)  # settled once when the budget ran out
+        self.assertEqual(monitor.verdict.analyzed_seconds, 4.0)  # forced check not counted
+        self.assertTrue(stream.closed)
+
     async def test_concurrent_results_use_chronological_window_order(self) -> None:
         monitor = DetectionMonitor(
             transport=_OutOfOrderTransport(),

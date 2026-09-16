@@ -699,17 +699,19 @@ class DetectionMonitor(rtc.EventEmitter[EventTypes]):
                     if self._samples_taken >= self._opts.samples:
                         continue
 
-                if self._budget_exhausted():
-                    if self._opts.mode == "first_n":
-                        await self._flush_and_emit_verdict()
-                        return
+                if self._budget_exhausted() and not forced:
+                    # first_n budget spent: settle the verdict, but keep draining audio so
+                    # later check_now() calls are still served (same as sampled mode)
+                    await self._flush_and_emit_verdict()
                     continue
 
                 if self._is_silence(window) and not forced:
                     logger.debug("skipping silent window", extra={"window_start": window_start})
                     continue
 
-                self._analyzed_seconds += self._opts.window_seconds
+                if not forced:
+                    # on-demand checks never draw down the ambient analysis budget
+                    self._analyzed_seconds += self._opts.window_seconds
                 index = self._window_index
                 self._window_index += 1
                 self._spawn(

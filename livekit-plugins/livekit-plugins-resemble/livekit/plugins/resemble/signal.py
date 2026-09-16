@@ -574,17 +574,17 @@ class RestSignalTransport:
             # deletes legitimately answer 204 / an empty body — that is success, not JSON
             if resp.status == 204:
                 return {}
-            body = await resp.read()
-            if not body.strip():
+            raw = await resp.read()
+            if not raw.strip():
                 return {}
             try:
-                payload: object = _json.loads(body)
+                payload: object = _json.loads(raw)
             except ValueError:
                 raise APIStatusError(
                     message="resemble signal response was not valid JSON",
                     status_code=resp.status,
                     request_id=None,
-                    body=body[:500].decode(errors="replace"),
+                    body=raw[:500].decode(errors="replace"),
                 ) from None
             if not isinstance(payload, dict):
                 raise APIStatusError(
