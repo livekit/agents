@@ -64,6 +64,7 @@ class _Generation:
     text_ch: utils.aio.Chan[str]
     audio_ch: utils.aio.Chan[rtc.AudioFrame]
     message_ch: utils.aio.Chan[llm.MessageGeneration]
+    function_ch: utils.aio.Chan[llm.FunctionCall]
     modalities: asyncio.Future[list[Literal["text", "audio"]]]
     started_at: float
     text_done: bool = False
@@ -204,6 +205,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
             await utils.aio.cancel_and_wait(*tasks)
             await session.close()
             self._finish_generation()
+            self._fail_pending_reply()
 
     def _subscribe(self, session: CambSession) -> None:
         def on_transcript(event: TranscriptCompletedEvent) -> None:
@@ -285,6 +287,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
             text_ch=utils.aio.Chan[str](),
             audio_ch=utils.aio.Chan[rtc.AudioFrame](),
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
+            function_ch=utils.aio.Chan[llm.FunctionCall](),
             modalities=asyncio.Future[list[Literal["text", "audio"]]](),
             started_at=self._turn_started_at or time.time(),
         )
@@ -300,14 +303,18 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
             )
         )
 
+        pending = self._pending_reply
+        if pending is not None and pending.done():
+            pending = None
+
         ev = llm.GenerationCreatedEvent(
             message_stream=gen.message_ch,
-            function_stream=utils.aio.Chan[llm.FunctionCall](),
-            user_initiated=False,
+            function_stream=gen.function_ch,
+            user_initiated=pending is not None,
             response_id=message_id,
         )
-        if self._pending_reply is not None and not self._pending_reply.done():
-            self._pending_reply.set_result(ev)
+        if pending is not None:
+            pending.set_result(ev)
             self._pending_reply = None
         self.emit("generation_created", ev)
         return gen
@@ -319,13 +326,20 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
         for frame in self._bstream.push(data):
             gen.audio_ch.send_nowait(frame)
 
+    def _fail_pending_reply(self) -> None:
+        pending, self._pending_reply = self._pending_reply, None
+        if pending is not None and not pending.done():
+            pending.set_exception(
+                llm.RealtimeError("the camb.ai realtime session closed before a translation")
+            )
+
     def _finish_generation(self) -> None:
         gen, self._current = self._current, None
         if gen is None:
             return
         for frame in self._bstream.flush():
             gen.audio_ch.send_nowait(frame)
-        for ch in (gen.text_ch, gen.audio_ch, gen.message_ch):
+        for ch in (gen.text_ch, gen.audio_ch, gen.message_ch, gen.function_ch):
             if not ch.closed:
                 ch.close()
         self._turn_started_at = None
@@ -436,6 +450,7 @@ class RealtimeSession(llm.RealtimeSession[Literal["cambai_server_event_received"
 
     async def aclose(self) -> None:
         self._msg_ch.close()
+        self._fail_pending_reply()
         await utils.aio.cancel_and_wait(self._main_atask)
 
 
