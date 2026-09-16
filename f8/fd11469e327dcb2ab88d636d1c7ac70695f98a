@@ -1,0 +1,38 @@
+livekit-agents/livekit/agents/metrics/usage_collector.py
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 32-34
+  s_cb009245d7cc49::t_11f1954784f194 120-122
+livekit-agents/livekit/agents/metrics/utils.py
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 95-98
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/realtime_model.py
+  s_cb009245d7cc49::t_11f1954784f194 311,2105,2123,2138
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 17,21,84-87,306-310,312-319,2073-2074,2098-2104,2106-2122,2124-2137,2139-2141
+  s_cb009245d7cc49::t_d32ab5189598ae 2142
+livekit-agents/livekit/agents/metrics/base.py
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 5,61-67,69-70
+  s_cb009245d7cc49::t_11f1954784f194 6,58,68,71,78-82
+  s_cb009245d7cc49::t_e754c955fffb2d 83
+livekit-agents/livekit/agents/metrics/usage.py
+  s_cb009245d7cc49::t_11f1954784f194 97-99,256
+tests/test_metrics_usage.py
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 7-13,82-109,112-116
+  s_cb009245d7cc49::t_f05c30f902d032 1,110-111,117-120
+tests/test_realtime/test_openai_realtime_model.py
+  s_cb009245d7cc49::t_a4d05dc9ed8f51 14,24,525-527,530,538,540-559,561-565,567-572,574-589,591-592,597,603
+  s_cb009245d7cc49::t_f05c30f902d032 16,21,26-27,528-529,531-537,539,560,566,573,590,593-596,598-602,604-664
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8fd11469e327dcb2ab88d636d1c7ac70695f98a",
+  "prompts": {},
+  "sessions": {
+    "s_cb009245d7cc49": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a686-0bff-7d91-849c-50d5d6e0562f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
