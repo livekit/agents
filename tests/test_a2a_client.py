@@ -249,6 +249,15 @@ async def _client(agent: ForeignAgent) -> AsyncIterator[a2a.A2AClient]:
         await asyncio.wait_for(transport.aclose(), timeout=10.0)
 
 
+def _asks(agent: ForeignAgent) -> list[dict[str, Any]]:
+    """What the client asked for, which is every message but the goodbye."""
+    return [
+        request
+        for request in agent.requests
+        if (request["message"].get("metadata") or {}).get(KIND) != "close"
+    ]
+
+
 async def _collect(client: a2a.A2AClient, task_input: a2a.TaskInput) -> list[a2a.TaskUpdate]:
     async with client.send(task_input) as stream:
         return [update async for update in stream]
@@ -283,7 +292,7 @@ async def test_the_request_carries_the_context_and_the_delegation_tag() -> None:
         await _collect(client, a2a.TaskInput(instruction="find it"))
         context_id = client.context_id
 
-    (sent,) = agent.requests
+    (sent,) = _asks(agent)
     assert sent["message"]["contextId"] == context_id
     assert sent["message"]["metadata"][KIND] == "delegation"
 
@@ -309,9 +318,9 @@ async def test_a_question_is_referenced_by_the_next_send() -> None:
         agent._frames = ANSWERED
         await _collect(client, a2a.TaskInput(text="the 9am one"))
 
-    assert agent.requests[0]["message"].get("referenceTaskIds") is None
+    assert _asks(agent)[0]["message"].get("referenceTaskIds") is None
     # the answer says what it might be answering; a resume it is not
-    assert agent.requests[1]["message"]["referenceTaskIds"] == ["t1"]
+    assert _asks(agent)[1]["message"]["referenceTaskIds"] == ["t1"]
 
 
 async def test_a_question_is_referenced_once() -> None:
@@ -322,8 +331,8 @@ async def test_a_question_is_referenced_once() -> None:
         await _collect(client, a2a.TaskInput(text="the 9am one"))
         await _collect(client, a2a.TaskInput(text="thanks"))
 
-    assert agent.requests[1]["message"]["referenceTaskIds"] == ["t1"]
-    assert agent.requests[2]["message"].get("referenceTaskIds") is None
+    assert _asks(agent)[1]["message"]["referenceTaskIds"] == ["t1"]
+    assert _asks(agent)[2]["message"].get("referenceTaskIds") is None
 
 
 async def _settle() -> None:
@@ -345,17 +354,17 @@ async def test_one_unacknowledged_send_per_context() -> None:
         try:
             reading_first = asyncio.create_task(first.__anext__())
             await _settle()
-            assert [r["message"]["parts"][0]["text"] for r in agent.requests] == ["one"]
+            assert [r["message"]["parts"][0]["text"] for r in _asks(agent)] == ["one"]
 
             reading_second = asyncio.create_task(second.__anext__())
             await _settle()
             # the first is still unacknowledged, so the second has not reached the wire
-            assert [r["message"]["parts"][0]["text"] for r in agent.requests] == ["one"]
+            assert [r["message"]["parts"][0]["text"] for r in _asks(agent)] == ["one"]
 
             agent.hold.set()
             await reading_first
             await reading_second
-            assert [r["message"]["parts"][0]["text"] for r in agent.requests] == ["one", "two"]
+            assert [r["message"]["parts"][0]["text"] for r in _asks(agent)] == ["one", "two"]
         finally:
             await first.aclose()
             await second.aclose()
@@ -370,7 +379,7 @@ async def test_a_send_that_never_reaches_the_wire_releases_the_turn() -> None:
         updates = await _collect(client, a2a.TaskInput(text="two"))
 
     assert [u.state for u in updates] == ["working", "completed"]
-    assert [r["message"]["parts"][0]["text"] for r in agent.requests] == ["two"]
+    assert [r["message"]["parts"][0]["text"] for r in _asks(agent)] == ["two"]
 
 
 async def test_cancel_names_the_task_and_says_why() -> None:
@@ -389,6 +398,23 @@ async def test_cancelling_before_the_task_is_known_does_nothing() -> None:
     async with _client(agent) as client, client.send(a2a.TaskInput(text="hi")) as stream:
         await stream.cancel("too early")
     assert agent.cancels == []
+
+
+async def test_closing_says_goodbye_once() -> None:
+    agent = ForeignAgent(ANSWERED)
+    async with _client(agent) as client:
+        await _collect(client, a2a.TaskInput(text="hi"))
+
+    kinds = [(r["message"].get("metadata") or {}).get(KIND) for r in agent.requests]
+    assert kinds == [None, "close"]
+
+
+async def test_a_context_nothing_was_sent_on_says_nothing() -> None:
+    """Closing a client that never connected must not open one to say goodbye."""
+    agent = ForeignAgent(ANSWERED)
+    async with _client(agent):
+        pass
+    assert agent.requests == []
 
 
 async def test_a_vanilla_reply_without_a_task_is_the_answer() -> None:
@@ -417,7 +443,7 @@ async def test_the_conversation_rides_along_and_comes_back_intact() -> None:
     async with _client(agent) as client:
         await _collect(client, a2a.TaskInput(instruction="find it", chat_ctx=chat_ctx))
 
-    (sent,) = agent.requests
+    (sent,) = _asks(agent)
     request = pb.SendMessageRequest()
     from google.protobuf import json_format
 

@@ -24,6 +24,7 @@ __all__ = [
     "EXTENSION_URI",
     "KIND",
     "KIND_CHAT_CTX",
+    "KIND_CLOSE",
     "KIND_CHAT_ITEM",
     "KIND_DELEGATION",
     "REASON",
@@ -67,6 +68,9 @@ REASON = _key("reason")
 """On a ``CancelTaskRequest``: why the caller is stopping the task."""
 
 KIND_DELEGATION = "delegation"
+KIND_CLOSE = "close"
+"""On a message: the conversation is over. The task completes with no answer and the server
+drops the context, rather than holding it until it goes idle."""
 KIND_CHAT_CTX = "chat_ctx"
 KIND_CHAT_ITEM = "chat_item"
 

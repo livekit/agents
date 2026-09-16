@@ -36,7 +36,7 @@ async def check_fares(ctx: RunContext) -> str:
 @function_tool
 async def say_goodbye(ctx: RunContext) -> str:
     """Called when the caller is done."""
-    request = ctx.session.request
+    request = ctx.request
     assert request is not None
     request.set_directive("end_session", reason="user_request")
     return "wrapped up"
@@ -210,6 +210,22 @@ async def test_two_requests_share_one_conversation() -> None:
     assert [u.text for u in second if u.state == "completed"] == ["It is 240 USD."]
     # one context, one handler run, one session
     assert len(served.sessions) == 1
+
+
+async def test_closing_drops_the_conversation() -> None:
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        await _collect(client, TaskInput(instruction="what is the change fee"))
+        assert len(served.executor._conversations) == 1
+
+        # aclose says goodbye, so the endpoint drops the context rather than waiting it out
+        await client.aclose()
+        assert served.executor._conversations == {}
+
+    # the expert's session went with it
+    assert not served.sessions[0]._started
 
 
 async def test_a_stock_client_reads_the_same_endpoint() -> None:
