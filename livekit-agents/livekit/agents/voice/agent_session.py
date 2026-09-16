@@ -650,6 +650,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        # a session that relays a tool's progress verbatim records the report for its model
+        # without answering it; the report is the fact, and a reply would only restate it
+        self._reply_to_tool_updates = True
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
