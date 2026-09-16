@@ -29,6 +29,7 @@ from .events import (
 )
 
 if TYPE_CHECKING:
+    from .._reply_guard import ReplyGuard
     from ..agent import Agent
     from ..agent_session import AgentSession
     from ..events import (
@@ -37,7 +38,6 @@ if TYPE_CHECKING:
         SpeechCreatedEvent,
         UserInputTranscribedEvent,
         UserStateChangedEvent,
-        UserTurnCommittedEvent,
     )
     from ..speech_handle import SpeechHandle
 
@@ -74,6 +74,21 @@ class _Run:
     llm: llm.LLM
     completion: asyncio.Future[AMDCompletedEvent]
     stt: RacingSTT
+
+
+@dataclass(frozen=True)
+class _AMDReplyGuard:
+    _amd: AMD
+    _turn_id: int | None = None
+
+    def tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
+        return self._amd._tools_for_reply(tools)
+
+    async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
+        return await self._amd._should_reply(self._turn_id, chat_ctx)
+
+    def on_reply_created(self, handle: SpeechHandle) -> None:
+        self._amd._on_reply_created(handle, self._turn_id)
 
 
 class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_observed"]]):
@@ -166,6 +181,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 stt = self._DEFAULT_STT_MODEL if auto_select else None
 
         self._session = session
+        self._reply_guard = _AMDReplyGuard(self)
         self._owns_llm = isinstance(llm, str)
         self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
         self._owns_stt = isinstance(stt, str)
@@ -247,7 +263,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         activity._pause_authorization()
         self._session.on("user_state_changed", self._on_user_state_changed)
         self._session.on("user_input_transcribed", self._on_user_input_transcribed)
-        self._session.on("user_turn_committed", self._on_user_turn_committed)
         self._session.on("speech_created", self._on_speech_created)
         self._session.on("agent_state_changed", self._on_agent_state_changed)
         self._session.on("agent_false_interruption", self._on_false_interruption)
@@ -372,19 +387,23 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         if self.started and event.is_final:
             self._run.stt.push_session_text(event.transcript)
 
-    def _on_user_turn_committed(self, event: UserTurnCommittedEvent) -> None:
+    def _on_user_turn_committed(
+        self, transcript: str, end_of_turn_delay: float | None
+    ) -> ReplyGuard:
         if not self.started:
-            return
+            return self._reply_guard
         if activity := self._session._activity:
             activity._pause_authorization()
-        transcript = self._run.stt.end_turn(event.turn_id, event.transcript)
+        turn_id = self._fsm.turn_id + 1
+        turn_transcript = self._run.stt.end_turn(turn_id, transcript)
         self._fsm.commit_turn(
-            transcript,
+            turn_transcript,
             time.monotonic(),
-            event.end_of_turn_delay or 0,
-            turn_id=event.turn_id,
+            end_of_turn_delay or 0,
+            turn_id=turn_id,
         )
         self._reschedule_timer()
+        return _AMDReplyGuard(self, turn_id)
 
     async def _consume_transcripts(self) -> None:
         async for turn in self._run.stt:
@@ -488,7 +507,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             await self._decision_changed.wait()
         return decision
 
-    async def should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
+    async def _should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
         """Wait for the turn's decision, then add stage instructions when a reply is allowed."""
         if turn_id is not None and self._fsm.has_turn(turn_id):
             await self._wait_for_decision(turn_id)
@@ -518,7 +537,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             extra={"amd_run": self._session_id, "amd_stage": self._fsm.category.value},
         )
 
-    def tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
+    def _tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
         if self.started and self._fsm.category == AMDCategory.MACHINE_IVR:
             from ...beta.tools.send_dtmf import send_dtmf_events
 
@@ -526,7 +545,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 return [*tools, send_dtmf_events]
         return tools
 
-    def on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
+    def _on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
         if (
             self.started
             and turn_id == self._fsm.turn_id
@@ -597,7 +616,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     )
             self._session.off("user_state_changed", self._on_user_state_changed)
             self._session.off("user_input_transcribed", self._on_user_input_transcribed)
-            self._session.off("user_turn_committed", self._on_user_turn_committed)
             self._session.off("speech_created", self._on_speech_created)
             self._session.off("agent_state_changed", self._on_agent_state_changed)
             self._session.off("agent_false_interruption", self._on_false_interruption)

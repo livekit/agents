@@ -30,7 +30,6 @@ from .events import (
     UserInputTranscribedEvent,
     UserStateChangedEvent,
     UserTranscriptionTimeoutEvent,
-    UserTurnCommittedEvent,
     UserTurnExceededEvent,
 )
 from .keyterm_detection import (
@@ -71,7 +70,6 @@ __all__ = [
     "CloseEvent",
     "CloseReason",
     "UserStateChangedEvent",
-    "UserTurnCommittedEvent",
     "UserTranscriptionTimeoutEvent",
     "AgentStateChangedEvent",
     "FunctionToolsExecutedEvent",

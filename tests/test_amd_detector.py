@@ -24,6 +24,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import APIConnectOptions
+from livekit.agents.voice._reply_guard import ReplyGuard
 from livekit.agents.voice.amd import AMDCategory
 from livekit.agents.voice.amd.detector import (
     _HUMAN_INSTRUCTIONS,
@@ -192,10 +193,12 @@ def end_of_turn(text: str = "hello", *, skip_reply: bool = False) -> _EndOfTurnI
     )
 
 
-def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> None:
-    info.turn_id = detector._session._user_turn_committed(
+def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> ReplyGuard:
+    guard = detector._session._user_turn_committed(
         info.new_transcript, info.metrics.end_of_turn_delay
     )
+    assert guard is not None
+    return guard
 
 
 def speech_started(detector: AMD) -> None:
@@ -252,16 +255,17 @@ async def running(
 
 async def commit(
     detector: AMD, session: AgentSession, classifier: ClassifierLLM, *, reply: bool = False
-) -> _EndOfTurnInfo:
+) -> ReplyGuard | None:
     info = end_of_turn()
+    guard = None
     if reply:
         assert session._activity is not None
         session._activity.on_end_of_turn(info)
     else:
-        commit_turn(detector, info)
+        guard = commit_turn(detector, info)
     request = await classifier.request()
-    assert request.turn_id == info.turn_id
-    return info
+    assert request.turn_id == detector._fsm.turn_id
+    return guard
 
 
 @pytest.mark.asyncio
@@ -272,7 +276,7 @@ async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> No
         """A tool available only to the guarded reply."""
         return "done"
 
-    replies: list[tuple[SpeechHandle, int | None]] = []
+    replies: list[SpeechHandle] = []
 
     class Guard:
         def tools_for_reply(
@@ -280,12 +284,12 @@ async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> No
         ) -> list[llm.Tool | llm.Toolset]:
             return [*tools, guard_tool]
 
-        async def should_reply(self, turn_id: int | None, chat_ctx: llm.ChatContext) -> bool:
+        async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
             chat_ctx.add_message(role="system", content="Guard instructions")
             return allow_reply
 
-        def on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
-            replies.append((handle, turn_id))
+        def on_reply_created(self, handle: SpeechHandle) -> None:
+            replies.append(handle)
 
     model = RecordingLLM()
     agent = CustomerAgent()
@@ -309,9 +313,7 @@ async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> No
             )
             assert guard_tool in call["tools"]
             assert len(replies) == 1
-            handle, turn_id = replies[0]
-            assert turn_id == info.turn_id
-            await asyncio.wait_for(handle, 2)
+            await asyncio.wait_for(replies[0], 2)
         else:
             assert model.calls.empty()
             assert replies == []
@@ -377,17 +379,15 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
     agent.hook_release.clear()
     async with running(agent=agent) as (detector, session, classifier, model):
         completed = asyncio.create_task(detector.execute())
-        turns = []
-        session.on("user_turn_committed", turns.append)
         info = end_of_turn()
         info.metrics.end_of_turn_delay = 0.5
         session._activity.on_end_of_turn(info)
+        assert detector._fsm.turn_id == 1
+        assert not agent.hook_started.is_set()
         request = await classifier.request()
         await agent.hook_started.wait()
-        assert len(turns) == 1
-        assert turns[0].turn_id == info.turn_id == request.turn_id
-        assert turns[0].transcript == request.transcript == "hello"
-        assert turns[0].end_of_turn_delay == 0.5
+        assert request.turn_id == 1
+        assert request.transcript == "hello"
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await eventually(lambda: detector._fsm.decision(1) is not None)
         assert model.calls.empty()
@@ -407,6 +407,76 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("category", "instructions"),
+    [
+        (AMDCategory.MACHINE_SCREENING, DEFAULT_SCREENING_INSTRUCTIONS),
+        (AMDCategory.MACHINE_VM, DEFAULT_VOICEMAIL_INSTRUCTIONS),
+        (AMDCategory.HUMAN, _HUMAN_INSTRUCTIONS),
+    ],
+)
+async def test_reply_guard_keeps_its_turn_while_an_older_hook_is_blocked(
+    category: AMDCategory, instructions: str
+) -> None:
+    agent = CustomerAgent()
+    agent.hook_release.clear()
+    async with running(agent=agent) as (detector, session, classifier, model):
+        activity = session._activity
+        assert activity is not None
+        try:
+            await commit(detector, session, classifier, reply=True)
+            await asyncio.wait_for(agent.hook_started.wait(), 2)
+            classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+            await eventually(lambda: detector._fsm.decision(1) is not None)
+
+            activity.on_end_of_turn(end_of_turn("Can you hear me?"))
+            assert (await classifier.request()).turn_id == 2
+            classifier.prediction(2, category)
+            await eventually(lambda: detector._fsm.decision(2) is not None)
+            if category == AMDCategory.HUMAN:
+                await asyncio.wait_for(detector.execute(), 2)
+                assert session.amd is None
+            assert len(agent.hooks) == 1
+            assert model.calls.empty()
+        finally:
+            agent.hook_release.set()
+
+        await asyncio.wait_for(activity._user_turn_completed_atask, 2)
+        call = await asyncio.wait_for(model.calls.get(), 2)
+        messages = [m for m in call["chat_ctx"].items if m.type == "message"]
+        assert messages[-1].text_content == instructions
+        assert any(m.text_content == "Can you hear me?" for m in messages)
+        assert len(agent.hooks) == 2
+        if category == AMDCategory.MACHINE_VM:
+            await eventually(lambda: detector._fsm.voicemail_message_played)
+        await eventually(lambda: activity._no_pending_speech)
+        assert model.calls.empty()
+
+
+@pytest.mark.asyncio
+async def test_turn_ids_are_local_to_each_amd_run() -> None:
+    session = AgentSession(llm=RecordingLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(CustomerAgent())
+    try:
+        activity = session._activity
+        assert activity is not None
+        for _ in range(2):
+            activity.on_end_of_turn(end_of_turn(skip_reply=True))
+            await asyncio.wait_for(activity._user_turn_completed_atask, 2)
+            classifier = ClassifierLLM()
+            async with AMD(
+                session, llm=classifier, stt=None, machine_silence_threshold=0
+            ) as detector:
+                await eventually(lambda: detector.started)
+                guard = await commit(detector, session, classifier)
+                assert detector._fsm.turn_id == 1
+                classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+                assert await guard.should_reply(llm.ChatContext())
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "category", [AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_UNAVAILABLE]
 )
 async def test_amd_guard_retains_the_adopted_user_turn_span(category: AMDCategory) -> None:
@@ -420,7 +490,6 @@ async def test_amd_guard_retains_the_adopted_user_turn_span(category: AMDCategor
         await session.current_agent.hook_started.wait()
         await asyncio.sleep(0)
 
-        assert info.turn_id == 1
         assert info.user_turn_span_adopted
         span.end.assert_not_called()
         assert model.calls.empty()
@@ -534,9 +603,9 @@ async def test_late_stage_change_replaces_the_idle_timer(category: AMDCategory) 
             else AMDCategory.MACHINE_VM
         )
         classifier.prediction(1, previous)
-        assert await detector.should_reply(first.turn_id, llm.ChatContext())
+        assert await first.should_reply(llm.ChatContext())
         second = await commit(detector, session, classifier)
-        await detector.should_reply(second.turn_id, llm.ChatContext())
+        await second.should_reply(llm.ChatContext())
         timer = detector._timer
         assert timer is not None
         classifier.prediction(2, category)
@@ -647,12 +716,12 @@ async def test_menu_is_observability_only_and_dtmf_tool_is_temporary() -> None:
     async with running() as (detector, session, classifier, model):
         menus = []
         detector.on("amd_menu_observed", menus.append)
-        info = await commit(detector, session, classifier)
+        guard = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
         context = llm.ChatContext()
-        assert await detector.should_reply(info.turn_id, context)
+        assert await guard.should_reply(context)
         before = session.current_agent.tools.copy()
-        tools = detector.tools_for_reply(before)
+        tools = guard.tools_for_reply(before)
         assert any(t.id == "send_dtmf_events" for t in tools)
         assert session.current_agent.tools == before
         response = await asyncio.wait_for(classifier.menu_requests.get(), 2)
@@ -675,12 +744,12 @@ async def test_menu_is_observability_only_and_dtmf_tool_is_temporary() -> None:
 @pytest.mark.parametrize("category", [AMDCategory.HUMAN, AMDCategory.MACHINE_UNAVAILABLE])
 async def test_terminal_result_completes_once_and_releases_guard(category: AMDCategory) -> None:
     async with running() as (detector, session, classifier, _):
-        assert session._reply_guard is detector
+        assert session._reply_guard is not None
         events = []
         detector.on("amd_completed", events.append)
         first = asyncio.create_task(detector.execute())
         second = asyncio.create_task(detector.execute())
-        info = await commit(detector, session, classifier)
+        guard = await commit(detector, session, classifier)
         classifier.prediction(1, category)
         a, b = await asyncio.wait_for(asyncio.gather(first, second), 2)
         assert a is b
@@ -693,12 +762,9 @@ async def test_terminal_result_completes_once_and_releases_guard(category: AMDCa
         for event, callback in (
             ("user_state_changed", detector._on_user_state_changed),
             ("user_input_transcribed", detector._on_user_input_transcribed),
-            ("user_turn_committed", detector._on_user_turn_committed),
         ):
             assert callback not in session._events[event]
-        assert await detector.should_reply(info.turn_id, llm.ChatContext()) == (
-            category == AMDCategory.HUMAN
-        )
+        assert await guard.should_reply(llm.ChatContext()) == (category == AMDCategory.HUMAN)
         await detector.aclose()
         assert len(events) == 1
 
@@ -789,8 +855,8 @@ async def test_timeout_rearms_and_late_result_cannot_change_a_newer_turn() -> No
     async with running(inference_timeout=0.02) as (detector, session, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
-        info = await commit(detector, session, classifier)
-        assert await detector.should_reply(info.turn_id, llm.ChatContext())
+        guard = await commit(detector, session, classifier)
+        assert await guard.should_reply(llm.ChatContext())
         assert events[-1].reason == "inference_timeout"
         assert detector._fsm._idle_deadline is not None
         await commit(detector, session, classifier)
@@ -822,9 +888,9 @@ async def test_stop_response_remains_owned_by_session() -> None:
 @pytest.mark.asyncio
 async def test_invalid_model_output_falls_back_and_releases_the_reply() -> None:
     async with running() as (detector, session, classifier, _):
-        info = await commit(detector, session, classifier)
+        guard = await commit(detector, session, classifier)
         classifier.respond(1, "not JSON")
-        assert await detector.should_reply(info.turn_id, llm.ChatContext())
+        assert await guard.should_reply(llm.ChatContext())
         assert detector._fsm._latest.reason == "inference_error"
         assert detector._fsm.category == AMDCategory.UNCERTAIN
         assert detector.enabled
@@ -849,19 +915,18 @@ async def test_unchanged_voicemail_rearms_idle_without_another_reply(reason: str
     async with running(voicemail_idle_timeout=0.03) as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
-        assert await detector.should_reply(first.turn_id, llm.ChatContext())
+        assert await first.should_reply(llm.ChatContext())
         speech_started(detector)
         speech_ended(detector, 0)
         if reason == "reused":
-            second = end_of_turn("")
-            commit_turn(detector, second)
+            second = commit_turn(detector, end_of_turn(""))
         else:
             second = await commit(detector, session, classifier)
             if reason == "inference_error":
                 classifier.respond(2, "not JSON")
             else:
                 classifier.prediction(2, AMDCategory.MACHINE_VM)
-        assert not await detector.should_reply(second.turn_id, llm.ChatContext())
+        assert not await second.should_reply(llm.ChatContext())
         result = await asyncio.wait_for(detector.execute(), 2)
         assert result.reason == "idle_timeout"
         assert result.category == AMDCategory.MACHINE_VM

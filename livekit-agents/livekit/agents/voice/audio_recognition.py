@@ -76,8 +76,6 @@ class _EndOfTurnInfo:
     metrics: _EndOfTurnMetrics
     backchannel_over_agent: bool = False
     """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
-    turn_id: int | None = None
-    """Session turn ID, assigned when the activity accepts the turn."""
     user_turn_span: trace.Span | None = None
     """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
     ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""

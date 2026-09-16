@@ -79,7 +79,6 @@ from .events import (
     UserInputTranscribedEvent,
     UserState,
     UserStateChangedEvent,
-    UserTurnCommittedEvent,
 )
 from .ivr import IVRActivity
 from .keyterm_detection import (
@@ -695,7 +694,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._activity: AgentActivity | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
-        self._user_turn_id = 0
         self._agent_state: AgentState = "initializing"
         self._user_away_timer: asyncio.TimerHandle | None = None
 
@@ -755,7 +753,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _set_amd(self, amd: AMD | None) -> None:
         self._amd = amd
-        self._reply_guard = amd
+        self._reply_guard = amd._reply_guard if amd is not None else None
 
     @property
     def _input_audio_allowed(self) -> bool:
@@ -2258,16 +2256,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             else:
                 self._update_user_state("listening")
 
-    def _user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> int:
-        self._user_turn_id += 1
-        turn_id = self._user_turn_id
-        self.emit(
-            "user_turn_committed",
-            UserTurnCommittedEvent(
-                turn_id=turn_id, transcript=transcript, end_of_turn_delay=end_of_turn_delay
-            ),
-        )
-        return turn_id
+    def _user_turn_committed(
+        self, transcript: str, end_of_turn_delay: float | None
+    ) -> ReplyGuard | None:
+        """Notify AMD before the customer hook and retain this turn's reply guard."""
+        if self._amd is not None:
+            return self._amd._on_user_turn_committed(transcript, end_of_turn_delay)
+        return self._reply_guard
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if ev.transcript:

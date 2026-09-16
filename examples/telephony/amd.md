@@ -5,9 +5,10 @@ handle several screening, voicemail, and IVR turns before it completes.
 The SDK owns classification, stage changes, reply guards, and deadlines.
 AgentSession owns the customer hook, interruption, and playback.
 
-AMD consumes `user_state_changed`, `user_input_transcribed`, and
-`user_turn_committed` session events. The commit event carries the session turn ID,
-transcript, and EOT delay. State events carry the accepted speech-boundary time,
+AMD consumes `user_state_changed` and `user_input_transcribed` session events.
+At each accepted EOT, AgentSession notifies AMD internally before
+`on_user_turn_completed` runs. AMD owns its turn IDs and returns a reply guard
+bound to that turn. State events carry the accepted speech-boundary time,
 including the STT timestamp when STT controls turn detection.
 
 This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,

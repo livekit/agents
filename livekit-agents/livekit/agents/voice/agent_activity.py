@@ -2690,8 +2690,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        reply_guard = self._session._reply_guard
-        info.turn_id = self._session._user_turn_committed(
+        reply_guard = self._session._user_turn_committed(
             info.new_transcript, info.metrics.end_of_turn_delay
         )
 
@@ -2838,7 +2837,7 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        if reply_guard and not await reply_guard.should_reply(info.turn_id, temp_mutable_chat_ctx):
+        if reply_guard and not await reply_guard.should_reply(temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2916,7 +2915,7 @@ class AgentActivity(RecognitionHooks):
             await speech_handle.interrupt(source="user_turn")
 
         if reply_guard:
-            reply_guard.on_reply_created(speech_handle, info.turn_id)
+            reply_guard.on_reply_created(speech_handle)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):

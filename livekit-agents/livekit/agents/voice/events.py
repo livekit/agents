@@ -292,7 +292,6 @@ EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
-    "user_turn_committed",
     "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
@@ -334,18 +333,6 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
-    created_at: float = Field(default_factory=time.time)
-
-
-class UserTurnCommittedEvent(BaseModel):
-    """An accepted end of turn, emitted before the Agent's user-turn hook runs."""
-
-    type: Literal["user_turn_committed"] = "user_turn_committed"
-    turn_id: int
-    """Increasing turn ID within the session."""
-    transcript: str
-    end_of_turn_delay: float | None = None
-    """Seconds from speech end to turn commit, when known."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -599,7 +586,6 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
-    | UserTurnCommittedEvent
     | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
