@@ -47,3 +47,40 @@ result = await WarmTransferTask(
 ```python
 python warm_transfer.py dev
 ```
+
+## Twilio connector transfers with the original caller ID
+
+[`twilio_connector_warm_transfer.py`](twilio_connector_warm_transfer.py) uses the
+[Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/) to dial the
+supervisor through Twilio's Calls API and connect their audio to the consultation
+room. This path requires LiveKit Cloud and the optional `twilio` Python package.
+
+To show an inbound customer's phone number to the supervisor, capture `From` and
+`CallToken` from that call's validated Twilio voice webhook. Keep them together in
+your server-side state, keyed by the inbound `CallSid`, and supply them to the task
+when that call requests a transfer:
+
+```python
+result = await TwilioConnectorWarmTransferTask(
+    SUPERVISOR_PHONE_NUMBER,
+    twilio_from_number=inbound_from,
+    twilio_call_token=inbound_call_token,
+    chat_ctx=self.chat_ctx,
+)
+```
+
+Twilio credentials are read from `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`, or
+can be supplied through the task's corresponding constructor arguments. The task
+passes the token unchanged to Twilio as `call_token`; it does not put it into the
+connector request or TwiML. Retrieve it through your application's server-side
+call context, and keep it out of prompts, chat history, logs, and participant
+attributes.
+
+The token must belong to the original incoming call, and `twilio_from_number`
+must match that call's `From`. This does not authorize an arbitrary caller ID.
+Without an inbound token, omit `twilio_call_token` and use a Twilio number or
+verified caller ID as `twilio_from_number`. A rejected token fails the transfer
+dial; the task does not silently retry with a different caller ID.
+
+The [Twilio Calls API](https://www.twilio.com/docs/voice/api/call-resource#create-a-call)
+supports CallToken directly, so this workflow does not require a Twilio conference.

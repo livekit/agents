@@ -442,6 +442,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         twilio_from_number: str,
         twilio_account_sid: NotGivenOr[str] = NOT_GIVEN,
         twilio_auth_token: NotGivenOr[str] = NOT_GIVEN,
+        twilio_call_token: NotGivenOr[str] = NOT_GIVEN,
         ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
@@ -455,8 +456,27 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         extra_instructions: str = "",
     ) -> None:
+        """Dial a human agent using Twilio's Calls API and the LiveKit Twilio Connector.
+
+        Args:
+            phone_number: The human agent's phone number to dial.
+            twilio_from_number: Caller ID shown to the human agent. Use a Twilio
+                number or verified caller ID, or the original incoming call's
+                ``From`` number when supplying its ``twilio_call_token``.
+            twilio_account_sid: Twilio account SID. Defaults to ``TWILIO_ACCOUNT_SID``.
+            twilio_auth_token: Twilio auth token. Defaults to ``TWILIO_AUTH_TOKEN``.
+            twilio_call_token: The ``CallToken`` from the original incoming Twilio
+                voice webhook, authorizing reuse of that call's caller ID. Pass it
+                together with that call's ``From`` as ``twilio_from_number``.
+                Retrieve the token from server-side state for that specific call;
+                do not include it in prompts or participant attributes. When omitted,
+                no CallToken is sent to Twilio.
+
+        Other arguments have the same meaning as in ``WarmTransferTask``.
+        """
         self._phone_number = phone_number
         self._twilio_from_number = twilio_from_number
+        self._twilio_call_token = twilio_call_token
         self._twilio_account_sid = (
             twilio_account_sid
             if is_given(twilio_account_sid)
@@ -516,11 +536,15 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         )
 
         client = Client(self._twilio_account_sid, self._twilio_auth_token)
+        call_options: dict[str, str] = {}
+        if is_given(self._twilio_call_token):
+            call_options["call_token"] = self._twilio_call_token
         call = await asyncio.to_thread(
             client.calls.create,
             to=self._phone_number,
             from_=self._twilio_from_number,
             twiml=twiml,
+            **call_options,
         )
 
         try:
