@@ -556,33 +556,50 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             f"<Response><Connect><Stream url={quoteattr(resp.connect_url)}/></Connect></Response>"
         )
 
+        async def create_call(from_number: str, **options: str) -> str:
+            def create() -> str:
+                return str(
+                    client.calls.create(
+                        to=self._phone_number, from_=from_number, twiml=twiml, **options
+                    ).sid
+                )
+
+            pending = asyncio.create_task(asyncio.to_thread(create))
+            try:
+                return await asyncio.shield(pending)
+            except asyncio.CancelledError:
+
+                async def cleanup() -> None:
+                    # Cancelling an await cannot stop the synchronous HTTP request.
+                    # Retain its result and cancel any call it creates before teardown.
+                    with contextlib.suppress(Exception):
+                        sid = await pending
+                        await asyncio.to_thread(client.calls(sid).update, status="canceled")
+
+                cleanup_task = asyncio.create_task(cleanup())
+                while not cleanup_task.done():
+                    # Repeated cancellation must not detach the cleanup either.
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(cleanup_task)
+                cleanup_task.result()
+                raise
+
         try:
-            call = await asyncio.to_thread(
-                client.calls.create,
-                to=self._phone_number,
-                from_=from_number,
-                twiml=twiml,
-                **call_options,
-            )
+            call_sid = await create_call(from_number, **call_options)
         except TwilioRestException as error:
             # This explicit rejection means no call was created. Never retry ambiguous
             # transport failures, or errors after a call has already been accepted.
             if not call_options or error.status != 400 or error.code != 21210:
                 raise
             logger.warning("Twilio rejected preserved caller ID; retrying with business caller ID")
-            call = await asyncio.to_thread(
-                client.calls.create,
-                to=self._phone_number,
-                from_=self._twilio_from_number,
-                twiml=twiml,
-            )
+            call_sid = await create_call(self._twilio_from_number)
 
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
             # we gave up waiting; cancel the still-ringing call so it doesn't linger
             with contextlib.suppress(Exception):
-                await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+                await asyncio.to_thread(client.calls(call_sid).update, status="canceled")
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:

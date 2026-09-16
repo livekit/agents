@@ -1,4 +1,6 @@
+import asyncio
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, create_autospec
 from xml.etree import ElementTree
@@ -312,3 +314,72 @@ async def test_unanswered_fallback_cancels_fallback_call(
     assert twilio_client.calls.create.call_count == 2
     twilio_client.calls.assert_called_once_with("CA_fallback")
     twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_cancellation_during_call_creation_retains_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_client: Mock,
+    connector: AsyncMock,
+    fallback: bool,
+    rejected: bool,
+) -> None:
+    task = TwilioConnectorWarmTransferTask(
+        HUMAN_NUMBER,
+        twilio_from_number=TWILIO_NUMBER,
+        original_caller_number=CALLER_NUMBER,
+        twilio_call_token=CALL_TOKEN,
+        twilio_account_sid="AC_test",
+        twilio_auth_token="test",
+    )
+    wait = AsyncMock()
+    monkeypatch.setattr(task, "_wait_for_human_agent", wait)
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    attempts = 0
+
+    def create(**kwargs: str) -> SimpleNamespace:
+        nonlocal attempts
+        attempts += 1
+        if fallback and attempts == 1:
+            raise FakeTwilioRestException(400, 21210)
+        loop.call_soon_threadsafe(started.set)
+        if not release.wait(timeout=5):
+            raise RuntimeError("test did not release worker")
+        if rejected:
+            raise FakeTwilioRestException(400, 21210)
+        return SimpleNamespace(sid="CA_late_call")
+
+    twilio_client.calls.create.side_effect = create
+    dial = asyncio.create_task(
+        task._originate_human_agent(
+            room_name="consult",
+            identity="human",
+            room=Mock(),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        dial.cancel()
+        await asyncio.sleep(0)
+        dial.cancel()  # teardown can request cancellation more than once
+        await asyncio.sleep(0)
+        assert not dial.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(dial, timeout=5)
+        assert attempts == (2 if fallback else 1)
+        wait.assert_not_awaited()
+        if rejected:
+            twilio_client.calls.assert_not_called()
+        else:
+            twilio_client.calls.assert_called_once_with("CA_late_call")
+            twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
+    finally:
+        release.set()
+        if not dial.done():
+            dial.cancel()
+            await asyncio.gather(dial, return_exceptions=True)
