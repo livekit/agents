@@ -211,7 +211,7 @@ class AvatarSession(BaseAvatarSession):
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime = runtime
+        self._runtime: AsyncBithuman | None = runtime or None
 
     @property
     def avatar_identity(self) -> str:
@@ -258,17 +258,12 @@ class AvatarSession(BaseAvatarSession):
             logger.debug("new transaction id: %s", runtime.transaction_id)
             await runtime._initialize_token()
         else:
-            kwargs = {
-                "model_path": self._model_path,
-            }
-            if self._api_secret:
-                kwargs["api_secret"] = self._api_secret
-            if self._api_token:
-                kwargs["token"] = self._api_token
-            if self._api_url:
-                kwargs["api_url"] = self._api_url
-
-            runtime = await AsyncBithuman.create(**kwargs)
+            runtime = await AsyncBithuman.create(
+                model_path=self._model_path,
+                api_secret=self._api_secret,
+                token=self._api_token,
+                api_url=self._api_url,
+            )
             self._runtime = runtime
 
         video_generator = BithumanGenerator(runtime)
@@ -624,7 +619,7 @@ class AvatarSession(BaseAvatarSession):
 
     async def aclose(self) -> None:
         await super().aclose()
-        if self._mode == "local" and utils.is_given(self._runtime) and self._runtime is not None:
+        if self._mode == "local" and self._runtime is not None:
             self._runtime.cleanup()
 
 
@@ -641,11 +636,11 @@ class BithumanGenerator(VideoGenerator):
 
     @property
     def video_fps(self) -> int:
-        return self._runtime.settings.FPS  # type: ignore
+        return self._runtime.settings.FPS
 
     @property
     def audio_sample_rate(self) -> int:
-        return self._runtime.settings.INPUT_SAMPLE_RATE  # type: ignore
+        return self._runtime.settings.INPUT_SAMPLE_RATE
 
     @utils.log_exceptions(logger=logger)
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
