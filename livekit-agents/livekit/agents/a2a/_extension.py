@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from ..log import logger
 
@@ -28,7 +28,6 @@ __all__ = [
     "KIND_DELEGATION",
     "REASON",
     "VERBATIM",
-    "DirectiveKind",
     "agent_card",
     "as_dict",
     "offers_extension",
@@ -73,8 +72,6 @@ KIND_CHAT_ITEM = "chat_item"
 
 ANSWER_ARTIFACT_NAME = "answer"
 """The one artifact that is the answer. A caller reads it whole at the terminal status."""
-
-DirectiveKind = Literal["escalate", "end_session"]
 
 
 def struct(value: dict[str, Any]) -> struct_pb2.Struct:

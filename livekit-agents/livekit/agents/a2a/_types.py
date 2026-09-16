@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ..llm.chat_context import ChatContext, ChatItem
-from ._extension import DirectiveKind
+from ..voice.served_request import Directive
 
 TaskState = Literal["working", "completed", "failed", "canceled", "input-required"]
 """How far a task has got, in A2A's task states.
@@ -14,16 +14,6 @@ TaskState = Literal["working", "completed", "failed", "canceled", "input-require
 ``working`` is intermediate and repeats; the rest end the task. ``input-required`` ends it
 too — the answer is a question, nothing waits on it, and the reply is a new task.
 """
-
-
-@dataclass
-class Directive:
-    """What the caller does once it has said the answer. Only on ``completed``."""
-
-    kind: DirectiveKind
-    reason: str = ""
-    """Why, in the sender's own words. Implementation-neutral: a reader that does not know
-    the reason still acts on the kind."""
 
 
 @dataclass
