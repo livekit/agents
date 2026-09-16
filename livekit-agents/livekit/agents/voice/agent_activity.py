@@ -1667,12 +1667,15 @@ class AgentActivity(RecognitionHooks):
         # When discarding, substitute silence on the paths that would otherwise
         # see contaminated/echoed audio (STT, realtime model) so the downstream
         # stream stays continuous. VAD and the interruption detector keep
-        # receiving the real frame so they can still react to the user.
+        # receiving the real frame so they can still react to the user. AMD also
+        # receives the real frame: a human who talks over the agent's greeting is
+        # the signal AMD must not miss, so it never gets the substituted silence.
         stt_frame: rtc.AudioFrame | None = None
         if should_discard:
             stt_frame = utils.audio.silence_frame_like(frame)
 
-        self._session._on_input_audio(stt_frame if stt_frame is not None else frame)
+        if self._session._amd is not None:
+            self._session._amd.push_audio(frame)
 
         if self._rt_session is not None:
             self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
@@ -1793,7 +1796,8 @@ class AgentActivity(RecognitionHooks):
                     tool_choice = "none"
 
         all_tools = self.tools.copy()
-        if turn_hooks := self._session._turn_hooks:
+        # inject DTMF tool for IVR if needed
+        if (turn_hooks := self._session._turn_hooks) is not None:
             all_tools = turn_hooks.on_reply_generation(all_tools)
 
         # resolve tool names to Tool objects if tools param is given
@@ -1870,7 +1874,7 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation.speech_handle._cancel()
             self._preemptive_generation = None
 
-    def _cancel_pending_speech(self) -> None:
+    def _cancel_pending_speeches(self) -> None:
         """Cancel preemptive, queued, and held speech; preserve active or paused playback."""
         self._cancel_preemptive_generation()
         for _, _, speech in self._speech_q:
@@ -2690,9 +2694,10 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        turn_hooks = self._session._user_turn_committed(
-            info.new_transcript, info.metrics.end_of_turn_delay
-        )
+        if (turn_hooks := self._session._turn_hooks) is not None:
+            turn_hooks = turn_hooks.on_user_turn_committed(
+                info.new_transcript, info.metrics.end_of_turn_delay
+            )
 
         # a replying turn interrupts the paused speech, so cancel the resume that would race it —
         # but the reply task returns before that in these two cases, so leave the resume armed
@@ -2706,7 +2711,10 @@ class AgentActivity(RecognitionHooks):
             self._user_turn_completed_task(old_task, info, turn_hooks),
             name="AgentActivity._user_turn_completed_task",
         )
-        self._user_turn_completed_atask.add_done_callback(self._session._on_user_turn_completed)
+        if turn_hooks is not None:
+            self._user_turn_completed_atask.add_done_callback(
+                lambda _: turn_hooks.on_user_turn_completed()
+            )
         return True
 
     @utils.log_exceptions(logger=logger)
@@ -2837,7 +2845,7 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        if turn_hooks and not await turn_hooks.should_reply(temp_mutable_chat_ctx):
+        if turn_hooks is not None and not await turn_hooks.should_reply(temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2914,7 +2922,7 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt(source="user_turn")
 
-        if turn_hooks:
+        if turn_hooks is not None:
             turn_hooks.on_agent_turn_committed(speech_handle)
 
         metadata: Metadata | None = None

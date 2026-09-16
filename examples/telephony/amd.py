@@ -66,10 +66,9 @@ async def entrypoint(ctx: JobContext) -> None:
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY") or NOT_GIVEN
     outbound_trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID")
 
-    if not session.room_io:
-        raise RuntimeError(
-            "session room_io is unavailable. Make sure you use dev or start commands"
-        )
+    # AMD needs a SIP participant, so console mode is not supported.
+    # room_io raises when the session was started without a room.
+    _ = session.room_io
 
     detector = AMD(
         session,

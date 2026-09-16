@@ -1,3 +1,4 @@
+from ._fsm import AMDLifecycle
 from .detector import AMD
 from .events import (
     AMDCategory,
@@ -5,15 +6,16 @@ from .events import (
     AMDMenuObservedEvent,
     AMDPredictionEvent,
     AMDReason,
-    IvrMenuOption,
+    IVRMenuOption,
 )
 
 __all__ = [
     "AMD",
     "AMDCategory",
+    "AMDLifecycle",
     "AMDPredictionEvent",
     "AMDCompletedEvent",
     "AMDMenuObservedEvent",
     "AMDReason",
-    "IvrMenuOption",
+    "IVRMenuOption",
 ]

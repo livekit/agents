@@ -17,16 +17,14 @@ class AMDReason(str, Enum):
     """Why a prediction was published or why the run completed."""
 
     PREDICTION = "prediction"
-    """A model prediction was released without an earlier inference timeout."""
+    """A model prediction was released normally."""
     LATE_PREDICTION = "late_prediction"
     """A model prediction was released after the turn's inference timeout.
 
-    It can update the stage without replacing the turn's saved decision.
+    It can update the stage without replacing the turn's saved prediction.
     """
     REUSED = "reused"
-    """An empty transcript used pending classification or the current stage without a new request."""
-    SUPERSEDED = "superseded"
-    """Internal decision for a turn made obsolete by a newer turn.
+    """Internal prediction for an empty turn using the current stage without a new request.
 
     Not emitted through ``amd_prediction``.
     """
@@ -100,7 +98,7 @@ class AMDCompletedEvent(BaseModel):
     voicemail_message_played: bool = False
 
 
-class IvrMenuOption(BaseModel):
+class IVRMenuOption(BaseModel):
     label: str
     dtmf: str = ""
     spoken_response: str = ""
@@ -113,5 +111,5 @@ class AMDMenuObservedEvent(BaseModel):
     session_id: str
     turn_id: int
     menu: str
-    options: list[IvrMenuOption] = Field(default_factory=list)
+    options: list[IVRMenuOption] = Field(default_factory=list)
     extraction_duration: float

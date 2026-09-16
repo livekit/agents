@@ -1,5 +1,8 @@
+"""AMD turn and stage policy driven by explicit timestamps, with no asyncio resources."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Literal
@@ -7,6 +10,8 @@ from typing import Literal
 from pydantic import BaseModel
 
 from .events import AMDCategory, AMDCompletedEvent, AMDPredictionEvent, AMDReason
+
+_HISTORY_LIMIT = 19  # Earlier turns sent to the classifier with the current turn.
 
 ALLOWED = {
     AMDCategory.UNCERTAIN: frozenset(AMDCategory),
@@ -36,120 +41,311 @@ ALLOWED = {
     ),
 }
 TERMINAL = frozenset({AMDCategory.HUMAN, AMDCategory.MACHINE_UNAVAILABLE})
-_AMDEvent = AMDPredictionEvent | AMDCompletedEvent
-_Source = Literal["session", "amd"]
-_HISTORY_LIMIT = 20
-_MAX_INFERENCE_TIMEOUTS = 3
+MACHINE = frozenset(
+    {
+        AMDCategory.MACHINE_SCREENING,
+        AMDCategory.MACHINE_VM,
+        AMDCategory.MACHINE_IVR,
+        AMDCategory.MACHINE_UNAVAILABLE,
+    }
+)
+AMDEvent = AMDPredictionEvent | AMDCompletedEvent
+AMDTranscriptSource = Literal["session", "amd"]
 
 
-class _Lifecycle(Enum):
-    NEW = auto()
-    WAITING = auto()
-    LISTENING = auto()
+class AMDLifecycle(Enum):
+    """Lifecycle of an AMD run."""
+
+    INITIALIZED = auto()
+    PENDING = auto()
+    ACTIVE = auto()
     FINISHED = auto()
 
 
-class _Phase(Enum):
-    """Prediction progress for one turn, separate from its saved decision."""
-
-    IDLE = auto()
-    """No model result is pending."""
-    INFERRING = auto()
-    """The classifier is running. ``deadline`` is the inference timeout."""
-    HOLDING = auto()
-    """A machine prediction waits for participant silence. ``deadline`` is the release time,
-    or None while the participant is still speaking."""
+@dataclass(frozen=True)
+class AMDTranscript:
+    transcript: str
+    source: AMDTranscriptSource | None
 
 
 @dataclass(frozen=True)
-class _Transcript:
-    text: str
-    source: _Source | None
-    alternative: str = ""
-
-
-@dataclass(frozen=True)
-class _Prediction:
+class AMDPrediction:
     category: AMDCategory
-    fallback: AMDReason | None = None
+    reason: AMDReason
     inference_duration: float | None = None
 
+    @property
+    def from_model(self) -> bool:
+        return self.reason in {AMDReason.PREDICTION, AMDReason.LATE_PREDICTION}
+
 
 @dataclass(frozen=True)
-class ReplyDecision:
+class AMDReplyDecision:
     allow: bool
     instructions_for: AMDCategory | None = None
+    track_voicemail: bool = False
 
 
-_SKIP = ReplyDecision(allow=False)
-_PLAIN = ReplyDecision(allow=True)
+_SKIP = AMDReplyDecision(allow=False)
+_ABSTAIN = AMDReplyDecision(allow=True)
 
 
-class TurnContext(BaseModel):
+class AMDTurnContext(BaseModel):
     turn_id: int
     transcript: str
-    transcript_source: _Source | None
+    transcript_source: AMDTranscriptSource | None
     dtmf_digits: str
-    alternative_transcript: str | None = None
 
 
-class ClassifyRequest(BaseModel):
+class AMDClassifyRequest(BaseModel):
     """Model-facing payload for one classification. Serialize with ``exclude_none``."""
 
     stage: AMDCategory
     allowed_next_categories: list[AMDCategory]
-    earlier_turns: list[TurnContext]
+    current_turn: AMDTurnContext
+    earlier_turns: list[AMDTurnContext]
     speech_duration: float
+
+
+@dataclass(frozen=True)
+class AMDMenuRequest:
     turn_id: int
     transcript: str
-    transcript_source: _Source | None
-    dtmf_digits: str
+
+
+AMDEffect = AMDPredictionEvent | AMDCompletedEvent | AMDClassifyRequest | AMDMenuRequest
+"""What a transition asks the driver to do: emit an event, classify a turn, or extract a menu."""
+_Deadline = tuple[float, Callable[[float], list[AMDEffect]]]
+"""An armed deadline and the transition to apply once it is due."""
 
 
 @dataclass
-class _Turn:
+class AMDTurnHandle:
     turn_id: int
     committed_at: float
-    transcript: _Transcript
+    transcript: AMDTranscript
     speech_duration: float
-    release_epoch: int
-    silence_started_at: float
     dtmf_digits: str
-    decision: AMDPredictionEvent | None = None
-    phase: _Phase = _Phase.IDLE
-    deadline: float | None = None
-    pending_prediction: _Prediction | None = None
-    timed_out: bool = False
+    reuses: int | None = None
+    """Earlier turn whose outstanding prediction also settles this empty turn."""
+    prediction: AMDPredictionEvent | None = None
+    """The first prediction released for this turn."""
 
-    def context(self) -> TurnContext:
-        alternative = self.transcript.alternative
-        return TurnContext(
+    def context(self) -> AMDTurnContext:
+        return AMDTurnContext(
             turn_id=self.turn_id,
-            transcript=self.transcript.text,
+            transcript=self.transcript.transcript,
             transcript_source=self.transcript.source,
             dtmf_digits=self.dtmf_digits,
-            alternative_transcript=alternative
-            if alternative and alternative != self.transcript.text
-            else None,
         )
 
-    def clear_pending_prediction(self) -> None:
-        self.phase = _Phase.IDLE
-        self.deadline = None
-        self.pending_prediction = None
+
+@dataclass
+class AMDInference:
+    """The one classifier request in flight. A timed-out request may still return late."""
+
+    turn: AMDTurnHandle
+    deadline: float
+    timed_out: bool = False
 
 
-class _AMDFSM:
+@dataclass
+class AMDHold:
+    """The one machine prediction waiting for user silence before release."""
+
+    turn: AMDTurnHandle
+    prediction: AMDPrediction
+    release_at: float | None
+    """Release time, or None while the user speaks."""
+
+
+@dataclass
+class _SpeechWindow:
+    """User speech edges on the monotonic clock. The speech window resets at each commit."""
+
+    speaking_since: float | None = None
+    silence_since: float | None = None
+    uncommitted: bool = False
+    """Speech started after the last commit, so no turn has claimed it yet."""
+    duration: float = 0.0
+    """Speech time accumulated for the next commit."""
+
+    @property
+    def speaking(self) -> bool:
+        return self.speaking_since is not None
+
+    def started(self, at: float) -> None:
+        self.speaking_since = at
+        self.silence_since = None
+        self.uncommitted = True
+
+    def ended(self, at: float) -> None:
+        if self.speaking_since is not None:
+            self.duration += max(0.0, at - self.speaking_since)
+        self.speaking_since = None
+        self.silence_since = at
+
+    def commit(self, now: float, eot_delay: float) -> float:
+        """Close the turn's speech window and return its speech duration."""
+        if self.speaking_since is None and not self.uncommitted:
+            # No speech edge since the last commit: the EOT delay is the freshest anchor.
+            self.silence_since = now - max(0.0, eot_delay)
+        self.uncommitted = False
+        duration, self.duration = self.duration, 0.0
+        if self.speaking_since is not None:
+            duration += now - self.speaking_since
+            self.speaking_since = now
+        return duration
+
+    def release_at(self, threshold: float) -> float | None:
+        """When ``threshold`` seconds of silence will have passed, or None while speech is open."""
+        if self.speaking or self.silence_since is None:
+            return None
+        return self.silence_since + threshold
+
+
+class _Turns:
+    """Committed turns, the one inference in flight, and the one held prediction.
+
+    Knows nothing about stages or the run lifecycle. AMDFSM decides what a settled
+    prediction means; this class tracks which turn it belongs to and when it is due.
+    """
+
+    def __init__(self, inference_timeout: float) -> None:
+        self._inference_timeout = inference_timeout
+        self._turns: dict[int, AMDTurnHandle] = {}
+        self._inference: AMDInference | None = None
+        self._hold: AMDHold | None = None
+        self._pending_dtmf_digits = ""
+
+    def __contains__(self, turn_id: object) -> bool:
+        return turn_id in self._turns
+
+    @property
+    def turn_id(self) -> int:
+        return next(reversed(self._turns), 0)
+
+    @property
+    def inference(self) -> AMDInference | None:
+        return self._inference
+
+    @property
+    def hold(self) -> AMDHold | None:
+        return self._hold
+
+    @property
+    def settled(self) -> bool:
+        """Whether no turn waits for a prediction or a held release."""
+        if self._hold is not None:
+            return False
+        return not self._turns or self.prediction(self.turn_id) is not None
+
+    def prediction(self, turn_id: int) -> AMDPredictionEvent | None:
+        turn = self._turns[turn_id]
+        while turn.prediction is None and turn.reuses is not None:
+            turn = self._turns[turn.reuses]
+            # A saved fallback does not release turns waiting for a held model result.
+            if self._hold is not None and self._hold.turn is turn:
+                return None
+        return turn.prediction
+
+    def record_prediction(self, turn: AMDTurnHandle, event: AMDPredictionEvent) -> None:
+        """Save the first released prediction for the turn and any turns reusing it."""
+        if turn.prediction is None:
+            turn.prediction = event
+        for reused in self._turns.values():
+            if reused.prediction is None and reused.reuses is not None:
+                reused.prediction = self.prediction(reused.turn_id)
+
+    def dtmf_sent(self, digits: str) -> None:
+        if not digits or any(digit not in "0123456789*#ABCD" for digit in digits):
+            raise ValueError("digits must contain only 0-9, *, #, or A-D")
+        self._pending_dtmf_digits += digits
+
+    def commit(
+        self, transcript: AMDTranscript, speech_duration: float, now: float
+    ) -> AMDTurnHandle:
+        turn = AMDTurnHandle(
+            turn_id=self.turn_id + 1,
+            committed_at=now,
+            transcript=transcript,
+            speech_duration=speech_duration,
+            dtmf_digits=self._pending_dtmf_digits,
+        )
+        self._turns[turn.turn_id] = turn
+        self._pending_dtmf_digits = ""
+        return turn
+
+    def outstanding(self) -> AMDTurnHandle | None:
+        """The turn whose hold or live inference an empty turn can reuse."""
+        if self._hold is not None:
+            return self._hold.turn
+        if self._inference is not None and not self._inference.timed_out:
+            return self._inference.turn
+        return None
+
+    def classify(
+        self, turn: AMDTurnHandle, now: float, *, stage: AMDCategory, allowed: list[AMDCategory]
+    ) -> AMDClassifyRequest:
+        """Start the turn's inference. A new request supersedes any hold."""
+        self._hold = None
+        self._inference = AMDInference(turn, deadline=now + self._inference_timeout)
+        earlier_turns = [t for t in self._turns.values() if t.turn_id < turn.turn_id]
+        return AMDClassifyRequest(
+            stage=stage,
+            allowed_next_categories=allowed,
+            current_turn=turn.context(),
+            earlier_turns=[t.context() for t in earlier_turns[-_HISTORY_LIMIT:]],
+            speech_duration=turn.speech_duration,
+        )
+
+    def take_inference(self, turn_id: int) -> AMDInference | None:
+        """Close the in-flight inference if it belongs to the turn."""
+        inference = self._inference
+        if inference is None or inference.turn.turn_id != turn_id:
+            return None
+        self._inference = None
+        return inference
+
+    def time_out_inference(self) -> AMDInference | None:
+        """Mark the in-flight inference as timed out. It stays open for a late result."""
+        inference = self._inference
+        if inference is None or inference.timed_out:
+            return None
+        inference.timed_out = True
+        return inference
+
+    def hold_prediction(
+        self, turn: AMDTurnHandle, prediction: AMDPrediction, release_at: float | None
+    ) -> None:
+        self._hold = AMDHold(turn, prediction, release_at)
+
+    def freeze_hold(self) -> None:
+        """Stop the hold's release timer while the user speaks."""
+        if self._hold is not None:
+            self._hold.release_at = None
+
+    def take_hold(self) -> AMDHold | None:
+        hold, self._hold = self._hold, None
+        return hold
+
+    def reset(self) -> None:
+        self._inference = None
+        self._hold = None
+        self._pending_dtmf_digits = ""
+
+
+class AMDFSM:
     """AMD state and policy, with explicit timestamps and no async resources.
 
-    Only the latest accepted turn can reply. Newer inference supersedes older work.
-    Normal path: commit -> transcript ready -> inferring -> [holding] -> release -> apply stage.
-    Holding waits for participant silence before releasing a pending prediction.
-    Release saves the turn's first decision; ReplyDecision selects its reply behavior.
-    Empty turns reuse pending inference or the current stage without a new request.
-    Timeouts and failures produce fallback predictions that keep the current stage.
-    A late model prediction can update the stage without replacing the saved decision.
-    Superseded turns get internal decisions to unblock waiters; no event is emitted.
+    At most one inference and one held prediction exist at a time. A new turn with
+    a transcript supersedes both. An empty turn reuses them instead.
+    Normal path: commit -> inference -> [hold] -> publish -> transition.
+    Machine predictions hold until the user has been silent long enough.
+    New speech pauses a hold; speech end restarts its silence wait without requiring a commit.
+    Timeouts and failures publish fallback predictions that keep the current stage.
+    A late model prediction can update the stage without replacing the turn's saved prediction.
+    Only the latest turn can reply; AMDReplyDecision selects its stage instructions.
     """
 
     def __init__(
@@ -161,50 +357,31 @@ class _AMDFSM:
         inference_timeout: float,
         machine_silence_threshold: float,
         max_uncertain_turns: int,
+        max_inference_timeouts: int,
     ) -> None:
         self._idle_timeout = idle_timeout
         self._voicemail_idle_timeout = voicemail_idle_timeout
         self._timeout = timeout
-        self._inference_timeout = inference_timeout
         self._machine_silence_threshold = machine_silence_threshold
         self._max_uncertain_turns = max_uncertain_turns
-        self._lifecycle = _Lifecycle.NEW
+        self._max_inference_timeouts = max_inference_timeouts
+
+        self.lifecycle = AMDLifecycle.INITIALIZED
+        self._user_speech = _SpeechWindow()
+        self._turns = _Turns(inference_timeout)
+
         self._completion_reason = AMDReason.CANCELLED
         self._category = AMDCategory.UNCERTAIN
         self._previous_turn: AMDCategory | None = None
         self._previous_stage: AMDCategory | None = None
         self._latest: AMDPredictionEvent | None = None
-        self._voicemail_reply_reserved = False
+        self._pending_voicemail_turn_id: int | None = None
+        self._voicemail_reply_committed = False
         self._voicemail_message_played = False
         self._uncertain_turns = 0
         self._inference_timeouts = 0
-        self._speaking_since: float | None = None
-        self._speech_ended_at: float | None = None
-        self._speech_duration = 0.0
-        self._speech_epoch = 0
-        self._turns: dict[int, _Turn] = {}
-        self._pending_turn: _Turn | None = None
-        self._last_inference_turn_id = 0
-        self._reused_turns: list[_Turn] = []
-        self._pending_dtmf_digits = ""
         self._hard_deadline: float | None = None
         self._idle_deadline: float | None = None
-
-    @property
-    def entered(self) -> bool:
-        return self._lifecycle is not _Lifecycle.NEW
-
-    @property
-    def enabled(self) -> bool:
-        return self._lifecycle in {_Lifecycle.WAITING, _Lifecycle.LISTENING}
-
-    @property
-    def started(self) -> bool:
-        return self._lifecycle is _Lifecycle.LISTENING
-
-    @property
-    def finished(self) -> bool:
-        return self._lifecycle is _Lifecycle.FINISHED
 
     @property
     def category(self) -> AMDCategory:
@@ -212,7 +389,7 @@ class _AMDFSM:
 
     @property
     def turn_id(self) -> int:
-        return next(reversed(self._turns), 0)
+        return self._turns.turn_id
 
     @property
     def voicemail_message_played(self) -> bool:
@@ -220,169 +397,142 @@ class _AMDFSM:
 
     @property
     def next_deadline(self) -> float | None:
-        deadlines = [self._hard_deadline, self._idle_deadline]
-        deadlines.extend(turn.deadline for turn in self._turns.values())
-        return min((at for at in deadlines if at is not None), default=None)
+        return min((at for at, _ in self._deadlines()), default=None)
 
-    def has_turn(self, turn_id: int | None) -> bool:
+    def _deadlines(self) -> list[_Deadline]:
+        """Armed deadlines with their actions. List order breaks ties: hard, idle, turn work."""
+        deadlines: list[_Deadline] = []
+        if self._hard_deadline is not None:
+            deadlines.append((self._hard_deadline, lambda _: [self.finish(AMDReason.TIMEOUT)]))
+        if self._idle_deadline is not None:
+            deadlines.append((self._idle_deadline, lambda _: [self.finish(AMDReason.IDLE_TIMEOUT)]))
+        hold = self._turns.hold
+        if hold is not None and hold.release_at is not None:
+            deadlines.append((hold.release_at, self._release_hold))
+        inference = self._turns.inference
+        if inference is not None and not inference.timed_out:
+            deadlines.append((inference.deadline, self._time_out_inference))
+        return deadlines
+
+    def has_turn(self, turn_id: int) -> bool:
         return turn_id in self._turns
 
-    def decision(self, turn_id: int) -> AMDPredictionEvent | None:
-        decision = self._turns[turn_id].decision
-        return decision.model_copy() if decision is not None else None
+    def prediction(self, turn_id: int) -> AMDPredictionEvent | None:
+        return self._turns.prediction(turn_id)
 
     def enter(self) -> None:
-        if self.entered:
+        if self.lifecycle is not AMDLifecycle.INITIALIZED:
             raise RuntimeError("use a new AMD instance for each run")
-        self._lifecycle = _Lifecycle.WAITING
+        self.lifecycle = AMDLifecycle.PENDING
 
     def start(self, now: float) -> None:
-        if self._lifecycle is _Lifecycle.WAITING:
-            self._lifecycle = _Lifecycle.LISTENING
+        if self.lifecycle is AMDLifecycle.PENDING:
+            self.lifecycle = AMDLifecycle.ACTIVE
             self._hard_deadline = now + self._timeout
 
     def dtmf_sent(self, digits: str) -> None:
-        if not self.enabled:
-            return
-        if not digits or any(digit not in "0123456789*#ABCD" for digit in digits):
-            raise ValueError("digits must contain only 0-9, *, #, or A-D")
-        self._pending_dtmf_digits += digits
+        if self.lifecycle in {AMDLifecycle.PENDING, AMDLifecycle.ACTIVE}:
+            self._turns.dtmf_sent(digits)
 
-    def speech_started(self, now: float) -> None:
-        if not self.started:
-            return
-        self._speech_epoch += 1
-        self._speaking_since = now
-        self._speech_ended_at = None
-        self._idle_deadline = None
-        for turn in self._turns.values():
-            if turn.phase is _Phase.HOLDING:
-                turn.deadline = None
-
-    def speech_ended(self, now: float, silence_duration: float) -> list[_AMDEvent]:
-        if not self.started:
+    def speech_started(self, now: float) -> list[AMDEffect]:
+        if self.lifecycle is not AMDLifecycle.ACTIVE:
             return []
-        self._speech_ended_at = now - max(0, silence_duration)
-        if self._speaking_since is not None:
-            self._speech_duration += max(0, self._speech_ended_at - self._speaking_since)
-        self._speaking_since = None
-        events: list[_AMDEvent] = []
-        for turn in self._turns.values():
-            if turn.release_epoch == self._speech_epoch:
-                turn.silence_started_at = self._speech_ended_at
-                events.extend(self._release(turn, now))
-        return events
+        self._user_speech.started(now)
+        self._idle_deadline = None
+        self._turns.freeze_hold()
+        return []
+
+    def speech_ended(self, now: float, silence_duration: float) -> list[AMDEffect]:
+        if self.lifecycle is not AMDLifecycle.ACTIVE:
+            return []
+        self._user_speech.ended(now - max(0.0, silence_duration))
+        return self._resume_hold(now)
 
     def commit_turn(
-        self, transcript: _Transcript, now: float, eot_delay: float, *, turn_id: int
-    ) -> None:
-        if not self.started:
+        self, transcript: AMDTranscript, now: float, eot_delay: float
+    ) -> list[AMDEffect]:
+        if self.lifecycle is not AMDLifecycle.ACTIVE:
             raise RuntimeError("AMD must be listening before committing a turn")
+        self._pending_voicemail_turn_id = None
         self._idle_deadline = None
-        speech_duration, self._speech_duration = self._speech_duration, 0
-        if self._speaking_since is not None:
-            speech_duration += now - self._speaking_since
-            self._speaking_since = now
-        turn = _Turn(
-            turn_id=turn_id,
-            committed_at=now,
-            transcript=transcript,
-            speech_duration=speech_duration,
-            release_epoch=self._speech_epoch,
-            silence_started_at=self._speech_ended_at
-            if self._speech_ended_at is not None
-            else now - max(0, eot_delay),
-            dtmf_digits=self._pending_dtmf_digits,
-        )
-        self._turns[turn.turn_id] = turn
-        self._pending_dtmf_digits = ""
+        speech_duration = self._user_speech.commit(now, eot_delay)
+        turn = self._turns.commit(transcript, speech_duration, now)
+        if turn.transcript.transcript:
+            request = self._turns.classify(
+                turn, now, stage=self._category, allowed=sorted(ALLOWED[self._category])
+            )
+            return [request]
 
-    def transcript_ready(
-        self, turn_id: int, transcript: _Transcript, now: float
-    ) -> tuple[ClassifyRequest | None, list[_AMDEvent]]:
-        if self.finished:
-            return None, []
-        turn = self._turns[turn_id]
-        turn.transcript = transcript
-        if turn_id < self._last_inference_turn_id:
-            self._supersede(turn, now)
-            return None, []
-
-        pending = self._pending_turn
-        if (
-            not turn.transcript.text
-            and pending is not None
-            and (pending.decision is None or pending.phase is _Phase.HOLDING)
-        ):
-            self._reused_turns.append(turn)
-            pending.release_epoch = turn.release_epoch
-            pending.silence_started_at = turn.silence_started_at
-            return None, self._release(pending, now)
-
-        for previous in self._turns.values():
-            if previous.turn_id < turn_id and previous.phase is _Phase.HOLDING:
-                self._supersede(previous, now)
-        if not turn.transcript.text:
-            turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.REUSED)
-            return None, self._release(turn, now)
-
-        if pending is not None:
-            self._supersede(pending, now)
-            for reused in self._reused_turns:
-                self._supersede(reused, now)
-            self._reused_turns.clear()
-        return self._new_request(turn), []
+        # An empty turn reuses outstanding work, or settles with the current stage.
+        outstanding = self._turns.outstanding()
+        if outstanding is None:
+            return self._settle(turn, AMDPrediction(self._category, AMDReason.REUSED), now)
+        turn.reuses = outstanding.turn_id
+        return self._resume_hold(now)
 
     def prediction_received(
         self, turn_id: int, category: AMDCategory, now: float, inference_duration: float
-    ) -> list[_AMDEvent]:
-        if self.finished or self._pending_turn is None or self._pending_turn.turn_id != turn_id:
+    ) -> list[AMDEffect]:
+        inference = self._turns.take_inference(turn_id)
+        if inference is None:
             return []
-        turn = self._pending_turn
         category = self._category if category == AMDCategory.UNCERTAIN else category
         if category not in ALLOWED[self._category]:
-            raise ValueError("invalid amd stage transition")
+            if inference.timed_out:
+                return []
+            prediction = AMDPrediction(self._category, AMDReason.INFERENCE_ERROR)
+            return self._settle(inference.turn, prediction, now)
         self._inference_timeouts = 0
-        turn.pending_prediction = _Prediction(category, inference_duration=inference_duration)
-        return self._release(turn, now)
+        reason = AMDReason.LATE_PREDICTION if inference.timed_out else AMDReason.PREDICTION
+        prediction = AMDPrediction(category, reason, inference_duration=inference_duration)
+        return self._settle(inference.turn, prediction, now)
 
-    def inference_failed(self, turn_id: int, now: float) -> list[_AMDEvent]:
-        if self.finished or self._pending_turn is None or self._pending_turn.turn_id != turn_id:
+    def inference_failed(self, turn_id: int, now: float) -> list[AMDEffect]:
+        inference = self._turns.take_inference(turn_id)
+        if inference is None or inference.timed_out:
             return []
-        turn = self._pending_turn
-        turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.INFERENCE_ERROR)
-        events = self._release(turn, now)
-        self._pending_turn = None
-        return [*events, *self._flush_reused(now)]
+        prediction = AMDPrediction(self._category, AMDReason.INFERENCE_ERROR)
+        return self._settle(inference.turn, prediction, now)
 
-    def tick(self, now: float) -> list[_AMDEvent]:
-        """Apply every due deadline in order, even when the timer wakes late."""
-        events: list[_AMDEvent] = []
-        while (at := self.next_deadline) is not None and at <= now:
-            if at == self._hard_deadline:
-                return [*events, self.finish(AMDReason.TIMEOUT)]
-            if at == self._idle_deadline:
-                return [*events, self.finish(AMDReason.IDLE_TIMEOUT)]
-            for turn in self._turns.values():
-                if turn.deadline != at:
-                    continue
-                if turn.phase is _Phase.INFERRING:
-                    turn.timed_out = True
-                    self._inference_timeouts += 1
-                    turn.pending_prediction = _Prediction(
-                        self._category, fallback=AMDReason.INFERENCE_TIMEOUT
-                    )
-                    events.extend(self._release(turn, now))
-                    events.extend(self._flush_reused(now))
-                elif turn.phase is _Phase.HOLDING:
-                    events.extend(self._release(turn, now))
-        return events
+    def deadline_reached(self, now: float) -> list[AMDEffect]:
+        """Apply every due deadline in time order, even when the timer wakes late."""
+        effects: list[AMDEffect] = []
+        while due := [deadline for deadline in self._deadlines() if deadline[0] <= now]:
+            _, action = min(due, key=lambda deadline: deadline[0])
+            effects.extend(action(now))
+        return effects
+
+    def _resume_hold(self, now: float) -> list[AMDEffect]:
+        hold = self._turns.hold
+        if hold is None:
+            return []
+        hold.release_at = self._user_speech.release_at(self._machine_silence_threshold)
+        if hold.release_at is not None and hold.release_at <= now:
+            return self._release_hold(now)
+        return []
+
+    def _release_hold(self, now: float) -> list[AMDEffect]:
+        hold = self._turns.take_hold()
+        if hold is None:
+            return []
+        return self._publish(hold.turn, hold.prediction, now)
+
+    def _time_out_inference(self, now: float) -> list[AMDEffect]:
+        inference = self._turns.time_out_inference()
+        if inference is None:
+            return []
+        self._inference_timeouts += 1
+        prediction = AMDPrediction(self._category, AMDReason.INFERENCE_TIMEOUT)
+        return self._settle(inference.turn, prediction, now)
 
     def update_idle(self, now: float, *, session_busy: bool) -> None:
-        unsettled = any(
-            turn.decision is None or turn.phase is _Phase.HOLDING for turn in self._turns.values()
+        idle = (
+            self.lifecycle is AMDLifecycle.ACTIVE
+            and not session_busy
+            and not self._user_speech.speaking
+            and self._turns.settled
         )
-        if not self.started or self._speaking_since is not None or session_busy or unsettled:
+        if not idle:
             self._idle_deadline = None
         elif self._idle_deadline is None:
             timeout = (
@@ -392,50 +542,57 @@ class _AMDFSM:
             )
             self._idle_deadline = now + timeout
 
-    def authorize_reply(self, turn_id: int | None) -> ReplyDecision:
+    def authorize_reply(self, turn_id: int) -> AMDReplyDecision:
         """Reserve a reply for the turn and select its stage instructions."""
-        if self.finished and self._category is AMDCategory.MACHINE_UNAVAILABLE:
+        finished = self.lifecycle is AMDLifecycle.FINISHED
+        if finished and self._category is AMDCategory.MACHINE_UNAVAILABLE:
             return _SKIP
         if turn_id not in self._turns:
-            return _PLAIN
-        if turn_id != self.turn_id or self._turns[turn_id].decision is None:
+            return _ABSTAIN
+        if turn_id != self.turn_id:
             return _SKIP
-        if self.finished:
-            human = self._category is AMDCategory.HUMAN
-            return ReplyDecision(allow=True, instructions_for=AMDCategory.HUMAN if human else None)
-        if self._category is AMDCategory.MACHINE_VM:
-            if self._voicemail_reply_reserved:
-                return _SKIP
-            self._voicemail_reply_reserved = True
+        if finished:
+            human_after_machine = (
+                self._category is AMDCategory.HUMAN and self._previous_stage in MACHINE
+            )
+            return AMDReplyDecision(
+                allow=True, instructions_for=AMDCategory.HUMAN if human_after_machine else None
+            )
+        if self.prediction(turn_id) is None:
+            return _SKIP
         if self._category is AMDCategory.UNCERTAIN:
-            return _PLAIN
-        return ReplyDecision(allow=True, instructions_for=self._category)
+            return _ABSTAIN
+        if self._category is AMDCategory.MACHINE_VM:
+            if self._voicemail_reply_committed or self._pending_voicemail_turn_id is not None:
+                return _SKIP
+            self._pending_voicemail_turn_id = turn_id
+            return AMDReplyDecision(
+                allow=True, instructions_for=self._category, track_voicemail=True
+            )
+        return AMDReplyDecision(allow=True, instructions_for=self._category)
+
+    def commit_voicemail_reply(self, turn_id: int) -> bool:
+        """Consume the pending reservation when its reply handle is accepted."""
+        if self.lifecycle is not AMDLifecycle.ACTIVE or self._pending_voicemail_turn_id != turn_id:
+            return False
+        self._pending_voicemail_turn_id = None
+        self._voicemail_reply_committed = True
+        return True
 
     def voicemail_played(self) -> None:
         self._voicemail_message_played = True
 
     def finish(self, reason: AMDReason) -> AMDCompletedEvent:
-        if self.finished:
+        if self.lifecycle is AMDLifecycle.FINISHED:
             return self.completion()
-        self._lifecycle = _Lifecycle.FINISHED
+        self.lifecycle = AMDLifecycle.FINISHED
         self._completion_reason = reason
         self._hard_deadline = self._idle_deadline = None
-        self._pending_dtmf_digits = ""
-        for turn in self._turns.values():
-            turn.clear_pending_prediction()
-            if turn.decision is None:
-                turn.decision = self._latest or AMDPredictionEvent(
-                    turn_id=turn.turn_id,
-                    category=self._category,
-                    reason=reason,
-                    transcript=turn.transcript.text,
-                    speech_duration=turn.speech_duration,
-                    delay=0,
-                )
+        self._turns.reset()
         return self.completion()
 
     def completion(self) -> AMDCompletedEvent:
-        if not self.finished:
+        if self.lifecycle is not AMDLifecycle.FINISHED:
             raise RuntimeError("AMD has not completed")
         return AMDCompletedEvent(
             category=self._category,
@@ -447,114 +604,90 @@ class _AMDFSM:
             voicemail_message_played=self._voicemail_message_played,
         )
 
-    def _new_request(self, turn: _Turn) -> ClassifyRequest:
-        self._last_inference_turn_id = turn.turn_id
-        self._pending_turn = turn
-        turn.phase = _Phase.INFERRING
-        turn.deadline = turn.committed_at + self._inference_timeout
-        return ClassifyRequest(
-            stage=self._category,
-            allowed_next_categories=sorted(ALLOWED[self._category]),
-            earlier_turns=[
-                earlier.context()
-                for earlier in list(self._turns.values())[-_HISTORY_LIMIT:]
-                if earlier.turn_id < turn.turn_id
-            ],
-            speech_duration=turn.speech_duration,
-            turn_id=turn.turn_id,
-            transcript=turn.transcript.text,
-            transcript_source=turn.transcript.source,
-            dtmf_digits=turn.dtmf_digits,
-        )
-
-    def _supersede(self, turn: _Turn, now: float) -> None:
-        turn.clear_pending_prediction()
-        if turn.decision is None:
-            turn.decision = self._event(
-                turn, _Prediction(self._category, fallback=AMDReason.SUPERSEDED), now
-            )
-
-    def _flush_reused(self, now: float) -> list[_AMDEvent]:
-        turns, self._reused_turns = self._reused_turns, []
-        events: list[_AMDEvent] = []
-        for turn in turns:
-            turn.pending_prediction = _Prediction(self._category, fallback=AMDReason.REUSED)
-            events.extend(self._release(turn, now))
-        return events
-
-    def _release(self, turn: _Turn, now: float) -> list[_AMDEvent]:
-        """Publish the pending prediction, or hold it until enough participant silence."""
-        prediction = turn.pending_prediction
-        if prediction is None:
+    def _settle(
+        self, turn: AMDTurnHandle, prediction: AMDPrediction, now: float
+    ) -> list[AMDEffect]:
+        """Hold a machine prediction until enough user silence, otherwise publish it."""
+        if self.lifecycle is AMDLifecycle.FINISHED:
             return []
-        turn.clear_pending_prediction()
-        if self.finished:
-            return []
-        if prediction.fallback is not None and turn.decision is not None:
-            return []
-        if prediction.category not in {AMDCategory.HUMAN, AMDCategory.UNCERTAIN} and (
-            self._machine_silence_threshold > 0
-        ):
+        if not prediction.from_model and turn.prediction is not None:
+            return []  # the turn already settled; a late fallback adds nothing
+        hold = self._turns.hold
+        if hold is not None and hold.turn is turn:
+            self._turns.take_hold()
+        if prediction.category in MACHINE and self._machine_silence_threshold > 0:
             self._idle_deadline = None
-            speaking = self._speaking_since is not None or turn.release_epoch != self._speech_epoch
-            release_at = turn.silence_started_at + self._machine_silence_threshold
-            if speaking or now < release_at:
-                turn.phase = _Phase.HOLDING
-                turn.pending_prediction = prediction
-                turn.deadline = None if speaking else release_at
+            if hold is not None and hold.turn is not turn and prediction.from_model:
+                hold.turn.reuses = turn.turn_id
+                hold.turn = turn
+                hold.prediction = prediction
+                if hold.release_at is not None and hold.release_at <= now:
+                    return self._release_hold(now)
                 return []
-        event = self._event(turn, prediction, now)
-        if turn.decision is None:
-            turn.decision = event
-        self._latest = event
-        if prediction.fallback is not None:
-            if (
-                prediction.fallback is AMDReason.INFERENCE_TIMEOUT
-                and self._inference_timeouts >= _MAX_INFERENCE_TIMEOUTS
-            ):
-                return [event.model_copy(), self.finish(AMDReason.INFERENCE_TIMEOUT)]
-            return [event.model_copy()]
-        result = self._apply(event)
-        if isinstance(result, AMDCompletedEvent):
-            return [event.model_copy(), result]
-        return [event.model_copy(), *self._flush_reused(now)]
+            release_at = self._user_speech.release_at(self._machine_silence_threshold)
+            if release_at is None or now < release_at:
+                if self._turns.hold is None:
+                    self._turns.hold_prediction(turn, prediction, release_at)
+                return []
+        return self._publish(turn, prediction, now)
 
-    def _apply(self, event: AMDPredictionEvent) -> _AMDEvent:
-        """Move the stage to a released model prediction."""
-        self._category = event.category
-        self._previous_turn = event.prev_turn_category
-        self._previous_stage = event.prev_stage_category
-        self._pending_turn = None
-        if event.state_changed:
+    def _publish(
+        self, turn: AMDTurnHandle, prediction: AMDPrediction, now: float
+    ) -> list[AMDEffect]:
+        """Record the prediction on its turn, emit it, and apply its effect on the run."""
+        previous = self._latest
+        if prediction.from_model and prediction.category != self._category:
+            self._previous_stage = self._category
+            self._category = prediction.category
+        event = self._make_prediction_event(turn, prediction, now)
+        self._turns.record_prediction(turn, event)
+        if prediction.reason is AMDReason.REUSED:
+            return []
+        self._latest = event
+        if prediction.from_model:
+            completed = self._transition(previous_turn=previous.category if previous else None)
+        elif (
+            prediction.reason is AMDReason.INFERENCE_TIMEOUT
+            and self._inference_timeouts >= self._max_inference_timeouts
+        ):
+            completed = self.finish(AMDReason.INFERENCE_TIMEOUT)
+        else:
+            completed = None
+        effects: list[AMDEffect] = [event.model_copy()]
+        if completed is not None:
+            effects.append(completed)
+        elif prediction.from_model and prediction.category is AMDCategory.MACHINE_IVR:
+            # Prediction listeners can commit a newer turn and cancel this menu work.
+            effects.insert(0, AMDMenuRequest(turn.turn_id, turn.transcript.transcript))
+        return effects
+
+    def _transition(self, *, previous_turn: AMDCategory | None) -> AMDCompletedEvent | None:
+        if self._category != (previous_turn or AMDCategory.UNCERTAIN):
             self._idle_deadline = None
-            self._voicemail_reply_reserved = False
+            self._pending_voicemail_turn_id = None
+            self._voicemail_reply_committed = False
+        self._previous_turn = previous_turn
+        if self._category in TERMINAL:
+            return self.finish(AMDReason.FINISHED)
         self._uncertain_turns = (
             self._uncertain_turns + 1 if self._category is AMDCategory.UNCERTAIN else 0
         )
-        if self._category in TERMINAL:
-            return self.finish(AMDReason.FINISHED)
         if self._uncertain_turns >= self._max_uncertain_turns:
             return self.finish(AMDReason.MAX_UNCERTAIN_TURNS)
-        return event
+        return None
 
-    def _event(self, turn: _Turn, prediction: _Prediction, now: float) -> AMDPredictionEvent:
-        if prediction.fallback is not None:
-            reason = prediction.fallback
-        elif turn.timed_out:
-            reason = AMDReason.LATE_PREDICTION
-        else:
-            reason = AMDReason.PREDICTION
+    def _make_prediction_event(
+        self, turn: AMDTurnHandle, prediction: AMDPrediction, now: float
+    ) -> AMDPredictionEvent:
         return AMDPredictionEvent(
             turn_id=turn.turn_id,
             category=prediction.category,
-            reason=reason,
-            transcript=turn.transcript.text,
+            reason=prediction.reason,
+            transcript=turn.transcript.transcript,
             speech_duration=turn.speech_duration,
             delay=now - turn.committed_at,
             inference_duration=prediction.inference_duration,
             prev_turn_category=self._latest.category if self._latest else None,
-            prev_stage_category=self._category
-            if prediction.fallback is None and prediction.category != self._category
-            else self._previous_stage,
+            prev_stage_category=self._previous_stage,
             voicemail_message_played=self._voicemail_message_played,
         )

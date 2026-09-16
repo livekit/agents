@@ -314,8 +314,9 @@ class UserStateChangedEvent(BaseModel):
     type: Literal["user_state_changed"] = "user_state_changed"
     old_state: UserState
     new_state: UserState
+    speech_timestamp: float | None = None
+    """Unix time of speech start or end, when known."""
     created_at: float = Field(default_factory=time.time)
-    """Unix time of the accepted state transition, including backdated speech boundaries."""
 
 
 class AgentStateChangedEvent(BaseModel):

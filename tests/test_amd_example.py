@@ -62,19 +62,22 @@ async def test_outbound_call_setup(monkeypatch: pytest.MonkeyPatch, outcome: str
         shutdown=Mock(),
         add_shutdown_callback=Mock(),
     )
+    if outcome == "console":
+        with pytest.raises(RuntimeError, match="not started with a room"):
+            await example["entrypoint"](ctx)
+        detector.__aenter__.assert_not_awaited()
+        create.assert_not_awaited()
+        return
     if outcome == "cancelled":
         with pytest.raises(asyncio.CancelledError):
             await example["entrypoint"](ctx)
     else:
         await example["entrypoint"](ctx)
 
-    if outcome == "console":
-        create.assert_not_awaited()
-    else:
-        create.assert_awaited_once()
-        assert create.call_args.args[0].wait_until_answered
+    create.assert_awaited_once()
+    assert create.call_args.args[0].wait_until_answered
     detector.__aexit__.assert_awaited_once()
-    if outcome in ("answered", "console"):
+    if outcome == "answered":
         detector.execute.assert_awaited_once()
         ctx.shutdown.assert_not_called()
     else:

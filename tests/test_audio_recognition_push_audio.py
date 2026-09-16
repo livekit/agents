@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit import rtc
-from livekit.agents import AgentSession
+from livekit.agents import AgentSession, AMDLifecycle
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -85,7 +85,8 @@ def _make_activity() -> AgentActivity:
     activity._started = True
     activity._session = AgentSession(vad=None)
     activity._session._agent_state = "listening"
-    activity._session._set_amd(MagicMock(enabled=True, started=True))
+    activity._session._amd = MagicMock(lifecycle=AMDLifecycle.ACTIVE)
+    activity._session._turn_hooks = activity._session._amd._turn_hooks
     activity._current_speech = None
     activity._rt_session = MagicMock()
     activity._audio_recognition = MagicMock()
@@ -94,13 +95,13 @@ def _make_activity() -> AgentActivity:
 
 def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
     activity = _make_activity()
-    activity._session.amd.started = False
+    activity._session.amd.lifecycle = AMDLifecycle.PENDING
     activity.push_audio(_make_frame())
     activity._session.amd.push_audio.assert_not_called()
     activity._audio_recognition._push_audio.assert_not_called()
     activity._rt_session.push_audio.assert_not_called()
 
-    activity._session.amd.started = True
+    activity._session.amd.lifecycle = AMDLifecycle.ACTIVE
     frame = _make_frame()
     activity.push_audio(frame)
     activity._session.amd.push_audio.assert_called_once_with(frame)
@@ -109,7 +110,7 @@ def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
 
 
 @pytest.mark.parametrize("guard", ["aec_warmup", "uninterruptible"])
-def test_activity_sends_the_same_muted_audio_to_amd_and_session_stt(guard: str) -> None:
+def test_activity_preserves_amd_audio_when_session_stt_is_muted(guard: str) -> None:
     activity = _make_activity()
     if guard == "aec_warmup":
         activity._session._agent_state = "speaking"
@@ -122,7 +123,8 @@ def test_activity_sends_the_same_muted_audio_to_amd_and_session_stt(guard: str) 
         activity._session.options.interruption["discard_audio_if_uninterruptible"] = True
     frame = _make_frame()
     activity.push_audio(frame)
-    muted = activity._session.amd.push_audio.call_args.args[0]
+    activity._session.amd.push_audio.assert_called_once_with(frame)
+    muted = activity._audio_recognition._push_audio.call_args.kwargs["stt_frame"]
     assert bytes(muted.data) == bytes(len(frame.data) * frame.data.itemsize)
     activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=muted)
     activity._rt_session.push_audio.assert_called_once_with(muted)

@@ -14,7 +14,7 @@ State events carry the accepted speech-boundary time,
 including the STT timestamp when STT controls turn detection.
 
 This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
-not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each decision.
+not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each prediction.
 The application still decides whether to continue or end the call.
 
 ## Start AMD
@@ -46,9 +46,13 @@ async with detector:
     # Choose the next call action from result.category and result.reason.
 ```
 
-Omit `participant_identity` for console input. By default, AMD and the Agent
-discard SIP pre-answer audio. Set `wait_until_answered=False` to use subscribed
-early media. This does not cause the SIP provider to supply early media.
+By default, AMD and the Agent discard SIP pre-answer audio. Set
+`wait_until_answered=False` to use subscribed early media. This does not cause
+the SIP provider to supply early media.
+
+`detector.lifecycle` uses `AMDLifecycle`: `INITIALIZED` before context entry, `PENDING`
+while awaiting the participant, `ACTIVE` during detection, and `FINISHED`
+after detection ends. Import `AMDLifecycle` from `livekit.agents`.
 
 ## Model selection and transcript race
 
@@ -73,23 +77,31 @@ The LLM must support required function calls. AMD uses a `record_result` tool
 for each prediction or menu result. It validates the tool arguments against the
 result schema. This tool is not added to the active Agent.
 
-The first non-empty final transcript wins each AMD turn. Empty and interim
-results cannot win. AMD collects further final segments from the winning source
-until client-side EOT. The Agent's transcript, history, hooks, and EOT stay
-unchanged. A faster AMD transcript does not make the Agent's EOT arrive earlier.
+The first non-empty final transcript selects the source for the whole AMD run.
+Empty and interim results cannot win. AMD keeps using the selected source across
+turns, so a change in relative STT latency cannot discard trailing transcript segments.
+If session STT wins, AMD closes its optional STT stream and stops sending audio to it.
+The Agent's transcript, history, hooks, and EOT stay unchanged. A faster AMD
+transcript does not make the Agent's EOT arrive earlier.
 
-If neither source has text at EOT, AMD waits up to 500 ms within the prediction
-deadline. The AMD STT must support streaming. It uses one stream for the whole
-run, and each EOT flushes it. A final that arrives after the turn is classified
-belongs to the next turn, as with the session STT. The AMD STT receives the same
-audio as the session STT, including the muting guard during AEC warmup and
-uninterruptible speech.
+At EOT, AMD commits the selected source's available transcript immediately, even if
+it is empty. Finals received after EOT accumulate for the next turn. The AMD STT
+must support streaming. It uses a single stream without flushing at EOT,
+matching session STT. AMD receives the unsuppressed participant audio during AEC
+warmup and uninterruptible agent speech, while session STT receives silence. A human
+who talks over the agent's greeting must still be heard. The classifier prompt treats
+the transcript as untrusted evidence, so echoed agent speech cannot instruct it.
 
-Late text updates AMD history for the next inference. It does not change an
-in-flight request or a reply that already started. Losing transcripts are marked
-as another reading of the same audio. History holds the last 20 committed turns.
+If the AMD stream fails, the open turn uses its buffered session transcript, even if
+it is empty. Subsequent turns also use the session transcript. The sources are never
+combined, and committed turns stay unchanged.
+
+History holds the last 20 committed turns. Late transcripts become part of the next
+committed turn. They do not change an in-flight request or a reply that already started.
 A new turn can cancel classification work without discarding its transcript.
-An empty EOT does not cancel a useful pending classification.
+The next request includes that transcript, source, and DTMF digits in its history.
+An empty EOT keeps useful pending classification for the latest turn. Older AMD
+reply waits exit immediately. Reusing a prediction does not emit another event.
 
 ## Stage behavior
 
@@ -99,12 +111,15 @@ An empty EOT does not cancel a useful pending classification.
 | `machine-screening` | Answer the screener's latest question briefly. | Continue listening for the next turn. |
 | `machine-vm` | Generate one message per voicemail stage. | Keep listening during and after playback. |
 | `machine-ivr` | Use the actual prompt to choose DTMF or a spoken response. | Continue listening for the next turn. |
-| `human` | Supply a temporary human-state notice; earlier automated prompts no longer apply. | Complete AMD. |
+| `human` | After a machine stage, supply temporary human instructions. Otherwise use normal Agent instructions. | Complete AMD. |
 | `machine-unavailable` | Cancel held replies; do not generate a machine reply. | Complete AMD. |
 
 Stage instructions are temporary. They do not enter the Agent's saved history.
-Use `screening_instructions`, `voicemail_instructions`, and `ivr_instructions`
-to customize them. The customer hook runs before AMD adds its instructions.
+Use `screening_instructions`, `voicemail_instructions`, `ivr_instructions`, and
+`human_instructions` to customize them. `human_instructions` applies to the first
+human turn after a machine stage. It is skipped if no machine stage preceded the
+human, including when earlier predictions were only `uncertain`.
+The customer hook runs before AMD adds its instructions.
 `StopResponse` and interruption remain AgentSession responsibilities.
 
 The normal interruption path handles a person who speaks during a message.
@@ -119,9 +134,11 @@ while it waits for silence.
 
 Human and initial `uncertain` predictions use normal EOT timing. If `uncertain`
 keeps an established machine stage, the machine silence rule still applies.
-New speech cancels a pending release. The next EOT can replace the prediction,
-or rearm it if there is no new text. AMD retains the earlier transcript.
-Superseded results do not emit a prediction or authorize an old reply.
+New speech pauses a pending release. Speech end restarts the silence wait for
+the already committed turn, even if the new speech produces no accepted turn.
+Before release, a new EOT can replace the prediction, or reuse it if there is no
+new transcript. AMD retains the earlier transcript. Superseded results do not
+emit a prediction or authorize an old reply.
 
 ## DTMF and menus
 
@@ -130,7 +147,7 @@ The next classification includes those digits with the participant history.
 A failed or canceled publish is not reported. DTMF alone neither triggers
 classification nor proves that a person answered.
 
-If a custom tool sends DTMF, call `detector.notify_dtmf_sent(digit)` after each
+If a custom tool sends DTMF, call `detector.on_dtmf_event(digit)` after each
 successful publish. Report digits separately if a sequence can fail midway.
 
 Menu extraction runs as separate best-effort work. It never holds a reply.
@@ -149,10 +166,11 @@ or execute the observed menu. Extraction has a 5-second deadline and at most
 | `voicemail_idle_timeout` | 60 seconds | Allow a delayed post-message menu after playback. |
 | `timeout` | 120 seconds | Fixed overall limit from the start of listening. |
 | `max_uncertain_turns` | 3 | Complete after consecutive uncertain predictions without an established stage. |
+| `max_inference_timeouts` | 3 | Complete after this many prediction timeouts. A valid prediction resets the count. |
 
 A late prediction can update the stage if no newer inference replaced it.
-It cannot change a reply that already started. Three consecutive prediction
-timeouts also complete AMD after the current stage's silence requirement.
+It cannot change a reply that already started. Reaching `max_inference_timeouts`
+completes AMD after the current stage's silence requirement.
 Model errors and reused results use the same stage and silence rule.
 New speech cancels the idle timer. Stage changes do not extend the overall limit.
 The overall limit can end AMD during a silence wait. Without speech-end timing,
@@ -164,15 +182,15 @@ and reason. Completion does not decide the next call action.
 
 ## Run the example
 
-Configure `.env` for the selected providers, then run:
+The example requires a LiveKit room. Configure `.env` for the selected providers,
+then run it in `dev` mode:
 
 ```sh
-uv run python examples/telephony/amd.py console
+uv run python examples/telephony/amd.py dev
 ```
 
-Use `dev` for a LiveKit room. To place an outbound call, also set
+To place an outbound call, also set
 `SIP_PHONE_NUMBER`, `SIP_PARTICIPANT_IDENTITY`, and `SIP_OUTBOUND_TRUNK_ID`.
-Console mode does not place SIP calls.
 
 ## Current limits
 

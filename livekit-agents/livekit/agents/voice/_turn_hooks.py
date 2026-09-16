@@ -20,6 +20,10 @@ class TurnHooks(Protocol):
         """Bind hooks to the accepted user turn before the customer hook runs."""
         ...
 
+    def on_user_turn_completed(self) -> None:
+        """Observe completion of user-turn processing, including cancellation."""
+        ...
+
     def on_reply_generation(
         self, tools: list[llm.Tool | llm.Toolset]
     ) -> list[llm.Tool | llm.Toolset]:
