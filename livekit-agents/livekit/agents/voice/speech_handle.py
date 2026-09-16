@@ -303,10 +303,16 @@ class SpeechHandle:
 
         return self
 
-    def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+    def add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+        """Call ``callback`` with each chat item this speech records, as it is recorded.
+
+        Items recorded before the callback was added are in :attr:`chat_items`. A tool that
+        released early still belongs to the speech that called it, and reports through the
+        session's ``tool_execution_updated`` events rather than here.
+        """
         self._item_added_callbacks.add(callback)
 
-    def _remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+    def remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.discard(callback)
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:
