@@ -2030,6 +2030,48 @@ class TestCancelAll:
             await _cleanup_fakes(t)
 
 
+class TestSessionCancelToolCall:
+    """AgentSession.cancel_tool_call — the public way to stop one running call."""
+
+    pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
+
+    @pytest.mark.asyncio
+    async def test_cancels_a_cancellable_call(self):
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor
+
+        executor = _ToolExecutor()
+        t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
+        session = executor._running_tasks["a"].ctx.session
+        _RunningTasks[session] = executor._running_tasks
+        try:
+            assert await AgentSession.cancel_tool_call(session, "a") is True
+            assert t.done()
+        finally:
+            await _cleanup_fakes(t)
+
+    @pytest.mark.asyncio
+    async def test_leaves_a_call_it_may_not_stop(self):
+        from livekit.agents import AgentSession
+        from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor
+
+        executor = _ToolExecutor()
+        non_cancellable = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
+        protected = _register_fake(
+            executor, "b", "tool_y", allow_cancellation=True, allow_interruptions=False
+        )
+        session = executor._running_tasks["a"].ctx.session
+        _RunningTasks[session] = executor._running_tasks
+        try:
+            assert await AgentSession.cancel_tool_call(session, "a") is False
+            assert await AgentSession.cancel_tool_call(session, "b") is False
+            # nothing by that call id is running
+            assert await AgentSession.cancel_tool_call(session, "nope") is False
+            assert not non_cancellable.done() and not protected.done()
+        finally:
+            await _cleanup_fakes(non_cancellable, protected)
+
+
 class TestToolExecutorLifecycle:
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
