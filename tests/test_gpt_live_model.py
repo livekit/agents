@@ -1619,3 +1619,123 @@ async def test_backend_work_queued_for_a_session_that_ended_is_not_replayed(
             )
         await session.aclose()
         await model.aclose()
+
+
+async def test_an_image_in_the_startup_history_still_reaches_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """session.start carries the words of the conversation so far but has no image part, so an
+    image already in the chat context is queued behind it instead of being lost."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=["What is shown?", llm.ImageContent(image=_PNG)], id="m1")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.", chat_ctx=ctx, tools=[])
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == ["session.start", "response.item.create"]
+        # the words ride in the startup history, so the image does not repeat them
+        assert ws.sent[0]["session"]["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is shown?"}],
+            }
+        ]
+        assert ws.sent[1]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"}
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_startup_image_is_composed_again_for_the_next_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The image is queued per connection, so the session that replaces a dropped one gets it too
+    rather than inheriting a queued copy stamped for the session that died."""
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=["What is shown?", llm.ImageContent(image=_PNG)], id="m1")
+
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[0].sent] == ["session.start", "response.item.create"]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "response.item.create"]
+        assert sockets[1].sent[1]["item"]["content"][0]["type"] == "input_image"
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_delegation_scoped_append_does_not_cross_connections(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A delegation belongs to the session that created it, so an answer queued for one cannot be
+    replayed into its replacement; an unscoped append is context any session can hear."""
+    sockets = [_LifecycleWS(start=False), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    caplog.set_level(logging.WARNING, logger=gpt_live_model.logger.name)
+    model = GPTLiveModel(
+        api_key="sk-test",
+        delegation="client",
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+    )
+    session = model.session()
+    try:
+        await session._update_session(tools=[])
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        # the first is held at the handshake this connection never finishes; the rest stay queued
+        session.append_thinking("held at the handshake")
+        session.append_commentary("done", delegation_id="item_123")
+        session.append_thinking("The caller is a premium customer.")
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[0].sent] == ["session.start"]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # item_123 was never created on this session, so its answer is dropped, not replayed
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "session.thinking.append"]
+        assert sockets[1].sent[-1]["content"] == "The caller is a premium customer."
+        assert "queued for a session that ended" in caplog.text
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()

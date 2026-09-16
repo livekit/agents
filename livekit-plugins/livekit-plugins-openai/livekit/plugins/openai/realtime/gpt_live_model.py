@@ -339,6 +339,7 @@ class GPTLiveSession(
         """The whole configuration, composed fresh for each connection."""
         # the conversation so far is startup history, newest first until the cap is reached
         items: list[types.InputItem] = []
+        images: list[list[ResponseInputText | ResponseInputImage]] = []
         dropped = 0
         for item in reversed(self._history.items):
             if (rendered := _render_item(item)) is None:
@@ -353,12 +354,18 @@ class GPTLiveSession(
                 else types.InputTextPart(text=text)
             )
             items.append(types.InputItem(role=role, content=[part]))
+            # session.start carries this message's words but has no image part, so its images
+            # are queued behind it; the words are already there and are not repeated
+            if isinstance(item, llm.ChatMessage) and (parts := _to_input_images(item)):
+                images.append(parts)
         if dropped:
             logger.warning(
                 "gpt-live startup history exceeds what a session accepts; dropping the oldest",
                 extra={"dropped": dropped, "kept": len(items)},
             )
         items.reverse()
+        for parts in reversed(images):
+            self._send_backend_input(parts, label="image_")
 
         return types.SessionStartEvent(
             event_id=utils.shortuuid("session_start_"),
@@ -573,13 +580,19 @@ class GPTLiveSession(
 
     def _keep_stale_event(self, event: types.ClientEvent | dict[str, Any]) -> bool:
         """Whether an event queued for an earlier connection may still go out on this one."""
-        etype = event.get("type", "") if isinstance(event, dict) else event.type
-        if etype not in _CONNECTION_BOUND:
+        if isinstance(event, dict):
+            etype, delegation_id = event.get("type", ""), event.get("delegation_id")
+        else:
+            etype, delegation_id = event.type, getattr(event, "delegation_id", None)
+        # an append answering a delegation is bound to it, and a delegation belongs to the
+        # session that created it; an unscoped append is context any session can hear
+        if etype not in _CONNECTION_BOUND and delegation_id is None:
             return True
         if etype != "session.input_audio.append":
-            # backend work is the caller's to redo: it was written against a backend that is gone
+            # backend work is the caller's to redo: it was written against a session that is gone
             logger.warning(
-                "gpt-live dropped an item queued for a session that ended", extra={"type": etype}
+                "gpt-live dropped an item queued for a session that ended",
+                extra={"type": etype, "delegation_id": delegation_id},
             )
         return False
 
@@ -979,7 +992,13 @@ class GPTLiveSession(
         self, content: list[ResponseInputText | ResponseInputImage], *, label: str
     ) -> bool:
         """Queue one user input item for the backend; a response.create is what runs it."""
-        if self._opts.delegation != "responses" or not content:
+        if not content:
+            return False
+        if self._opts.delegation != "responses":
+            logger.warning(
+                "gpt-live client delegation has no backend model to look at an image, so it was "
+                'dropped. Pass delegation="responses" to send images.'
+            )
             return False
         self.send_event(
             types.ResponseItemCreateEvent(
@@ -1120,21 +1139,13 @@ class GPTLiveSession(
         """Send an image to the backend; returns the line the voice model still needs."""
         text = item.text_content
         line = f"user: {text}" if text else None
-        if not (images := [c for c in item.content if isinstance(c, llm.ImageContent)]):
+        if not (parts := _to_input_images(item)):
             return line
-
         # an image has nowhere else to go, since the voice model has no image channel, and text
         # that arrives with one rides along so the caption reaches the model that can see it
-        content: list[ResponseInputText | ResponseInputImage] = []
         if text:
-            content.append(ResponseInputText(type="input_text", text=text))
-        content.extend(_to_input_image(image) for image in images)
-        if not self._send_backend_input(content, label="image_"):
-            logger.warning(
-                "gpt-live client delegation has no backend model to look at an image, so it was "
-                'dropped. Pass delegation="responses" to send images.',
-                extra={"images": len(images)},
-            )
+            parts.insert(0, ResponseInputText(type="input_text", text=text))
+        self._send_backend_input(parts, label="image_")
         return line
 
     def _generate_reply(
@@ -1169,6 +1180,15 @@ class GPTLiveSession(
             self._send_delegation_update(
                 types.ResponsesConfig(tool_choice=_to_tool_choice(tool_choice))
             )
+
+
+def _to_input_images(item: llm.ChatMessage) -> list[ResponseInputText | ResponseInputImage]:
+    """A message's images as Responses input parts; empty when it carries none."""
+    return [
+        _to_input_image(content)
+        for content in item.content
+        if isinstance(content, llm.ImageContent)
+    ]
 
 
 def _to_input_image(image: llm.ImageContent) -> ResponseInputImage:
