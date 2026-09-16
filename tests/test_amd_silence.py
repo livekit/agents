@@ -94,9 +94,9 @@ async def test_human_and_initial_uncertain_do_not_wait(category: AMDCategory) ->
     async with running(machine_silence_threshold=1.5) as (detector, session, classifier, _):
         speech_started(detector)
         speech_ended(detector, 0)
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         classifier.prediction(1, category)
-        assert await guard.should_reply(llm.ChatContext())
+        assert await hooks.should_reply(llm.ChatContext())
         assert detector._fsm._latest.category == category
         assert detector._fsm._latest.delay < 0.01
 
@@ -111,10 +111,10 @@ async def test_elapsed_silence_and_slow_inference_do_not_add_another_wait() -> N
     ):
         speech_started(detector)
         speech_ended(detector, 0.5)
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         await asyncio.sleep(1.2)
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-        assert await guard.should_reply(llm.ChatContext())
+        assert await hooks.should_reply(llm.ChatContext())
         assert detector._fsm._latest.delay == pytest.approx(1.2, abs=0.01)
 
 
@@ -163,7 +163,7 @@ async def test_resumed_speech_invalidates_release_and_preserves_history() -> Non
         detector.on("amd_prediction", events.append)
         speech_started(detector)
         speech_ended(detector, 0.5)
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         await asyncio.sleep(0.5)
         speech_started(detector)
@@ -175,7 +175,7 @@ async def test_resumed_speech_invalidates_release_and_preserves_history() -> Non
         commit_turn(detector, end_of_turn("Hello, can you hear me?"))
         request = await classifier.request()
         assert request.earlier_turns[0]["transcript"] == "hello"
-        assert not await guard.should_reply(llm.ChatContext())
+        assert not await hooks.should_reply(llm.ChatContext())
         classifier.prediction(2, AMDCategory.HUMAN)
         assert (await detector.execute()).category == AMDCategory.HUMAN
         assert not any(event.is_machine for event in events)
@@ -281,7 +281,7 @@ async def test_older_empty_transcript_wait_cannot_block_newer_prediction() -> No
         speech_started(detector)
         speech_ended(detector, 0)
         info = end_of_turn("Please state your name and why you are calling.")
-        guard = commit_turn(detector, info)
+        hooks = commit_turn(detector, info)
         assert (await classifier.request()).turn_id == 2
         classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
 
@@ -292,7 +292,7 @@ async def test_older_empty_transcript_wait_cannot_block_newer_prediction() -> No
             (2, AMDCategory.MACHINE_SCREENING)
         ]
         assert detector._fsm.decision(1).reason == "superseded"
-        assert await guard.should_reply(llm.ChatContext())
+        assert await hooks.should_reply(llm.ChatContext())
 
 
 @pytest.mark.asyncio
@@ -342,8 +342,8 @@ async def test_late_machine_prediction_suspends_idle_during_silence_wait() -> No
         classifier,
         _,
     ):
-        guard = await commit(detector, session, classifier)
-        await guard.should_reply(llm.ChatContext())
+        hooks = await commit(detector, session, classifier)
+        await hooks.should_reply(llm.ChatContext())
         assert detector._fsm._idle_deadline is not None
         classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
         await asyncio.sleep(0.2)

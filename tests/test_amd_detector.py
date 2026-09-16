@@ -24,7 +24,7 @@ from livekit.agents import (
     utils,
 )
 from livekit.agents.types import APIConnectOptions
-from livekit.agents.voice._reply_guard import ReplyGuard
+from livekit.agents.voice._turn_hooks import TurnHooks
 from livekit.agents.voice.amd import AMDCategory
 from livekit.agents.voice.amd.detector import (
     _HUMAN_INSTRUCTIONS,
@@ -193,12 +193,12 @@ def end_of_turn(text: str = "hello", *, skip_reply: bool = False) -> _EndOfTurnI
     )
 
 
-def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> ReplyGuard:
-    guard = detector._session._user_turn_committed(
+def commit_turn(detector: AMD, info: _EndOfTurnInfo) -> TurnHooks:
+    hooks = detector._session._user_turn_committed(
         info.new_transcript, info.metrics.end_of_turn_delay
     )
-    assert guard is not None
-    return guard
+    assert hooks is not None
+    return hooks
 
 
 def speech_started(detector: AMD) -> None:
@@ -255,40 +255,54 @@ async def running(
 
 async def commit(
     detector: AMD, session: AgentSession, classifier: ClassifierLLM, *, reply: bool = False
-) -> ReplyGuard | None:
+) -> TurnHooks | None:
     info = end_of_turn()
-    guard = None
+    hooks = None
     if reply:
         assert session._activity is not None
         session._activity.on_end_of_turn(info)
     else:
-        guard = commit_turn(detector, info)
+        hooks = commit_turn(detector, info)
     request = await classifier.request()
     assert request.turn_id == detector._fsm.turn_id
-    return guard
+    return hooks
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allow_reply", [False, True])
-async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> None:
+async def test_turn_hooks_control_replies_without_amd(allow_reply: bool) -> None:
     @llm.function_tool
-    def guard_tool() -> str:
-        """A tool available only to the guarded reply."""
+    def reply_tool() -> str:
+        """A tool available only to the generated reply."""
         return "done"
 
     replies: list[SpeechHandle] = []
+    calls: list[str] = []
 
-    class Guard:
-        def tools_for_reply(
+    class Hooks:
+        def on_user_turn_committed(
+            self, transcript: str, end_of_turn_delay: float | None
+        ) -> TurnHooks:
+            assert transcript == "hello"
+            assert end_of_turn_delay is None
+            assert agent.hooks == []
+            calls.append("user_turn_committed")
+            return self
+
+        def on_reply_generation(
             self, tools: list[llm.Tool | llm.Toolset]
         ) -> list[llm.Tool | llm.Toolset]:
-            return [*tools, guard_tool]
+            calls.append("reply_generation")
+            return [*tools, reply_tool]
 
         async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
-            chat_ctx.add_message(role="system", content="Guard instructions")
+            assert len(agent.hooks) == 1
+            calls.append("should_reply")
+            chat_ctx.add_message(role="system", content="Turn instructions")
             return allow_reply
 
-        def on_reply_created(self, handle: SpeechHandle) -> None:
+        def on_agent_turn_committed(self, handle: SpeechHandle) -> None:
+            calls.append("agent_turn_committed")
             replies.append(handle)
 
     model = RecordingLLM()
@@ -297,7 +311,7 @@ async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> No
     await session.start(agent)
     try:
         assert session.amd is None
-        session._reply_guard = Guard()
+        session._turn_hooks = Hooks()
         activity = session._activity
         assert activity is not None
         info = end_of_turn()
@@ -305,24 +319,87 @@ async def test_reply_guard_controls_replies_without_amd(allow_reply: bool) -> No
         await asyncio.wait_for(activity._user_turn_completed_atask, 2)
 
         if allow_reply:
+            assert calls == [
+                "user_turn_committed",
+                "should_reply",
+                "reply_generation",
+                "agent_turn_committed",
+            ]
             call = await asyncio.wait_for(model.calls.get(), 2)
             assert any(
-                m.text_content == "Guard instructions"
+                m.text_content == "Turn instructions"
                 for m in call["chat_ctx"].items
                 if m.type == "message"
             )
-            assert guard_tool in call["tools"]
+            assert reply_tool in call["tools"]
             assert len(replies) == 1
             await asyncio.wait_for(replies[0], 2)
         else:
+            assert calls == ["user_turn_committed", "should_reply"]
             assert model.calls.empty()
             assert replies == []
         assert len(agent.hooks) == 1
         assert not any(
-            m.text_content == "Guard instructions"
+            m.text_content == "Turn instructions"
             for m in agent.chat_ctx.items
             if m.type == "message"
         )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["adopted", "replaced", "suppressed"])
+async def test_preemptive_generation_commits_only_the_accepted_reply(outcome: str) -> None:
+    hooks = Mock(spec=TurnHooks)
+    hooks.on_user_turn_committed.return_value = hooks
+    hooks.on_reply_generation.side_effect = lambda tools: tools
+
+    async def should_reply(chat_ctx: llm.ChatContext) -> bool:
+        if outcome == "replaced":
+            chat_ctx.add_message(role="system", content=_HUMAN_INSTRUCTIONS)
+        return outcome != "suppressed"
+
+    hooks.should_reply.side_effect = should_reply
+    model = RecordingLLM()
+    session = AgentSession(llm=model, turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    try:
+        session._turn_hooks = hooks
+        session.options.preemptive_generation["enabled"] = True
+        activity = session._activity
+        assert activity is not None
+        activity.on_preemptive_generation(
+            _PreemptiveGenerationInfo(
+                new_transcript="hello", transcript_confidence=1, started_speaking_at=None
+            )
+        )
+        assert activity._preemptive_generation is not None
+        preemptive = activity._preemptive_generation.speech_handle
+        await asyncio.wait_for(model.calls.get(), 2)
+
+        hooks.on_reply_generation.assert_called_once()
+        hooks.on_user_turn_committed.assert_not_called()
+        hooks.should_reply.assert_not_awaited()
+        hooks.on_agent_turn_committed.assert_not_called()
+
+        activity.on_end_of_turn(end_of_turn())
+        await asyncio.wait_for(activity._user_turn_completed_atask, 2)
+
+        hooks.on_user_turn_committed.assert_called_once_with("hello", None)
+        hooks.should_reply.assert_awaited_once()
+        if outcome == "suppressed":
+            hooks.on_agent_turn_committed.assert_not_called()
+        else:
+            hooks.on_agent_turn_committed.assert_called_once()
+            reply = hooks.on_agent_turn_committed.call_args.args[0]
+            assert (reply is preemptive) == (outcome == "adopted")
+            await asyncio.wait_for(reply, 2)
+        assert preemptive.interrupted == (outcome != "adopted")
+        if outcome == "replaced":
+            await asyncio.wait_for(model.calls.get(), 2)
+        assert hooks.on_reply_generation.call_count == (2 if outcome == "replaced" else 1)
+        assert model.calls.empty()
     finally:
         await session.aclose()
 
@@ -414,7 +491,7 @@ async def test_customer_hook_and_prediction_overlap_controls_are_temporary() -> 
         (AMDCategory.HUMAN, _HUMAN_INSTRUCTIONS),
     ],
 )
-async def test_reply_guard_keeps_its_turn_while_an_older_hook_is_blocked(
+async def test_turn_hooks_keep_their_turn_while_an_older_hook_is_blocked(
     category: AMDCategory, instructions: str
 ) -> None:
     agent = CustomerAgent()
@@ -467,10 +544,10 @@ async def test_turn_ids_are_local_to_each_amd_run() -> None:
                 session, llm=classifier, stt=None, machine_silence_threshold=0
             ) as detector:
                 await eventually(lambda: detector.started)
-                guard = await commit(detector, session, classifier)
+                hooks = await commit(detector, session, classifier)
                 assert detector._fsm.turn_id == 1
                 classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-                assert await guard.should_reply(llm.ChatContext())
+                assert await hooks.should_reply(llm.ChatContext())
     finally:
         await session.aclose()
 
@@ -479,7 +556,7 @@ async def test_turn_ids_are_local_to_each_amd_run() -> None:
 @pytest.mark.parametrize(
     "category", [AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_UNAVAILABLE]
 )
-async def test_amd_guard_retains_the_adopted_user_turn_span(category: AMDCategory) -> None:
+async def test_amd_turn_hooks_retain_the_adopted_user_turn_span(category: AMDCategory) -> None:
     async with running() as (detector, session, classifier, model):
         span = Mock(spec=trace.Span)
         span.get_span_context.return_value = trace.INVALID_SPAN_CONTEXT
@@ -684,7 +761,7 @@ async def test_human_takeover_updates_the_reply_context_during_machine_speech(
         if hook_finishes_after_cleanup:
             await asyncio.wait_for(detector.execute(), 2)
             assert session.amd is None
-            assert session._reply_guard is None
+            assert session._turn_hooks is None
             agent.hook_release.set()
 
         call = await asyncio.wait_for(model.calls.get(), 2)
@@ -716,12 +793,12 @@ async def test_menu_is_observability_only_and_dtmf_tool_is_temporary() -> None:
     async with running() as (detector, session, classifier, model):
         menus = []
         detector.on("amd_menu_observed", menus.append)
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
         context = llm.ChatContext()
-        assert await guard.should_reply(context)
+        assert await hooks.should_reply(context)
         before = session.current_agent.tools.copy()
-        tools = guard.tools_for_reply(before)
+        tools = hooks.on_reply_generation(before)
         assert any(t.id == "send_dtmf_events" for t in tools)
         assert session.current_agent.tools == before
         response = await asyncio.wait_for(classifier.menu_requests.get(), 2)
@@ -742,21 +819,23 @@ async def test_menu_is_observability_only_and_dtmf_tool_is_temporary() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("category", [AMDCategory.HUMAN, AMDCategory.MACHINE_UNAVAILABLE])
-async def test_terminal_result_completes_once_and_releases_guard(category: AMDCategory) -> None:
+async def test_terminal_result_completes_once_and_releases_turn_hooks(
+    category: AMDCategory,
+) -> None:
     async with running() as (detector, session, classifier, _):
-        assert session._reply_guard is not None
+        assert session._turn_hooks is not None
         events = []
         detector.on("amd_completed", events.append)
         first = asyncio.create_task(detector.execute())
         second = asyncio.create_task(detector.execute())
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         classifier.prediction(1, category)
         a, b = await asyncio.wait_for(asyncio.gather(first, second), 2)
         assert a is b
         assert a.reason == "finished"
         assert len(events) == 1
         assert session.amd is None
-        assert session._reply_guard is None
+        assert session._turn_hooks is None
         assert session._activity._authorization_allowed.is_set()
         assert not detector._tasks
         for event, callback in (
@@ -764,7 +843,7 @@ async def test_terminal_result_completes_once_and_releases_guard(category: AMDCa
             ("user_input_transcribed", detector._on_user_input_transcribed),
         ):
             assert callback not in session._events[event]
-        assert await guard.should_reply(llm.ChatContext()) == (category == AMDCategory.HUMAN)
+        assert await hooks.should_reply(llm.ChatContext()) == (category == AMDCategory.HUMAN)
         await detector.aclose()
         assert len(events) == 1
 
@@ -855,8 +934,8 @@ async def test_timeout_rearms_and_late_result_cannot_change_a_newer_turn() -> No
     async with running(inference_timeout=0.02) as (detector, session, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
-        guard = await commit(detector, session, classifier)
-        assert await guard.should_reply(llm.ChatContext())
+        hooks = await commit(detector, session, classifier)
+        assert await hooks.should_reply(llm.ChatContext())
         assert events[-1].reason == "inference_timeout"
         assert detector._fsm._idle_deadline is not None
         await commit(detector, session, classifier)
@@ -888,9 +967,9 @@ async def test_stop_response_remains_owned_by_session() -> None:
 @pytest.mark.asyncio
 async def test_invalid_model_output_falls_back_and_releases_the_reply() -> None:
     async with running() as (detector, session, classifier, _):
-        guard = await commit(detector, session, classifier)
+        hooks = await commit(detector, session, classifier)
         classifier.respond(1, "not JSON")
-        assert await guard.should_reply(llm.ChatContext())
+        assert await hooks.should_reply(llm.ChatContext())
         assert detector._fsm._latest.reason == "inference_error"
         assert detector._fsm.category == AMDCategory.UNCERTAIN
         assert detector.enabled
@@ -952,7 +1031,7 @@ async def test_three_timeouts_complete_detection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_realtime_model_is_rejected_before_installing_guard() -> None:
+async def test_realtime_model_is_rejected_before_installing_turn_hooks() -> None:
     session = SimpleNamespace(_activity=SimpleNamespace(llm=Mock(spec=llm.RealtimeModel)))
     detector = AMD(session, llm=None, stt=None)
     with pytest.raises(ValueError, match="does not support realtime models"):

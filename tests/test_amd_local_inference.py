@@ -251,14 +251,14 @@ async def test_default_falls_back_to_session_model_without_amd_credentials(
 
 
 @pytest.mark.asyncio
-async def test_missing_llm_does_not_install_a_reply_guard() -> None:
+async def test_missing_llm_does_not_install_turn_hooks() -> None:
     session = AgentSession(turn_handling={"turn_detection": "manual"})
     await session.start(Agent(instructions="Call about an appointment."))
     try:
         with pytest.raises(ValueError, match="requires an LLM"):
             await AMD(session, llm=None, stt=None).__aenter__()
         assert session.amd is None
-        assert session._reply_guard is None
+        assert session._turn_hooks is None
         assert session._activity._authorization_allowed.is_set()
     finally:
         await session.aclose()
@@ -464,9 +464,9 @@ async def test_invalid_transition_falls_back_and_uncertain_preserves_stage() -> 
             (2, AMDCategory.UNCERTAIN, "prediction"),
             (3, AMDCategory.MACHINE_SCREENING, "inference_error"),
         ):
-            guard = await commit(detector, session, classifier)
+            hooks = await commit(detector, session, classifier)
             classifier.prediction(turn_id, category)
-            await guard.should_reply(llm.ChatContext())
+            await hooks.should_reply(llm.ChatContext())
             assert detector._fsm._latest.reason == reason
             assert detector._fsm.category == AMDCategory.MACHINE_VM
             assert not detector._fsm._latest.state_changed
@@ -539,7 +539,7 @@ async def test_stt_stream_failure_leaves_session_transcript_available() -> None:
 
 
 @pytest.mark.asyncio
-async def test_owned_model_cleanup_failure_still_detaches_and_releases_guard(
+async def test_owned_model_cleanup_failure_still_detaches_and_releases_turn_hooks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents import inference
@@ -561,9 +561,9 @@ async def test_screening_prediction_is_forwarded_to_session_observability() -> N
         host = Mock()
         session._session_host = host
         try:
-            guard = await commit(detector, session, classifier)
+            hooks = await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
-            await guard.should_reply(llm.ChatContext())
+            await hooks.should_reply(llm.ChatContext())
             assert (
                 host._on_amd_prediction.call_args.args[0].category == AMDCategory.MACHINE_SCREENING
             )

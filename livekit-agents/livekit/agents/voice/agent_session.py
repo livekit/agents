@@ -61,7 +61,7 @@ from ..types import (
 from ..utils.deprecation import deprecate_params
 from ..utils.misc import is_given
 from . import io, room_io
-from ._reply_guard import ReplyGuard
+from ._turn_hooks import TurnHooks
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
@@ -744,7 +744,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # ivr and AMD
         self._ivr_activity: IVRActivity | None = None
         self._amd: AMD | None = None
-        self._reply_guard: ReplyGuard | None = None
+        self._turn_hooks: TurnHooks | None = None
 
     @property
     def amd(self) -> AMD | None:
@@ -753,7 +753,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _set_amd(self, amd: AMD | None) -> None:
         self._amd = amd
-        self._reply_guard = amd._reply_guard if amd is not None else None
+        self._turn_hooks = amd._turn_hooks if amd is not None else None
 
     @property
     def _input_audio_allowed(self) -> bool:
@@ -2258,11 +2258,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _user_turn_committed(
         self, transcript: str, end_of_turn_delay: float | None
-    ) -> ReplyGuard | None:
-        """Notify AMD before the customer hook and retain this turn's reply guard."""
-        if self._amd is not None:
-            return self._amd._on_user_turn_committed(transcript, end_of_turn_delay)
-        return self._reply_guard
+    ) -> TurnHooks | None:
+        """Notify turn hooks before the customer hook and retain the bound hooks."""
+        if self._turn_hooks is not None:
+            return self._turn_hooks.on_user_turn_committed(transcript, end_of_turn_delay)
+        return None
 
     def _user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if ev.transcript:

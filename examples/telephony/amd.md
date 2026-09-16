@@ -2,13 +2,15 @@
 
 AMD classifies the call participant at client-side end of turn (EOT). It can
 handle several screening, voicemail, and IVR turns before it completes.
-The SDK owns classification, stage changes, reply guards, and deadlines.
+The SDK owns classification, stage changes, turn hooks, and deadlines.
 AgentSession owns the customer hook, interruption, and playback.
 
 AMD consumes `user_state_changed` and `user_input_transcribed` session events.
 At each accepted EOT, AgentSession notifies AMD internally before
-`on_user_turn_completed` runs. AMD owns its turn IDs and returns a reply guard
-bound to that turn. State events carry the accepted speech-boundary time,
+`on_user_turn_completed` runs. AMD owns its turn IDs and returns turn hooks
+bound to that turn. Preemptive generation prepares reply tools but only commits
+an agent turn if its reply is accepted for output.
+State events carry the accepted speech-boundary time,
 including the STT timestamp when STT controls turn detection.
 
 This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
@@ -156,8 +158,8 @@ New speech cancels the idle timer. Stage changes do not extend the overall limit
 The overall limit can end AMD during a silence wait. Without speech-end timing,
 the silence wait starts at EOT.
 
-Completion or context exit closes AMD requests, removes listeners and reply
-guards, and releases pending callers. The application receives the final category
+Completion or context exit closes AMD requests, removes listeners and turn
+hooks, and releases pending callers. The application receives the final category
 and reason. Completion does not decide the next call action.
 
 ## Run the example

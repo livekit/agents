@@ -29,7 +29,7 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from .._reply_guard import ReplyGuard
+    from .._turn_hooks import TurnHooks
     from ..agent import Agent
     from ..agent_session import AgentSession
     from ..events import (
@@ -77,18 +77,23 @@ class _Run:
 
 
 @dataclass(frozen=True)
-class _AMDReplyGuard:
+class _AMDTurnHooks:
     _amd: AMD
     _turn_id: int | None = None
 
-    def tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
-        return self._amd._tools_for_reply(tools)
+    def on_user_turn_committed(self, transcript: str, end_of_turn_delay: float | None) -> TurnHooks:
+        return self._amd._on_user_turn_committed(transcript, end_of_turn_delay)
+
+    def on_reply_generation(
+        self, tools: list[llm.Tool | llm.Toolset]
+    ) -> list[llm.Tool | llm.Toolset]:
+        return self._amd._on_reply_generation(tools)
 
     async def should_reply(self, chat_ctx: llm.ChatContext) -> bool:
         return await self._amd._should_reply(self._turn_id, chat_ctx)
 
-    def on_reply_created(self, handle: SpeechHandle) -> None:
-        self._amd._on_reply_created(handle, self._turn_id)
+    def on_agent_turn_committed(self, handle: SpeechHandle) -> None:
+        self._amd._on_agent_turn_committed(handle, self._turn_id)
 
 
 class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_observed"]]):
@@ -181,7 +186,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 stt = self._DEFAULT_STT_MODEL if auto_select else None
 
         self._session = session
-        self._reply_guard = _AMDReplyGuard(self)
+        self._turn_hooks = _AMDTurnHooks(self)
         self._owns_llm = isinstance(llm, str)
         self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
         self._owns_stt = isinstance(stt, str)
@@ -389,9 +394,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     def _on_user_turn_committed(
         self, transcript: str, end_of_turn_delay: float | None
-    ) -> ReplyGuard:
+    ) -> TurnHooks:
         if not self.started:
-            return self._reply_guard
+            return self._turn_hooks
         if activity := self._session._activity:
             activity._pause_authorization()
         turn_id = self._fsm.turn_id + 1
@@ -403,7 +408,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             turn_id=turn_id,
         )
         self._reschedule_timer()
-        return _AMDReplyGuard(self, turn_id)
+        return _AMDTurnHooks(self, turn_id)
 
     async def _consume_transcripts(self) -> None:
         async for turn in self._run.stt:
@@ -537,7 +542,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             extra={"amd_run": self._session_id, "amd_stage": self._fsm.category.value},
         )
 
-    def _tools_for_reply(self, tools: list[llm.Tool | llm.Toolset]) -> list[llm.Tool | llm.Toolset]:
+    def _on_reply_generation(
+        self, tools: list[llm.Tool | llm.Toolset]
+    ) -> list[llm.Tool | llm.Toolset]:
         if self.started and self._fsm.category == AMDCategory.MACHINE_IVR:
             from ...beta.tools.send_dtmf import send_dtmf_events
 
@@ -545,7 +552,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 return [*tools, send_dtmf_events]
         return tools
 
-    def _on_reply_created(self, handle: SpeechHandle, turn_id: int | None) -> None:
+    def _on_agent_turn_committed(self, handle: SpeechHandle, turn_id: int | None) -> None:
         if (
             self.started
             and turn_id == self._fsm.turn_id

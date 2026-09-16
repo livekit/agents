@@ -110,7 +110,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..llm import mcp
-    from ._reply_guard import ReplyGuard
+    from ._turn_hooks import TurnHooks
     from .agent_session import AgentSession, ExpressiveOptions
 
 
@@ -1793,8 +1793,8 @@ class AgentActivity(RecognitionHooks):
                     tool_choice = "none"
 
         all_tools = self.tools.copy()
-        if reply_guard := self._session._reply_guard:
-            all_tools = reply_guard.tools_for_reply(all_tools)
+        if turn_hooks := self._session._turn_hooks:
+            all_tools = turn_hooks.on_reply_generation(all_tools)
 
         # resolve tool names to Tool objects if tools param is given
         resolved_tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN
@@ -2690,7 +2690,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.clear_audio()
             return False
 
-        reply_guard = self._session._user_turn_committed(
+        turn_hooks = self._session._user_turn_committed(
             info.new_transcript, info.metrics.end_of_turn_delay
         )
 
@@ -2703,7 +2703,7 @@ class AgentActivity(RecognitionHooks):
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
         self._user_turn_completed_atask = self._create_speech_task(
-            self._user_turn_completed_task(old_task, info, reply_guard),
+            self._user_turn_completed_task(old_task, info, turn_hooks),
             name="AgentActivity._user_turn_completed_task",
         )
         self._user_turn_completed_atask.add_done_callback(self._session._on_user_turn_completed)
@@ -2714,10 +2714,10 @@ class AgentActivity(RecognitionHooks):
         self,
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
-        reply_guard: ReplyGuard | None = None,
+        turn_hooks: TurnHooks | None = None,
     ) -> None:
         try:
-            await self._user_turn_completed_impl(old_task, info, reply_guard)
+            await self._user_turn_completed_impl(old_task, info, turn_hooks)
         finally:
             _end_user_turn_span(info)
 
@@ -2725,7 +2725,7 @@ class AgentActivity(RecognitionHooks):
         self,
         old_task: asyncio.Task[None] | None,
         info: _EndOfTurnInfo,
-        reply_guard: ReplyGuard | None = None,
+        turn_hooks: TurnHooks | None = None,
     ) -> None:
         if old_task is not None:
             # We never cancel user code as this is very confusing.
@@ -2837,7 +2837,7 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
-        if reply_guard and not await reply_guard.should_reply(temp_mutable_chat_ctx):
+        if turn_hooks and not await turn_hooks.should_reply(temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
             if info.new_transcript:
                 self._agent._chat_ctx.insert(user_message)
@@ -2914,8 +2914,8 @@ class AgentActivity(RecognitionHooks):
             # await the interrupt to make sure user message is added to the chat context before the new task starts
             await speech_handle.interrupt(source="user_turn")
 
-        if reply_guard:
-            reply_guard.on_reply_created(speech_handle)
+        if turn_hooks:
+            turn_hooks.on_agent_turn_committed(speech_handle)
 
         metadata: Metadata | None = None
         if isinstance(self._turn_detection, str):
