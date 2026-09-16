@@ -20,6 +20,7 @@ from ._extension import (
     KIND,
     KIND_CHAT_CTX,
     KIND_CHAT_ITEM,
+    KIND_CLOSE,
     KIND_DELEGATION,
     VERBATIM,
     as_dict,
@@ -100,7 +101,9 @@ def to_a2a_request(
         parts=parts,
         reference_task_ids=list(reference_task_ids),
     )
-    if task_input.is_delegation:
+    if task_input.closing:
+        message.metadata.CopyFrom(struct({KIND: KIND_CLOSE}))
+    elif task_input.is_delegation:
         message.metadata.CopyFrom(struct({KIND: KIND_DELEGATION}))
 
     return pb.SendMessageRequest(
@@ -126,12 +129,14 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
         chat_ctx = ChatContext.from_dict(as_dict(part.data))
 
     body = text_of(message.parts)
-    delegation = as_dict(message.metadata).get(KIND) == KIND_DELEGATION
+    kind = as_dict(message.metadata).get(KIND)
+    delegation = kind == KIND_DELEGATION
     return TaskInput(
         text=None if delegation else body,
         instruction=body if delegation else None,
         chat_ctx=chat_ctx,
         metadata=as_dict(request.metadata),
+        closing=kind == KIND_CLOSE,
     )
 
 

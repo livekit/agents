@@ -37,8 +37,13 @@ class TaskInput:
     """Application data, handed to the handler untouched. JSON-serializable."""
 
     def __post_init__(self) -> None:
+        if self.closing:
+            self.text = self.text if self.text is not None else ""
         if (self.text is None) == (self.instruction is None):
             raise ValueError("a TaskInput carries exactly one of `text` and `instruction`")
+
+    closing: bool = False
+    """The conversation is over: nothing is being asked, and the receiver may drop it."""
 
     @property
     def is_delegation(self) -> bool:

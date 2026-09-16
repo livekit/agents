@@ -221,7 +221,21 @@ class A2AClient:
             )
             return self._client
 
+    async def close_context(self) -> None:
+        """Tell the endpoint the conversation is over, so it need not wait for idle.
+
+        Best-effort: a caller that crashes says nothing, so a server keeps its own idle
+        policy and this only saves it the wait.
+        """
+        if self._client is None:
+            return  # nothing was ever sent on this context
+        with contextlib.suppress(Exception):
+            async with self.send(TaskInput(closing=True)) as stream:
+                async for _ in stream:
+                    pass
+
     async def aclose(self) -> None:
+        await self.close_context()
         if self._client is not None:
             await self._client.close()
             self._client = None

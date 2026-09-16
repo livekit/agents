@@ -81,7 +81,12 @@ TextSessionHandler = Callable[[TextSessionContext], Coroutine[Any, Any, None]]
 
 
 class _Conversation:
-    """One context id: the handler run that owns its session, and the requests in flight."""
+    """One context id: the handler run that owns its session, and the requests in flight.
+
+    Held for the life of the process. TODO(v1): once there is a session store, an idle
+    conversation should persist what it holds and close, and the next request on that context
+    should rehydrate it — which is also what moves it into a job process.
+    """
 
     def __init__(self, context_id: str, handler: TextSessionHandler) -> None:
         self._ctx = TextSessionContext(context_id)
@@ -147,6 +152,13 @@ class _SessionExecutor(AgentExecutor):
         task_input = from_a2a_request(request)
 
         conversation = self._conversation(context_id)
+        if task_input.closing:
+            # the caller is done, so the conversation goes now rather than when it times out
+            self._conversations.pop(context_id, None)
+            await conversation.aclose()
+            await self._emit(event_queue, TaskUpdate(state="completed"), task_id, context_id)
+            return
+
         try:
             runner = await conversation.runner()
         except Exception as exc:
