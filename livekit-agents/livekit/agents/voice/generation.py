@@ -1014,6 +1014,9 @@ async def _execute_tools_task(
                         if run_ctx._suppress_reply:
                             # a silent update() keeps the output item but asks for no speech
                             output.fnc_call_out.reply_required = False
+                        # set only when the tool released through update(): the step that
+                        # answers a report is bound by what the report asked for
+                        output.reply_tool_choice = run_ctx._reply_tool_choice
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
@@ -1134,6 +1137,8 @@ class ToolExecutionOutput:
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
+    reply_tool_choice: llm.ToolChoice | None = None
+    """What the reply to this output may call, when the tool released through ``update()``."""
 
 
 def make_tool_output(

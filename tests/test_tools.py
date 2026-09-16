@@ -2184,6 +2184,31 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
     )
 
 
+class TestReplyToolChoice:
+    """One reply step answering several tool outputs honours a single shared request."""
+
+    def test_a_shared_request_is_honoured(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", "none"]) == "none"
+
+    def test_a_result_leaves_the_model_on_its_default(self):
+        """A real return carries no request: it is something to act on."""
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice([None]) is None
+
+    def test_one_result_among_reports_is_enough(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", None]) is None
+
+    def test_requests_that_disagree_constrain_nothing(self):
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        assert _reply_tool_choice(["none", "auto"]) is None
+
+
 class TestSpeechHandleItemCallbacks:
     """A caller watching what a speech records, item by item."""
 
@@ -2535,6 +2560,80 @@ class TestToolCallEvents:
         # only the tool's return is answered; the reports are recorded, not voiced
         scheduled = [i for i in items if isinstance(i, ToolReplyUpdated)]
         assert [i.update_ids for i in scheduled if i.status == "scheduled"] == [["c12_final"]]
+
+    @pytest.mark.asyncio
+    async def test_a_reply_covering_only_reports_may_not_call(self):
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> None:
+            """p"""
+            await ctx.update("on it")
+            await ctx.update("still on it")
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c20", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        # a None return files no result, so everything buffered asked for "none"
+        assert session.generate_reply.call_args.kwargs["tool_choice"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_a_report_may_ask_for_the_tools(self):
+        """The default keeps the model speaking, but a tool whose report is genuinely
+        something to act on can say so."""
+        from livekit.agents.voice.events import RunContext
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> None:
+            """p"""
+            await ctx.update("on it")
+            await ctx.update("three matches, which one?", tool_choice="auto")
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c21", name="progress_tool")
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        # the report asked for the tools, and the step that answers it gets them
+        assert session.generate_reply.call_args.kwargs["tool_choice"] == "auto"
 
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):

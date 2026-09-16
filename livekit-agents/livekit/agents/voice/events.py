@@ -25,6 +25,7 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
@@ -79,6 +80,8 @@ class RunContext(Generic[Userdata_T]):
 
         # set by a silent first update(): the output is recorded but nothing voices it
         self._suppress_reply = False
+        # set by the first update(): what the step that answers it may call
+        self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
@@ -203,6 +206,7 @@ class RunContext(Generic[Userdata_T]):
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
         silent: bool = False,
+        tool_choice: ToolChoice = "none",
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -219,6 +223,10 @@ class RunContext(Generic[Userdata_T]):
             silent: Record the message without voicing it. On the first update this
                 releases control without speaking; on a later one the items still land in
                 the chat context and history, but no reply is generated from them.
+            tool_choice: What the reply to this update may call. ``"none"`` by default: a
+                report is not a result, so the model speaks to it rather than acting on it,
+                and without that it can answer a report by calling the same tool again. Set
+                it where the report is genuinely something to act on.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -275,11 +283,14 @@ class RunContext(Generic[Userdata_T]):
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
             self._suppress_reply = not reply
+            self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]], silent=not reply)
+        await self._executor._enqueue_reply(
+            self, [pair[0], pair[1]], silent=not reply, tool_choice=tool_choice
+        )
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]

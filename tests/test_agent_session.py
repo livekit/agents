@@ -419,6 +419,55 @@ def test_a_directive_is_advice_carried_with_the_answer() -> None:
     assert request.directive == Directive("end_session", "user_request")
 
 
+async def test_a_report_is_answered_with_speech_not_another_call() -> None:
+    """ctx.update() releases the turn, and the step that answers the report must not be
+    able to call the same tool again — that is how one request becomes two."""
+    calls: list[str] = []
+    choices: list[object] = []
+
+    @function_tool
+    async def look_it_up(ctx: RunContext) -> str:
+        """Slow work that reports before it returns."""
+        calls.append("call")
+        await ctx.update("looking it up")
+        await asyncio.sleep(0.5)
+        return "the answer is 42"
+
+    original = AgentActivity._pipeline_reply_task
+
+    async def _capture(self, *, speech_handle, chat_ctx, tools, model_settings, **kwargs):
+        choices.append(model_settings.tool_choice)
+        return await original(
+            self,
+            speech_handle=speech_handle,
+            chat_ctx=chat_ctx,
+            tools=tools,
+            model_settings=model_settings,
+            **kwargs,
+        )
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "look it up")
+    actions.add_llm(
+        content="",
+        tool_calls=[FunctionToolCall(name="look_it_up", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(1.0)
+    actions.add_llm(content="One moment.", input="looking it up")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    with patch.object(AgentActivity, "_pipeline_reply_task", _capture):
+        await asyncio.wait_for(
+            run_session(session, Agent(instructions="assistant", tools=[look_it_up])),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert calls == ["call"], "the tool was called again on its own progress report"
+    # the first step is the user's turn; the next answers the report, and may only speak
+    assert choices[1] == "none", choices
+
+
 async def test_assistant_messages_carry_their_source() -> None:
     class SayOnEnterAgent(MyAgent):
         async def on_enter(self) -> None:
