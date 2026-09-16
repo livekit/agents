@@ -444,6 +444,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         twilio_account_sid: NotGivenOr[str] = NOT_GIVEN,
         twilio_auth_token: NotGivenOr[str] = NOT_GIVEN,
         twilio_call_token: NotGivenOr[str] = NOT_GIVEN,
+        original_caller_number: NotGivenOr[str] = NOT_GIVEN,
         ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
@@ -461,23 +462,28 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
 
         Args:
             phone_number: The human agent's phone number to dial.
-            twilio_from_number: Caller ID shown to the human agent. Use a Twilio
-                number or verified caller ID, or the original incoming call's
-                ``From`` number when supplying its ``twilio_call_token``.
+            twilio_from_number: Agent/business Twilio number or verified caller ID.
+                Used when no token is supplied and for the caller-ID rejection fallback.
             twilio_account_sid: Twilio account SID. Defaults to ``TWILIO_ACCOUNT_SID``.
             twilio_auth_token: Twilio auth token. Defaults to ``TWILIO_AUTH_TOKEN``.
-            twilio_call_token: The ``CallToken`` from the original incoming Twilio
-                voice webhook, authorizing reuse of that call's caller ID. Pass it
-                together with that call's ``From`` as ``twilio_from_number``.
-                Retrieve the token from server-side state for that specific call;
-                do not include it in prompts or participant attributes. When omitted,
-                no CallToken is sent to Twilio. Requires ``twilio>=6.55.0`` when set.
+            original_caller_number: Original incoming call's ``From``. Used only
+                with a nonempty ``twilio_call_token``; otherwise the business number is used.
+            twilio_call_token: Nonempty ``CallToken`` from that incoming call's validated
+                webhook. Requires ``original_caller_number`` and ``twilio>=6.55.0``.
+                Keep it in server-side state for that call, outside prompts and participant
+                attributes. On HTTP 400 / Twilio error 21210 (unverified caller ID), retry
+                once using ``twilio_from_number`` without the token. Other failures are
+                propagated without retrying to avoid duplicate calls.
 
         Other arguments have the same meaning as in ``WarmTransferTask``.
         """
         self._phone_number = phone_number
         self._twilio_from_number = twilio_from_number
         self._twilio_call_token = twilio_call_token
+        self._original_caller_number = original_caller_number
+        if is_given(twilio_call_token) and twilio_call_token:
+            if not is_given(original_caller_number) or not original_caller_number:
+                raise ValueError("twilio_call_token requires original_caller_number")
         self._twilio_account_sid = (
             twilio_account_sid
             if is_given(twilio_account_sid)
@@ -517,6 +523,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
     ) -> None:
         # optional dep; keep SIP path import-free
         try:
+            from twilio.base.exceptions import TwilioRestException  # type: ignore
             from twilio.rest import Client  # type: ignore
         except ImportError as e:
             raise ImportError(
@@ -526,13 +533,16 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
 
         client = Client(self._twilio_account_sid, self._twilio_auth_token)
         call_options: dict[str, str] = {}
-        if is_given(self._twilio_call_token):
+        from_number = self._twilio_from_number
+        if is_given(self._twilio_call_token) and self._twilio_call_token:
             if "call_token" not in inspect.signature(client.calls.create).parameters:
                 raise RuntimeError(
                     "Using twilio_call_token requires twilio>=6.55.0. "
                     "To upgrade, run: pip install 'twilio>=6.55.0'"
                 )
             call_options["call_token"] = self._twilio_call_token
+            assert is_given(self._original_caller_number)
+            from_number = self._original_caller_number
 
         job_ctx = get_job_context()
         resp = await job_ctx.api.connector.connect_twilio_call(
@@ -546,13 +556,26 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             f"<Response><Connect><Stream url={quoteattr(resp.connect_url)}/></Connect></Response>"
         )
 
-        call = await asyncio.to_thread(
-            client.calls.create,
-            to=self._phone_number,
-            from_=self._twilio_from_number,
-            twiml=twiml,
-            **call_options,
-        )
+        try:
+            call = await asyncio.to_thread(
+                client.calls.create,
+                to=self._phone_number,
+                from_=from_number,
+                twiml=twiml,
+                **call_options,
+            )
+        except TwilioRestException as error:
+            # This explicit rejection means no call was created. Never retry ambiguous
+            # transport failures, or errors after a call has already been accepted.
+            if not call_options or error.status != 400 or error.code != 21210:
+                raise
+            logger.warning("Twilio rejected preserved caller ID; retrying with business caller ID")
+            call = await asyncio.to_thread(
+                client.calls.create,
+                to=self._phone_number,
+                from_=self._twilio_from_number,
+                twiml=twiml,
+            )
 
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
