@@ -501,6 +501,46 @@ def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
     assert finals[0].alternatives[0].language == "es"
 
 
+@pytest.mark.parametrize(
+    "message_type",
+    ["partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"],
+)
+@pytest.mark.parametrize(
+    ("language", "language_data", "expected_language"),
+    [
+        ("es", {}, "es"),
+        ("es", {"language_code": None}, "es"),
+        ("es", {"language_code": ""}, "es"),
+        ("es", {"language_code": "fra"}, "fr"),
+        (None, {}, "en"),
+        (None, {"language_code": None}, "en"),
+        (None, {"language_code": ""}, "en"),
+        (None, {"language_code": "fra"}, "fr"),
+    ],
+)
+def test_transcript_language_falls_back_to_configured_language(
+    message_type: str,
+    language: str | None,
+    language_data: dict[str, str | None],
+    expected_language: str,
+) -> None:
+    stream = _new_stream(
+        language=language,
+        include_timestamps=message_type == "committed_transcript_with_timestamps",
+        include_language_detection=False,
+    )
+
+    stream._process_stream_event({"message_type": message_type, "text": "hola", **language_data})
+
+    transcript = stream._event_ch.events[-1]
+    assert transcript.type == (
+        stt.SpeechEventType.INTERIM_TRANSCRIPT
+        if message_type == "partial_transcript"
+        else stt.SpeechEventType.FINAL_TRANSCRIPT
+    )
+    assert transcript.alternatives[0].language == expected_language
+
+
 class _FakeWS:
     """Records outgoing messages. receive() parks so recv_task stays alive."""
 

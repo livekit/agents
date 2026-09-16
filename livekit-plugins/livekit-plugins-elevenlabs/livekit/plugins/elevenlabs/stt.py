@@ -739,7 +739,7 @@ class SpeechStream(stt.SpeechStream):
         words = data.get("words", [])
         start_time = words[0].get("start", 0) if words else 0
         end_time = words[-1].get("end", 0) if words else 0
-        language_code = data.get("language_code", self._language)
+        language_code = data.get("language_code") or self._language
 
         normalized_language = LanguageCode(language_code) if language_code else LanguageCode("en")
 
