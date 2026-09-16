@@ -526,12 +526,14 @@ class ToolCallEnded(BaseModel):
 
 class ToolReplyUpdated(BaseModel):
     """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
-    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
-    several calls; an inline first update never gets one."""
+    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply covers the
+    buffered calls of one turn; an inline first update never gets one."""
 
     type: Literal["tool_reply_updated"] = "tool_reply_updated"
     update_ids: list[str]
     """``ToolCallUpdated.id`` values this reply covers."""
+    call_ids: list[str]
+    """The calls those entries belong to, so the reply can be tied back to what issued them."""
     status: Literal["scheduled", "completed", "interrupted", "skipped"]
     speech_id: str
     """Id of the reply speech; ``speech_created`` carries its handle."""
