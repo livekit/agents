@@ -59,7 +59,7 @@ class STTMetrics(_BaseMetrics):
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
     input_tokens: int = 0
-    """Total input tokens (for token-based billing)."""
+    """Total input tokens, including both audio and text (for token-based billing)."""
     output_tokens: int = 0
     """Total output tokens (for token-based billing)."""
     total_tokens: int = 0

@@ -94,7 +94,7 @@ class STTModelUsage(_BaseModelUsage):
     """The model name (e.g., 'nova-2', 'best')."""
 
     input_tokens: int = 0
-    """Total input tokens (for token-based STT billing)."""
+    """Total input tokens, including both audio and text (for token-based STT billing)."""
     input_audio_tokens: int = 0
     """Audio input tokens, a subset of input_tokens when reported by the provider."""
     output_tokens: int = 0
