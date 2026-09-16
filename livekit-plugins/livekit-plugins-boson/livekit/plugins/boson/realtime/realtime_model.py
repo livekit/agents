@@ -456,7 +456,10 @@ class RealtimeSession(openai_rt.RealtimeSession):
     The server keeps no session state between connections: a dropped socket is
     reconnected and the chat context is replayed from the client as text. An
     audio turn whose transcript had not arrived by then has nothing to replay
-    and is lost -- at most the last untranscribed turn.
+    and is lost -- at most the last untranscribed turn. Completed tool calls and
+    their results are dropped from that replay too: the base builds it with
+    ``exclude_function_call=True``, from a ``_reconnect`` local to its
+    ``_main_task`` that this plugin does not reach.
     """
 
     def __init__(self, realtime_model: RealtimeModel) -> None:

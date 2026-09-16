@@ -177,6 +177,11 @@ the item, which returns on a later sync once it has text again.
   `["audio"]` or `["text"]`.
 - This plugin sends and receives 24 kHz PCM audio. That's the format this
   integration uses, not the full range the Higgs Realtime API supports.
+- A reconnect replays the conversation without its completed function calls or their
+  results. The base copies the chat context with `exclude_function_call=True` before
+  replaying, from a `_reconnect` local to its `_main_task`, so this plugin has no hook to
+  keep them. The same loss applies to the OpenAI plugin this one derives from. After a
+  drop, the model can repeat a tool call it had already made.
 - `system`/`developer`-role chat items are not supported (the server's
   conversation store only accepts `assistant`/`user` items); they're silently
   dropped when syncing `update_chat_ctx()`. Use `instructions` for persistent
