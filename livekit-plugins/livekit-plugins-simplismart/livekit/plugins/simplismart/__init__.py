@@ -16,7 +16,8 @@
 
 Support for speech-to-text and text-to-speech with [SimpliSmart](https://simplismart.ai/).
 
-SimpliSmart provides high-quality STT and TTS for Indian languages.
+SimpliSmart hosts a range of STT and TTS models, including Whisper-based transcription
+and TTS models such as Orpheus and Qwen 3 TTS.
 
 For API access, visit https://simplismart.ai/
 """

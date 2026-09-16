@@ -3,10 +3,12 @@ import logging
 import os
 import queue
 import threading
+from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
 
 import riva.client
+from riva.client.proto.riva_asr_pb2 import SpeakerDiarizationConfig
 
 from livekit import rtc
 from livekit.agents import (
@@ -33,6 +35,8 @@ class STTOptions:
     sample_rate: int
     use_ssl: bool
     server: str
+    enable_diarization: bool
+    max_speaker_count: int
 
 
 class STT(stt.STT):
@@ -47,15 +51,25 @@ class STT(stt.STT):
         server: str = "grpc.nvcf.nvidia.com:443",
         use_ssl: bool = True,
         api_key: NotGivenOr[str] = NOT_GIVEN,
+        enable_diarization: bool = False,
+        max_speaker_count: int = 0,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
                 interim_results=True,
+                diarization=enable_diarization,
                 aligned_transcript="word",
                 offline_recognize=False,
             ),
         )
+
+        if enable_diarization and "sortformer" not in model:
+            logger.warning(
+                "Speaker diarization is enabled but model '%s' may not support it. "
+                "Diarization requires a Sortformer-based model.",
+                model,
+            )
 
         if is_given(api_key):
             self.nvidia_api_key = api_key
@@ -80,6 +94,8 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             server=server,
             use_ssl=use_ssl,
+            enable_diarization=enable_diarization,
+            max_speaker_count=max_speaker_count,
         )
 
     def _recognize_impl(
@@ -164,17 +180,26 @@ class SpeechStream(stt.SpeechStream):
             await self._done_fut
 
     def _create_streaming_config(self) -> riva.client.StreamingRecognitionConfig:
+        recognition_config = riva.client.RecognitionConfig(
+            encoding=riva.client.AudioEncoding.LINEAR_PCM,
+            language_code=self._language,
+            model=self._stt._opts.model,
+            max_alternatives=1,
+            enable_automatic_punctuation=self._stt._opts.punctuate,
+            sample_rate_hertz=self._stt._opts.sample_rate,
+            audio_channel_count=1,
+            enable_word_time_offsets=True,
+        )
+
+        if self._stt._opts.enable_diarization:
+            diarization_config = SpeakerDiarizationConfig(
+                enable_speaker_diarization=True,
+                max_speaker_count=self._stt._opts.max_speaker_count,
+            )
+            recognition_config.diarization_config.CopyFrom(diarization_config)
+
         return riva.client.StreamingRecognitionConfig(
-            config=riva.client.RecognitionConfig(
-                encoding=riva.client.AudioEncoding.LINEAR_PCM,
-                language_code=self._language,
-                model=self._stt._opts.model,
-                max_alternatives=1,
-                enable_automatic_punctuation=self._stt._opts.punctuate,
-                sample_rate_hertz=self._stt._opts.sample_rate,
-                audio_channel_count=1,
-                enable_word_time_offsets=True,
-            ),
+            config=recognition_config,
             interim_results=True,
         )
 
@@ -241,7 +266,7 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH),
                     )
 
-                speech_data = self._convert_to_speech_data(alternative)
+                speech_data = self._convert_to_speech_data(alternative, is_final=is_final)
 
                 if is_final:
                     self._event_loop.call_soon_threadsafe(
@@ -271,16 +296,23 @@ class SpeechStream(stt.SpeechStream):
         except Exception:
             logger.exception("Error handling response")
 
-    def _convert_to_speech_data(self, alternative) -> stt.SpeechData:
+    def _convert_to_speech_data(self, alternative, *, is_final: bool) -> stt.SpeechData:
         transcript = getattr(alternative, "transcript", "")
         confidence = getattr(alternative, "confidence", 0.0)
         words = getattr(alternative, "words", [])
 
         start_time = 0.0
         end_time = 0.0
+        speaker_id: str | None = None
         if words:
             start_time = getattr(words[0], "start_time", 0) / 1000.0 + self.start_time_offset
             end_time = getattr(words[-1], "end_time", 0) / 1000.0 + self.start_time_offset
+
+            if self._stt._opts.enable_diarization and is_final:
+                speaker_tags = [getattr(word, "speaker_tag", 0) for word in words]
+                if speaker_tags:
+                    speaker = Counter(speaker_tags).most_common(1)[0][0]
+                    speaker_id = f"S{speaker}"
 
         return stt.SpeechData(
             language=LanguageCode(self._language),
@@ -288,6 +320,7 @@ class SpeechStream(stt.SpeechStream):
             end_time=end_time,
             confidence=confidence,
             text=transcript,
+            speaker_id=speaker_id,
             words=[
                 TimedString(
                     text=getattr(word, "word", ""),

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-keywords = ["webrtc", "realtime", "audio", "video", "livekit", "speechify"]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "speechify", "tts"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3 :: Only",
 ]
-dependencies = ["livekit-agents[codecs]>=1.4.4"]
+dependencies = ["livekit-agents[codecs]>=1.8.2", "speechify-api>=4.0.0"]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -36,3 +36,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

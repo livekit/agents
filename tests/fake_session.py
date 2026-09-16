@@ -9,7 +9,11 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentSession,
+    EndpointingOptions,
+    InterruptionOptions,
     NotGivenOr,
+    RecordingOptions,
+    TurnHandlingOptions,
     utils,
 )
 from livekit.agents.llm import FunctionToolCall
@@ -29,17 +33,42 @@ def create_session(
     actions: FakeActions,
     *,
     speed_factor: float = 1.0,
+    turn_handling: TurnHandlingOptions | None = None,
     extra_kwargs: dict[str, Any] | None = None,
+    can_pause_audio: bool = False,
+    with_stt: bool = True,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
     tts_responses = actions.get_tts_responses(speed_factor=speed_factor)
 
-    stt = FakeSTT(fake_user_speeches=user_speeches)
+    extra = dict(extra_kwargs or {})
+    default_endpointing = EndpointingOptions(
+        min_delay=0.5 / speed_factor,
+        max_delay=6.0 / speed_factor,
+    )
+    default_interruption = InterruptionOptions(
+        min_duration=0.5 / speed_factor,
+        false_interruption_timeout=2.0 / speed_factor,
+    )
+    # allowing overriding default endpointing and interruption options
+    turn_handling = turn_handling or {}
+    # Use VAD-based endpointing by default. The AgentSession default is the
+    # turn-detector-v1-mini model; it runs locally but predicts end-of-turn from
+    # acoustic features, so it can't fire deterministically on synthetic test
+    # audio. Model accuracy is covered by the audio_eot suite instead.
+    turn_handling.setdefault("turn_detection", None)
+    turn_handling["endpointing"] = EndpointingOptions(
+        **{**default_endpointing, **turn_handling.get("endpointing", {})}
+    )
+    turn_handling["interruption"] = InterruptionOptions(
+        **{**default_interruption, **turn_handling.get("interruption", {})}
+    )
 
-    extra_kwargs = extra_kwargs or {}
-    if "aec_warmup_duration" not in extra_kwargs:
-        extra_kwargs["aec_warmup_duration"] = None  # disable aec warmup by default
+    stt = FakeSTT(fake_user_speeches=user_speeches) if with_stt else None
+
+    if "aec_warmup_duration" not in extra:
+        extra["aec_warmup_duration"] = None  # disable aec warmup by default
 
     session = AgentSession[None](
         vad=FakeVAD(
@@ -50,16 +79,13 @@ def create_session(
         stt=stt,
         llm=FakeLLM(fake_responses=llm_responses),
         tts=FakeTTS(fake_responses=tts_responses),
-        min_interruption_duration=0.5 / speed_factor,
-        min_endpointing_delay=0.5 / speed_factor,
-        max_endpointing_delay=6.0 / speed_factor,
-        false_interruption_timeout=2.0 / speed_factor,
-        **extra_kwargs,
+        turn_handling=turn_handling,
+        **extra,
     )
 
     # setup io with transcription sync
     audio_input = FakeAudioInput()
-    audio_output = FakeAudioOutput()
+    audio_output = FakeAudioOutput(can_pause=can_pause_audio)
     transcription_output = FakeTextOutput()
 
     transcript_sync = TranscriptSynchronizer(
@@ -70,27 +96,34 @@ def create_session(
     session.input.audio = audio_input
     session.output.audio = transcript_sync.audio_output
     session.output.transcription = transcript_sync.text_output
+
     return session
 
 
-async def run_session(session: AgentSession, agent: Agent, *, drain_delay: float = 0.2) -> float:
+async def run_session(
+    session: AgentSession,
+    agent: Agent,
+    *,
+    drain_delay: float = 5,
+    record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+) -> float:
     stt = session.stt
     audio_input = session.input.audio
-    assert isinstance(stt, FakeSTT)
     assert isinstance(audio_input, FakeAudioInput)
 
     transcription_sync: TranscriptSynchronizer | None = None
     if isinstance(session.output.audio, _SyncedAudioOutput):
         transcription_sync = session.output.audio._synchronizer
 
-    await session.start(agent)
+    await session.start(agent, record=record)
 
     # start the fake vad and stt
     t_origin = time.time()
     audio_input.push(0.1)
 
-    # wait for the user speeches to be processed
-    await stt.fake_user_speeches_done
+    if stt is not None:
+        assert isinstance(stt, FakeSTT)
+        await stt.fake_user_speeches_done
 
     await asyncio.sleep(drain_delay)
     with contextlib.suppress(RuntimeError):
@@ -108,7 +141,13 @@ class FakeActions:
         self._items: list[FakeUserSpeech | FakeLLMResponse | FakeTTSResponse] = []
 
     def add_user_speech(
-        self, start_time: float, end_time: float, transcript: str, *, stt_delay: float = 0.2
+        self,
+        start_time: float,
+        end_time: float,
+        transcript: str,
+        *,
+        stt_delay: float = 0.2,
+        final: bool = True,
     ) -> None:
         self._items.append(
             FakeUserSpeech(
@@ -116,6 +155,7 @@ class FakeActions:
                 end_time=end_time,
                 transcript=transcript,
                 stt_delay=stt_delay,
+                final=final,
             )
         )
 

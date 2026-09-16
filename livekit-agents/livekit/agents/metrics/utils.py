@@ -3,7 +3,16 @@ from __future__ import annotations
 import logging
 
 from ..log import logger as default_logger
-from .base import AgentMetrics, EOUMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TTSMetrics
+from .base import (
+    AgentMetrics,
+    AvatarMetrics,
+    EOUMetrics,
+    InterruptionMetrics,
+    LLMMetrics,
+    RealtimeModelMetrics,
+    STTMetrics,
+    TTSMetrics,
+)
 
 
 def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) -> None:
@@ -25,7 +34,9 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "ttft": round(metrics.ttft, 2),
                 "prompt_tokens": metrics.prompt_tokens,
                 "prompt_cached_tokens": metrics.prompt_cached_tokens,
+                "cache_creation_tokens": metrics.cache_creation_tokens,
                 "completion_tokens": metrics.completion_tokens,
+                "reasoning_tokens": metrics.reasoning_tokens,
                 "tokens_per_second": round(metrics.tokens_per_second, 2),
             },
         )
@@ -83,3 +94,25 @@ def log_metrics(metrics: AgentMetrics, *, logger: logging.Logger | None = None) 
                 "audio_duration": round(metrics.audio_duration, 2),
             },
         )
+    elif isinstance(metrics, InterruptionMetrics):
+        logger.info(
+            "Interruption metrics",
+            extra=metadata
+            | {
+                "total_duration": round(metrics.total_duration, 2),
+                "prediction_duration": round(metrics.prediction_duration, 2),
+                "detection_delay": round(metrics.detection_delay, 2),
+                "num_interruptions": metrics.num_interruptions,
+                "num_backchannels": metrics.num_backchannels,
+                "num_requests": metrics.num_requests,
+            },
+        )
+    elif isinstance(metrics, AvatarMetrics):
+        extra: dict[str, str | float] = {}
+        if metrics.session_started_time and metrics.avatar_joined_time:
+            extra["avatar_join_latency"] = round(
+                metrics.avatar_joined_time - metrics.session_started_time, 3
+            )
+        if metrics.playback_latency:
+            extra["playback_latency"] = round(metrics.playback_latency, 3)
+        logger.info("Avatar metrics", extra=metadata | extra)

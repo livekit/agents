@@ -17,6 +17,7 @@ class Interval:
         self._last_sleep = 0.0
         self._i = 0
         self._handler: asyncio.TimerHandle | None = None
+        self._fut: asyncio.Future[Any] | None = None
 
     def reset(self) -> None:
         if self._fut and self._handler and not self._handler.cancelled():

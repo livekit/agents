@@ -5,7 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import aiohttp
 
@@ -25,6 +25,8 @@ from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from .log import logger
 
 TTSModel = Literal[
+    "speech-2.8-hd",
+    "speech-2.8-turbo",
     "speech-2.6-hd",
     "speech-2.6-turbo",
     "speech-2.5-hd-preview",
@@ -191,8 +193,9 @@ class TTS(tts.TTS):
 
         Args:
             model (TTSModel | str, optional): The Minimax TTS model to use. Defaults to DEFAULT_MODEL.
-                Available models: speech-2.6-hd, speech-2.6-turbo, speech-2.5-hd-preview,
-                speech-2.5-turbo-preview, speech-02-hd, speech-02-turbo, speech-01-hd, speech-01-turbo.
+                Available models: speech-2.8-hd, speech-2.8-turbo, speech-2.6-hd, speech-2.6-turbo,
+                speech-2.5-hd-preview, speech-2.5-turbo-preview, speech-02-hd, speech-02-turbo,
+                speech-01-hd, speech-01-turbo.
             voice (TTSVoice | str, optional): The voice to use. Defaults to DEFAULT_VOICE_ID.
             emotion (TTSEmotion | None, optional): Emotion control for speech synthesis.
                 Options: "happy", "sad", "angry", "fearful", "disgusted", "surprised", "neutral", "fluent".
@@ -209,7 +212,7 @@ class TTS(tts.TTS):
             timbre (int | None, optional): Corresponds to the "Nasal/Crisp" slider on the official page. Range: [-100, 100].
             sample_rate (TTSSampleRate, optional): The audio sample rate in Hz. Defaults to 24000.
             bitrate (TTSBitRate, optional): The audio bitrate in kbps. Defaults to 128000.
-            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.basic.SentenceTokenizer`.
+            tokenizer (NotGivenOr[tokenize.SentenceTokenizer], optional): The sentence tokenizer to use. Defaults to `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
             text_pacing (tts.SentenceStreamPacer | bool, optional): Enable text pacing for sentence-level timing control. Defaults to False.
             api_key (str | None, optional): The Minimax API key. Defaults to None.
             base_url (NotGivenOr[str], optional): The base URL for the Minimax API. Defaults to NOT_GIVEN.
@@ -249,7 +252,7 @@ class TTS(tts.TTS):
             )
 
         self._sentence_tokenizer = (
-            tokenizer if utils.is_given(tokenizer) else tokenize.basic.SentenceTokenizer()
+            tokenizer if utils.is_given(tokenizer) else tokenize.blingfire.SentenceTokenizer()
         )
 
         self._stream_pacer: tts.SentenceStreamPacer | None = None
@@ -327,7 +330,7 @@ class TTS(tts.TTS):
             self._opts.text_normalization = text_normalization
 
         if utils.is_given(audio_format):
-            self._opts.audio_format = cast(TTSAudioFormat, audio_format)
+            self._opts.audio_format = audio_format
 
         if utils.is_given(pronunciation_dict):
             self._opts.pronunciation_dict = pronunciation_dict
@@ -480,7 +483,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     logger.error(
                         f"MiniMax WebSocket error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                        extra={"request_id": request_id, "full_response": data},
+                        extra={"request_id": request_id, "lk.pii.full_response": data},
                     )
 
                     raise APIStatusError(
@@ -513,14 +516,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
 
                 elif data.get("event") == "task_failed":
-                    error_msg = (
-                        f"MiniMax returned task failed (trace_id: {current_trace_id}): {msg.data}"
-                    )
-                    logger.error(error_msg)
+                    error_msg = f"MiniMax returned task failed (trace_id: {current_trace_id})"
+                    logger.error(error_msg, extra={"lk.pii.data": msg.data})
                     raise APIError(error_msg)
 
                 else:
-                    logger.warning(f"unexpected Minimax message: {msg.data}")
+                    logger.warning("unexpected Minimax message", extra={"lk.pii.data": msg.data})
 
         try:
             ws = await self._tts._connect_ws(self._conn_options.timeout)
@@ -630,7 +631,7 @@ class ChunkedStream(tts.ChunkedStream):
                     if not line:
                         continue
                     if not line.startswith("data:"):
-                        logger.warning("unexpected Minimax message: %s", line)
+                        logger.warning("unexpected Minimax message", extra={"lk.pii.data": line})
                         continue
 
                     data = json.loads(line[5:])
@@ -652,7 +653,7 @@ class ChunkedStream(tts.ChunkedStream):
 
                             logger.error(
                                 f"MiniMax HTTP stream error: code={status_code}, msg={status_msg}, trace_id={error_trace_id}",
-                                extra={"full_response": data},
+                                extra={"lk.pii.full_response": data},
                             )
 
                             raise APIStatusError(

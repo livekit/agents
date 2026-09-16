@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable, Awaitable
 from dataclasses import dataclass
@@ -11,8 +12,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
+from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
-from .chat_context import ChatContext, FunctionCall
+from ..utils import is_given
+from .chat_context import ChatContext, ChatItem, FunctionCall, MetricsMetadata
 from .tool_context import Tool, ToolChoice, ToolContext
 
 
@@ -56,16 +59,53 @@ class RealtimeModelError(BaseModel):
 @dataclass
 class RealtimeCapabilities:
     message_truncation: bool
+    """Whether generated assistant messages can be truncated after interruption"""
     turn_detection: bool
+    """Whether the model emits server-side speech start and stop events for turn taking"""
     user_transcription: bool
+    """Whether the model emits user audio transcription events"""
     auto_tool_reply_generation: bool
+    """Whether the model automatically generates a reply after receiving tool results"""
     audio_output: bool
+    """Whether the model can produce audio output directly"""
     manual_function_calls: bool
+    """Whether function call items already in the chat context can be resumed"""
+    can_disable_turn_detection: bool = False
+    """Whether server-side turn detection can be disabled for a session so the client drives
+    turn-taking. Set by plugins that implement ``session(turn_detection_disabled=True)``."""
+    supports_overlapping_speech: bool = False
+    """Whether the model and the caller may speak at once, the model deciding when to yield. The
+    framework then never holds the model's speech back for silence, nor cuts it when the caller
+    starts, so its output reaches the caller as it is generated"""
+    mutable_chat_context: bool = False
+    """Whether the chat context can be updated mid-session"""
+    mutable_instructions: bool = False
+    """Whether the instructions can be updated mid-session"""
+    mutable_tools: bool = False
+    """Whether the tools can be updated mid-session"""
+    per_response_tool_choice: bool = False
+    """Whether the tool and tool choice can be specified per response"""
+    supports_say: bool = False
+    """Whether session.say() can use the realtime session directly, without TTS.
+
+    When used through a RealtimeModel, add_to_chat_ctx=False is ignored and the
+    message is still added to the chat context.
+    """
 
 
 class RealtimeError(Exception):
-    def __init__(self, message: str) -> None:
+    """Error raised by a realtime session when a request fails.
+
+    Args:
+        message: Human-readable description of the failure.
+        code: Provider error code when the failure mirrors one (e.g. OpenAI's
+            ``conversation_already_has_active_response``), so callers can branch on it
+            programmatically; ``None`` when the error carries no provider code.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
+        self.code = code
 
 
 class RealtimeModel:
@@ -82,6 +122,11 @@ class RealtimeModel:
         return "unknown"
 
     @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        """Metadata used to label turn metrics emitted for this realtime model."""
+        return {"model_name": self.model, "model_provider": self.provider}
+
+    @property
     def capabilities(self) -> RealtimeCapabilities:
         return self._capabilities
 
@@ -90,7 +135,12 @@ class RealtimeModel:
         return self._label
 
     @abstractmethod
-    def session(self) -> RealtimeSession: ...
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a new session, optionally with server-side turn detection disabled.
+
+        ``turn_detection_disabled`` is honored only by plugins reporting
+        ``can_disable_turn_detection``; the model itself is left unchanged and reusable."""
+        ...
 
     @abstractmethod
     async def aclose(self) -> None: ...
@@ -114,6 +164,7 @@ EventTypes = Literal[
     "generation_created",
     "session_reconnected",
     "metrics_collected",
+    "remote_item_added",
     "error",
 ]
 
@@ -127,6 +178,15 @@ class InputTranscriptionCompleted:
     transcript: str
     """transcript of the input audio"""
     is_final: bool
+    confidence: float | None = None
+    """confidence score of the transcript (0.0 to 1.0), derived from model logprobs"""
+    turn_started_at: float | None = None
+    """When the turn this transcript belongs to began (``time.time()``).
+
+    A provider that withholds the final transcript until its reply has finished
+    generating should set this, so the user message can be placed on the session
+    timeline where the turn happened rather than where the transcript arrived.
+    """
 
 
 @dataclass
@@ -134,14 +194,49 @@ class RealtimeSessionReconnectedEvent:
     pass
 
 
+@dataclass
+class RemoteItemAddedEvent:
+    previous_item_id: str | None
+    item: ChatItem
+
+
 class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent]):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__()
         self._realtime_model = realtime_model
 
+    def _report_connection_acquired(self, acquire_time: float) -> None:
+        """Report connection timing as a RealtimeModelMetrics event with zero usage."""
+        from ..metrics.base import Metadata, RealtimeModelMetrics
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                request_id="",
+                timestamp=time.time(),
+                acquire_time=acquire_time,
+                connection_reused=False,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
+
     @property
     def realtime_model(self) -> RealtimeModel:
         return self._realtime_model
+
+    @property
+    def capabilities(self) -> RealtimeCapabilities:
+        """Capabilities of the session.
+
+        Defaults to the parent model's capabilities. Adapters that swap the underlying model
+        mid-session override this to report the currently active model's capabilities.
+        """
+        return self._realtime_model.capabilities
 
     @property
     @abstractmethod
@@ -176,6 +271,8 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]: ...  # can raise RealtimeError on Timeout
 
     # commit the input audio buffer to the server
@@ -204,6 +301,39 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
     @abstractmethod
     async def aclose(self) -> None: ...
 
+    async def _update_session(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        if is_given(instructions):
+            try:
+                await self.update_instructions(instructions)
+            except RealtimeError:
+                logger.exception("failed to update the instructions")
+
+        if is_given(chat_ctx):
+            try:
+                await self.update_chat_ctx(chat_ctx)
+            except RealtimeError:
+                logger.exception("failed to update the chat_ctx")
+
+        if is_given(tools):
+            try:
+                await self.update_tools(tools)
+            except RealtimeError:
+                logger.exception("failed to update the tools")
+
     def start_user_activity(self) -> None:
         """notifies the model that user activity has started"""
         pass
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement say(). use a TTS model instead"
+        )

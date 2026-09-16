@@ -20,6 +20,7 @@ import wave
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -255,7 +256,18 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        if self._opts.speech_endpoint:
+            endpoint = self._opts.speech_endpoint.strip()
+            parsed = urlparse(endpoint if "://" in endpoint else f"//{endpoint}")
+            location = parsed.hostname or endpoint
+        elif self._opts.region:
+            location = self._opts.region
+        else:
+            return "unknown"
+        model = f"{location}:{self._opts.voice}"
+        if self._opts.deployment_id:
+            model += f":{self._opts.deployment_id}"
+        return model
 
     @property
     def provider(self) -> str:

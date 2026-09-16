@@ -3,7 +3,8 @@ from typing import Literal, TypedDict
 
 from openai.types import AudioModel
 
-STTModels = AudioModel
+# AudioModel covers the transcriptions endpoint; these two are served only over realtime
+STTModels = AudioModel | Literal["gpt-live-transcribe", "gpt-realtime-whisper"]
 TTSModels = Literal["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 TTSVoices = Literal[
     "alloy",
@@ -19,6 +20,10 @@ TTSVoices = Literal[
 ]
 DalleModels = Literal["dall-e-2", "dall-e-3"]
 ChatModels = Literal[
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-chat-latest",
     "gpt-5.2",
     "gpt-5.2-chat-latest",
     "gpt-5.1",
@@ -57,6 +62,7 @@ ChatModels = Literal[
 RealtimeModels = Literal[
     "gpt-realtime",
     "gpt-realtime-1.5",
+    "gpt-realtime-2",
     "gpt-realtime-2025-08-28",
     "gpt-4o-realtime-preview",
 ]
@@ -104,15 +110,9 @@ NebiusChatModels = Literal[
 ]
 
 CerebrasChatModels = Literal[
-    "llama3.1-8b",
-    "llama-3.3-70b",
-    "llama-4-scout-17b-16e-instruct",
-    "llama-4-maverick-17b-128e-instruct",
-    "qwen-3-32b",
-    "qwen-3-235b-a22b-instruct-2507",
-    "qwen-3-235b-a22b-thinking-2507",
-    "qwen-3-coder-480b",
     "gpt-oss-120b",
+    "zai-glm-4.7",
+    "gemma-4-31b",
 ]
 
 PerplexityChatModels = Literal[
@@ -122,24 +122,6 @@ PerplexityChatModels = Literal[
     "llama-3.1-sonar-large-128k-chat",
     "llama-3.1-8b-instruct",
     "llama-3.1-70b-instruct",
-]
-
-GroqChatModels = Literal[
-    "llama-3.1-405b-reasoning",
-    "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile",
-    "llama3-groq-70b-8192-tool-use-preview",
-    "llama3-groq-8b-8192-tool-use-preview",
-    "llama-guard-3-8b",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
-    "mixtral-8x7b-32768",
-    "gemma-7b-it",
-    "gemma2-9b-it",
-]
-
-GroqAudioModels = Literal[
-    "whisper-large-v3", "distil-whisper-large-v3-en", "whisper-large-v3-turbo"
 ]
 
 DeepSeekChatModels = Literal[
@@ -184,17 +166,6 @@ CometAPIChatModels = Literal[
     # Qwen series
     "qwen3-30b-a3b",
     "qwen3-coder-plus-2025-07-22",
-]
-
-VertexModels = Literal[
-    "google/gemini-2.0-flash-exp",
-    "google/gemini-1.5-flash",
-    "google/gemini-1.5-pro",
-    "google/gemini-1.0-pro-vision",
-    "google/gemini-1.0-pro-vision-001",
-    "google/gemini-1.0-pro-002",
-    "google/gemini-1.0-pro-001",
-    "google/gemini-1.0-pro",
 ]
 
 TogetherChatModels = Literal[
@@ -309,6 +280,9 @@ SambaNovaChatModels = Literal[
 
 def _supports_reasoning_effort(model: ChatModels | str) -> bool:
     return model in [
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
         "gpt-5.2",
         "gpt-5.1",
         "gpt-5",

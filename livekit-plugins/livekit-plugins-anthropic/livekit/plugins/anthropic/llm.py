@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -56,6 +56,7 @@ class _LLMOptions:
     caching: NotGivenOr[Literal["ephemeral"]]
     top_k: NotGivenOr[int]
     max_tokens: NotGivenOr[int]
+    strict_tool_schema: bool
     """If set to "ephemeral", the system prompt, tools, and chat history will be cached."""
 
 
@@ -63,7 +64,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ChatModels = "claude-3-5-sonnet-20241022",
+        model: str | ChatModels = "claude-sonnet-4-6",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         user: NotGivenOr[str] = NOT_GIVEN,
@@ -74,6 +75,9 @@ class LLM(llm.LLM):
         parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         caching: NotGivenOr[Literal["ephemeral"]] = NOT_GIVEN,
+        timeout: NotGivenOr[httpx.Timeout] = NOT_GIVEN,
+        max_retries: NotGivenOr[int] = NOT_GIVEN,
+        _strict_tool_schema: bool = True,
     ) -> None:
         """
         Create a new instance of Anthropic LLM.
@@ -81,11 +85,19 @@ class LLM(llm.LLM):
         ``api_key`` must be set to your Anthropic API key, either using the argument or by setting
         the ``ANTHROPIC_API_KEY`` environmental variable.
 
-        model (str | ChatModels): The model to use. Defaults to "claude-3-5-sonnet-20241022".
+        model (str | ChatModels): The model to use. Defaults to "claude-sonnet-4-6".
         api_key (str, optional): The Anthropic API key. Defaults to the ANTHROPIC_API_KEY environment variable.
         base_url (str, optional): The base URL for the Anthropic API. Defaults to None.
         user (str, optional): The user for the Anthropic API. Defaults to None.
         client (anthropic.AsyncClient | None): The Anthropic client to use. Defaults to None.
+        max_retries (int, optional): Vendor client retries. Defaults to 0 because the framework
+            owns retries via ``conn_options``.
+        timeout (httpx.Timeout | None): HTTP timeout configuration for the underlying httpx client.
+            Defaults to ``httpx.Timeout(5.0, read=30.0)``, which keeps a tight connect timeout
+            while allowing up to 30 s between streamed chunks — long enough for Claude's
+            adaptive-thinking phases without masking genuine network stalls.
+            Pass a custom ``httpx.Timeout`` to override (e.g. ``httpx.Timeout(5.0, read=60.0)``
+            for very large contexts or extended thinking budgets).
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
@@ -103,6 +115,7 @@ class LLM(llm.LLM):
             caching=caching,
             top_k=top_k,
             max_tokens=max_tokens,
+            strict_tool_schema=_strict_tool_schema,
         )
         anthropic_api_key = api_key if is_given(api_key) else os.environ.get("ANTHROPIC_API_KEY")
         if not anthropic_api_key:
@@ -114,8 +127,9 @@ class LLM(llm.LLM):
         self._client = client or anthropic.AsyncClient(
             api_key=anthropic_api_key,
             base_url=base_url if is_given(base_url) else None,
+            max_retries=max_retries if is_given(max_retries) else 0,
             http_client=httpx.AsyncClient(
-                timeout=5.0,
+                timeout=timeout or httpx.Timeout(5.0, read=30.0),
                 follow_redirects=True,
                 limits=httpx.Limits(
                     max_connections=1000,
@@ -124,6 +138,9 @@ class LLM(llm.LLM):
                 ),
             ),
         )
+
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list(limit=1)
 
     @property
     def model(self) -> str:
@@ -164,7 +181,9 @@ class LLM(llm.LLM):
             from .tools import AnthropicTool
 
             tool_ctx = llm.ToolContext(tools)
-            tool_schemas = tool_ctx.parse_function_tools("anthropic")
+            tool_schemas = tool_ctx.parse_function_tools(
+                "anthropic", strict=self._opts.strict_tool_schema
+            )
 
             for tool in tool_ctx.provider_tools:
                 if isinstance(tool, AnthropicTool):
@@ -174,9 +193,7 @@ class LLM(llm.LLM):
 
             extra["tools"] = tool_schemas
 
-            tool_choice = (
-                cast(ToolChoice, tool_choice) if is_given(tool_choice) else self._opts.tool_choice
-            )
+            tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
             if is_given(tool_choice):
                 anthropic_tool_choice: dict[str, Any] | None = {"type": "auto"}
                 if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
@@ -234,27 +251,31 @@ class LLM(llm.LLM):
                     content[-1]["cache_control"] = CACHE_CONTROL_EPHEMERAL  # type: ignore
                     break
 
-        if beta_flag:
-            stream = self._client.beta.messages.create(
-                betas=[beta_flag],
-                messages=messages,  # type: ignore[arg-type]
-                model=self._opts.model,
-                stream=True,
-                timeout=conn_options.timeout,
-                **extra,
-            )
-        else:
-            stream = self._client.messages.create(
-                messages=messages,
-                model=self._opts.model,
-                stream=True,
-                timeout=conn_options.timeout,
-                **extra,
-            )
+        async def create_anthropic_stream() -> anthropic.AsyncStream[
+            anthropic.types.RawMessageStreamEvent
+        ]:
+            if beta_flag:
+                stream = await self._client.beta.messages.create(
+                    betas=[beta_flag],
+                    messages=messages,  # type: ignore[arg-type]
+                    model=self._opts.model,
+                    stream=True,
+                    timeout=conn_options.timeout,
+                    **extra,
+                )
+            else:
+                stream = await self._client.messages.create(
+                    messages=messages,
+                    model=self._opts.model,
+                    stream=True,
+                    timeout=conn_options.timeout,
+                    **extra,
+                )
+            return cast(anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent], stream)
 
         return LLMStream(
             self,
-            anthropic_stream=stream,  # type: ignore[arg-type]
+            create_anthropic_stream=create_anthropic_stream,
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
@@ -266,16 +287,15 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        anthropic_stream: Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]],
+        create_anthropic_stream: Callable[
+            [], Awaitable[anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent]]
+        ],
         chat_ctx: llm.ChatContext,
         tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
-        self._awaitable_anthropic_stream = anthropic_stream
-        self._anthropic_stream: (
-            anthropic.AsyncStream[anthropic.types.RawMessageStreamEvent] | None
-        ) = None
+        self._create_anthropic_stream = create_anthropic_stream
 
         # current function call that we're waiting for full completion (args are streamed)
         self._tool_call_id: str | None = None
@@ -292,10 +312,7 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            if not self._anthropic_stream:
-                self._anthropic_stream = await self._awaitable_anthropic_stream
-
-            async with self._anthropic_stream as stream:
+            async with await self._create_anthropic_stream() as stream:
                 async for event in stream:
                     chat_chunk = self._parse_event(event)
                     if chat_chunk is not None:

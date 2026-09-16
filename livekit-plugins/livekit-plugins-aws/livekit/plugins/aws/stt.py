@@ -16,6 +16,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,8 +36,10 @@ from .log import logger
 from .utils import DEFAULT_REGION
 
 try:
-    from aws_sdk_transcribe_streaming.client import TranscribeStreamingClient
-    from aws_sdk_transcribe_streaming.config import Config
+    from aws_sdk_transcribe_streaming.client import (
+        AsyncTranscribeStreamingClient as TranscribeStreamingClient,
+    )
+    from aws_sdk_transcribe_streaming.config import AsyncTranscribeStreamingConfig as Config
     from aws_sdk_transcribe_streaming.models import (
         AudioEvent,
         AudioStream,
@@ -73,7 +76,7 @@ class Credentials:
 @dataclass
 class STTOptions:
     sample_rate: int
-    language: LanguageCode
+    language: LanguageCode | None
     encoding: str
     vocabulary_name: NotGivenOr[str]
     session_id: NotGivenOr[str]
@@ -86,6 +89,12 @@ class STTOptions:
     partial_results_stability: NotGivenOr[str]
     language_model_name: NotGivenOr[str]
     region: str
+    identify_language: bool
+    identify_multiple_languages: bool
+    language_options: NotGivenOr[str]
+    preferred_language: NotGivenOr[str]
+    vocabulary_names: NotGivenOr[str]
+    vocabulary_filter_names: NotGivenOr[str]
 
 
 class STT(stt.STT):
@@ -94,7 +103,7 @@ class STT(stt.STT):
         *,
         region: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        language: str = "en-US",
+        language: str | None = "en-US",
         encoding: str = "pcm",
         vocabulary_name: NotGivenOr[str] = NOT_GIVEN,
         session_id: NotGivenOr[str] = NOT_GIVEN,
@@ -107,6 +116,12 @@ class STT(stt.STT):
         partial_results_stability: NotGivenOr[str] = NOT_GIVEN,
         language_model_name: NotGivenOr[str] = NOT_GIVEN,
         credentials: NotGivenOr[Credentials] = NOT_GIVEN,
+        identify_language: bool = False,
+        identify_multiple_languages: bool = False,
+        language_options: NotGivenOr[str] = NOT_GIVEN,
+        preferred_language: NotGivenOr[str] = NOT_GIVEN,
+        vocabulary_names: NotGivenOr[str] = NOT_GIVEN,
+        vocabulary_filter_names: NotGivenOr[str] = NOT_GIVEN,
     ):
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -126,8 +141,19 @@ class STT(stt.STT):
         if not is_given(region):
             region = os.getenv("AWS_REGION") or DEFAULT_REGION
 
+        if identify_language and identify_multiple_languages:
+            raise ValueError(
+                "identify_language and identify_multiple_languages are mutually exclusive. "
+                "Set only one to True."
+            )
+
+        # When auto language detection is enabled, language_code must not be set
+        lang: LanguageCode | None = None
+        if not identify_language and not identify_multiple_languages:
+            lang = LanguageCode(language) if language else LanguageCode("en-US")
+
         self._config = STTOptions(
-            language=LanguageCode(language),
+            language=lang,
             sample_rate=sample_rate,
             encoding=encoding,
             vocabulary_name=vocabulary_name,
@@ -141,6 +167,12 @@ class STT(stt.STT):
             partial_results_stability=partial_results_stability,
             language_model_name=language_model_name,
             region=region,
+            identify_language=identify_language,
+            identify_multiple_languages=identify_multiple_languages,
+            language_options=language_options,
+            preferred_language=preferred_language,
+            vocabulary_names=vocabulary_names,
+            vocabulary_filter_names=vocabulary_filter_names,
         )
 
         self._credentials = credentials if is_given(credentials) else None
@@ -194,10 +226,23 @@ class SpeechStream(stt.SpeechStream):
         super().__init__(stt=stt, conn_options=conn_options, sample_rate=opts.sample_rate)
         self._opts = opts
         self._credentials = credentials
-        self._http_client = AWSCRTHTTPClient()
+        self._http_client: AWSCRTHTTPClient | None = None
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        if self._http_client is not None:
+            await self._http_client.close()
 
     async def _run(self) -> None:
         while True:
+            # a restarted attempt needs its own transport: the pooled HTTP/2 connection
+            # of the finished stream cannot carry a second StartStreamTranscription
+            if self._http_client is not None:
+                await self._http_client.close()
+            self._http_client = AWSCRTHTTPClient()
+
             config_kwargs: dict[str, Any] = {"region": self._opts.region}
             if self._credentials:
                 # Use a credentials resolver for explicit credentials
@@ -227,11 +272,10 @@ class SpeechStream(stt.SpeechStream):
                 )
 
             client: TranscribeStreamingClient = TranscribeStreamingClient(
-                config=Config(**config_kwargs)
+                config=await Config.resolve(transport=self._http_client, **config_kwargs)
             )
 
             live_config = {
-                "language_code": self._opts.language,
                 "media_sample_rate_hertz": self._opts.sample_rate,
                 "media_encoding": self._opts.encoding,
                 "vocabulary_name": self._opts.vocabulary_name,
@@ -245,7 +289,40 @@ class SpeechStream(stt.SpeechStream):
                 "partial_results_stability": self._opts.partial_results_stability,
                 "language_model_name": self._opts.language_model_name,
             }
-            filtered_config = {k: v for k, v in live_config.items() if v and is_given(v)}
+
+            # Auto language detection is mutually exclusive with language_code
+            if self._opts.identify_language:
+                live_config["identify_language"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            elif self._opts.identify_multiple_languages:
+                live_config["identify_multiple_languages"] = True
+                if is_given(self._opts.language_options):
+                    live_config["language_options"] = self._opts.language_options
+                if is_given(self._opts.preferred_language):
+                    live_config["preferred_language"] = self._opts.preferred_language
+                if is_given(self._opts.vocabulary_names):
+                    live_config["vocabulary_names"] = self._opts.vocabulary_names
+                if is_given(self._opts.vocabulary_filter_names):
+                    live_config["vocabulary_filter_names"] = self._opts.vocabulary_filter_names
+            else:
+                if self._opts.language:
+                    live_config["language_code"] = self._opts.language
+
+            filtered_config: dict[str, Any] = {}
+            for k, v in live_config.items():
+                if isinstance(v, bool):
+                    filtered_config[k] = v
+                elif isinstance(v, (int, float)):
+                    filtered_config[k] = v
+                elif v is not None and is_given(v):
+                    filtered_config[k] = v
 
             tasks: list[asyncio.Task[Any]] = []
 
@@ -268,7 +345,12 @@ class SpeechStream(stt.SpeechStream):
                                         value=AudioEvent(audio_chunk=frame.data.tobytes())
                                     )
                                 )
+                                self._audio_duration += frame.duration
+                                self._maybe_emit_recognition_usage()
+                            elif isinstance(frame, self._FlushSentinel):
+                                self._emit_recognition_usage()
                     finally:
+                        self._emit_recognition_usage()
                         # Send empty frame to close (required by AWS Transcribe)
                         try:
                             await audio_stream.send(
@@ -331,10 +413,33 @@ class SpeechStream(stt.SpeechStream):
                         await asyncio.wait_for(tasks[1], timeout=3.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         await utils.aio.gracefully_cancel(tasks[1])
+                    except BadRequestException:
+                        # Already handled above (e.g. idle-timeout retry). Swallow so
+                        # re-awaiting the failed task here cannot override `continue`.
+                        pass
 
                 # Ensure gather future is retrieved to avoid "exception never retrieved"
                 with contextlib.suppress(Exception):
                     await gather_future
+
+    def _maybe_emit_recognition_usage(self) -> None:
+        if time.monotonic() - self._last_audio_duration_report_time >= 5.0:
+            self._emit_recognition_usage()
+
+    def _emit_recognition_usage(self) -> None:
+        if self._audio_duration <= 0.0:
+            return
+
+        audio_duration = self._audio_duration
+        self._audio_duration = 0.0
+        self._last_audio_duration_report_time = time.monotonic()
+        with contextlib.suppress(utils.aio.ChanClosed):
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.RECOGNITION_USAGE,
+                    recognition_usage=stt.RecognitionUsage(audio_duration=audio_duration),
+                )
+            )
 
     def _process_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         if not transcript_event.transcript or not transcript_event.transcript.results:
@@ -372,12 +477,22 @@ class SpeechStream(stt.SpeechStream):
         if resp.alternatives and (items := resp.alternatives[0].items):
             confidence = items[0].confidence or 0.0
 
+        detected_lang = resp.language_code or self._opts.language or "en-US"
+
+        # Populate source_languages when language identification is active
+        source_languages: list[LanguageCode] | None = None
+        if (
+            self._opts.identify_language or self._opts.identify_multiple_languages
+        ) and resp.language_code:
+            source_languages = [LanguageCode(resp.language_code)]
+
         return stt.SpeechData(
-            language=LanguageCode(resp.language_code or self._opts.language),
+            language=LanguageCode(detected_lang),
             start_time=(resp.start_time or 0.0) + self.start_time_offset,
             end_time=(resp.end_time or 0.0) + self.start_time_offset,
             text=resp.alternatives[0].transcript if resp.alternatives else "",
             confidence=confidence,
+            source_languages=source_languages,
             words=[
                 TimedString(
                     text=item.content,

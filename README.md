@@ -38,7 +38,7 @@ agents that can see, hear, and understand.
 - **Telephony integration**: Works seamlessly with LiveKit's [telephony stack](https://docs.livekit.io/sip/), allowing your agent to make calls to or receive calls from phones.
 - **Exchange data with clients**: Use [RPCs](https://docs.livekit.io/home/client/data/rpc/) and other [Data APIs](https://docs.livekit.io/home/client/data/) to seamlessly exchange data with clients.
 - **Semantic turn detection**: Uses a transformer model to detect when a user is done with their turn, helps to reduce interruptions.
-- **MCP support**: Native support for MCP. Integrate tools provided by MCP servers with one loc.
+- **MCP support**: Native support for MCP. Integrate tools provided by MCP servers with one line of code.
 - **Builtin test framework**: Write tests and use judges to ensure your agent is performing as expected.
 - **Open-source**: Fully open-source, allowing you to run the entire stack on your own servers, including [LiveKit server](https://github.com/livekit/livekit), one of the most widely used WebRTC media servers.
 
@@ -47,7 +47,7 @@ agents that can see, hear, and understand.
 To install the core Agents library, along with plugins for popular model providers:
 
 ```bash
-pip install "livekit-agents[openai,silero,deepgram,cartesia,turn-detector]~=1.4"
+pip install "livekit-agents[openai,deepgram,cartesia]"
 ```
 
 ## Docs and guides
@@ -92,7 +92,6 @@ from livekit.agents import (
     function_tool,
     inference,
 )
-from livekit.plugins import silero
 
 
 @function_tool
@@ -111,7 +110,7 @@ server = AgentServer()
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         # any combination of STT, LLM, TTS, or realtime API can be used
         # this example shows LiveKit Inference, a unified API to access different models via LiveKit Cloud
         # to use model provider keys directly, replace with the following:
@@ -120,7 +119,7 @@ async def entrypoint(ctx: JobContext):
         # llm=openai.LLM(model="gpt-4.1-mini"),
         # tts=cartesia.TTS(model="sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         stt=inference.STT("deepgram/nova-3", language="multi"),
-        llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("google/gemma-4-31b-it"),  # low-latency gemma, hosted on LiveKit
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
@@ -147,7 +146,7 @@ You'll need the following environment variables for this example:
 
 ---
 
-This code snippet is abbreviated. For the full example, see [multi_agent.py](examples/voice_agents/multi_agent.py)
+This code snippet is abbreviated. For the full example, see the [LiveKit docs](https://docs.livekit.io/agents/handoffs/)
 
 ```python
 ...
@@ -186,7 +185,7 @@ class StoryAgent(Agent):
     def __init__(self, name: str, location: str) -> None:
         super().__init__(
             instructions=f"You are a storyteller. Use the user's information in order to make the story personalized."
-            f"The user's name is {name}, from {location}"
+            f"The user's name is {name}, from {location}",
             # override the default model, switching to Realtime API from standard LLMs
             llm=openai.realtime.RealtimeModel(voice="echo"),
             chat_ctx=chat_ctx,
@@ -200,9 +199,9 @@ class StoryAgent(Agent):
 async def entrypoint(ctx: JobContext):
     userdata = StoryData()
     session = AgentSession[StoryData](
-        vad=silero.VAD.load(),
+        vad=inference.VAD(),
         stt="deepgram/nova-3",
-        llm="openai/gpt-4.1-mini",
+        llm="google/gemma-4-31b-it",  # low-latency gemma, hosted on LiveKit
         tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         userdata=userdata,
     )
@@ -222,7 +221,7 @@ Automated tests are essential for building reliable agents, especially with the 
 @pytest.mark.asyncio
 async def test_no_availability() -> None:
     llm = google.LLM()
-    async AgentSession(llm=llm) as sess:
+    async with AgentSession(llm=llm) as sess:
         await sess.start(MyAgent())
         result = await sess.run(
             user_input="Hello, I need to place an order."
@@ -240,6 +239,8 @@ async def test_no_availability() -> None:
 
 ## Examples
 
+For more examples and detailed setup instructions, see the [examples directory](examples/). For even more examples, see the [python-agents-examples](https://github.com/livekit-examples/python-agents-examples) repository.
+
 <table>
 <tr>
 <td width="50%">
@@ -250,44 +251,10 @@ async def test_no_availability() -> None:
 </p>
 </td>
 <td width="50%">
-<h3>🔄 Multi-user push to talk</h3>
-<p>Responds to multiple users in the room via push-to-talk.</p>
-<p>
-<a href="examples/voice_agents/push_to_talk.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
-<h3>🎵 Background audio</h3>
-<p>Background ambient and thinking audio to improve realism.</p>
-<p>
-<a href="examples/voice_agents/background_audio.py">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>🛠️ Dynamic tool creation</h3>
-<p>Creating function tools dynamically.</p>
-<p>
-<a href="examples/voice_agents/dynamic_tool_creation.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
 <h3>☎️ Outbound caller</h3>
 <p>Agent that makes outbound phone calls</p>
 <p>
 <a href="https://github.com/livekit-examples/outbound-caller-python">Code</a>
-</p>
-</td>
-<td width="50%">
-<h3>📋 Structured output</h3>
-<p>Using structured output from LLM to guide TTS tone.</p>
-<p>
-<a href="examples/voice_agents/structured_output.py">Code</a>
 </p>
 </td>
 </tr>
@@ -301,37 +268,20 @@ async def test_no_availability() -> None:
 </p>
 </td>
 <td width="50%">
-<h3>💬 Text-only agent</h3>
-<p>Skip voice altogether and use the same code for text-only integrations</p>
-<p>
-<a href="examples/other/text_only.py">Code</a>
-</p>
-</td>
-</tr>
-
-<tr>
-<td width="50%">
 <h3>📝 Multi-user transcriber</h3>
 <p>Produce transcriptions from all users in the room</p>
 <p>
 <a href="examples/other/transcription/multi-user-transcriber.py">Code</a>
 </p>
 </td>
-<td width="50%">
-<h3>🎥 Video avatars</h3>
-<p>Add an AI avatar with Tavus, Hedra, Bithuman, LemonSlice, and more</p>
-<p>
-<a href="examples/avatar_agents/">Code</a>
-</p>
-</td>
 </tr>
 
 <tr>
 <td width="50%">
-<h3>🍽️ Restaurant ordering and reservations</h3>
-<p>Full example of an agent that handles calls for a restaurant.</p>
+<h3>🎥 Video avatars</h3>
+<p>Add an AI avatar with Tavus, Bithuman, LemonSlice, and more</p>
 <p>
-<a href="examples/voice_agents/restaurant_agent.py">Code</a>
+<a href="examples/avatar/">Code</a>
 </p>
 </td>
 <td width="50%">
@@ -380,20 +330,72 @@ python myagent.py start
 
 Runs the agent with production-ready optimizations.
 
+## License
+
+The Agents framework is licensed under [Apache-2.0](LICENSE). The LiveKit turn detection models are licensed under the [LiveKit Model License](MODEL_LICENSE).
+
 ## Contributing
 
-The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in LiveKit's [Slack community](https://livekit.io/join-slack).
+The Agents framework is under active development in a rapidly evolving field. We welcome and appreciate contributions of any kind, be it feedback, bugfixes, features, new plugins and tools, or better documentation. You can file issues under this repo, open a PR, or chat with us in the [LiveKit community](https://docs.livekit.io/intro/community/).
+
+### Development setup
+
+This project uses [uv](https://docs.astral.sh/uv/) for package management. To install dependencies for development:
+
+```shell
+uv sync --all-extras --dev
+```
+
+### Examples
+
+This project includes many examples in the [`examples`](examples/) directory. To run them, create the file `examples/.env` with credentials for LiveKit Server and any necessary model providers (see `examples/.env.example`), then run:
+
+```shell
+uv run examples/voice_agents/basic_agent.py dev
+```
+
+For more information, see the [examples README](examples/README.md).
+
+### Tests
+
+Unit tests are in the `tests` directory and can be run with:
+
+```shell
+uv run pytest --unit
+```
+
+Integration tests for each plugin require various API credentials and run automatically in GitHub CI for PRs submitted by project maintainers. See the [tests workflow](.github/workflows/tests.yml) for details.
+
+### Formatting
+
+This project uses [ruff](https://github.com/astral-sh/ruff) for formatting and linting:
+
+```shell
+uv run ruff format
+uv run ruff check --fix
+```
+
+### Documentation
+
+To generate docs locally with [pdoc](https://github.com/pdoc3/pdoc):
+
+```shell
+uv sync --all-extras --group docs
+uv run --active pdoc --skip-errors --html --output-dir=docs livekit
+```
 
 <!--BEGIN_REPO_NAV-->
 <br/><table>
 <thead><tr><th colspan="2">LiveKit Ecosystem</th></tr></thead>
 <tbody>
-<tr><td>LiveKit SDKs</td><td><a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">iOS/macOS/visionOS</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (WebGL)</a> · <a href="https://github.com/livekit/client-sdk-esp32">ESP32</a></td></tr><tr></tr>
-<tr><td>Server APIs</td><td><a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/server-sdk-go">Golang</a> · <a href="https://github.com/livekit/server-sdk-ruby">Ruby</a> · <a href="https://github.com/livekit/server-sdk-kotlin">Java/Kotlin</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/agence104/livekit-server-sdk-php">PHP (community)</a> · <a href="https://github.com/pabloFuente/livekit-server-sdk-dotnet">.NET (community)</a></td></tr><tr></tr>
+<tr><td>Agents SDKs</td><td><b>Python</b> · <a href="https://github.com/livekit/agents-js">Node.js</a></td></tr><tr></tr>
+<tr><td>LiveKit SDKs</td><td><a href="https://github.com/livekit/client-sdk-js">Browser</a> · <a href="https://github.com/livekit/client-sdk-swift">Swift</a> · <a href="https://github.com/livekit/client-sdk-android">Android</a> · <a href="https://github.com/livekit/client-sdk-flutter">Flutter</a> · <a href="https://github.com/livekit/client-sdk-react-native">React Native</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/client-sdk-unity">Unity</a> · <a href="https://github.com/livekit/client-sdk-unity-web">Unity (WebGL)</a> · <a href="https://github.com/livekit/client-sdk-esp32">ESP32</a> · <a href="https://github.com/livekit/client-sdk-cpp">C++</a></td></tr><tr></tr>
+<tr><td>Starter Apps</td><td><a href="https://github.com/livekit-examples/agent-starter-python">Python Agent</a> · <a href="https://github.com/livekit-examples/agent-starter-node">TypeScript Agent</a> · <a href="https://github.com/livekit-examples/agent-starter-react">React App</a> · <a href="https://github.com/livekit-examples/agent-starter-swift">SwiftUI App</a> · <a href="https://github.com/livekit-examples/agent-starter-android">Android App</a> · <a href="https://github.com/livekit-examples/agent-starter-flutter">Flutter App</a> · <a href="https://github.com/livekit-examples/agent-starter-react-native">React Native App</a> · <a href="https://github.com/livekit-examples/agent-starter-embed">Web Embed</a></td></tr><tr></tr>
 <tr><td>UI Components</td><td><a href="https://github.com/livekit/components-js">React</a> · <a href="https://github.com/livekit/components-android">Android Compose</a> · <a href="https://github.com/livekit/components-swift">SwiftUI</a> · <a href="https://github.com/livekit/components-flutter">Flutter</a></td></tr><tr></tr>
-<tr><td>Agents Frameworks</td><td><b>Python</b> · <a href="https://github.com/livekit/agents-js">Node.js</a> · <a href="https://github.com/livekit/agent-playground">Playground</a></td></tr><tr></tr>
-<tr><td>Services</td><td><a href="https://github.com/livekit/livekit">LiveKit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
-<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://github.com/livekit-examples">Example apps</a> · <a href="https://livekit.io/cloud">Cloud</a> · <a href="https://docs.livekit.io/home/self-hosting/deployment">Self-hosting</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a></td></tr>
+<tr><td>Server APIs</td><td><a href="https://github.com/livekit/node-sdks">Node.js</a> · <a href="https://github.com/livekit/server-sdk-go">Golang</a> · <a href="https://github.com/livekit/server-sdk-ruby">Ruby</a> · <a href="https://github.com/livekit/server-sdk-kotlin">Java/Kotlin</a> · <a href="https://github.com/livekit/python-sdks">Python</a> · <a href="https://github.com/livekit/rust-sdks">Rust</a> · <a href="https://github.com/agence104/livekit-server-sdk-php">PHP (community)</a> · <a href="https://github.com/pabloFuente/livekit-server-sdk-dotnet">.NET (community)</a></td></tr><tr></tr>
+<tr><td>Resources</td><td><a href="https://docs.livekit.io">Docs</a> · <a href="https://docs.livekit.io/mcp">Docs MCP Server</a> · <a href="https://github.com/livekit/livekit-cli">CLI</a> · <a href="https://cloud.livekit.io">LiveKit Cloud</a></td></tr><tr></tr>
+<tr><td>LiveKit Server OSS</td><td><a href="https://github.com/livekit/livekit">LiveKit server</a> · <a href="https://github.com/livekit/egress">Egress</a> · <a href="https://github.com/livekit/ingress">Ingress</a> · <a href="https://github.com/livekit/sip">SIP</a></td></tr><tr></tr>
+<tr><td>Community</td><td><a href="https://community.livekit.io">Developer Community</a> · <a href="https://livekit.io/join-slack">Slack</a> · <a href="https://x.com/livekit">X</a> · <a href="https://www.youtube.com/@livekit_io">YouTube</a></td></tr>
 </tbody>
 </table>
 <!--END_REPO_NAV-->

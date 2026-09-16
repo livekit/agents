@@ -196,12 +196,24 @@ class TTS(tts.TTS):
             language (str, optional): The language code for synthesis. Defaults to "en".
             voice (str, optional): The voice ID.
         """
+        connection_params_changed = False
         if is_given(model):
             self._opts.model = model
+            connection_params_changed = True
         if is_given(language):
             self._opts.language = language
+            connection_params_changed = True
         if is_given(voice):
             self._opts.voice = cast(str | list[float], voice)
+            connection_params_changed = True
+
+        if connection_params_changed:
+            # model, voice and language are sent once, in the init payload _connect_ws
+            # writes immediately after the handshake, so a pooled connection keeps
+            # synthesising with the previous settings. mark_refreshed_on_get=True resets
+            # max_session_duration on every acquire, so under steady use that connection
+            # can outlive the change indefinitely.
+            self._pool.invalidate()
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -312,14 +324,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         b64data = base64.b64decode(audio)
                         output_emitter.push(b64data)
                     except Exception:
-                        logger.warning("invalid audio payload %s", data)
+                        logger.warning("invalid audio payload", extra={"lk.pii.data": data})
                         continue
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         async_context_id = str(uuid.uuid4())
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, async_context_id)),

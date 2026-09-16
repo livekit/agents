@@ -5,19 +5,17 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ... import llm, stt, tts, vad
+from ...llm.chat_context import Instructions
 from ...llm.tool_context import ToolError, ToolFlag, function_tool
+from ...log import logger
 from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
-from ...voice.speech_handle import SpeechHandle
+from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
-    from ...voice.audio_recognition import TurnDetectionMode
-
-EMAIL_REGEX = (
-    r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
-)
+    from ...voice.turn import TurnDetectionMode
 
 
 @dataclass
@@ -28,7 +26,8 @@ class GetEmailResult:
 class GetEmailTask(AgentTask[GetEmailResult]):
     def __init__(
         self,
-        extra_instructions: str = "",
+        *,
+        instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
@@ -38,39 +37,38 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         tts: NotGivenOr[tts.TTS | None] = NOT_GIVEN,
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
+        require_explicit_ask: bool = False,
+        # deprecated
+        extra_instructions: str = "",
     ) -> None:
+        if not is_given(instructions):
+            instructions = WorkflowInstructions(persona=PERSONA, extra=extra_instructions)
+        elif extra_instructions:
+            logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
+
+        if isinstance(instructions, WorkflowInstructions):
+            instructions = instructions.resolve(
+                template=INSTRUCTIONS_TEMPLATE,
+                default_persona=PERSONA,
+                _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
+                _confirmation=Instructions(
+                    # confirmation is enabled by default for audio, disabled by default for text
+                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
+                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+                ),
+            )
+
+        assert isinstance(instructions, (str, Instructions))  # for type checking
+        self._current_email = ""
+        self._spell_read_back = False
+        self._require_confirmation = require_confirmation
+        self._require_explicit_ask = require_explicit_ask
+
         super().__init__(
-            instructions=(
-                "You are only a single step in a broader system, responsible solely for capturing an email address.\n"
-                "Handle input as noisy voice transcription. Expect that users will say emails aloud with formats like:\n"
-                "- 'john dot doe at gmail dot com'\n"
-                "- 'susan underscore smith at yahoo dot co dot uk'\n"
-                "- 'dave dash b at protonmail dot com'\n"
-                "- 'jane at example' (partial—prompt for the domain)\n"
-                "- 'theo t h e o at livekit dot io' (name followed by spelling)\n"
-                "Normalize common spoken patterns silently:\n"
-                "- Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.\n"
-                "- Convert 'at' to `@`.\n"
-                "- Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.\n"
-                "- Filter out filler words or hesitations.\n"
-                "- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).\n"
-                "Don't mention corrections. Treat inputs as possibly imperfect but fix them silently.\n"
-                "Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. "
-                "(before asking any questions or providing any answers.) \n"
-                "Don't invent new email addresses, stick strictly to what the user said. \n"
-                + (
-                    "Call `confirm_email_address` after the user confirmed the email address is correct. \n"
-                    if require_confirmation is not False
-                    else ""
-                )
-                + "If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed. \n"
-                "Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary. \n"
-                "Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called."
-                + extra_instructions
-            ),
+            instructions=instructions,
             chat_ctx=chat_ctx,
             turn_detection=turn_detection,
-            tools=tools or [],
+            tools=[*(tools or []), self._build_update_email_tool()],
             stt=stt,
             vad=vad,
             llm=llm,
@@ -78,23 +76,31 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             allow_interruptions=allow_interruptions,
         )
 
-        self._current_email = ""
-        self._require_confirmation = require_confirmation
-        # speech_handle/turn used to update the email address.
-        # used to ignore the call to confirm_email_address in case the LLM is hallucinating and not asking for user confirmation
-        self._email_update_speech_handle: SpeechHandle | None = None
-
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Ask the user to provide an email address.")
+        self.session.generate_reply(
+            instructions=(
+                "Ask the user for their email address. If the user already stated one earlier "
+                "in this conversation, record it with update_email_address instead of asking again."
+            )
+        )
 
-    @function_tool
-    async def update_email_address(self, email: str, ctx: RunContext) -> str | None:
-        """Update the email address provided by the user.
+    def _build_update_email_tool(self) -> llm.FunctionTool:
+        # Built dynamically so we can apply IGNORE_ON_ENTER per-instance
+        # based on require_explicit_ask.
+        flags = ToolFlag.IGNORE_ON_ENTER if self._require_explicit_ask else ToolFlag.NONE
 
-        Args:
-            email: The email address provided by the user
-        """
-        self._email_update_speech_handle = ctx.speech_handle
+        @function_tool(flags=flags)
+        async def update_email_address(email: str, ctx: RunContext) -> str | None:
+            """Update the email address provided by the user.
+
+            Args:
+                email: The email address provided by the user
+            """
+            return await self._update_email_impl(email, ctx)
+
+        return update_email_address
+
+    async def _update_email_impl(self, email: str, ctx: RunContext) -> str | None:
         email = email.strip()
 
         if not re.match(EMAIL_REGEX, email):
@@ -108,29 +114,40 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 self.complete(GetEmailResult(email_address=self._current_email))
             return None  # no need to continue the conversation
 
+        confirm_tool = self._build_confirm_tool(email=email)
+        current_tools = [t for t in self.tools if t.id != "confirm_email_address"]
+        current_tools.append(confirm_tool)
+        await self.update_tools(current_tools)
+
+        read_back = (
+            f"Repeat the email character by character: {separated_email}"
+            if self._spell_read_back
+            else "Repeat the email back to the user."
+        )
+        self._spell_read_back = True
         return (
             f"The email has been updated to {email}\n"
-            f"Repeat the email character by character: {separated_email} if needed\n"
+            f"{read_back}\n"
             f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
         )
 
-    @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
-    async def confirm_email_address(self, ctx: RunContext) -> None:
-        """Validates/confirms the email address provided by the user."""
-        await ctx.wait_for_playout()
+    def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:
+        @function_tool()
+        async def confirm_email_address() -> str | None:
+            """Call after the user confirms the email address is correct."""
+            if email != self._current_email:
+                # stale closure: update_email_address ran again after this confirm
+                # tool was installed (e.g. parallel tool calls in the same turn)
+                return (
+                    "The email has changed since confirmation was requested, "
+                    "ask the user to confirm the updated email."
+                )
 
-        if ctx.speech_handle == self._email_update_speech_handle and self._confirmation_required(
-            ctx
-        ):
-            raise ToolError("error: the user must confirm the email address explicitly")
+            if not self.done():
+                self.complete(GetEmailResult(email_address=email))
+            return None
 
-        if not self._current_email.strip():
-            raise ToolError(
-                "error: no email address were provided, `update_email_address` must be called before"
-            )
-
-        if not self.done():
-            self.complete(GetEmailResult(email_address=self._current_email))
+        return confirm_email_address
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def decline_email_capture(self, reason: str) -> None:
@@ -146,3 +163,47 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         if is_given(self._require_confirmation):
             return self._require_confirmation
         return ctx.speech_handle.input_details.modality == "audio"
+
+
+EMAIL_REGEX = (
+    r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}$"
+)
+
+
+# instructions
+PERSONA = "You are only a single step in a broader system, responsible solely for capturing an email address."
+
+AUDIO_SPECIFIC = """\
+Handle input as noisy voice transcription. Users say emails aloud.
+Normalize common spoken patterns silently:
+- Convert words like 'dot', 'underscore', 'dash', 'plus' into symbols: `.`, `_`, `-`, `+`.
+- Convert 'at' to `@`.
+- Recognize patterns where users speak their name or a word, followed by spelling: e.g., 'john j o h n'.
+- If only the part before the '@' is given, prompt for the domain.
+- Filter out filler words or hesitations.
+- Assume some spelling if contextually obvious (e.g. 'mike b two two' → mikeb22).
+Don't mention corrections. Treat inputs as possibly imperfect but fix them silently."""
+
+TEXT_SPECIFIC = """\
+Handle input as typed text. Expect users to type their email address directly in standard format.
+If the address looks almost correct but has minor typos (e.g. missing '@' or domain), prompt for clarification."""
+
+
+CONFIRMATION_INSTRUCTION = """\
+Call `confirm_email_address` after the user confirmed the email address is correct."""
+
+INSTRUCTIONS_TEMPLATE = """\
+{persona}
+
+{_modality_specific}
+
+Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+Don't invent new email addresses, stick strictly to what the user said.
+{_confirmation}
+If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
+
+Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.
+Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.
+
+{extra}
+"""

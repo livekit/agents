@@ -19,10 +19,18 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ["livekit-agents>=1.4.4", "bithuman>=0.5.25"]
+dependencies = [
+    "livekit-agents>=1.8.2",
+    "bithuman>=0.5.25,<3",
+    "pillow>=10.3.0",
+]
 
 [project.urls]
 Documentation = "https://docs.livekit.io"
@@ -37,3 +45,7 @@ packages = ["livekit"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..llm import LLM, ChatContext
 from .judge import JudgmentResult
@@ -66,7 +66,8 @@ class EvaluationResult:
         """True if more than half of the judgments passed."""
         if not self.judgments:
             return True
-        return self.score > len(self.judgments) / 2
+        passed_count = sum(1 for j in self.judgments.values() if j.passed)
+        return passed_count > len(self.judgments) / 2
 
     @property
     def none_failed(self) -> bool:
@@ -107,12 +108,22 @@ class JudgeGroup:
         Args:
             llm: The LLM to use for evaluation. Can be an LLM instance or a model
                 string like "openai/gpt-4o-mini" (uses LiveKit inference gateway).
+                Model strings default to the lowest reasoning effort the model
+                supports and to low inference priority; pass a configured LLM
+                instance to override.
             judges: The judges to run during evaluation.
         """
         if isinstance(llm, str):
             from ..inference import LLM as InferenceLLM
+            from ..inference.llm import min_reasoning_effort
 
-            self._llm: LLM = InferenceLLM(llm)
+            extra_kwargs: dict[str, Any] = {}
+            if (effort := min_reasoning_effort(llm)) is not None:
+                extra_kwargs["reasoning_effort"] = effort
+
+            # Judges run after the conversation, so no caller is waiting on them:
+            # they must not compete with live voice traffic for gateway quota.
+            self._llm: LLM = InferenceLLM(llm, inference_class="low", extra_kwargs=extra_kwargs)
         else:
             self._llm = llm
 

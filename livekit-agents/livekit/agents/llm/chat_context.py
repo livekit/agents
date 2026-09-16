@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import textwrap
 import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
@@ -22,8 +23,10 @@ from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
+from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import utils
+from .._proto import encode_chat_item
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils.misc import is_given
@@ -31,6 +34,120 @@ from . import _provider_format
 
 if TYPE_CHECKING:
     from ..llm import LLM, Tool, Toolset
+
+
+class Instructions:
+    """Instructions with optional modality-specific additions.
+
+    Construction::
+
+        # Simple — same instructions for all modalities
+        Instructions("You are a helpful assistant.")
+
+        # With modality-specific additions
+        Instructions(
+            "You are a helpful assistant.",
+            audio="Keep responses short for voice.",
+            text="Use markdown formatting.",
+        )
+
+    Rendering::
+
+        instr.render()                              # → common text
+        instr.render(modality="audio")               # → common + audio addition
+        instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
+    """
+
+    def __init__(
+        self,
+        common: str = "",
+        *,
+        audio: str | None = None,
+        text: str | None = None,
+    ) -> None:
+        self.common = common
+        self.audio = audio
+        self.text = text
+
+    def render(
+        self,
+        *,
+        modality: Literal["audio", "text"] | None = None,
+        data: dict[str, object] | None = None,
+    ) -> str:
+        """Render instructions to a plain string.
+
+        Args:
+            modality: If given, appends the modality-specific addition to the common text.
+            data: Template variables to fill. Missing placeholders log a warning
+                and are replaced with empty strings.
+        """
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
+
+        result = "\n\n".join(p for p in parts if p)
+
+        if data:
+            result = utils.misc.safe_render(result, data)
+
+        return result
+
+    @staticmethod
+    def resolve_template(template: str, **kwargs: object) -> Instructions:
+        """Fill a template string, producing an ``Instructions`` with modality variants.
+
+        If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
+        parts are substituted into the matching variant of the result. This is used by
+        workflow tasks to build modality-aware instructions from a single template.
+        """
+        any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
+        if any_instructions:
+            audio_kw: dict[str, object] = {
+                # an explicit "" removes the section; only None falls back to common
+                k: (v.audio if v.audio is not None else str(v))
+                if isinstance(v, Instructions)
+                else v
+                for k, v in kwargs.items()
+            }
+            text_kw: dict[str, object] = {
+                k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
+                for k, v in kwargs.items()
+            }
+            # audio/text hold fully rendered variants of the whole template, so they go in
+            # place of common (which render() would otherwise prepend, doubling the template).
+            audio = utils.misc.safe_render(template, audio_kw)
+            text = utils.misc.safe_render(template, text_kw)
+            if audio == text:
+                # no modality-specific differences; a single common variant renders correctly
+                # with or without a modality
+                return Instructions(common=audio)
+            return Instructions(common="", audio=audio, text=text)
+        else:
+            rendered = utils.misc.safe_render(template, kwargs)
+            return Instructions(common=rendered)
+
+    def __str__(self) -> str:
+        return self.common
+
+    def __repr__(self) -> str:
+        return f"Instructions({self.common!r})"
+
+    def __hash__(self) -> int:
+        return hash((self.common, self.audio, self.text))
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Instructions):
+            return (
+                self.common == other.common
+                and self.audio == other.audio
+                and self.text == other.text
+            )
+        if isinstance(other, str):
+            return self.common == other
+        return NotImplemented
 
 
 class ImageContent(BaseModel):
@@ -107,6 +224,11 @@ ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 # The metrics are stored in a dict, since some fields may not be relevant
 # in certain context (e.g., text-only mode or when using a speech-to-speech model).
+class MetricsMetadata(TypedDict, total=False):
+    model_name: str
+    model_provider: str
+
+
 class MetricsReport(TypedDict, total=False):
     started_speaking_at: float
     stopped_speaking_at: float
@@ -135,8 +257,34 @@ class MetricsReport(TypedDict, total=False):
     Assistant `ChatMessage` only
     """
 
+    llm_node_tps: float
+    """LLM output tokens per second for this turn, measured at the `llm_node` over the
+    streaming window (first to last text chunk). Absent for a reply that arrived in a
+    single chunk, which has no measurable rate
+
+    Assistant `ChatMessage` only
+    """
+
+    llm_node_ttfs: float
+    """Time from LLM generation start until the first sentence reached the TTS provider, as
+    segmented by that TTS. Absent when no audio came from a LiveKit TTS this turn: no TTS,
+    an interruption before the first frame, or a `tts_node` synthesizing audio on its own
+
+    Assistant `ChatMessage` only
+    """
+
     tts_node_ttfb: float
     """Time taken for the `tts_node` to return the first chunk of audio (after the first text token has been sent)
+
+    Assistant `ChatMessage` only
+    """
+
+    playback_latency: float
+    """Delay between forwarding the first audio frame and the `AudioOutput` reporting
+    playback started. Near-zero for the default room output (self-reported when the frame
+    is pushed to the track, so it doesn't account for network delivery to the client);
+    meaningful when a remote avatar worker is in the chain and reports playback via
+    the `lk.playback_started` RPC.
 
     Assistant `ChatMessage` only
     """
@@ -146,6 +294,17 @@ class MetricsReport(TypedDict, total=False):
 
     Assistant `ChatMessage` only
     """
+
+    provider_request_ids: list[str]
+    """Provider-known request or response IDs associated with this turn.
+
+    Assistant `ChatMessage` only. These IDs can be used to correlate a turn with
+    provider-side logs.
+    """
+
+    llm_metadata: MetricsMetadata
+    tts_metadata: MetricsMetadata
+    stt_metadata: MetricsMetadata
 
 
 class ChatMessage(BaseModel):
@@ -163,7 +322,25 @@ class ChatMessage(BaseModel):
     @property
     def text_content(self) -> str | None:
         """
-        Returns a string of all text content in the message.
+        Returns a string of all text content in the message, with LiveKit's
+        expressive ``<expr/>`` tags removed from assistant messages.
+
+        Multiple text content items will be joined by a newline.
+        Use :attr:`raw_text_content` for the exact model-facing content.
+        """
+        raw = self.raw_text_content
+        if raw is None or self.role != "assistant":
+            return raw
+
+        from ..tts._provider_format import strip_expr_markup
+
+        return strip_expr_markup(raw)
+
+    @property
+    def raw_text_content(self) -> str | None:
+        """
+        Returns a string of all text content in the message, exactly as generated
+        (assistant messages may contain expressive ``<expr/>`` tags).
 
         Multiple text content items will be joined by a newline.
         """
@@ -200,6 +377,11 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    reply_required: bool = Field(default=True)
+    """Whether the model should answer once it receives this output.
+
+    Only realtime models read it, since they answer a result on their own.
+    """
 
 
 class AgentHandoff(BaseModel):
@@ -273,7 +455,9 @@ class ChatContext:
         if is_given(extra):
             kwargs["extra"] = extra
 
-        if isinstance(content, str):
+        if isinstance(content, Instructions):
+            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+        elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:
             message = ChatMessage(role=role, content=content, **kwargs)
@@ -292,6 +476,16 @@ class ChatContext:
         for _item in items:
             idx = self.find_insertion_index(created_at=_item.created_at)
             self._items.insert(idx, _item)
+
+    def remove(self, item: ChatItem | str) -> None:
+        """Remove the first item from the chat context by ChatItem or item ID.
+
+        Raises ValueError if the item/ID is not found.
+        """
+        idx = self.index_by_id(item.id if not isinstance(item, str) else item)
+        if idx is None:
+            raise ValueError(f"Item not found: {item!r}")
+        self._items.pop(idx)
 
     def get_by_id(self, item_id: str) -> ChatItem | None:
         return next((item for item in self.items if item.id == item_id), None)
@@ -441,6 +635,7 @@ class ChatContext:
         exclude_function_call: bool = False,
         exclude_metrics: bool = False,
         exclude_config_update: bool = False,
+        strip_markup: bool = False,
     ) -> dict[str, Any]:
         items: list[ChatItem] = []
         for item in self.items:
@@ -459,6 +654,13 @@ class ChatContext:
                     item.content = [c for c in item.content if not isinstance(c, ImageContent)]
                 if exclude_audio:
                     item.content = [c for c in item.content if not isinstance(c, AudioContent)]
+                # only strip the <expr/> dialect, and only in assistant messages
+                if strip_markup and item.role == "assistant":
+                    from ..tts._provider_format import strip_expr_markup
+
+                    item.content = [
+                        strip_expr_markup(c) if isinstance(c, str) else c for c in item.content
+                    ]
 
             items.append(item)
 
@@ -490,7 +692,11 @@ class ChatContext:
 
     @overload
     def to_provider_format(
-        self, format: Literal["google"], *, inject_dummy_user_message: bool = True
+        self,
+        format: Literal["google"],
+        *,
+        inject_dummy_user_message: bool = True,
+        thought_signatures: dict[str, bytes] | None = None,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload
@@ -506,7 +712,7 @@ class ChatContext:
     @overload
     def to_provider_format(
         self, format: Literal["mistralai"], *, inject_dummy_user_message: bool = True
-    ) -> tuple[list[dict], Literal[None]]: ...
+    ) -> tuple[list[dict], _provider_format.mistralai.MistralFormatData]: ...
 
     @overload
     def to_provider_format(self, format: str, **kwargs: Any) -> tuple[list[dict], Any]: ...
@@ -540,7 +746,9 @@ class ChatContext:
         elif format == "anthropic":
             return _provider_format.anthropic.to_chat_ctx(self, **kwargs)
         elif format == "mistralai":
-            return _provider_format.mistralai.to_chat_ctx(self, **kwargs)
+            return _provider_format.mistralai.to_conversations_ctx(
+                self, inject_dummy_user_message=inject_dummy_user_message
+            )
         else:
             raise ValueError(f"Unsupported provider format: {format}")
 
@@ -557,46 +765,98 @@ class ChatContext:
 
         return 0
 
+    def _upsert_item(self, item: ChatItem, *, allow_type_mismatch: bool = False) -> None:
+        """Update an item with the same ID if it exists, otherwise insert it by creation time."""
+        idx = self.index_by_id(item.id)
+        if idx is not None:
+            if not allow_type_mismatch and item.type != self._items[idx].type:
+                raise ValueError(f"Item type mismatch: {item.type} != {self._items[idx].type}")
+            self._items[idx] = item
+        else:
+            self.insert(item)
+
     async def _summarize(
         self,
         llm_v: LLM,
         *,
         keep_last_turns: int = 2,
     ) -> ChatContext:
-        to_summarize: list[ChatMessage] = []
-        for msg in self.messages():
-            if msg.role not in ("user", "assistant"):
-                continue
-            if msg.extra.get("is_summary") is True:  # avoid making summary of summaries
-                continue
+        # Split self.items into head/tail. Walk backward, counting only
+        # user/assistant ChatMessages toward the keep_last_turns budget (each
+        # turn = one user + one assistant message, so budget = keep_last_turns * 2).
+        # Everything from the split point onward — including any interleaved
+        # FunctionCall/FunctionCallOutput items — is preserved as-is in the tail.
+        msg_budget = keep_last_turns * 2
+        split_idx = len(self.items)
 
-            text = (msg.text_content or "").strip()
-            if text:
-                to_summarize.append(msg)
+        if msg_budget > 0:
+            msg_count = 0
+            for i in range(len(self.items) - 1, -1, -1):
+                item = self.items[i]
+                if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
+                    msg_count += 1
+                    if msg_count >= msg_budget:
+                        split_idx = i
+                        break
+            else:
+                # Not enough messages to fill the budget — nothing to summarize
+                return self
+
+        if split_idx == 0:
+            return self
+
+        head_items, tail_items = self.items[:split_idx], self.items[split_idx:]
+
+        # Build summarization input from head_items only.
+        to_summarize: list[ChatMessage | FunctionCall | FunctionCallOutput] = []
+        for item in head_items:
+            if isinstance(item, ChatMessage):
+                if item.role not in ("user", "assistant"):
+                    continue
+                if item.extra.get("is_summary") is True:  # avoid making summary of summaries
+                    continue
+
+                if (item.text_content or "").strip():
+                    to_summarize.append(item)
+            elif isinstance(item, (FunctionCall, FunctionCallOutput)):
+                to_summarize.append(item)
+
         if not to_summarize:
             return self
 
-        tail_n = max(0, min(len(to_summarize), keep_last_turns * 2))
-        if tail_n == 0:
-            head, tail = to_summarize, []
-        else:
-            head, tail = to_summarize[:-tail_n], to_summarize[-tail_n:]
+        # Render items to XML format and collect the contents.
+        contents: list[str] = []
+        for m in to_summarize:
+            if isinstance(m, (FunctionCall, FunctionCallOutput)):
+                contents.append(_function_call_item_to_message(m).raw_text_content or "")
+            else:
+                contents.append(to_xml(m.role, (m.text_content or "").strip()))
 
-        if not head:
-            return self
+        source_text = "\n".join(contents).strip()
 
-        source_text = "\n".join(f"{m.role}: {(m.text_content or '').strip()}" for m in head).strip()
         if not source_text:
             return self
 
         chat_ctx = ChatContext()
         chat_ctx.add_message(
             role="system",
-            content=(
-                "Compress older chat history into a short, faithful summary.\n"
-                "Focus on user goals, constraints, decisions, key facts/preferences/entities, and pending tasks.\n"
-                "Exclude chit-chat and greetings. Be concise."
-            ),
+            content=textwrap.dedent("""\
+                Compress older conversation history into a short, faithful summary.
+
+                The conversation is formatted as XML. Here is how to read it:
+                - <user>…</user>  — something the user said.
+                - <assistant>…</assistant>  — something the assistant said.
+                - <function_call name="…" call_id="…">…</function_call>  — the assistant invoked an action.
+                - <function_call_output name="…" call_id="…">…</function_call_output>  — the result of that \
+                action. May contain <error>…</error> if it failed.
+
+                Guidelines:
+                - Distill the *information learned* from function call outputs into the summary. \
+                Do not mention that a tool/function was called — just preserve the knowledge gained.
+                - Focus on: user goals, constraints, decisions, key facts, preferences, entities, \
+                and any pending or unresolved tasks.
+                - Omit greetings, filler, and chit-chat.
+                - Be concise."""),
         )
         chat_ctx.add_message(
             role="user",
@@ -613,33 +873,31 @@ class ChatContext:
         if not summary:
             return self
 
-        tail_start_ts = tail[0].created_at if tail else float("inf")
-
+        # Rebuild self._items. From head_items, keep only structural
+        # items (system messages, agent handoffs, config updates, prior
+        # summaries) — everything summarizable is replaced by the summary.
+        # Tail items are appended as-is.
         preserved: list[ChatItem] = []
-        for it in self.items:
-            if (
-                it.type in ("function_call", "function_call_output")
-                and it.created_at < tail_start_ts
-            ):
+        for it in head_items:
+            if isinstance(it, ChatMessage) and it.role in ("user", "assistant"):
                 continue
-
-            if it.type == "message" and it.role in ("user", "assistant"):
+            if isinstance(it, (FunctionCall, FunctionCallOutput)):
                 continue
-
             preserved.append(it)
 
         self._items = preserved
 
-        created_at_hint = (tail[0].created_at - 1e-6) if tail else (head[-1].created_at + 1e-6)
+        created_at_hint = (
+            (tail_items[0].created_at - 1e-6) if tail_items else (head_items[-1].created_at + 1e-6)
+        )
         self.add_message(
             role="assistant",
-            content=f"[history summary]\n{summary}",
+            content=to_xml("chat_history_summary", summary),
             created_at=created_at_hint,
             extra={"is_summary": True},
         )
 
-        for msg in tail:
-            self._items.append(msg)
+        self._items.extend(tail_items)
 
         return self
 
@@ -648,6 +906,9 @@ class ChatContext:
         item_adapter = TypeAdapter(list[ChatItem])
         items = item_adapter.validate_python(data["items"])
         return cls(items)
+
+    def to_proto(self) -> agent_pb.ChatContext:
+        return agent_pb.ChatContext(items=[encode_chat_item(item) for item in self.items])
 
     @property
     def readonly(self) -> bool:
@@ -721,3 +982,63 @@ class _ReadOnlyChatContext(ChatContext):
     @property
     def readonly(self) -> bool:
         return True
+
+
+def _to_attrs_str(attrs: dict[str, Any] | None = None) -> str | None:
+    if attrs:
+        return " ".join([f'{k}="{v}"' for k, v in attrs.items()])
+    return None
+
+
+def to_xml(
+    tag_name: str,
+    content: str | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> str:
+    attrs_str = _to_attrs_str(attrs)
+
+    if content:
+        return "\n".join(
+            [
+                f"<{tag_name} {attrs_str}>" if attrs_str else f"<{tag_name}>",
+                content,
+                f"</{tag_name}>",
+            ]
+        )
+    else:
+        return f"<{tag_name} {attrs_str} />" if attrs_str else f"<{tag_name} />"
+
+
+def _function_call_item_to_message(item: FunctionCall | FunctionCallOutput) -> ChatMessage:
+    if isinstance(item, FunctionCall):
+        return ChatMessage(
+            role="user",
+            content=[
+                to_xml(
+                    "function_call",
+                    item.arguments,
+                    attrs={
+                        "name": item.name,
+                        "call_id": item.call_id,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call": True},
+        )
+    elif isinstance(item, FunctionCallOutput):
+        return ChatMessage(
+            role="assistant",
+            content=[
+                to_xml(
+                    "function_call_output",
+                    item.output if not item.is_error else to_xml("error", item.output),
+                    attrs={
+                        "call_id": item.call_id,
+                        "name": item.name,
+                    },
+                )
+            ],
+            created_at=item.created_at,
+            extra={"is_function_call_output": True},
+        )

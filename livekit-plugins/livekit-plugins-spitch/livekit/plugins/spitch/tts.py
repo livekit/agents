@@ -77,7 +77,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         spitch_stream = self._client.speech.with_streaming_response.generate(
             text=self.input_text,
-            language=self._opts.language.language,  # type: ignore
+            language=self._opts.language.language,
             voice=self._opts.voice,  # type: ignore
             format="mp3",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),

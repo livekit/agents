@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 import aiohttp
 
@@ -26,6 +27,7 @@ from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -82,10 +84,32 @@ class ContextObject:
 
 
 @dataclass
+class TranslationConfig:
+    """Translation configuration for the Soniox Speech-to-Text API.
+
+    See: https://soniox.com/docs/stt/api-reference/websocket-api
+    """
+
+    type: Literal["one_way", "two_way"]
+    target_language: str | None = None
+    """Target language for one-way translation."""
+    language_a: str | None = None
+    """First language for two-way translation."""
+    language_b: str | None = None
+    """Second language for two-way translation."""
+
+    def __post_init__(self) -> None:
+        if self.type == "one_way" and not self.target_language:
+            raise ValueError("target_language is required for one_way translation")
+        if self.type == "two_way" and not (self.language_a and self.language_b):
+            raise ValueError("language_a and language_b are both required for two_way translation")
+
+
+@dataclass
 class STTOptions:
     """Configuration options for Soniox Speech-to-Text service."""
 
-    model: str = "stt-rt-v4"
+    model: str = "stt-rt-v5"
 
     language_hints: list[str] | None = None
     language_hints_strict: bool = False
@@ -97,7 +121,35 @@ class STTOptions:
     enable_speaker_diarization: bool = False
     enable_language_identification: bool = True
 
+    max_endpoint_delay_ms: int = 2000
+    """Maximum delay in milliseconds between speech cessation and endpoint detection.
+    Range: 500–3000.
+    See: https://soniox.com/docs/stt/rt/endpoint-detection"""
+
+    endpoint_sensitivity: float | None = None
+    """How readily the model emits speech endpoints. Range: -1.0 to 1.0.
+    Higher values make endpoints more likely (finalize sooner); lower values make them
+    less likely. Leave as None to use the server-side default.
+    Introduced in the Soniox v5 model; earlier models reject it."""
+
+    endpoint_latency_adjustment_level: int | None = None
+    """How aggressively the model reduces endpoint latency. Range: 0 to 3.
+    Higher values reduce latency but may emit more endpoints and slightly reduce accuracy.
+    Leave as None to use the server-side default.
+    Introduced in the Soniox v5 model; earlier models reject it."""
+
     client_reference_id: str | None = None
+    translation: TranslationConfig | None = None
+
+    def __post_init__(self) -> None:
+        if not (500 <= self.max_endpoint_delay_ms <= 3000):
+            raise ValueError("max_endpoint_delay_ms must be between 500 and 3000")
+        if self.endpoint_sensitivity is not None and not (-1.0 <= self.endpoint_sensitivity <= 1.0):
+            raise ValueError("endpoint_sensitivity must be between -1.0 and 1.0")
+        if self.endpoint_latency_adjustment_level is not None and not (
+            0 <= self.endpoint_latency_adjustment_level <= 3
+        ):
+            raise ValueError("endpoint_latency_adjustment_level must be between 0 and 3")
 
 
 class STT(stt.STT):
@@ -228,6 +280,22 @@ class SpeechStream(stt.SpeechStream):
             "enable_language_identification": self._stt._params.enable_language_identification,
             "client_reference_id": self._stt._params.client_reference_id,
         }
+        config["max_endpoint_delay_ms"] = self._stt._params.max_endpoint_delay_ms
+        if self._stt._params.endpoint_sensitivity is not None:
+            config["endpoint_sensitivity"] = self._stt._params.endpoint_sensitivity
+        if self._stt._params.endpoint_latency_adjustment_level is not None:
+            config["endpoint_latency_adjustment_level"] = (
+                self._stt._params.endpoint_latency_adjustment_level
+            )
+        if self._stt._params.translation is not None:
+            tr = self._stt._params.translation
+            translation_dict: dict[str, Any] = {"type": tr.type}
+            if tr.type == "one_way":
+                translation_dict["target_language"] = tr.target_language
+            elif tr.type == "two_way":
+                translation_dict["language_a"] = tr.language_a
+                translation_dict["language_b"] = tr.language_b
+            config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
         ws = await asyncio.wait_for(
             self._ensure_session().ws_connect(self._stt._base_url),
@@ -237,8 +305,8 @@ class SpeechStream(stt.SpeechStream):
         await ws.send_str(json.dumps(config))
         logger.debug("Soniox Speech-to-Text API connection established!")
 
-        # Reset duration tracking on new connection
         self._reported_duration_ms = 0
+        self.audio_queue = asyncio.Queue()
         return ws
 
     def _report_processed_audio_duration(self, total_audio_proc_ms: float) -> None:
@@ -292,6 +360,8 @@ class SpeechStream(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()
 
+            except APIError:
+                raise
             except asyncio.TimeoutError as e:
                 logger.error(
                     f"Timeout during Soniox Speech-to-Text API connection/initialization: {e}"
@@ -367,17 +437,45 @@ class SpeechStream(stt.SpeechStream):
     async def _recv_messages_task(self) -> None:
         """Receive transcription messages, handle tokens, errors, and dispatch events."""
 
+        # Translation routes original-language tokens to `final_original` and translated
+        # tokens to `final`. In non-translation mode, all tokens go to `final` and
+        # `final_original` stays empty (so `final` IS the source side there).
+        is_translation_mode = self._stt._params.translation is not None
+
         # final tokens are accumulated across messages until an endpoint is detected.
         final = _TokenAccumulator()
+        final_original = _TokenAccumulator()
         is_speaking = False
 
         def send_endpoint_transcript() -> None:
             nonlocal is_speaking
             if final.text:
+                # Translation mode determines the role of each accumulator:
+                # when on, `final_original` carries the source side and
+                # `final` carries the target side -- even across flush windows
+                # where the originals were finalized in a prior message and
+                # only translation tokens land in this one. When translation
+                # is off, `final` IS the source side and `final_original`
+                # stays empty.
+                src_segs, tgt_segs = (
+                    (final_original._lang_segments, final._lang_segments)
+                    if is_translation_mode
+                    else (final._lang_segments, [])
+                )
+                source_languages, source_texts = _lang_segments_to_fields(src_segs)
+                target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[final.to_speech_data(self.start_time_offset)],
+                        alternatives=[
+                            final.to_speech_data(
+                                self.start_time_offset,
+                                source_languages=source_languages,
+                                source_texts=source_texts,
+                                target_languages=target_languages,
+                                target_texts=target_texts,
+                            )
+                        ],
                     )
                 )
                 self._event_ch.send_nowait(
@@ -388,89 +486,191 @@ class SpeechStream(stt.SpeechStream):
 
                 # Reset buffers.
                 final.reset()
+                final_original.reset()
 
                 # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
                 is_speaking = False
+            else:
+                final_original.reset()
 
-        # Method handles receiving messages from the Soniox Speech-to-Text API.
-        while self._ws:
-            try:
-                async for msg in self._ws:
-                    if msg.type in (
-                        aiohttp.WSMsgType.CLOSED,
-                        aiohttp.WSMsgType.CLOSE,
-                        aiohttp.WSMsgType.CLOSING,
-                    ):
-                        break
+        if not self._ws:
+            return
 
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        logger.warning(
-                            f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
-                        )
-                        continue
+        try:
+            async for msg in self._ws:
+                if msg.type in (
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSING,
+                ):
+                    break
 
-                    try:
-                        content = json.loads(msg.data)
-                        tokens = content["tokens"]
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    logger.warning(
+                        f"Unexpected message type from Soniox Speech-to-Text API: {msg.type}"
+                    )
+                    continue
 
-                        non_final = _TokenAccumulator()
-                        total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+                try:
+                    content = json.loads(msg.data)
+                    has_error = bool(content.get("error_code") or content.get("error_message"))
+                    tokens = content.get("tokens", []) if has_error else content["tokens"]
 
-                        # 1) process tokens: accumulate final/non-final,
-                        #    flush immediately on endpoint tokens.
-                        for token in tokens:
+                    non_final = _TokenAccumulator()
+                    non_final_original = _TokenAccumulator()
+                    total_audio_proc_ms = content.get("total_audio_proc_ms", 0)
+
+                    # 1) process tokens: accumulate final/non-final,
+                    #    flush immediately on endpoint tokens.
+                    for token in tokens:
+                        is_translated = token.get("translation_status") == "translation"
+                        if is_translation_mode and not is_end_token(token) and not is_translated:
+                            # Original-language token: capture text for source_text only.
                             if token["is_final"]:
-                                if is_end_token(token):
-                                    send_endpoint_transcript()
-                                    self._report_processed_audio_duration(
-                                        total_audio_proc_ms,
-                                    )
-                                else:
-                                    final.update(token)
+                                final_original.update(token)
                             else:
-                                non_final.update(token)
+                                non_final_original.update(token)
+                            continue
+                        if token["is_final"]:
+                            if is_end_token(token):
+                                send_endpoint_transcript()
+                            else:
+                                final.update(token)
+                        else:
+                            non_final.update(token)
 
-                        # 2) emit START_OF_SPEECH + interim for remaining content.
-                        if final.text or non_final.text:
-                            if not is_speaking:
-                                is_speaking = True
-                                self._event_ch.send_nowait(
-                                    stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
-                                )
+                    # 2) emit START_OF_SPEECH + transcript for remaining content.
+                    if final.text or non_final.text:
+                        if not is_speaking:
+                            is_speaking = True
                             self._event_ch.send_nowait(
-                                stt.SpeechEvent(
-                                    type=SpeechEventType.INTERIM_TRANSCRIPT,
-                                    alternatives=[
-                                        final.merged_speech_data(non_final, self.start_time_offset)
-                                    ],
-                                )
+                                stt.SpeechEvent(type=SpeechEventType.START_OF_SPEECH)
                             )
+                        # Same source/target classification as in
+                        # `send_endpoint_transcript`: in translation mode the
+                        # `_original` buckets carry the source side and `final` /
+                        # `non_final` carry the translation; in non-translation
+                        # mode the `_original` buckets are empty and `final` /
+                        # `non_final` ARE the source.
+                        merged_originals = _merge_lang_segments(
+                            final_original._lang_segments,
+                            non_final_original._lang_segments,
+                        )
+                        merged_primary = _merge_lang_segments(
+                            final._lang_segments, non_final._lang_segments
+                        )
+                        interim_src_segs, interim_tgt_segs = (
+                            (merged_originals, merged_primary)
+                            if is_translation_mode
+                            else (merged_primary, [])
+                        )
+                        interim_src_langs, interim_src_texts = _lang_segments_to_fields(
+                            interim_src_segs
+                        )
+                        interim_tgt_langs, interim_tgt_texts = _lang_segments_to_fields(
+                            interim_tgt_segs
+                        )
 
-                        # 3) on error or finish, flush any remaining final tokens.
-                        if (
-                            content.get("finished")
-                            or content.get("error_code")
-                            or content.get("error_message")
-                        ):
-                            send_endpoint_transcript()
-                            self._report_processed_audio_duration(total_audio_proc_ms)
-
-                        if content.get("error_code") or content.get("error_message"):
-                            logger.error(
-                                f"WebSocket error: {content.get('error_code')}"
-                                f" - {content.get('error_message')}"
+                        # When all tokens in this batch are final (no non-final pending),
+                        # speech has reached a stable state — emit PREFLIGHT_TRANSCRIPT to
+                        # allow preemptive LLM generation. This mirrors Deepgram v2's
+                        # EagerEndOfTurn behavior.
+                        event_type = (
+                            SpeechEventType.PREFLIGHT_TRANSCRIPT
+                            if final.text and not non_final.text
+                            else SpeechEventType.INTERIM_TRANSCRIPT
+                        )
+                        self._event_ch.send_nowait(
+                            stt.SpeechEvent(
+                                type=event_type,
+                                alternatives=[
+                                    final.merged_speech_data(
+                                        non_final,
+                                        self.start_time_offset,
+                                        source_languages=interim_src_langs,
+                                        source_texts=interim_src_texts,
+                                        target_languages=interim_tgt_langs,
+                                        target_texts=interim_tgt_texts,
+                                    )
+                                ],
                             )
+                        )
 
-                        if content.get("finished"):
-                            logger.debug("Transcription finished")
+                    # 3) on error or finish, flush any remaining final tokens.
+                    if content.get("finished") or has_error:
+                        send_endpoint_transcript()
 
-                    except Exception as e:
-                        logger.exception(f"Error processing message: {e}")
+                    # 4) report processed audio for every frame; gating on
+                    #    endpoint/finish frames dropped whatever never reached one.
+                    self._report_processed_audio_duration(total_audio_proc_ms)
 
-            except aiohttp.ClientError as e:
-                logger.error(f"WebSocket error while receiving: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error while receiving messages: {e}")
+                    if has_error:
+                        err_code = content.get("error_code")
+                        err_msg = content.get("error_message", "Unknown Soniox STT error")
+                        logger.error(f"WebSocket error: {err_code} - {err_msg}")
+                        status_code = int(err_code) if isinstance(err_code, int) else -1
+                        if isinstance(err_code, str) and err_code.isdigit():
+                            status_code = int(err_code)
+                        raise APIStatusError(
+                            f"Soniox STT error: {err_code} - {err_msg}",
+                            status_code=status_code,
+                            body=content,
+                        )
+
+                    if content.get("finished"):
+                        logger.debug("Transcription finished")
+
+                except APIError:
+                    raise
+                except Exception as e:
+                    logger.exception(f"Error processing message: {e}")
+
+        except asyncio.CancelledError:
+            # Normal shutdown — don't trigger reconnect.
+            raise
+        except APIError:
+            raise
+        except aiohttp.ClientError as e:
+            logger.error(f"WebSocket error while receiving: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error while receiving messages: {e}")
+
+        # Request reconnect if STT silently dies on WS drop.
+        if not self._reconnect_event.is_set():
+            logger.warning("Soniox STT WebSocket closed; requesting reconnect")
+            self._reconnect_event.set()
+
+
+def _merge_lang_segments(
+    a: list[tuple[str, str]], b: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Merge two (language, text) segment lists, combining adjacent segments of the same language."""
+    result = list(a)
+    for lang, text in b:
+        if result and result[-1][0] == lang:
+            lang, t = result[-1]
+            result[-1] = (lang, t + text)
+        else:
+            result.append((lang, text))
+    return result
+
+
+def _lang_segments_to_fields(
+    segments: list[tuple[str, str]],
+) -> tuple[list[LanguageCode] | None, list[str] | None]:
+    """Convert `(lang, text)` runs to the parallel `SpeechData` field pair,
+    or `(None, None)` when empty."""
+    if not segments:
+        return None, None
+    return (
+        [LanguageCode(lang) for lang, _ in segments],
+        [t for _, t in segments],
+    )
+
+
+class _LangStats(NamedTuple):
+    num_chars: int
+    updated_at: float
 
 
 class _TokenAccumulator:
@@ -489,11 +689,29 @@ class _TokenAccumulator:
         self._confidence_sum: float = 0.0
         self._confidence_count: int = 0
         self._has_start_time: bool = False
+        self._lang_segments: list[tuple[str, str]] = []  # (language, text) pairs
+        self._lang_stats: dict[str, _LangStats] = {}
+
+    def _get_language(self) -> str:
+        """Language with the most characters; ties go to the one that reached the count first."""
+        if not self._lang_stats:
+            return ""
+        most_chars = max(s.num_chars for s in self._lang_stats.values())
+        tied = [
+            (lang_code, stats)
+            for lang_code, stats in self._lang_stats.items()
+            if stats.num_chars == most_chars
+        ]
+        return min(tied, key=lambda t: t[1].updated_at)[0]
 
     def update(self, token: dict[str, Any]) -> None:
-        self.text += token["text"]
-        if token.get("language") and not self.language:
-            self.language = token["language"]
+        text = token["text"]
+        lang = token.get("language", "")
+        self.text += text
+        if lang and text:
+            chars, _ = self._lang_stats.get(lang, (0, 0.0))
+            self._lang_stats[lang] = _LangStats(chars + len(text), time.monotonic())
+            self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
         if "start_ms" in token and not self._has_start_time:
@@ -504,6 +722,12 @@ class _TokenAccumulator:
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1
+        if text:
+            if self._lang_segments and self._lang_segments[-1][0] == lang:
+                lang, t = self._lang_segments[-1]
+                self._lang_segments[-1] = (lang, t + text)
+            else:
+                self._lang_segments.append((lang, text))
 
     @property
     def confidence(self) -> float:
@@ -520,11 +744,24 @@ class _TokenAccumulator:
         self._confidence_sum = 0.0
         self._confidence_count = 0
         self._has_start_time = False
+        self._lang_segments = []
+        self._lang_stats = {}
 
-    def to_speech_data(self, start_time_offset: float = 0.0) -> stt.SpeechData:
+    def to_speech_data(
+        self,
+        start_time_offset: float = 0.0,
+        source_languages: list[LanguageCode] | None = None,
+        source_texts: list[str] | None = None,
+        target_languages: list[LanguageCode] | None = None,
+        target_texts: list[str] | None = None,
+    ) -> stt.SpeechData:
         return stt.SpeechData(
             text=self.text,
             language=LanguageCode(self.language),
+            source_languages=source_languages,
+            source_texts=source_texts,
+            target_languages=target_languages,
+            target_texts=target_texts,
             speaker_id=self.speaker_id,
             start_time=self.start_time / 1000 + start_time_offset,
             end_time=self.end_time / 1000 + start_time_offset,
@@ -532,7 +769,13 @@ class _TokenAccumulator:
         )
 
     def merged_speech_data(
-        self, other: _TokenAccumulator, start_time_offset: float = 0.0
+        self,
+        other: _TokenAccumulator,
+        start_time_offset: float = 0.0,
+        source_languages: list[LanguageCode] | None = None,
+        source_texts: list[str] | None = None,
+        target_languages: list[LanguageCode] | None = None,
+        target_texts: list[str] | None = None,
     ) -> stt.SpeechData:
         """Build a SpeechData combining self (final) with other (non-final)."""
         candidates = [acc.start_time for acc in (self, other) if acc._has_start_time]
@@ -543,6 +786,10 @@ class _TokenAccumulator:
         return stt.SpeechData(
             text=self.text + other.text,
             language=LanguageCode(self.language if self.language else other.language),
+            source_languages=source_languages,
+            source_texts=source_texts,
+            target_languages=target_languages,
+            target_texts=target_texts,
             speaker_id=self.speaker_id if self.speaker_id is not None else other.speaker_id,
             start_time=start / 1000 + start_time_offset,
             end_time=end / 1000 + start_time_offset,

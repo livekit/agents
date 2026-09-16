@@ -32,6 +32,7 @@ from livekit.agents.voice.avatar import (
     AudioSegmentEnd,
     AvatarOptions,
     AvatarRunner,
+    AvatarSession as BaseAvatarSession,
     DataStreamAudioOutput,
     QueueAudioOutput,
     VideoGenerator,
@@ -40,7 +41,7 @@ from livekit.agents.voice.avatar import (
 from .log import logger
 
 if TYPE_CHECKING:
-    from bithuman import AsyncBithuman  # type: ignore
+    from bithuman import AsyncBithuman
 
 _logger.remove()
 _logger.add(sys.stdout, level="INFO")
@@ -93,7 +94,7 @@ class BitHumanException(Exception):
     """Exception for BitHuman errors"""
 
 
-class AvatarSession:
+class AvatarSession(BaseAvatarSession):
     """A Beyond Presence avatar session"""
 
     def __init__(
@@ -157,6 +158,7 @@ class AvatarSession:
                  * "essence" for predefined actions and expressions
                - Allows flexibility in choosing the interaction style
         """
+        super().__init__()
         self._api_url = (
             api_url
             or os.getenv("BITHUMAN_API_URL")
@@ -209,7 +211,19 @@ class AvatarSession:
         self._conn_options = conn_options
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
-        self._runtime = runtime
+        self._runtime: AsyncBithuman | None = runtime or None
+
+    @property
+    def avatar_identity(self) -> str:
+        # In local mode the avatar video is published by the local agent participant,
+        # so the avatar identity is the local participant's identity.
+        if self._mode == "local" and self._room is not None:
+            return self._room.local_participant.identity
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "bithuman"
 
     async def start(
         self,
@@ -220,6 +234,7 @@ class AvatarSession:
         livekit_api_key: NotGivenOr[str] = NOT_GIVEN,
         livekit_api_secret: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
+        await super().start(agent_session, room)
         if self._mode == "local":
             await self._start_local(agent_session, room)
         elif self._mode == "cloud":
@@ -243,30 +258,15 @@ class AvatarSession:
             logger.debug("new transaction id: %s", runtime.transaction_id)
             await runtime._initialize_token()
         else:
-            kwargs = {
-                "model_path": self._model_path,
-            }
-            if self._api_secret:
-                kwargs["api_secret"] = self._api_secret
-            if self._api_token:
-                kwargs["token"] = self._api_token
-            if self._api_url:
-                kwargs["api_url"] = self._api_url
-
-            runtime = await AsyncBithuman.create(**kwargs)
+            runtime = await AsyncBithuman.create(
+                model_path=self._model_path,
+                api_secret=self._api_secret,
+                token=self._api_token,
+                api_url=self._api_url,
+            )
             self._runtime = runtime
 
         video_generator = BithumanGenerator(runtime)
-
-        try:
-            job_ctx = get_job_context()
-
-            async def _on_shutdown() -> None:
-                runtime.cleanup()
-
-            job_ctx.add_shutdown_callback(_on_shutdown)
-        except RuntimeError:
-            pass
 
         output_width, output_height = video_generator.video_resolution
         avatar_options = AvatarOptions(
@@ -277,7 +277,10 @@ class AvatarSession:
             audio_channels=1,
         )
 
-        audio_buffer = QueueAudioOutput(sample_rate=runtime.settings.INPUT_SAMPLE_RATE)
+        audio_buffer = QueueAudioOutput(
+            sample_rate=runtime.settings.INPUT_SAMPLE_RATE,
+            wait_playback_start=True,
+        )
         # create avatar runner
         self._avatar_runner = AvatarRunner(
             room=room,
@@ -287,7 +290,7 @@ class AvatarSession:
         )
         await self._avatar_runner.start()
 
-        agent_session.output.audio = audio_buffer
+        agent_session.output.replace_audio_tail(audio_buffer)
 
     async def _start_cloud(
         self,
@@ -341,9 +344,12 @@ class AvatarSession:
         logger.debug("starting avatar session")
         await self._start_cloud_agent(livekit_url, livekit_token, room.name)
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_playback_start=False,
+            ),
         )
 
     async def _start_cloud_agent(
@@ -611,6 +617,11 @@ class AvatarSession:
             raise BitHumanException("Runtime not initialized")
         return self._runtime
 
+    async def aclose(self) -> None:
+        await super().aclose()
+        if self._mode == "local" and self._runtime is not None:
+            self._runtime.cleanup()
+
 
 class BithumanGenerator(VideoGenerator):
     def __init__(self, runtime: AsyncBithuman):
@@ -625,11 +636,11 @@ class BithumanGenerator(VideoGenerator):
 
     @property
     def video_fps(self) -> int:
-        return self._runtime.settings.FPS  # type: ignore
+        return self._runtime.settings.FPS
 
     @property
     def audio_sample_rate(self) -> int:
-        return self._runtime.settings.INPUT_SAMPLE_RATE  # type: ignore
+        return self._runtime.settings.INPUT_SAMPLE_RATE
 
     @utils.log_exceptions(logger=logger)
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:

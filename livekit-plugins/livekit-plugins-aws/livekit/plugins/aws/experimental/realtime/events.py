@@ -5,6 +5,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from livekit.agents import llm
+from livekit.agents.llm.chat_context import Instructions
 
 from ...log import logger
 from .types import TURN_DETECTION
@@ -95,9 +96,16 @@ class ToolConfiguration(BaseModel):
     tools: list[Tool]
 
 
+class TurnDetectionConfiguration(BaseModel):
+    endpointingSensitivity: TURN_DETECTION
+
+
 class SessionStart(BaseModel):
     inferenceConfiguration: InferenceConfiguration
-    endpointingSensitivity: TURN_DETECTION | None = "MEDIUM"
+    # Nova Sonic 1 used a flat field; Nova Sonic 2 requires it nested under
+    # turnDetectionConfiguration. Exactly one is populated per model.
+    endpointingSensitivity: TURN_DETECTION | None = None
+    turnDetectionConfiguration: TurnDetectionConfiguration | None = None
 
 
 class InputTextContentStart(BaseModel):
@@ -227,9 +235,12 @@ class Event(BaseModel):
 
 
 class SonicEventBuilder:
-    def __init__(self, prompt_name: str, audio_content_name: str):
+    def __init__(
+        self, prompt_name: str, audio_content_name: str, model: str = "amazon.nova-2-sonic-v1:0"
+    ):
         self.prompt_name = prompt_name
         self.audio_content_name = audio_content_name
+        self._nova_sonic_2 = "nova-2-sonic" in model
 
     @classmethod
     def get_event_type(cls, json_data: dict) -> str:
@@ -304,8 +315,14 @@ class SonicEventBuilder:
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
-    ) -> list[str]:
+        endpointing_sensitivity: TURN_DETECTION = "MEDIUM",
+    ) -> tuple[list[str], list[str]]:
+        """Build session init events and history events separately.
+
+        Returns:
+            A tuple of (init_events, history_events). History events should be
+            sent after the session is established, with small delays between them.
+        """
         system_content_name = str(uuid.uuid4())
         init_events = [
             self.create_session_start_event(
@@ -315,45 +332,68 @@ class SonicEventBuilder:
             *self.create_text_content_block(system_content_name, "SYSTEM", system_content),
         ]
 
-        # note: tool call events are not supported yet
+        history_events: list[str] = []
+        # Nova Sonic requires strict USER/ASSISTANT alternation.
+        # Merge consecutive same-role messages and skip empty ones.
         messages = chat_ctx.messages()
         if messages:
             logger.debug("initiating session with chat context")
+            merged: list[tuple[str, str]] = []
             for msg in messages:
                 if (role := msg.role.upper()) not in ["USER", "ASSISTANT", "SYSTEM"]:
                     continue
 
+                text = "".join(str(c) for c in msg.content if isinstance(c, (str, Instructions)))
+                if not text.strip():
+                    continue
+
+                if merged and merged[-1][0] == role:
+                    merged[-1] = (role, merged[-1][1] + "\n" + text)
+                else:
+                    merged.append((role, text))
+
+            # Nova Sonic rejects history that starts with ASSISTANT.
+            # Strip leading assistant messages (e.g. orphaned greetings from handoff).
+            if merged and merged[0][0] == "ASSISTANT":
+                logger.debug("Stripping leading ASSISTANT message from history events")
+                merged.pop(0)
+
+            for role, text in merged:
                 ctx_content_name = str(uuid.uuid4())
-                init_events.extend(
+                history_events.extend(
                     self.create_text_content_block(
                         ctx_content_name,
                         cast(ROLE, role),
-                        "".join(c for c in msg.content if isinstance(c, str)),
+                        text,
                     )
                 )
 
-        return init_events
+        return init_events, history_events
 
     def create_session_start_event(
         self,
         max_tokens: int = 1024,
         top_p: float = 0.9,
         temperature: float = 0.7,
-        endpointing_sensitivity: TURN_DETECTION | None = "MEDIUM",
+        endpointing_sensitivity: TURN_DETECTION = "MEDIUM",
     ) -> str:
-        event = Event(
-            event=SessionStartEvent(
-                sessionStart=SessionStart(
-                    inferenceConfiguration=InferenceConfiguration(
-                        maxTokens=max_tokens,
-                        topP=top_p,
-                        temperature=temperature,
-                    ),
-                    endpointingSensitivity=endpointing_sensitivity,
-                )
-            )
+        inference = InferenceConfiguration(
+            maxTokens=max_tokens, topP=top_p, temperature=temperature
         )
-        return event.model_dump_json(exclude_none=False)
+        if self._nova_sonic_2:
+            session_start = SessionStart(
+                inferenceConfiguration=inference,
+                turnDetectionConfiguration=TurnDetectionConfiguration(
+                    endpointingSensitivity=endpointing_sensitivity
+                ),
+            )
+        else:
+            session_start = SessionStart(
+                inferenceConfiguration=inference,
+                endpointingSensitivity=endpointing_sensitivity,
+            )
+        event = Event(event=SessionStartEvent(sessionStart=session_start))
+        return event.model_dump_json(exclude_none=True)  # was exclude_none=False
 
     def create_audio_content_start_event(
         self,

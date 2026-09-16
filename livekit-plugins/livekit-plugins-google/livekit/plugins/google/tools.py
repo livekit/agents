@@ -83,3 +83,40 @@ class ToolCodeExecution(GeminiTool):
         return types.Tool(
             code_execution=types.ToolCodeExecution(),
         )
+
+
+@dataclass
+class VertexRAGRetrieval(GeminiTool):
+    """Vertex AI RAG Engine retrieval tool for server-side grounding.
+
+    Enables single-pass retrieval during Gemini inference with no tool-call
+    round-trip.  Works like Google Search grounding but against your own
+    document corpus managed by Vertex AI RAG Engine.
+
+    Args:
+        rag_resources: RAG corpus resource names
+            (e.g. ``["projects/123/locations/us-central1/ragCorpora/456"]``).
+        similarity_top_k: Number of top results to retrieve.
+        vector_distance_threshold: Optional distance threshold for filtering.
+    """
+
+    rag_resources: list[str]
+    similarity_top_k: int = 3
+    vector_distance_threshold: float | None = None
+
+    def __post_init__(self) -> None:
+        super().__init__(id="gemini_vertex_rag_retrieval")
+
+    def to_tool_config(self) -> types.Tool:
+        return types.Tool(
+            retrieval=types.Retrieval(
+                vertex_rag_store=types.VertexRagStore(
+                    rag_resources=[
+                        types.VertexRagStoreRagResource(rag_corpus=corpus)
+                        for corpus in self.rag_resources
+                    ],
+                    similarity_top_k=self.similarity_top_k,
+                    vector_distance_threshold=self.vector_distance_threshold,
+                ),
+            )
+        )

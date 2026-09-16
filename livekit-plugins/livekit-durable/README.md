@@ -1,1 +1,1 @@
-# BlingFire bindings for LiveKit Agents
+# Durable generator/coroutine tools for LiveKit Agents

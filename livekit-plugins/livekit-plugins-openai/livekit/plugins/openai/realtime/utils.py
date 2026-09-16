@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import math
+from collections.abc import Sequence
 from typing import Any
 
 from livekit import rtc
 from livekit.agents import llm
+from livekit.agents.llm.chat_context import Instructions
 from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
 from openai.types import realtime, responses
+from openai.types.beta.realtime.conversation_item_input_audio_transcription_completed_event import (
+    Logprob as BetaLogprob,
+)
 from openai.types.beta.realtime.session import (
     InputAudioNoiseReduction,
     InputAudioTranscription,
@@ -20,6 +27,7 @@ from openai.types.realtime import (
     NoiseReductionType,
     RealtimeAudioInputTurnDetection,
 )
+from openai.types.realtime.log_prob_properties import LogProbProperties
 from openai.types.realtime.realtime_audio_config_input import NoiseReduction
 
 from ..log import logger
@@ -107,6 +115,8 @@ def to_turn_detection(
                 kwargs["silence_duration_ms"] = turn_detection.silence_duration_ms
             if turn_detection.create_response is not None:
                 kwargs["create_response"] = turn_detection.create_response
+            if turn_detection.interrupt_response is not None:
+                kwargs["interrupt_response"] = turn_detection.interrupt_response
             return realtime.realtime_audio_input_turn_detection.ServerVad(**kwargs)
         elif turn_detection.type == "semantic_vad":
             kwargs["type"] = "semantic_vad"
@@ -122,6 +132,17 @@ def to_turn_detection(
     return turn_detection
 
 
+_MAX_CALL_ID_LEN = 32
+
+
+def _shorten_call_id(call_id: str) -> str:
+    # OpenAI caps call_id at 32 chars; deterministically shorten longer ids (e.g. from another
+    # provider replayed after a fallback swap) so a call and its output still map to the same id
+    if len(call_id) <= _MAX_CALL_ID_LEN:
+        return call_id
+    return hashlib.sha256(call_id.encode()).hexdigest()[:_MAX_CALL_ID_LEN]
+
+
 def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem:
     conversation_item: realtime.ConversationItem
 
@@ -129,7 +150,7 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCall(
             id=item.id,
             type="function_call",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             name=item.name,
             arguments=item.arguments,
         )
@@ -138,22 +159,22 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
         conversation_item = realtime.RealtimeConversationItemFunctionCallOutput(
             id=item.id,
             type="function_call_output",
-            call_id=item.call_id,
+            call_id=_shorten_call_id(item.call_id),
             output=item.output,
         )
         conversation_item.type = "function_call_output"
-        conversation_item.call_id = item.call_id
+        conversation_item.call_id = _shorten_call_id(item.call_id)
         conversation_item.output = item.output
 
     elif item.type == "message":
         if item.role == "system" or item.role == "developer":
             system_content: list[realtime.realtime_conversation_item_system_message.Content] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     system_content.append(
                         realtime.realtime_conversation_item_system_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemSystemMessage(
@@ -166,11 +187,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
                 realtime.realtime_conversation_item_assistant_message.Content
             ] = []
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     assistant_content.append(
                         realtime.realtime_conversation_item_assistant_message.Content(
                             type="output_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
             conversation_item = realtime.RealtimeConversationItemAssistantMessage(
@@ -182,11 +203,11 @@ def livekit_item_to_openai_item(item: llm.ChatItem) -> realtime.ConversationItem
             user_content: list[realtime.realtime_conversation_item_user_message.Content] = []
             # only user messages could be a list of content
             for c in item.content:
-                if isinstance(c, str):
+                if isinstance(c, (str, Instructions)):
                     user_content.append(
                         realtime.realtime_conversation_item_user_message.Content(
                             type="input_text",
-                            text=c,
+                            text=str(c),
                         )
                     )
                 elif isinstance(c, llm.ImageContent):
@@ -291,3 +312,25 @@ def to_oai_tool_choice(tool_choice: llm.ToolChoice | None) -> realtime.RealtimeT
         )
 
     return DEFAULT_TOOL_CHOICE
+
+
+def calculate_confidence_from_logprobs(
+    logprobs: Sequence[LogProbProperties] | Sequence[BetaLogprob] | None,
+) -> float | None:
+    """Calculate a confidence score from token log probabilities.
+
+    Converts log probabilities to probabilities (using exp) and returns
+    the geometric mean of all token probabilities as the confidence score.
+
+    Args:
+        logprobs: Sequence of objects with a logprob attribute, or None
+
+    Returns:
+        Confidence score between 0.0 and 1.0, or None if logprobs is None/empty
+    """
+    if not logprobs:
+        return None
+
+    total_logprob = sum(lp.logprob for lp in logprobs)
+    geometric_mean = math.exp(total_logprob / len(logprobs))
+    return geometric_mean

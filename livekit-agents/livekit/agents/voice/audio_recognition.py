@@ -1,33 +1,70 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import math
 import time
-from collections.abc import AsyncIterable
-from dataclasses import dataclass
+from collections import deque
+from collections.abc import AsyncIterable, Callable, Iterator
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan
+from pydantic import BaseModel
 
 from livekit import rtc
 
-from .. import llm, stt, utils, vad
+from .. import inference, llm, stt, tokenize, utils, vad
+from .._exceptions import APIError
+from ..inference.eot.base import MIN_SILENCE_DURATION_MS
+from ..inference.interruption import (
+    _AgentSpeechEndedSentinel,
+    _AgentSpeechStartedSentinel,
+    _OverlapSpeechEndedSentinel,
+    _OverlapSpeechStartedSentinel,
+)
 from ..language import LanguageCode
 from ..log import logger
+from ..stt import SpeechEvent
 from ..telemetry import trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
+from ..vad import VADStream
 from . import io
 from ._utils import _set_participant_attributes
-from .agent import ModelSettings
+from .endpointing import BaseEndpointing
+from .events import (
+    EotPredictionEvent,
+    UserTurnExceededEvent,
+    _AgentBackchannelOpportunityEvent,
+)
+from .turn import (
+    TurnDetectionEvent,
+    TurnDetectionMode as TurnDetectionMode,
+    _StreamingTurnDetector,
+    _StreamingTurnDetectorStream,
+    _TurnDetector,
+)
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+_NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
+# backoff before recreating the stt stream after an unrecoverable error
+_STT_RECONNECT_INTERVAL = 0.5
+
+
+@dataclass
+class _EndOfTurnMetrics:
+    started_speaking_at: float | None
+    stopped_speaking_at: float | None
+    transcription_delay: float | None
+    end_of_turn_delay: float | None
 
 
 @dataclass
@@ -36,12 +73,54 @@ class _EndOfTurnInfo:
     """If True, a reply was already triggered and should be skipped after end of turn detection."""
     new_transcript: str
     transcript_confidence: float
+    metrics: _EndOfTurnMetrics
+    backchannel_over_agent: bool = False
+    """The turn's speech overlapped agent speech and was classified a backchannel by adaptive interruption."""
+    user_turn_span: trace.Span | None = None
+    """The turn's open ``user_turn`` span. The activity sets ``user_turn_span_adopted`` to take
+    ownership and ends it after ``on_user_turn_completed``; otherwise recognition ends it."""
+    user_turn_span_adopted: bool = False
 
-    # metrics report
-    started_speaking_at: float | None
-    stopped_speaking_at: float | None
-    transcription_delay: float | None
-    end_of_turn_delay: float | None
+
+def _compute_end_of_turn_metrics(
+    *,
+    speech_start_time: float | None,
+    last_speaking_time: float | None,
+    last_final_transcript_time: float | None,
+    now: float,
+) -> _EndOfTurnMetrics:
+    """Compute the end-of-turn timing metrics from the captured turn anchors.
+
+    ``last_speaking_time`` is the internal ``_last_speaking_time`` anchor (reported
+    as ``stopped_speaking_at``). When the turn detector commits a turn whose anchor
+    was never refreshed for this segment, that value can be stale and predate the
+    start of the current turn, producing wildly inflated delays (see issue #6093).
+
+    We treat such an inconsistent anchor the same way we treat unreliable VAD: skip
+    the calculation and return ``None`` rather than emit a likely wrong value. A
+    valid anchor must satisfy ``last_speaking_time >= speech_start_time`` (you cannot
+    stop speaking before the turn started).
+    """
+    if (
+        speech_start_time is None
+        or last_speaking_time is None
+        or last_final_transcript_time is None
+        # stale/out-of-order anchor: stopping to speak cannot predate the turn start
+        or last_speaking_time < speech_start_time
+    ):
+        return _EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        )
+
+    return _EndOfTurnMetrics(
+        started_speaking_at=speech_start_time,
+        stopped_speaking_at=last_speaking_time,
+        transcription_delay=max(last_final_transcript_time - last_speaking_time, 0),
+        end_of_turn_delay=max(now - last_speaking_time, 0),
+    )
 
 
 @dataclass
@@ -51,50 +130,115 @@ class _PreemptiveGenerationInfo:
     started_speaking_at: float | None
 
 
-class _TurnDetector(Protocol):
-    @property
-    def model(self) -> str:
-        return "unknown"
-
-    @property
-    def provider(self) -> str:
-        return "unknown"
-
-    # TODO: Move those two functions to EOU ctor (capabilities dataclass)
-    async def unlikely_threshold(self, language: LanguageCode | None) -> float | None: ...
-    async def supports_language(self, language: LanguageCode | None) -> bool: ...
-
-    async def predict_end_of_turn(
-        self, chat_ctx: llm.ChatContext, *, timeout: float | None = None
-    ) -> float: ...
-
-
-TurnDetectionMode = Literal["stt", "vad", "realtime_llm", "manual"] | _TurnDetector
-"""
-The mode of turn detection to use.
-
-- "stt": use speech-to-text result to detect the end of the user's turn
-- "vad": use VAD to detect the start and end of the user's turn
-- "realtime_llm": use server-side turn detection provided by the realtime LLM
-- "manual": manually manage the turn detection
-- _TurnDetector: use the default mode with the provided turn detector
-
-(default) If not provided, automatically choose the best mode based on
-    available models (realtime_llm -> vad -> stt -> manual)
-If the needed model (VAD, STT, or RealtimeModel) is not provided, fallback to the default mode.
-"""
+@dataclass
+class _UserTurnTracker:
+    words: int = 0
+    transcript: str = ""
+    started_at: float | None = None
 
 
 class RecognitionHooks(Protocol):
-    def on_start_of_speech(self, ev: vad.VADEvent | None) -> None: ...
+    @property
+    def interruption_by_audio_activity_enabled(self) -> bool: ...
+
+    @interruption_by_audio_activity_enabled.setter
+    def interruption_by_audio_activity_enabled(self, enabled: bool) -> None: ...
+
+    def on_overlap_speech(self, ev: inference.OverlappingSpeechEvent) -> None: ...
+    def on_backchannel_confirmed(self) -> None: ...
+    def on_start_of_speech(self, ev: vad.VADEvent | None, speech_start_time: float) -> None: ...
     def on_vad_inference_done(self, ev: vad.VADEvent) -> None: ...
     def on_end_of_speech(self, ev: vad.VADEvent | None) -> None: ...
     def on_interim_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None) -> None: ...
     def on_final_transcript(self, ev: stt.SpeechEvent, *, speaking: bool | None = None) -> None: ...
+    def on_transcription_timeout(self, *, speech_duration: float, turn_start: float) -> None: ...
     def on_end_of_turn(self, info: _EndOfTurnInfo) -> bool: ...
+    def on_eot_prediction(self, ev: EotPredictionEvent) -> None: ...
+    def on_agent_backchannel_opportunity(self, ev: _AgentBackchannelOpportunityEvent) -> None: ...
     def on_preemptive_generation(self, info: _PreemptiveGenerationInfo) -> None: ...
-
+    def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None: ...
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
+
+
+class _STTPipeline:
+    """Transferable STT pipeline that survives agent handoff.
+
+    The pump task iterates the STT generator and forwards events into event_ch.
+    It is never cancelled during handoff — only the consumer is swapped.
+    """
+
+    def __init__(
+        self, stt_node: io.STTNode, *, is_closing: Callable[[], bool] | None = None
+    ) -> None:
+        self._stt_node = stt_node
+        # don't recreate the stream while the session is closing
+        self._is_closing = is_closing or (lambda: False)
+        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        self._event_ch = aio.Chan[stt.SpeechEvent]()
+        self._pump_task = asyncio.create_task(self._stt_pump())
+        self._pump_task.add_done_callback(lambda _: self._event_ch.close())
+        # wall-clock anchor for stream-based (STT and barge-in) timestamps
+        self.input_started_at: float | None = None
+
+    @property
+    def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
+        return self._audio_ch
+
+    @property
+    def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
+        return self._event_ch
+
+    @utils.log_exceptions(logger=logger)
+    async def _stt_pump(self) -> None:
+        """Iterate the STT node and forward events into *event_ch*.
+
+        Owns the generator lifecycle — never cancelled during handoff, only the
+        consumer is swapped. On a connection failure the long-lived stream is
+        recreated after a backoff; the session tolerance is what closes it.
+        """
+        from .agent import ModelSettings
+
+        while True:
+            try:
+                node = self._stt_node(self._audio_ch, ModelSettings())
+                if asyncio.iscoroutine(node):
+                    node = await node
+
+                if not isinstance(node, AsyncIterable):
+                    # None or a non-streaming node: nothing to iterate or recover
+                    return
+
+                async for ev in node:
+                    assert isinstance(ev, stt.SpeechEvent), (
+                        f"STT node must yield SpeechEvent, got: {type(ev)}"
+                    )
+                    self._event_ch.send_nowait(ev)
+            except APIError:
+                # only a connection failure is retried (it was emitted and counted by the
+                # session); any other error propagates and stops the pump
+                if self._is_closing():
+                    return
+                logger.warning(
+                    "STT stream ended on an unrecoverable error, recreating",
+                    exc_info=True,
+                )
+                await asyncio.sleep(_STT_RECONNECT_INTERVAL)
+                # the session may have started closing during the backoff
+                if self._is_closing():
+                    return
+                continue
+
+            # node ended without error (audio input closed): stop
+            return
+
+    def _rebind_node(self, stt_node: io.STTNode) -> None:
+        # the pipeline outlives the agent that created it (reused across handoff);
+        # recreation must call the currently-active node, not the previous agent's
+        # bound node whose activity is torn down (would raise, stopping the pump)
+        self._stt_node = stt_node
+
+    async def aclose(self) -> None:
+        await aio.cancel_and_wait(self._pump_task)
 
 
 class AudioRecognition:
@@ -103,30 +247,39 @@ class AudioRecognition:
         session: AgentSession,
         *,
         hooks: RecognitionHooks,
+        endpointing: BaseEndpointing,
         stt: io.STTNode | None,
         vad: vad.VAD | None,
+        interruption_detection: inference.AdaptiveInterruptionDetector | None,
         turn_detection: TurnDetectionMode | None,
-        min_endpointing_delay: float,
-        max_endpointing_delay: float,
+        stt_model: str | None = None,
+        stt_provider: str | None = None,
+        stt_aligned_transcript: bool = False,
     ) -> None:
         self._session = session
         self._hooks = hooks
         self._audio_input_atask: asyncio.Task[None] | None = None
         self._commit_user_turn_atask: asyncio.Task[None] | None = None
-        self._stt_atask: asyncio.Task[None] | None = None
+        self._stt_consumer_atask: asyncio.Task[None] | None = None
         self._vad_atask: asyncio.Task[None] | None = None
         self._end_of_turn_task: asyncio.Task[None] | None = None
-        self._min_endpointing_delay = min_endpointing_delay
-        self._max_endpointing_delay = max_endpointing_delay
+        self._endpointing: BaseEndpointing = endpointing
         self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
         self._stt = stt
         self._vad = vad
+        self._stt_model = stt_model
+        self._stt_provider = stt_provider
+        self._stt_aligned_transcript = stt_aligned_transcript
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
 
         self._sample_rate: int | None = None
-        self._speaking = False
+
+        # set on END_OF_SPEECH, cleared on START_OF_SPEECH; _speaking is its inverse.
+        # exposed as an event so _wait_for_inactive can level-wait on it
+        self._user_silence_ev = asyncio.Event()
+        self._user_silence_ev.set()
 
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
@@ -141,27 +294,94 @@ class AudioRecognition:
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
 
-        self._stt_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._stt_pipeline: _STTPipeline | None = None
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
+        self._vad_stream: VADStream | None = None
+
         self._tasks: set[asyncio.Task[Any]] = set()
 
-        self._user_turn_span: trace.Span | None = None
-        self._closing = asyncio.Event()
+        # region: adaptive interruption detection
+        self._interruption_atask: asyncio.Task[None] | None = None
+        self._interruption_detection = interruption_detection
+        self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
+        self._transcript_buffer: deque[SpeechEvent] = deque()
+        self._transcript_gate_active: bool = False
+        self._interruption_enabled: bool = interruption_detection is not None and vad is not None
+        # Tracks active audio playout, independently of the generation lifecycle.
+        self._agent_speaking: bool = False
+        self._agent_speech_started_at: float | None = None
+        self._active_vad_speech_started_at: float | None = None
+        # turn-scoped backchannel-over-agent verdict from adaptive interruption, consumed and reset at end of turn
+        self._overlap_in_current_turn: bool = False
+        self._turn_backchannel_over_agent: bool = False
+        # an overlap is open right now, awaiting a verdict; several can occur within one turn
+        self._overlap_open: bool = False
 
-    def update_options(
+        _backchannel_boundary: float | tuple[float, float] | None = (
+            session.options.interruption.get("backchannel_boundary")
+        )
+        self._backchannel_boundary: tuple[float, float] | None = (
+            (_backchannel_boundary, _backchannel_boundary)
+            if isinstance(_backchannel_boundary, int | float)
+            else _backchannel_boundary
+        )
+        if self._backchannel_boundary and (
+            len(self._backchannel_boundary) != 2 or any(x < 0.0 for x in self._backchannel_boundary)
+        ):
+            raise ValueError("backchannel_boundary must be a tuple of two non-negative floats")
+        self._backchannel_boundary_timer: asyncio.TimerHandle | None = None
+        self._backchannel_boundary_callback: Callable[[], None] | None = None
+        # endregion
+
+        self._user_turn_span: trace.Span | None = None
+        self._user_turn_start: float | None = None
+        # eou_wait: one span per user turn, from the last speech anchor to the turn decision
+        self._eou_wait_span: trace.Span | None = None
+        self._eou_wait_started_at_ns: int | None = None
+        self._eou_wait_rearms: int = 0
+        self._eou_wait_not_committed: int = 0
+        # eou_wait spans this user turn went through that ended with the user resuming
+        self._user_turn_resumes: int = 0
+        # latest timestamp recorded inside the wait; the span must not end before it
+        self._eou_wait_floor_ns: int | None = None
+        self._eou_detection_span: trace.Span | None = None
+        self._stt_request_ids: list[str] = []
+        self._closing = asyncio.Event()
+        self.__stt_context: BaseModel | None = None
+
+        self._vad_speech_started: bool = False
+
+        self._transcription_timeout_handle: asyncio.TimerHandle | None = None
+        self._turn_speech_duration: float = 0.0
+        self._turn_transcript_received: bool = False
+
+        # user turn limit tracking — accumulates across turns until agent speaks
+        self._turn_tracker = _UserTurnTracker()
+        self._word_tokenizer = tokenize.basic.WordTokenizer()
+
+        # streaming audio turn detection
+        self._turn_detector_stream: _StreamingTurnDetectorStream | None = None
+        self._turn_detector_prediction_fut: asyncio.Future[TurnDetectionEvent] | None = None
+        self._turn_detector_flushed: bool = False
+        self._turn_detector_late_prediction_warned: bool = False
+        self._last_emitted_prediction: TurnDetectionEvent | None = None
+
+    def _update_options(
         self,
         *,
+        endpointing: NotGivenOr[BaseEndpointing] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
+        # deprecated
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
-        turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
     ) -> None:
-        if is_given(min_endpointing_delay):
-            self._min_endpointing_delay = min_endpointing_delay
-        if is_given(max_endpointing_delay):
-            self._max_endpointing_delay = max_endpointing_delay
+        if is_given(endpointing):
+            self._endpointing = endpointing
 
         if is_given(turn_detection):
-            self._turn_detector = turn_detection if not isinstance(turn_detection, str) else None
+            self._update_turn_detector(
+                turn_detection if not isinstance(turn_detection, str) else None
+            )
 
             mode = turn_detection if isinstance(turn_detection, str) else None
             if self._turn_detection_mode != mode:
@@ -174,58 +394,515 @@ class AudioRecognition:
                         if not self._end_of_turn_task.done():
                             self._end_of_turn_task.cancel()
                     self._end_of_turn_task = None
+                    # the pending decision is abandoned with the mode; the user turn stays open
+                    self._end_eou_wait_span("dropped")
                     self._user_turn_committed = False
+                    if self._turn_detector_stream is not None:
+                        self._turn_detector_stream.cancel_inference()
+                    self._turn_detector_prediction_fut = None
 
-    def start(self) -> None:
-        self.update_stt(self._stt)
-        self.update_vad(self._vad)
+    def _update_last_language(self, language: LanguageCode, transcript: str) -> None:
+        if not language or language.language in _NON_SPECIFIC_LANGUAGE_CODES:
+            return
 
-    def stop(self) -> None:
-        self.update_stt(None)
-        self.update_vad(None)
+        if not self._last_language or len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH:
+            self._last_language = language
 
-    def push_audio(self, frame: rtc.AudioFrame, *, skip_stt: bool = False) -> None:
+    @property
+    def _input_started_at(self) -> float | None:
+        return self._stt_pipeline.input_started_at if self._stt_pipeline is not None else None
+
+    def _start(
+        self,
+        *,
+        stt_pipeline: _STTPipeline | None = None,
+        turn_detector_stream: _StreamingTurnDetectorStream | None = None,
+    ) -> None:
+        self._update_stt(self._stt, pipeline=stt_pipeline)
+        self._update_vad(self._vad)
+        self._update_interruption_detection(self._interruption_detection)
+        if isinstance(self._turn_detector, _StreamingTurnDetector) or self._turn_detector is None:
+            self._update_turn_detector(self._turn_detector, stream=turn_detector_stream)
+
+    def _stop(self) -> None:
+        self._update_stt(None)
+        self._update_vad(None)
+        self._update_turn_detector(None)
+        self._update_interruption_detection(None)
+
+    @property
+    def stt_context(self) -> BaseModel | None:
+        """Live speaker metadata from the STT stream.
+
+        STT plugins set ``RecognizeStream.context`` during recognition.
+        The framework copies it here so it's accessible even after the stream
+        is replaced (e.g. during agent handoff).
+        """
+        return self.__stt_context
+
+    @stt_context.setter
+    def stt_context(self, value: BaseModel | None) -> None:
+        self.__stt_context = value
+
+    def llm_instructions(self) -> str | None:
+        """Speaker context formatted as LLM instructions.
+
+        Returns ``stt_context.to_instructions()`` if the context implements
+        :class:`SpeakerContext`, otherwise ``None``.
+        """
+        ctx = self.__stt_context
+        if ctx is not None and isinstance(ctx, stt.SpeakerContext):
+            result = ctx.to_instructions()
+            return result if result else None
+        return None
+
+    @property
+    def _adaptive_interruption_active(self) -> bool:
+        return (
+            self._interruption_enabled
+            and self._interruption_ch is not None
+            and not self._interruption_ch.closed
+        )
+
+    # region: boundary for adaptive interruption detection
+
+    @property
+    def _backchannel_boundary_active(self) -> bool:
+        return self._backchannel_boundary_timer is not None
+
+    def _on_backchannel_boundary_done(self) -> None:
+        self._backchannel_boundary_timer = None
+        cb, self._backchannel_boundary_callback = (
+            self._backchannel_boundary_callback,
+            None,
+        )
+        if cb is not None:
+            cb()
+
+    def _cancel_backchannel_boundary(self) -> None:
+        if self._backchannel_boundary_timer is not None:
+            self._backchannel_boundary_timer.cancel()
+            self._backchannel_boundary_timer = None
+        self._backchannel_boundary_callback = None
+
+    # endregion
+
+    def _on_start_of_agent_speech(self, started_at: float) -> None:
+        """Mark the start of active agent speech.
+
+        This lifecycle follows audible playout, not the generation. Resuming paused playout
+        starts a new active-speech interval.
+        """
+        self._transcript_gate_active = False
+        self._agent_speaking = True
+        self._agent_speech_started_at = started_at
+        self._endpointing.on_start_of_agent_speech(started_at=started_at)
+
+        # reset user turn tracker when agent starts speaking
+        self._turn_tracker = _UserTurnTracker()
+
+        if self._backchannel_boundary and (start_cooldown := self._backchannel_boundary[0]) > 0:
+            self._cancel_backchannel_boundary()
+            self._backchannel_boundary_timer = asyncio.get_running_loop().call_later(
+                start_cooldown, self._on_backchannel_boundary_done
+            )
+
+        if self._adaptive_interruption_active:
+            self._interruption_ch.send_nowait(_AgentSpeechStartedSentinel())  # type: ignore[union-attr]
+
+        if self._speaking:
+            self._on_start_of_overlap_speech(
+                started_at=started_at,
+                user_speaking_span=self._session._user_speaking_span,
+            )
+
+    def _on_end_of_agent_speech(self, *, ended_at: float) -> None:
+        """Mark the end of active agent speech.
+
+        This can occur while the generation remains active, such as when playout is paused.
+        """
+        self._cancel_backchannel_boundary()
+        agent_was_speaking = self._agent_speaking
+
+        if agent_was_speaking:
+            self._endpointing.on_end_of_agent_speech(ended_at=ended_at)
+        # Replayed STT events must observe the post-playout state.
+        self._agent_speaking = False
+
+        if not self._adaptive_interruption_active:
+            self._flush_held_transcripts()
+            self._overlap_open = False
+            self._agent_speech_started_at = None
+            return
+
+        if agent_was_speaking:
+            # close any unresolved overlap before resetting the detector
+            self._on_end_of_overlap_speech(ended_at=ended_at, agent_ended=True)
+
+        self._interruption_ch.send_nowait(_AgentSpeechEndedSentinel())  # type: ignore[union-attr]
+
+        self._overlap_open = False
+
+        self._flush_held_transcripts(
+            resolved_at=ended_at,
+            vad_speech_started_at=self._active_vad_speech_started_at,
+        )
+
+        self._agent_speech_started_at = None
+
+    def _on_start_of_speech(
+        self,
+        started_at: float,
+        speech_duration: float = 0.0,
+        user_speaking_span: trace.Span | None = None,
+        *,
+        skip_adaptive_interruption: bool = False,
+    ) -> None:
+        self._endpointing.on_start_of_speech(
+            started_at=started_at, overlapping=self._agent_speaking
+        )
+        # every speech onset clears the prior backchannel verdict; an overlap re-derives it below
+        self._turn_backchannel_over_agent = False
+        if not self._agent_speaking:
+            self._overlap_in_current_turn = False
+
+        if not skip_adaptive_interruption:
+            self._on_start_of_overlap_speech(
+                started_at=started_at,
+                speech_duration=speech_duration,
+                user_speaking_span=user_speaking_span,
+            )
+
+    def _on_start_of_overlap_speech(
+        self,
+        started_at: float,
+        speech_duration: float = 0.0,
+        user_speaking_span: trace.Span | None = None,
+    ) -> None:
+        if not self._adaptive_interruption_active or not self._agent_speaking:
+            return
+
+        start_boundary = self._backchannel_boundary[0] if self._backchannel_boundary else 0.0
+        started_in_boundary = (
+            start_boundary > 0
+            and self._agent_speech_started_at is not None
+            and started_at <= self._agent_speech_started_at + start_boundary
+        )
+        if (
+            self._hooks.interruption_by_audio_activity_enabled
+            or self._backchannel_boundary_active
+            or started_in_boundary
+        ):
+            # VAD/STT owns the rest of this agent-speech interval because this
+            # overlap's transcript can arrive after VAD EOS.
+            self._hooks.interruption_by_audio_activity_enabled = True
+            self._flush_held_transcripts()
+            return
+
+        # overlap over agent speech started this turn; gates verdict acceptance below
+        self._overlap_in_current_turn = True
+        self._overlap_open = True
+        self._transcript_gate_active = True
+        self._interruption_ch.send_nowait(  # type: ignore[union-attr]
+            _OverlapSpeechStartedSentinel(
+                speech_duration=speech_duration,
+                user_speaking_span=user_speaking_span,
+                started_at=started_at,
+            )
+        )
+
+    def _on_end_of_speech(
+        self,
+        ended_at: float,
+        user_speaking_span: trace.Span | None = None,
+        interruption: NotGivenOr[bool] = NOT_GIVEN,
+    ) -> None:
+        if self._speaking:
+            self._endpointing.on_end_of_speech(
+                ended_at=ended_at,
+                interruption=interruption,
+            )
+
+        self._on_end_of_overlap_speech(ended_at=ended_at, user_speaking_span=user_speaking_span)
+
+    def _on_end_of_overlap_speech(
+        self,
+        ended_at: float,
+        user_speaking_span: trace.Span | None = None,
+        agent_ended: bool = False,
+    ) -> None:
+        """End interruption inference when agent is speaking and overlap speech ends.
+
+        agent_ended is True when the overlap is force-ended because the agent finished
+        speaking (the user may still be talking), in which case the synthesized verdict
+        is inconclusive and must not be treated as a confirmed backchannel.
+        """
+        # the overlap ends once, on the first of: a verdict, the user stopping, the agent
+        # stopping, or a teardown — so a call can arrive with it already closed
+        if not self._adaptive_interruption_active or not self._overlap_open:
+            return
+        self._overlap_open = False
+
+        # Only set is_interruption=false if not already set (avoid overwriting true from interruption detection)
+        if user_speaking_span and user_speaking_span.is_recording():
+            if isinstance(user_speaking_span, ReadableSpan):
+                if (
+                    user_speaking_span.attributes
+                    and user_speaking_span.attributes.get(trace_types.ATTR_IS_INTERRUPTION) is None
+                ):
+                    user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
+            else:
+                user_speaking_span.set_attribute(trace_types.ATTR_IS_INTERRUPTION, "false")
+
+        self._interruption_ch.send_nowait(  # type: ignore[union-attr]
+            _OverlapSpeechEndedSentinel(ended_at=ended_at or time.time(), agent_ended=agent_ended)
+        )
+
+    @property
+    def _speaking(self) -> bool:
+        return not self._user_silence_ev.is_set()
+
+    @_speaking.setter
+    def _speaking(self, value: bool) -> None:
+        if value:
+            self._user_silence_ev.clear()
+        else:
+            self._user_silence_ev.set()
+
+    async def _wait_for_user_silence(self) -> None:
+        if self._user_silence_ev.is_set():
+            return
+        await self._user_silence_ev.wait()
+
+    def _trim_held_transcripts(
+        self,
+        *,
+        resolved_at: float,
+        vad_speech_started_at: float | None,
+    ) -> None:
+        end_boundary = self._backchannel_boundary[1] if self._backchannel_boundary else 0.0
+        trim_start = resolved_at - end_boundary
+        if vad_speech_started_at is not None:
+            trim_start = min(trim_start, vad_speech_started_at)
+        if self._agent_speech_started_at is not None:
+            trim_start = max(trim_start, self._agent_speech_started_at)
+
+        while self._transcript_buffer:
+            event = self._transcript_buffer[0]
+            # Known speech timing takes precedence; arrival time is the fallback.
+            if event.speech_end_time is not None:
+                should_trim = event.speech_end_time < trim_start and (
+                    self._agent_speech_started_at is None
+                    or self._agent_speech_started_at < event.speech_end_time
+                )
+            else:
+                should_trim = event.created_at < trim_start
+
+            if not should_trim:
+                # Keep the provider-ordered suffix. Events have no stable utterance ID,
+                # so filtering later events can separate SOS, transcripts, and EOS.
+                break
+            self._transcript_buffer.popleft()
+
+    def _flush_held_transcripts(
+        self,
+        *,
+        resolved_at: float | None = None,
+        vad_speech_started_at: float | None = None,
+    ) -> None:
+        """Stop holding transcripts and emit the retained events in provider order."""
+        gate_was_active = self._transcript_gate_active
+        if gate_was_active or self._transcript_buffer:
+            logger.trace(
+                "flushing held transcripts",
+                extra={
+                    "event_count": len(self._transcript_buffer),
+                    "gate_was_active": gate_was_active,
+                    "resolved_at": resolved_at,
+                    "vad_speech_started_at": vad_speech_started_at,
+                },
+            )
+
+        self._transcript_gate_active = False
+        if resolved_at is not None:
+            self._trim_held_transcripts(
+                resolved_at=resolved_at,
+                vad_speech_started_at=vad_speech_started_at,
+            )
+
+        if not self._transcript_buffer:
+            return
+
+        events_to_emit = list(self._transcript_buffer)
+        self._transcript_buffer.clear()
+        for ev in events_to_emit:
+            logger.trace("re-emitting held STT event", extra={"event": ev.type})
+            self._process_stt_event(ev)
+
+    def _set_interruption_enabled(self, enabled: bool) -> None:
+        self._interruption_enabled = enabled
+        if not enabled:
+            self._flush_held_transcripts()
+
+    def _push_audio(
+        self, frame: rtc.AudioFrame, *, stt_frame: rtc.AudioFrame | None = None
+    ) -> None:
+        """Forward an audio frame to STT, VAD, AMD and the interruption detector.
+
+        When ``stt_frame`` is provided, it is sent to the STT pipeline in place of
+        ``frame`` (e.g. a silence substitute during AEC warmup or uninterruptible
+        speech). VAD, AMD and the interruption channel always receive ``frame``.
+        """
         self._sample_rate = frame.sample_rate
-        if not skip_stt and self._stt_ch is not None:
-            self._stt_ch.send_nowait(frame)
+        if self._stt_pipeline is not None:
+            # stamp the wall-clock anchor on the first frame to reach the pipeline
+            if self._stt_pipeline.input_started_at is None:
+                self._stt_pipeline.input_started_at = time.time() - frame.duration
+            self._stt_pipeline.audio_ch.send_nowait(stt_frame if stt_frame is not None else frame)
 
         if self._vad_ch is not None:
             self._vad_ch.send_nowait(frame)
 
-    async def aclose(self) -> None:
+        if self._session.amd is not None:
+            self._session.amd.push_audio(frame)
+
+        if self._interruption_ch is not None:
+            self._interruption_ch.send_nowait(frame)
+
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.push_audio(frame)
+
+    async def _aclose(self) -> None:
         self._closing.set()
+        try:
+            if self._commit_user_turn_atask is not None:
+                result = (
+                    await asyncio.gather(self._commit_user_turn_atask, return_exceptions=True)
+                )[0]
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "error while committing the final user turn on close: %s",
+                        type(result).__name__,
+                    )
 
-        if self._commit_user_turn_atask is not None:
-            await self._commit_user_turn_atask
+            if self._stt_pipeline is not None:
+                await self._stt_pipeline.aclose()
+                self._stt_pipeline = None
 
-        await aio.cancel_and_wait(*self._tasks)
+            await aio.cancel_and_wait(*self._tasks)
 
-        if self._stt_atask is not None:
-            await aio.cancel_and_wait(self._stt_atask)
+            if self._stt_consumer_atask is not None:
+                await aio.cancel_and_wait(self._stt_consumer_atask)
 
-        if self._vad_atask is not None:
-            await aio.cancel_and_wait(self._vad_atask)
+            if self._vad_atask is not None:
+                await aio.cancel_and_wait(self._vad_atask)
 
-        if self._end_of_turn_task is not None:
-            await self._end_of_turn_task
+            if self._interruption_atask is not None:
+                await aio.cancel_and_wait(self._interruption_atask)
 
-    def update_stt(self, stt: io.STTNode | None) -> None:
+            if self._end_of_turn_task is not None:
+                result = (await asyncio.gather(self._end_of_turn_task, return_exceptions=True))[0]
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "error while completing the final user turn on close: %s",
+                        type(result).__name__,
+                    )
+
+            if self._turn_detector_stream is not None:
+                await self._turn_detector_stream.aclose()
+                self._turn_detector_stream = None
+            self._turn_detector_prediction_fut = None
+
+            if self._backchannel_boundary_timer is not None:
+                self._backchannel_boundary_timer.cancel()
+                self._backchannel_boundary_timer = None
+                self._backchannel_boundary_callback = None
+        finally:
+            self._cancel_transcription_timeout()
+            # EOU normally ends this span, but teardown cancels EOU before a
+            # pending speech segment necessarily produces a transcript.
+            self._end_user_turn_span()
+
+    def _update_stt(
+        self,
+        stt: io.STTNode | None,
+        *,
+        pipeline: _STTPipeline | None = None,
+        model: NotGivenOr[str | None] = NOT_GIVEN,
+        provider: NotGivenOr[str | None] = NOT_GIVEN,
+        aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        reset_context: bool = False,
+    ) -> None:
         self._stt = stt
-        if stt:
-            self._stt_ch = aio.Chan[rtc.AudioFrame]()
-            self._stt_atask = asyncio.create_task(
-                self._stt_task(stt, self._stt_ch, self._stt_atask)
-            )
-        elif self._stt_atask is not None:
-            task = asyncio.create_task(aio.cancel_and_wait(self._stt_atask))
-            task.add_done_callback(lambda _: self._tasks.discard(task))
-            self._tasks.add(task)
-            self._stt_atask = None
-            self._stt_ch = None
+        # model/provider drive the user_turn span attributes; swapping to a different STT must
+        # refresh them (they default to unchanged for same-STT resets like _clear_user_turn)
+        if is_given(model):
+            self._stt_model = model
+        if is_given(provider):
+            self._stt_provider = provider
+        if is_given(aligned_transcript):
+            self._stt_aligned_transcript = aligned_transcript
+        # speaker metadata belongs to the old stream; drop it so a new STT starts clean
+        if reset_context:
+            self.stt_context = None
+        if pipeline is None and stt is not None:
+            pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
+        elif pipeline is not None and stt is not None:
+            # reused pipeline: rebind to this activity's node so a recreation
+            # after an error doesn't call into the previous (torn-down) agent
+            pipeline._rebind_node(stt)
 
-    def update_vad(self, vad: vad.VAD | None) -> None:
+        if pipeline is not None:
+            self._stt_consumer_atask = asyncio.create_task(
+                self._stt_consumer(
+                    event_ch=pipeline.event_ch,
+                    old_pipeline=self._stt_pipeline,
+                    old_consumer=self._stt_consumer_atask,
+                )
+            )
+            self._stt_pipeline = pipeline
+            # reset interruption handling related state
+            self._transcript_buffer.clear()
+        else:
+            self._cancel_transcription_timeout()
+
+            if self._stt_consumer_atask is not None:
+                task = asyncio.create_task(aio.cancel_and_wait(self._stt_consumer_atask))
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_consumer_atask = None
+
+            if self._stt_pipeline is not None:
+                task = asyncio.create_task(self._stt_pipeline.aclose())
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._stt_pipeline = None
+
+    def _check_vad_silence_requirement(
+        self,
+        detector: NotGivenOr[_TurnDetector | _StreamingTurnDetector | None] = NOT_GIVEN,
+        vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
+    ) -> None:
+        if not is_given(detector):
+            detector = self._turn_detector
+        # validate a candidate vad (before it's applied) when given, else the active one
+        target_vad = vad if is_given(vad) else self._vad
+        if not isinstance(detector, _StreamingTurnDetector) or target_vad is None:
+            return
+        if (current := getattr(target_vad, "min_silence_duration", None)) is None:
+            return
+        required = (MIN_SILENCE_DURATION_MS + 50) / 1000
+        if current < required:
+            raise ValueError(
+                f"vad min_silence_duration={current}s is too low for the TurnDetector. "
+                f"Raise the VAD's min_silence_duration to at least {required}s."
+            )
+
+    def _update_vad(self, vad: vad.VAD | None) -> None:
         self._vad = vad
+        self._check_vad_silence_requirement()
         if vad:
+            self._vad_stream = None
             self._vad_ch = aio.Chan[rtc.AudioFrame]()
             self._vad_atask = asyncio.create_task(
                 self._vad_task(vad, self._vad_ch, self._vad_atask)
@@ -236,29 +913,136 @@ class AudioRecognition:
             self._tasks.add(task)
             self._vad_atask = None
             self._vad_ch = None
+            self._vad_stream = None
 
-    def clear_user_turn(self) -> None:
+        self._set_interruption_enabled(
+            self._interruption_detection is not None and self._vad is not None
+        )
+
+    async def _detach_stt(self) -> _STTPipeline | None:
+        """Detach the STT pipeline for handoff to another AudioRecognition.
+
+        Returns the pipeline (pump task + channels) without stopping it.
+        The caller is responsible for passing it to the new AudioRecognition
+        via start(..., stt_pipeline=pipeline).
+        """
+        pipeline = self._stt_pipeline
+        self._stt_pipeline = None
+
+        # stop the consumer — the new AudioRecognition will start its own
+        if self._stt_consumer_atask is not None:
+            await aio.cancel_and_wait(self._stt_consumer_atask)
+            self._stt_consumer_atask = None
+
+        return pipeline
+
+    def _update_interruption_detection(
+        self, interruption_detection: inference.AdaptiveInterruptionDetector | None
+    ) -> None:
+        self._flush_held_transcripts()
+        self._interruption_detection = interruption_detection
+        self._overlap_open = False  # the stream it belonged to is gone either way
+        if interruption_detection is not None:
+            self._interruption_ch = aio.Chan[inference.InterruptionDataFrameType]()
+            self._interruption_atask = asyncio.create_task(
+                self._interruption_task(
+                    interruption_detection, self._interruption_ch, self._interruption_atask
+                )
+            )
+        else:
+            if self._interruption_atask is not None:
+                task = asyncio.create_task(aio.cancel_and_wait(self._interruption_atask))
+                task.add_done_callback(lambda _: self._tasks.discard(task))
+                self._tasks.add(task)
+                self._interruption_atask = None
+            self._interruption_ch = None
+            self._cancel_backchannel_boundary()
+
+        self._set_interruption_enabled(
+            self._interruption_detection is not None and self._vad is not None
+        )
+
+    def _update_turn_detector(
+        self,
+        detector: _TurnDetector | _StreamingTurnDetector | None,
+        *,
+        stream: _StreamingTurnDetectorStream | None = None,
+    ) -> None:
+        """Update the turn detector and turn detector stream if possible.
+
+        When *stream* is provided it is adopted as-is (handoff reuse) instead of
+        opening a fresh stream on *detector*; the live transport stream — and its
+        per-session cloud->local fallback state — survives the handoff.
+        """
+        self._check_vad_silence_requirement(detector)
+        self._turn_detector = detector
+
+        if (old_stream := self._turn_detector_stream) is not None and old_stream is not stream:
+            task = asyncio.create_task(old_stream.aclose())
+            task.add_done_callback(lambda _: self._tasks.discard(task))
+            self._tasks.add(task)
+        if stream is None:
+            stream = detector.stream() if isinstance(detector, _StreamingTurnDetector) else None
+        if self._turn_detector_stream is not stream:
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = False
+        self._turn_detector_stream = stream
+
+    def _detach_turn_detector(self) -> _StreamingTurnDetectorStream | None:
+        """Detach the turn detector stream for handoff to another AudioRecognition.
+
+        Returns the live stream (transport run loop intact) without closing it.
+        The caller passes it to the new AudioRecognition via
+        ``start(..., turn_detector_stream=stream)``. The adopting recognition
+        starts a fresh inference request on its next VAD event, superseding
+        any request that survived the handoff.
+        """
+        stream, self._turn_detector_stream = self._turn_detector_stream, None
+        self._turn_detector_prediction_fut = None
+        return stream
+
+    def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
+        self._last_final_transcript_time = None
+        self._speech_start_time = None
+        self._last_speaking_time = None
+        self._vad_speech_started = False
         self._user_turn_committed = False
+        self._last_emitted_prediction = None
+        if self._turn_detector_stream is not None:
+            self._turn_detector_stream.flush(reason="clear_user_turn")
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = True
+
+        self._turn_tracker = _UserTurnTracker()
+
+        # end any in-progress user_turn span so the next speech starts a fresh one
+        self._end_user_turn_span()
+        self._stt_request_ids = []
+        self._reset_transcription_timeout()
 
         # reset stt to clear the buffer from previous user turn
         stt = self._stt
-        self.update_stt(None)
-        self.update_stt(stt)
+        self._update_stt(None)
+        self._update_stt(stt)
 
-    def commit_user_turn(
+    def _commit_user_turn(
         self,
         *,
         audio_detached: bool,
         transcript_timeout: float,
         stt_flush_duration: float = 2.0,
         skip_reply: bool = False,
-    ) -> None:
+    ) -> asyncio.Future[str]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
         if not self._stt or self._closing.is_set():
-            return
+            fut.set_result("")
+            return fut
 
         async def _commit_user_turn() -> None:
             if self._last_final_transcript_time is None or (
@@ -271,16 +1055,10 @@ class AudioRecognition:
 
                 # flush the stt by pushing silence
                 if audio_detached and self._sample_rate:
-                    num_samples = int(self._sample_rate * 0.2)
-                    silence_frame = rtc.AudioFrame(
-                        b"\x00\x00" * num_samples,
-                        sample_rate=self._sample_rate,
-                        num_channels=1,
-                        samples_per_channel=num_samples,
-                    )
-                    num_frames = max(0, int(math.ceil(stt_flush_duration / silence_frame.duration)))
+                    silence = utils.audio.silence_frame(0.2, self._sample_rate)
+                    num_frames = max(0, int(math.ceil(stt_flush_duration / silence.duration)))
                     for _ in range(num_frames):
-                        self.push_audio(silence_frame)
+                        self._push_audio(silence)
 
                 # wait for the final transcript to be available
                 try:
@@ -294,7 +1072,7 @@ class AudioRecognition:
                             "final transcript not received after timeout",
                             extra={
                                 "transcript_timeout": transcript_timeout,
-                                "interim_transcript": self._audio_interim_transcript,
+                                "lk.pii.interim_transcript": self._audio_interim_transcript,
                             },
                         )
 
@@ -316,18 +1094,35 @@ class AudioRecognition:
                     f"{self._audio_transcript} {self._audio_interim_transcript}".strip()
                 )
 
+            transcript = self._audio_transcript
             self._audio_interim_transcript = ""
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx, skip_reply=skip_reply)
+            self._run_eou_detection(
+                chat_ctx,
+                skip_reply=skip_reply,
+                trigger="manual",
+            )
             self._user_turn_committed = True
+            if not fut.done():
+                fut.set_result(transcript)
+
+        def _on_task_done(task: asyncio.Task[None]) -> None:
+            if fut.done():
+                return
+            if task.cancelled():
+                fut.cancel()
+            elif exc := task.exception():
+                fut.set_exception(exc)
 
         if self._commit_user_turn_atask is not None:
             self._commit_user_turn_atask.cancel()
 
         self._commit_user_turn_atask = asyncio.create_task(_commit_user_turn())
+        self._commit_user_turn_atask.add_done_callback(_on_task_done)
+        return fut
 
     @property
-    def current_transcript(self) -> str:
+    def _current_transcript(self) -> str:
         """
         Transcript for this turn, including interim transcript if available.
         """
@@ -336,6 +1131,23 @@ class AudioRecognition:
         return self._audio_transcript
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if (
+            ev.speech_end_time is None
+            and self._stt_aligned_transcript
+            and ev.alternatives
+            and ev.alternatives[0].end_time > 0
+            and self._input_started_at is not None
+        ):
+            speech_end_time = self._input_started_at + ev.alternatives[0].end_time
+            if speech_end_time <= ev.created_at:
+                ev = replace(ev, speech_end_time=speech_end_time)
+
+        # Collect provider-known STT ids for this user turn. The actual attribute
+        # is written once when the user_turn span ends (see _on_end_of_turn), to
+        # avoid ordering issues with span creation.
+        if ev.request_id and ev.request_id not in self._stt_request_ids:
+            self._stt_request_ids.append(ev.request_id)
+
         if (
             self._turn_detection_mode == "manual"
             and self._user_turn_committed
@@ -349,26 +1161,72 @@ class AudioRecognition:
             # and EOU task is done or this is an interim transcript
             return
 
+        if (
+            ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+            and ev.alternatives
+            and ev.alternatives[0].text
+        ):
+            self._mark_turn_transcribed()
+            # whenever there is a final transcript when the gate is off
+            # fall back to vad interruption for the rest of the turn:
+            # - late STT transcript during backchannel boundary
+            # - late STT transcript when no overlap speech has been detected
+            if self._agent_speaking and not self._transcript_gate_active:
+                self._hooks.interruption_by_audio_activity_enabled = True
+
+        if ev.type != stt.SpeechEventType.RECOGNITION_USAGE and self._transcript_gate_active:
+            logger.trace("holding STT event during agent speech", extra={"event": ev.type})
+            self._transcript_buffer.append(ev)
+            return
+
+        self._process_stt_event(ev)
+
+    def _process_stt_event(self, ev: stt.SpeechEvent) -> None:
+        has_stt_end_time = bool(
+            len(ev.alternatives) > 0
+            and ev.alternatives[0].end_time > 0
+            and self._input_started_at is not None
+        )
+        now = time.time()
+        stt_last_speaking_time = (
+            min(ev.alternatives[0].end_time + self._input_started_at, now)
+            if has_stt_end_time and self._input_started_at is not None
+            else now
+        )
+        # Prefer the provider's speaking time when there is no VAD anchor to beat:
+        # no VAD at all, or the VAD missed this segment. In STT turn detection the
+        # provider owns the turn boundary, so its timestamp wins there too
+        # one issue to note: without `end_time` the estimate collapses to `now`
+        # which would report a ~0 transcription_delay for STT mode.
+        use_stt_speaking_time = (
+            self._vad is None
+            or self._last_speaking_time is None
+            or (self._turn_detection_mode == "stt" and has_stt_end_time)
+        )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
+            self._final_transcript_received.set()
             if not transcript:
                 return
 
             self._hooks.on_final_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
-            extra: dict[str, Any] = {"user_transcript": transcript, "language": self._last_language}
+            if self._session.amd is not None:
+                self._session.amd._on_transcript(transcript)
+
+            extra: dict[str, Any] = {
+                "lk.pii.user_transcript": transcript,
+                "language": self._last_language,
+            }
             if self._last_speaking_time:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
@@ -380,15 +1238,12 @@ class AudioRecognition:
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
             self._audio_preflight_transcript = ""
-            self._final_transcript_received.set()
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
-                # TODO: this would screw up transcription latency metrics
-                # but we'll live with it for now.
-                # the correct way is to ensure STT fires SpeechEventType.END_OF_SPEECH
-                # and using that timestamp for _last_speaking_time
-                self._last_speaking_time = time.time()
+            if use_stt_speaking_time:
+                self._last_speaking_time = stt_last_speaking_time
+
+            # check user turn limit after accumulating transcript
+            self._check_user_turn_limit(transcript)
 
             if self._vad_base_turn_detection or self._user_turn_committed:
                 if transcript_changed:
@@ -407,30 +1262,30 @@ class AudioRecognition:
 
                 if not self._speaking:
                     chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                    self._run_eou_detection(chat_ctx)
+                    self._run_eou_detection(
+                        chat_ctx,
+                        trigger="stt",
+                    )
 
         elif ev.type == stt.SpeechEventType.PREFLIGHT_TRANSCRIPT:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
 
-            if not self._last_language or (
-                language and len(transcript) > MIN_LANGUAGE_DETECTION_LENGTH
-            ):
-                self._last_language = language
+            self._update_last_language(language, transcript)
 
             if not transcript:
                 return
 
             logger.debug(
                 "received user preflight transcript",
-                extra={"user_transcript": transcript, "language": self._last_language},
+                extra={"lk.pii.user_transcript": transcript, "language": self._last_language},
             )
 
             # still need to increment it as it's used for turn detection,
@@ -439,9 +1294,8 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
 
-            if not self._vad or self._last_speaking_time is None:
-                # vad disabled, use stt timestamp
-                self._last_speaking_time = time.time()
+            if use_stt_speaking_time:
+                self._last_speaking_time = stt_last_speaking_time
 
             if self._turn_detection_mode != "manual" or self._user_turn_committed:
                 confidence_vals = list(self._final_transcript_confidence) + [confidence]
@@ -457,31 +1311,68 @@ class AudioRecognition:
             self._hooks.on_interim_transcript(
                 ev,
                 speaking=self._speaking
-                if self._vad or self._turn_detection_mode == "stt"
+                if (self._vad is not None) or self._turn_detection_mode == "stt"
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(None)
+
+            # STT EOT changes user state from speaking to listening without updating VAD internal states
+            # VAD EOS will also skip updating user state from listening (STT enforced) to listening (VAD detected)
+            # and user state won't be updated until a new VAD SOS is received
+            # reset VAD so that incorrect end of turn from STT can be corrected by VAD interruption
+            # if user is still speaking (an immediate VAD SOS will interrupt the agent)
+            if self._vad:
+                if self._vad_speech_started:
+                    if self._vad_stream is not None:
+                        self._vad_stream.flush()
+                    else:
+                        self._update_vad(self._vad)
+
+                    logger.warning(
+                        "stt end of speech received while vad is still in a speech segment, "
+                        "flushing vad",
+                        extra={
+                            "vad_speech_start_time": self._speech_start_time,
+                            "flushed": self._vad_stream is not None,
+                        },
+                    )
 
             self._speaking = False
             self._user_turn_committed = True
-            if not self._vad or self._last_speaking_time is None:
-                self._last_speaking_time = time.time()
+
+            # always use STT speaking time since turn detection mode is set to STT. we would want
+            # alignment here since _last_speaking_time is used for turn detection timing
+            if ev.speech_end_time is not None:
+                # clamped like the other anchors: a provider clock running ahead would
+                # otherwise push the anchor into the future and extend `extra_sleep`,
+                # delaying the turn commit by the skew
+                self._last_speaking_time = min(ev.speech_end_time, now)
+            else:
+                # use an implied version computed based on either word timestamps or current time
+                self._last_speaking_time = stt_last_speaking_time
 
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-            self._run_eou_detection(chat_ctx)
+            self._run_eou_detection(
+                chat_ctx,
+                trigger="stt",
+            )
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
-            with trace.use_span(self._ensure_user_turn_span()):
-                self._hooks.on_start_of_speech(None)
+            # If the plugin provided a server onset timestamp, use it;
+            # otherwise fall back to message arrival time.
+            if self._speech_start_time is None:
+                self._speech_start_time = ev.speech_start_time or time.time()
+            self._end_eou_wait_span("user_resumed", end_time=ev.speech_start_time or now)
+
+            with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
+                self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
 
             self._speaking = True
-            if self._speech_start_time is None:
-                self._speech_start_time = time.time()
-            self._last_speaking_time = time.time()
+            self._last_speaking_time = stt_last_speaking_time
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
@@ -489,15 +1380,30 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
-            with trace.use_span(
-                self._ensure_user_turn_span(start_time=time.time() - ev.speech_duration)
-            ):
-                self._hooks.on_start_of_speech(ev)
+            speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
+            self._active_vad_speech_started_at = speech_start_time
+            if not self._vad_speech_started:
+                self._speech_start_time = speech_start_time
+                self._vad_speech_started = True
+
+            self._cancel_transcription_timeout()
+            self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
+
+            with tracer.use_span(self._ensure_user_turn_span(start_time=speech_start_time)):
+                self._hooks.on_start_of_speech(ev, speech_start_time=speech_start_time)
 
             self._speaking = True
 
+            if self._turn_detector_stream is not None:
+                self._turn_detector_stream.cancel_inference()
+            self._turn_detector_prediction_fut = None
+            self._turn_detector_flushed = False
+
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
+
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_started()
 
         elif ev.type == vad.VADEventType.INFERENCE_DONE:
             self._hooks.on_vad_inference_done(ev)
@@ -507,30 +1413,112 @@ class AudioRecognition:
                 self._last_speaking_time = time.time()
 
                 if self._speech_start_time is None:
-                    self._speech_start_time = time.time()
+                    self._speech_start_time = time.time() - ev.raw_accumulated_speech
+                if self._speaking and self._turn_detector_prediction_fut is not None:
+                    if self._turn_detector_stream is not None:
+                        self._turn_detector_stream.cancel_inference()
+                    self._turn_detector_prediction_fut = None
+
+            if ev.raw_accumulated_silence >= MIN_SILENCE_DURATION_MS / 1000 and self._speaking:
+                if (
+                    self._turn_detector_stream is not None
+                    and self._turn_detector_prediction_fut is None
+                ):
+                    self._turn_detector_prediction_fut = self._turn_detector_stream.predict()
 
         elif ev.type == vad.VADEventType.END_OF_SPEECH:
-            with trace.use_span(self._ensure_user_turn_span()):
+            vad_speech_started = self._vad_speech_started
+            with tracer.use_span(self._ensure_user_turn_span()):
                 self._hooks.on_end_of_speech(ev)
 
+            self._active_vad_speech_started_at = None
+            self._vad_speech_started = False
             self._speaking = False
+            speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
+            self._last_speaking_time = speech_end_time
+
+            # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
+            if self._stt_pipeline is not None and vad_speech_started:
+                self._arm_transcription_timeout(
+                    ev.speech_duration,
+                    delay=ev.silence_duration + ev.inference_duration,
+                )
 
             if self._vad_base_turn_detection or (
                 self._turn_detection_mode == "stt" and self._user_turn_committed
             ):
                 chat_ctx = self._hooks.retrieve_chat_ctx().copy()
-                self._run_eou_detection(chat_ctx)
+                self._run_eou_detection(chat_ctx, trigger="vad")
 
-    def _run_eou_detection(self, chat_ctx: llm.ChatContext, skip_reply: bool = False) -> None:
+            if self._session.amd is not None:
+                self._session.amd._on_user_speech_ended(ev.silence_duration)
+
+    def _on_overlap_speech_event(self, ev: inference.OverlappingSpeechEvent) -> None:
+        # every verdict is terminal for its overlap, including one the cooldown then ignores
+        self._overlap_open = False
+
+        if self._backchannel_boundary_active and not ev.is_interruption:
+            logger.trace(
+                "ignoring backchannel event during backchannel boundary cooldown, falling back to vad"
+            )
+            return
+
+        if ev.is_interruption and self._transcript_gate_active:
+            self._flush_held_transcripts(
+                resolved_at=ev.detected_at,
+                vad_speech_started_at=ev.overlap_started_at,
+            )
+        elif self._transcript_gate_active:
+            self._trim_held_transcripts(
+                resolved_at=ev.detected_at,
+                vad_speech_started_at=self._active_vad_speech_started_at,
+            )
+
+        # only honor the verdict while this turn's overlap is unresolved so a late verdict
+        # can't leak into the next turn; an interruption supersedes a prior backchannel
+        if self._overlap_in_current_turn and not ev.agent_ended:
+            self._turn_backchannel_over_agent = not ev.is_interruption
+            # clear the backchannel audio, but only between segments — else we'd clip a real turn
+            if not ev.is_interruption and not self._speaking:
+                self._hooks.on_backchannel_confirmed()
+
+    def _on_missing_eot_prediction(self) -> None:
+        if self._turn_detector_flushed:
+            if not self._turn_detector_late_prediction_warned:
+                self._turn_detector_late_prediction_warned = True
+                logger.warning(
+                    "transcript arrives after turn has been committed. consider raising `min_delay` in the "
+                    "endpointing options to accommodate a slow stt. subsequent "
+                    "occurrences will log at debug level.",
+                )
+            else:
+                logger.debug("stt transcript arrived after a turn flush, skipping eot prediction")
+        else:
+            logger.debug("no eot inference request in flight, skipping eot prediction")
+
+    def _run_eou_detection(
+        self,
+        chat_ctx: llm.ChatContext,
+        *,
+        trigger: Literal["vad", "stt", "manual"],
+        skip_reply: bool = False,
+    ) -> None:
         if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
             # stt enabled but no transcript yet
             return
 
         chat_ctx = chat_ctx.copy()
-        chat_ctx.add_message(role="user", content=self._audio_transcript)
+        if self._audio_transcript:
+            chat_ctx.add_message(role="user", content=self._audio_transcript)
+
         turn_detector = (
-            self._turn_detector
-            if self._audio_transcript and self._turn_detection_mode != "manual"
+            (
+                self._turn_detector_stream
+                if isinstance(self._turn_detector, _StreamingTurnDetector)
+                else self._turn_detector
+            )
+            if self._turn_detection_mode != "manual"
+            and (self._audio_transcript or isinstance(self._turn_detector, _StreamingTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -540,67 +1528,200 @@ class AudioRecognition:
             last_final_transcript_time: float | None = None,
             speech_start_time: float | None = None,
         ) -> None:
-            endpointing_delay = self._min_endpointing_delay
-            user_turn_span = self._ensure_user_turn_span()
+            endpointing_delay = self._endpointing.min_delay
+            # a turn created here (no VAD/start-of-speech opened it) starts at the earliest
+            # anchor known, so the eou_wait child back-dated to last_speaking_time fits inside
+            anchors = [t for t in (speech_start_time, last_speaking_time) if t is not None]
+            user_turn_span = self._ensure_user_turn_span(
+                start_time=min(anchors) if anchors else None
+            )
+            eou_wait_span = self._ensure_eou_wait_span(
+                user_turn_span,
+                trigger=trigger,
+                last_speaking_time=last_speaking_time,
+                endpointing_delay=endpointing_delay,
+            )
+
+            end_of_turn_probability: float | None = None
+            unlikely_threshold: float | None = None
+            backchannel_threshold: float | None = None
+
             if turn_detector is not None:
                 if not await turn_detector.supports_language(self._last_language):
                     logger.info("Turn detector does not support language %s", self._last_language)
                 else:
+                    # ended explicitly: _end_eou_wait_span closes it early if the user resumes
                     with (
-                        trace.use_span(user_turn_span),
-                        tracer.start_as_current_span("eou_detection") as eou_detection_span,
+                        tracer.use_span(eou_wait_span),
+                        tracer.start_as_current_span(
+                            "eou_detection", end_on_exit=False
+                        ) as eou_detection_span,
+                        self._track_eou_detection_span(eou_detection_span),
                     ):
-                        # if there are failures, we should not hold the pipeline up
-                        end_of_turn_probability = 0.0
-                        unlikely_threshold: float | None = None
-                        try:
-                            end_of_turn_probability = await turn_detector.predict_end_of_turn(
-                                chat_ctx
+                        from_cache = False
+                        prediction_event: TurnDetectionEvent | None = None
+                        if isinstance(turn_detector, _StreamingTurnDetectorStream):
+                            fut = self._turn_detector_prediction_fut
+                            if fut is None:
+                                if trigger == "stt":
+                                    self._on_missing_eot_prediction()
+                            else:
+                                from_cache = fut.done()
+                                prediction_timeout = turn_detector.prediction_timeout
+                                done, _ = await asyncio.wait([fut], timeout=prediction_timeout)
+                                if fut in done and not fut.cancelled():
+                                    prediction_event = fut.result()
+                                    end_of_turn_probability = (
+                                        prediction_event.end_of_turn_probability
+                                    )
+                                    unlikely_threshold = await turn_detector.unlikely_threshold(
+                                        self._last_language
+                                    )
+                                    backchannel_threshold = (
+                                        await turn_detector.backchannel_threshold(
+                                            self._last_language
+                                        )
+                                    )
+                                else:
+                                    logger.warning(
+                                        "eot prediction timed out, committing without a prediction",
+                                        extra={"timeout": prediction_timeout},
+                                    )
+                                    turn_detector.cancel_inference(timed_out=True)
+                                    self._turn_detector_prediction_fut = None
+                        else:
+                            try:
+                                end_of_turn_probability = await turn_detector.predict_end_of_turn(
+                                    chat_ctx,
+                                )
+                                unlikely_threshold = await turn_detector.unlikely_threshold(
+                                    self._last_language
+                                )
+                            except Exception:
+                                logger.exception("Error predicting end of turn")
+
+                        if (
+                            end_of_turn_probability is not None
+                            and unlikely_threshold is not None
+                            and end_of_turn_probability < unlikely_threshold
+                        ):
+                            endpointing_delay = self._endpointing.max_delay
+
+                        eou_span_attributes: dict[str, Any] = {
+                            trace_types.ATTR_CHAT_CTX: json.dumps(
+                                llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
+                                .copy(
+                                    exclude_function_call=True,
+                                    exclude_instructions=True,
+                                    exclude_empty_message=True,
+                                    exclude_handoff=True,
+                                    exclude_config_update=True,
+                                )
+                                .to_dict(
+                                    exclude_audio=True,
+                                    exclude_image=True,
+                                    exclude_timestamp=True,
+                                    exclude_metrics=True,
+                                )
+                            ),
+                            trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                            trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
+                            trace_types.ATTR_EOU_SOURCE: trigger,
+                            trace_types.ATTR_EOU_FROM_CACHE: from_cache,
+                        }
+                        if end_of_turn_probability is not None:
+                            eou_span_attributes[trace_types.ATTR_EOU_PROBABILITY] = (
+                                end_of_turn_probability
                             )
-                            unlikely_threshold = await turn_detector.unlikely_threshold(
-                                self._last_language
+                        if unlikely_threshold is not None:
+                            eou_span_attributes[trace_types.ATTR_EOU_UNLIKELY_THRESHOLD] = (
+                                unlikely_threshold
+                            )
+                        eou_detection_span.set_attributes(eou_span_attributes)
+                        logger.debug(
+                            "eot prediction",
+                            extra={
+                                "probability": end_of_turn_probability,
+                                "unlikely_threshold": unlikely_threshold,
+                                "endpointing_delay": endpointing_delay,
+                                "language": self._last_language or "",
+                                "trigger": trigger,
+                                "from_cache": from_cache,
+                            },
+                        )
+
+                        if (
+                            end_of_turn_probability is not None
+                            and unlikely_threshold is not None
+                            and (
+                                prediction_event is None
+                                or prediction_event is not self._last_emitted_prediction
+                            )
+                        ):
+                            self._last_emitted_prediction = prediction_event
+                            inference_duration = (
+                                prediction_event.inference_duration
+                                if prediction_event is not None
+                                and prediction_event.inference_duration is not None
+                                else 0.0
+                            )
+                            # end of speech -> prediction receive time
+                            delay = (
+                                time.time() - last_speaking_time
+                                if last_speaking_time is not None
+                                else 0.0
+                            )
+                            self._hooks.on_eot_prediction(
+                                EotPredictionEvent(
+                                    probability=end_of_turn_probability,
+                                    threshold=unlikely_threshold,
+                                    inference_duration=inference_duration,
+                                    delay=delay,
+                                )
+                            )
+                            # surface the backchannel opportunity whenever it clears its
+                            # threshold, regardless of end-of-turn; AgentActivity decides
+                            # whether to acknowledge mid-turn or let it lead the reply
+                            backchannel_probability = (
+                                prediction_event.backchannel_probability
+                                if prediction_event is not None
+                                else None
                             )
                             if (
-                                unlikely_threshold is not None
-                                and end_of_turn_probability < unlikely_threshold
+                                backchannel_probability is not None
+                                and backchannel_threshold is not None
+                                and backchannel_probability >= backchannel_threshold
                             ):
-                                endpointing_delay = self._max_endpointing_delay
-                        except Exception:
-                            logger.exception("Error predicting end of turn")
+                                self._hooks.on_agent_backchannel_opportunity(
+                                    _AgentBackchannelOpportunityEvent(
+                                        probability=backchannel_probability,
+                                        threshold=backchannel_threshold,
+                                        end_of_turn_probability=end_of_turn_probability,
+                                        end_of_turn_threshold=unlikely_threshold,
+                                        language=self._last_language,
+                                    )
+                                )
+                        if (
+                            prediction_event is not None
+                            and prediction_event.detection_delay is not None
+                        ):
+                            eou_detection_span.set_attribute(
+                                trace_types.ATTR_EOU_DETECTION_DELAY,
+                                prediction_event.detection_delay,
+                            )
 
-                        eou_detection_span.set_attributes(
-                            {
-                                trace_types.ATTR_CHAT_CTX: json.dumps(
-                                    llm.ChatContext(chat_ctx.items[-_EOU_MAX_HISTORY_TURNS:])
-                                    .copy(
-                                        exclude_function_call=True,
-                                        exclude_instructions=True,
-                                        exclude_empty_message=True,
-                                        exclude_handoff=True,
-                                        exclude_config_update=True,
-                                    )
-                                    .to_dict(
-                                        exclude_audio=True,
-                                        exclude_image=True,
-                                        exclude_timestamp=True,
-                                        exclude_metrics=True,
-                                    )
-                                ),
-                                trace_types.ATTR_EOU_PROBABILITY: end_of_turn_probability,
-                                trace_types.ATTR_EOU_UNLIKELY_THRESHOLD: unlikely_threshold or 0,
-                                trace_types.ATTR_EOU_DELAY: endpointing_delay,
-                                trace_types.ATTR_EOU_LANGUAGE: self._last_language or "",
-                            }
-                        )
+            if eou_wait_span.is_recording():  # the wait may have ended with resumed speech
+                eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
 
             extra_sleep = endpointing_delay
             if last_speaking_time:
                 extra_sleep += last_speaking_time - time.time()
-
+            delay_completed = False
             if extra_sleep > 0:
                 try:
                     await asyncio.wait_for(self._closing.wait(), timeout=extra_sleep)
                 except asyncio.TimeoutError:
+                    delay_completed = True
                     pass
 
             confidence_avg = (
@@ -609,91 +1730,144 @@ class AudioRecognition:
                 else 0
             )
 
-            started_speaking_at = None
-            stopped_speaking_at = None
-            transcription_delay = None
-            end_of_turn_delay = None
-
-            # sometimes, we can't calculate the metrics because VAD was unreliable.
-            # in this case, we just ignore the calculation, it's better than providing likely wrong values
-            if (
-                last_final_transcript_time is not None
-                and last_speaking_time is not None
-                and speech_start_time is not None
-            ):
-                started_speaking_at = speech_start_time
-                stopped_speaking_at = last_speaking_time
-                transcription_delay = max(last_final_transcript_time - last_speaking_time, 0)
-                end_of_turn_delay = time.time() - last_speaking_time
-
-            committed = self._hooks.on_end_of_turn(
-                _EndOfTurnInfo(
-                    skip_reply=skip_reply,
-                    new_transcript=self._audio_transcript,
-                    transcript_confidence=confidence_avg,
-                    transcription_delay=transcription_delay or 0,
-                    end_of_turn_delay=end_of_turn_delay,
-                    started_speaking_at=started_speaking_at,
-                    stopped_speaking_at=stopped_speaking_at,
-                )
+            # sometimes, we can't calculate the metrics because VAD was unreliable or
+            # the speaking anchor is stale/out-of-order (see issue #6093). in this case,
+            # we just ignore the calculation, it's better than providing likely wrong values
+            metrics = _compute_end_of_turn_metrics(
+                speech_start_time=speech_start_time,
+                last_speaking_time=last_speaking_time,
+                last_final_transcript_time=last_final_transcript_time,
+                now=time.time(),
             )
+            end_of_turn = _EndOfTurnInfo(
+                skip_reply=skip_reply,
+                new_transcript=self._audio_transcript,
+                transcript_confidence=confidence_avg,
+                metrics=metrics,
+                backchannel_over_agent=self._turn_backchannel_over_agent,
+                user_turn_span=user_turn_span,
+            )
+            committed = self._hooks.on_end_of_turn(end_of_turn)
             if committed:
+                logger.debug(
+                    "user turn committed",
+                    extra={
+                        "last_speaking_time": last_speaking_time,
+                        "last_final_transcript_time": last_final_transcript_time,
+                        "speech_start_time": speech_start_time,
+                        "delay_completed": delay_completed,
+                        "source": trigger,
+                        "end_of_turn_probability": end_of_turn_probability,
+                        "unlikely_threshold": unlikely_threshold,
+                    },
+                )
                 user_turn_span.set_attributes(
                     {
                         trace_types.ATTR_USER_TRANSCRIPT: self._audio_transcript,
                         trace_types.ATTR_TRANSCRIPT_CONFIDENCE: confidence_avg,
-                        trace_types.ATTR_TRANSCRIPTION_DELAY: transcription_delay or 0,
-                        trace_types.ATTR_END_OF_TURN_DELAY: end_of_turn_delay or 0,
+                        trace_types.ATTR_TRANSCRIPTION_DELAY: metrics.transcription_delay or 0,
+                        trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
-                user_turn_span.end()
+                if self._stt_request_ids:
+                    user_turn_span.set_attribute(
+                        trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
+                    )
+                self._end_eou_wait_span("committed")
+                self._stamp_user_turn_resumes(user_turn_span)
+                if not end_of_turn.user_turn_span_adopted:
+                    user_turn_span.end()
                 self._user_turn_span = None
+                self._user_turn_start = None
+                self._stt_request_ids = []
+                self._reset_transcription_timeout()
 
                 # clear the transcript if the user turn was committed
                 self._audio_transcript = ""
                 self._final_transcript_confidence = []
-                self._last_speaking_time = None
                 self._last_final_transcript_time = None
-                self._speech_start_time = None
+                # concurrent user speech might have changed it
+                # only reset if there is no new speech
+                if self._last_speaking_time == last_speaking_time:
+                    self._speech_start_time = None
+                    self._vad_speech_started = False
+                    self._last_speaking_time = None
 
+                if self._turn_detector_stream is not None:
+                    self._turn_detector_stream.flush(reason="turn committed")
+                    self._turn_detector_prediction_fut = None
+                    self._turn_detector_flushed = True
+
+            elif eou_wait_span.is_recording():
+                self._eou_wait_not_committed += 1
+
+            # reset turn-scoped barge-in state once per logical turn (commit or drop)
+            self._turn_backchannel_over_agent = False
+            self._overlap_in_current_turn = False
             self._user_turn_committed = False
 
         if self._end_of_turn_task is not None:
             # TODO(theomonnom): disallow cancel if the extra sleep is done
             self._end_of_turn_task.cancel()
-
         # copy the last_speaking_time before awaiting (the value can change)
         self._end_of_turn_task = asyncio.create_task(
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
-                self._speech_start_time,
+                self._user_turn_start,
             )
         )
 
-    @utils.log_exceptions(logger=logger)
-    async def _stt_task(
-        self,
-        stt_node: io.STTNode,
-        audio_input: AsyncIterable[rtc.AudioFrame],
-        task: asyncio.Task[None] | None,
-    ) -> None:
-        if task is not None:
-            await aio.cancel_and_wait(task)
+    def _check_user_turn_limit(self, transcript: str) -> None:
+        """Check if the user turn exceeds configured limits.
+        Called when a final transcript event is received."""
+        opts = self._session.options.turn_handling["user_turn_limit"]
+        max_words = opts.get("max_words")
+        max_duration = opts.get("max_duration")
 
-        node = stt_node(audio_input, ModelSettings())
-        if asyncio.iscoroutine(node):
-            node = await node
-
-        if node is None:
+        if max_words is None and max_duration is None:
             return
 
-        if isinstance(node, AsyncIterable):
-            async for ev in node:
-                assert isinstance(ev, stt.SpeechEvent), (
-                    f"STT node must yield SpeechEvent, got: {type(ev)}"
-                )
-                await self._on_stt_event(ev)
+        now = time.time()
+        if self._turn_tracker.started_at is None:
+            self._turn_tracker.started_at = self._speech_start_time or now
+
+        words = self._word_tokenizer.tokenize(transcript)
+        self._turn_tracker.words += len(words)
+        self._turn_tracker.transcript = f"{self._turn_tracker.transcript} {transcript}".strip()
+
+        duration = now - self._turn_tracker.started_at
+        time_exceeded = max_duration is not None and duration >= max_duration
+        words_exceeded = max_words is not None and self._turn_tracker.words >= max_words
+
+        if not time_exceeded and not words_exceeded:
+            return
+
+        ev = UserTurnExceededEvent(
+            transcript=self._current_transcript,
+            accumulated_transcript=self._turn_tracker.transcript,
+            accumulated_word_count=self._turn_tracker.words,
+            duration=duration,
+        )
+        self._hooks.on_user_turn_exceeded(ev)
+
+    @utils.log_exceptions(logger=logger)
+    async def _stt_consumer(
+        self,
+        event_ch: aio.Chan[stt.SpeechEvent],
+        old_pipeline: _STTPipeline | None,
+        old_consumer: asyncio.Task[None] | None,
+    ) -> None:
+        """Consume STT events from the pump. Swapped on handoff."""
+
+        if old_pipeline is not None:
+            await old_pipeline.aclose()
+
+        if old_consumer is not None:
+            await aio.cancel_and_wait(old_consumer)
+
+        async for ev in event_ch:
+            await self._on_stt_event(ev)
 
     @utils.log_exceptions(logger=logger)
     async def _vad_task(
@@ -706,6 +1880,7 @@ class AudioRecognition:
             await aio.cancel_and_wait(task)
 
         stream = vad.stream()
+        self._vad_stream = stream
 
         @utils.log_exceptions(logger=logger)
         async def _forward() -> None:
@@ -720,16 +1895,232 @@ class AudioRecognition:
         finally:
             await aio.cancel_and_wait(forward_task)
             await stream.aclose()
+            if self._vad_stream is stream:
+                self._vad_stream = None
+
+            # reset the speaking state to prevent stuck user speaking state during handoff
+            if self._speaking:
+                with tracer.use_span(self._ensure_user_turn_span()):
+                    self._hooks.on_end_of_speech(None)
+                self._speaking = False
+                self._vad_speech_started = False
+            self._active_vad_speech_started_at = None
 
     @utils.log_exceptions(logger=logger)
+    async def _interruption_task(
+        self,
+        interruption_detection: inference.AdaptiveInterruptionDetector,
+        audio_input: AsyncIterable[inference.InterruptionDataFrameType],
+        task: asyncio.Task[None] | None,
+    ) -> None:
+        if task is not None:
+            await aio.cancel_and_wait(task)
+
+        stream = interruption_detection.stream()
+
+        @utils.log_exceptions(logger=logger)
+        async def _forward() -> None:
+            async for frame in audio_input:
+                stream.push_frame(frame)
+
+        forward_task = asyncio.create_task(_forward())
+
+        try:
+            async for ev in stream:
+                self._hooks.on_overlap_speech(ev)
+        except APIError:
+            # avoid already emitted error from the stream
+            return
+        finally:
+            await aio.cancel_and_wait(forward_task)
+            await stream.aclose()
+            if self._interruption_ch is audio_input:
+                self._flush_held_transcripts()
+
+    def _cancel_transcription_timeout(self) -> None:
+        if (handle := getattr(self, "_transcription_timeout_handle", None)) is not None:
+            handle.cancel()
+            self._transcription_timeout_handle = None
+
+    def _reset_transcription_timeout(self) -> None:
+        self._cancel_transcription_timeout()
+        self._turn_speech_duration = 0.0
+        self._turn_transcript_received = False
+
+    def _mark_turn_transcribed(self) -> None:
+        self._turn_transcript_received = True
+        self._cancel_transcription_timeout()
+
+    def _arm_transcription_timeout(self, speech_duration: float, *, delay: float) -> None:
+        timeout = self._session.options.transcription_timeout
+        if timeout is None or self._turn_transcript_received:
+            return
+
+        self._turn_speech_duration += speech_duration
+        self._cancel_transcription_timeout()
+        remaining_timeout = max(0.0, timeout - delay)
+        self._transcription_timeout_handle = asyncio.get_running_loop().call_later(
+            remaining_timeout, self._on_transcription_timeout
+        )
+
+    def _on_transcription_timeout(self) -> None:
+        self._transcription_timeout_handle = None
+        if self._user_turn_start is None or self._turn_transcript_received:
+            return
+
+        self._hooks.on_transcription_timeout(
+            speech_duration=self._turn_speech_duration, turn_start=self._user_turn_start
+        )
+
     def _ensure_user_turn_span(self, start_time: float | None = None) -> trace.Span:
         if self._user_turn_span and self._user_turn_span.is_recording():
             return self._user_turn_span
 
-        start_time_ns = int(start_time * 1_000_000_000) if start_time else None
-        self._user_turn_span = tracer.start_span("user_turn", start_time=start_time_ns)
+        if start_time is None:
+            start_time = time.time()
+        start_time_ns = int(start_time * 1_000_000_000)
+        # pinned to the session root: a turn may be created from any task (a late STT final)
+        self._user_turn_span = tracer.start_span(
+            "user_turn", context=self._session._root_span_context, start_time=start_time_ns
+        )
+
+        if self._user_turn_start is None:
+            self._user_turn_start = start_time
 
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
 
+        # add STT model/provider attributes
+        if self._stt_model:
+            self._user_turn_span.set_attribute(
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._stt_model
+            )
+        if self._stt_provider:
+            self._user_turn_span.set_attribute(
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME, self._stt_provider
+            )
+
         return self._user_turn_span
+
+    def _end_user_turn_span(self) -> None:
+        # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
+        self._end_eou_wait_span("dropped")
+        if self._user_turn_span is not None and self._user_turn_span.is_recording():
+            self._stamp_user_turn_resumes(self._user_turn_span)
+            self._user_turn_span.end()
+        self._user_turn_span = None
+        self._user_turn_start = None
+
+    def _stamp_user_turn_resumes(self, user_turn_span: trace.Span) -> None:
+        resumes, self._user_turn_resumes = self._user_turn_resumes, 0
+        if resumes and user_turn_span.is_recording():
+            user_turn_span.set_attribute(trace_types.ATTR_EOU_RESUME_COUNT, resumes)
+
+    def _ensure_eou_wait_span(
+        self,
+        user_turn_span: trace.Span,
+        *,
+        trigger: str,
+        last_speaking_time: float | None,
+        endpointing_delay: float,
+    ) -> trace.Span:
+        """The turn's ``eou_wait`` span, created on the first end-of-turn trigger and back-dated
+        to ``last_speaking_time``. Later triggers for the same turn (a late STT final, another
+        VAD end of speech) re-arm the wait as an event rather than start a new span."""
+        span = self._eou_wait_span
+        if span is not None and span.is_recording():
+            self._eou_wait_rearms += 1
+            self._eou_wait_floor_ns = time.time_ns()
+            span.add_event(
+                "rearmed",
+                {trace_types.ATTR_EOU_SOURCE: trigger},
+                timestamp=self._eou_wait_floor_ns,
+            )
+            span.set_attributes(
+                {
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    # the delay in force now; a prediction may raise it later
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                }
+            )
+            return span
+
+        now = time.time()
+        started_at = min(last_speaking_time, now) if last_speaking_time is not None else now
+        # lk.eou.wait_duration is computed from this same value, so it equals the span's length
+        started_at_ns = int(started_at * 1_000_000_000)
+        with tracer.use_span(user_turn_span):
+            span = tracer.start_span(
+                "eou_wait",
+                start_time=started_at_ns,
+                attributes={
+                    trace_types.ATTR_EOU_SOURCE: trigger,
+                    trace_types.ATTR_EOU_DELAY: endpointing_delay,
+                },
+            )
+        self._eou_wait_span = span
+        self._eou_wait_started_at_ns = started_at_ns
+        self._eou_wait_rearms = 0
+        self._eou_wait_not_committed = 0
+        self._eou_wait_floor_ns = None
+        return span
+
+    @contextlib.contextmanager
+    def _track_eou_detection_span(self, span: trace.Span) -> Iterator[None]:
+        """Own the ``eou_detection`` span's end so the wait can close it early."""
+        self._eou_detection_span = span
+        try:
+            yield
+        finally:
+            if self._eou_detection_span is span:
+                self._eou_detection_span = None
+            if span.is_recording():
+                self._eou_wait_floor_ns = time.time_ns()
+                span.end(end_time=self._eou_wait_floor_ns)
+
+    def _end_eou_wait_span(self, outcome: str, *, end_time: float | None = None) -> None:
+        span, self._eou_wait_span = self._eou_wait_span, None
+        started_at_ns, self._eou_wait_started_at_ns = self._eou_wait_started_at_ns, None
+        rearms, self._eou_wait_rearms = self._eou_wait_rearms, 0
+        not_committed, self._eou_wait_not_committed = self._eou_wait_not_committed, 0
+        if span is None or not span.is_recording():
+            return
+
+        requested_ns = int((end_time if end_time is not None else time.time()) * 1_000_000_000)
+        ended_at_ns = requested_ns
+        if started_at_ns is not None:
+            # resumed speech can carry a VAD timestamp from before the anchor; never negative
+            ended_at_ns = max(ended_at_ns, started_at_ns)
+
+        detection, self._eou_detection_span = self._eou_detection_span, None
+        if detection is not None and detection.is_recording():
+            # the detector is still running: end it first so the child stays inside the parent
+            self._eou_wait_floor_ns = time.time_ns()
+            detection.add_event(
+                "superseded",
+                {trace_types.ATTR_EOU_OUTCOME: outcome},
+                timestamp=self._eou_wait_floor_ns,
+            )
+            detection.end(end_time=self._eou_wait_floor_ns)
+        floor_ns, self._eou_wait_floor_ns = self._eou_wait_floor_ns, None
+        if floor_ns is not None:
+            # VAD reports a resume after the fact: never end before what the span contains
+            ended_at_ns = max(ended_at_ns, floor_ns)
+        if outcome == "user_resumed":
+            span.add_event("user_resumed", timestamp=max(requested_ns, started_at_ns or 0))
+        span.set_attributes(
+            {
+                trace_types.ATTR_EOU_OUTCOME: outcome,
+                # same integers as the span bounds, so the attribute equals the span's length
+                trace_types.ATTR_EOU_WAIT_DURATION: (
+                    (ended_at_ns - started_at_ns) / 1_000_000_000
+                    if started_at_ns is not None
+                    else 0.0
+                ),
+                trace_types.ATTR_EOU_REARM_COUNT: rearms,
+                trace_types.ATTR_EOU_NOT_COMMITTED_COUNT: not_committed,
+            }
+        )
+        span.end(end_time=ended_at_ns)
+        if outcome == "user_resumed":
+            self._user_turn_resumes += 1

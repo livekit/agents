@@ -1,9 +1,22 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, TypeVar
+from typing import Any, Literal, TypeAlias, TypeVar
+
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema, core_schema
 
 ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id"
 ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id"
 ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final"
+ATTRIBUTE_TRANSCRIPTION_EXPRESSION = "lk.expression"
+"""
+The expression (delivery/emotion) the agent used for a transcription segment, surfaced so
+the frontend can react to it, when expressive markup is stripped from the transcript. The
+value is a JSON object ``{"value": ...}`` carrying the segment's leading expression — the
+``<expression>`` tag for Inworld/ElevenLabs v3 or the ``<emotion>`` tag for Cartesia, e.g.
+``{"value": "speak happy"}``. A JSON object (rather than a bare string) so the shape can
+gain fields later without breaking parsers.
+"""
 ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf"
 """
 The identity of the agent participant that an avatar worker is publishing on behalf of.
@@ -32,46 +45,51 @@ Indicates that the participant is a simulator for testing purposes.
 When set to "true", the agent will skip audio input/output processing.
 """
 
+ATTRIBUTE_SIMULATOR_DISPATCH = "lk.simulator.dispatch"
+"""
+The job attribute carrying the run's protojson ``SimulationDispatch``,
+delivered with the agent dispatch and read by
+``JobContext.simulation_context()``.
+"""
+
+ATTRIBUTE_SIMULATION_ENABLED = "lk.simulation.enabled"
+"""Telemetry metadata key marking the session as a simulation."""
+
+ATTRIBUTE_SIMULATION_RUN_ID = "lk.simulation.run_id"
+"""Telemetry metadata key naming the simulation run this session belongs to.
+
+Sits alongside :data:`ATTRIBUTE_SIMULATION_ENABLED`: the boolean says a session is
+synthetic, this says which run it came from, so a run's sessions can be aggregated
+without resolving each one's room first.
+"""
+
+ATTRIBUTE_SIMULATION_JOB_ID = "lk.simulation.job_id"
+"""Telemetry metadata key naming the simulation run job (one scenario) behind the
+session."""
+
+ATTRIBUTE_REDACTION_ENABLED = "lk.redaction.enabled"
+"""Telemetry metadata key requesting PII redaction for the session."""
+
+_RECORDING_OPTION_KEYS = ("audio", "traces", "logs", "transcript")
+
+
+def recording_enabled(options: Mapping[str, object]) -> bool:
+    return any(options.get(key, False) for key in _RECORDING_OPTION_KEYS)
+
+
 TOPIC_CHAT = "lk.chat"
 TOPIC_TRANSCRIPTION = "lk.transcription"
-TOPIC_CLIENT_EVENTS = "lk.agent.events"
-"""
-Topic for streaming agent events to room participants.
-"""
-
-RPC_GET_SESSION_STATE = "lk.agent.get_session_state"
-"""
-RPC method to get the current session state.
-"""
-
-RPC_GET_CHAT_HISTORY = "lk.agent.get_chat_history"
-"""
-RPC method to get the agent<>user conversation turns.
-"""
-
-RPC_GET_AGENT_INFO = "lk.agent.get_agent_info"
-"""
-RPC method to get information about the current agent.
-"""
-
-RPC_SEND_MESSAGE = "lk.agent.send_message"
-"""
-RPC method to send a message and get the agent's response.
-"""
-
-TOPIC_AGENT_REQUEST = "lk.agent.request"
-"""
-Topic for sending requests to the agent via text streams (no size limit).
-"""
-
-TOPIC_AGENT_RESPONSE = "lk.agent.response"
-"""
-Topic for receiving responses from the agent via text streams (no size limit).
-"""
 
 USERDATA_TIMED_TRANSCRIPT = "lk.timed_transcripts"
 """
 The key for the timed transcripts in the audio frame userdata.
+"""
+
+USERDATA_TTS_STARTED_TIME = "lk.tts_started_time"
+"""
+The key for the time (``time.perf_counter()``) at which the synthesized text was first
+sent to the TTS provider, attached to the audio frame userdata. Used to compute TTFB
+without attributing upstream (e.g. LLM streaming) latency to the TTS.
 """
 
 
@@ -83,11 +101,19 @@ class FlushSentinel:
 
 
 class NotGiven:
+    __slots__ = ()
+
     def __bool__(self) -> Literal[False]:
         return False
 
     def __repr__(self) -> str:
         return "NOT_GIVEN"
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.is_instance_schema(cls)
 
 
 NotGivenOr: TypeAlias = _T | NotGiven
@@ -136,13 +162,27 @@ DEFAULT_API_CONNECT_OPTIONS = APIConnectOptions()
 
 
 class TimedString(str):
-    """A string with optional start and end timestamps for word-level alignment."""
+    """A string with optional start and end timestamps for word-level alignment.
+
+    Attributes:
+        start_time: Word start time in seconds (NOT_GIVEN when unavailable).
+        end_time: Word end time in seconds (NOT_GIVEN when unavailable).
+        confidence: Per-word confidence score (NOT_GIVEN when unavailable).
+        start_time_offset: Offset in seconds relative to the start of the audio
+            input stream or session. Used by STT plugins to align words against
+            the session timeline (NOT_GIVEN when unavailable).
+        speaker_id: Speaker identifier when the provider supports diarization.
+            Uses ``str | None`` rather than ``NotGivenOr[str]`` because the
+            absence of a speaker is a routine, expected case across all
+            providers — not a "not given" boundary condition — and downstream
+            consumers gate on ``speaker_id is None`` rather than ``is_given``.
+    """
 
     start_time: NotGivenOr[float]
     end_time: NotGivenOr[float]
     confidence: NotGivenOr[float]
     start_time_offset: NotGivenOr[float]
-    # offset relative to the start of the audio input stream or session in seconds, used in STT plugins
+    speaker_id: str | None
 
     def __new__(
         cls,
@@ -151,10 +191,12 @@ class TimedString(str):
         end_time: NotGivenOr[float] = NOT_GIVEN,
         confidence: NotGivenOr[float] = NOT_GIVEN,
         start_time_offset: NotGivenOr[float] = NOT_GIVEN,
+        speaker_id: str | None = None,
     ) -> "TimedString":
         obj = super().__new__(cls, text)
         obj.start_time = start_time
         obj.end_time = end_time
         obj.confidence = confidence
         obj.start_time_offset = start_time_offset
+        obj.speaker_id = speaker_id
         return obj

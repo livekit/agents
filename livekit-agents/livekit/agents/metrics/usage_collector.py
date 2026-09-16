@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -6,6 +9,11 @@ from .base import AgentMetrics, LLMMetrics, RealtimeModelMetrics, STTMetrics, TT
 
 @dataclass
 class UsageSummary:
+    """
+    .. deprecated::
+        Use :class:`LLMModelUsage`, :class:`TTSModelUsage`, or :class:`STTModelUsage` instead.
+    """
+
     llm_prompt_tokens: int = 0
     llm_prompt_cached_tokens: int = 0
     llm_input_audio_tokens: int = 0
@@ -21,6 +29,14 @@ class UsageSummary:
     tts_characters_count: int = 0
     tts_audio_duration: float = 0.0
     stt_audio_duration: float = 0.0
+
+    def __post_init__(self) -> None:
+        warnings.warn(
+            "UsageSummary is deprecated. Use LLMModelUsage, TTSModelUsage, "
+            "or STTModelUsage from metrics.model_usage instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     # properties for naming consistency: prompt = input, completion = output
     @property
@@ -41,7 +57,18 @@ class UsageSummary:
 
 
 class UsageCollector:
+    """
+    .. deprecated::
+        Use :class:`ModelUsageCollector` instead.
+    """
+
     def __init__(self) -> None:
+        warnings.warn(
+            "UsageCollector is deprecated. Use ModelUsageCollector from "
+            "metrics.model_usage instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._summary = UsageSummary()
 
     def __call__(self, metrics: AgentMetrics) -> None:

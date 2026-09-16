@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -41,6 +43,32 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
 RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
+
+# Models that use audio stream format (character-based billing)
+AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
+
+SSE_CONTENT_TYPE = "text/event-stream"
+
+# Content types `AudioEmitter` knows how to decode, mirroring the codecs decoder table.
+DECODABLE_CONTENT_TYPES = frozenset(
+    {
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/x-mpeg",
+        "audio/aac",
+        "audio/x-aac",
+        "audio/flac",
+        "audio/x-flac",
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+        "audio/opus",
+        "audio/ogg",
+        "audio/webm",
+        "audio/mp4",
+        "audio/pcm",
+    }
+)
 
 
 @dataclass
@@ -90,7 +118,7 @@ class TTS(tts.TTS):
                 "OpenAI API key is required, either as argument or set"
                 " OPENAI_API_KEY environment variable"
             )
-
+        self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             max_retries=0,
             api_key=api_key if is_given(api_key) else None,
@@ -179,7 +207,7 @@ class TTS(tts.TTS):
             else httpx.Timeout(connect=15.0, read=5.0, write=5.0, pool=5.0),
         )  # type: ignore
 
-        return TTS(
+        tts = TTS(
             model=model,
             voice=voice,
             speed=speed,
@@ -187,10 +215,12 @@ class TTS(tts.TTS):
             client=azure_client,
             response_format=response_format,
         )
+        tts._owns_client = True
+        return tts
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
-    ) -> ChunkedStream:
+    ) -> tts.ChunkedStream:
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
     def prewarm(self) -> None:
@@ -200,14 +230,28 @@ class TTS(tts.TTS):
             except Exception:
                 pass
 
-        self._prewarm_task = asyncio.create_task(_prewarm())
+        # Don't replace a prewarm still in flight: the old task would lose its only reference,
+        # and aclose() cancels just the latest one, so it could still be using the client after
+        # close. utils.ConnectionPool.prewarm guards the same way.
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(_prewarm())
 
     async def aclose(self) -> None:
         if self._prewarm_task:
             await aio.cancel_and_wait(self._prewarm_task)
 
+        if self._owns_client:
+            await self._client.close()
+
 
 class ChunkedStream(tts.ChunkedStream):
+    """ChunkedStream that reads the body according to what the server actually returned.
+
+    `stream_format` is an OpenAI-specific extension. OpenAI-compatible servers ignore it and
+    answer with the audio bytes of `response_format` rather than an SSE stream, so the response
+    `Content-Type` -- not the requested `stream_format` -- decides how the body is parsed.
+    """
+
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
@@ -221,20 +265,65 @@ class ChunkedStream(tts.ChunkedStream):
             response_format=self._opts.response_format,  # type: ignore
             speed=self._opts.speed,
             instructions=self._opts.instructions or openai.omit,
+            # `sse` is not supported for tts-1/tts-1-hd (character-based billing)
+            stream_format="audio" if self._opts.model in AUDIO_STREAM_MODELS else "sse",
             timeout=httpx.Timeout(30, connect=self._conn_options.timeout),
         )
 
         try:
             async with oai_stream as stream:
+                media_type = stream.headers.get("content-type", "").split(";")[0].strip().lower()
+                # a server that ignored response_format still declares what it sent
+                mime_type = (
+                    media_type
+                    if media_type in DECODABLE_CONTENT_TYPES
+                    else f"audio/{self._opts.response_format}"
+                )
                 output_emitter.initialize(
                     request_id=stream.request_id or "",
                     sample_rate=SAMPLE_RATE,
                     num_channels=NUM_CHANNELS,
-                    mime_type=f"audio/{self._opts.response_format}",
+                    mime_type=mime_type,
                 )
 
-                async for data in stream.iter_bytes():
-                    output_emitter.push(data)
+                if media_type != SSE_CONTENT_TYPE:
+                    # An OpenAI-compatible server that ignored stream_format and returned the
+                    # audio bytes of response_format directly.
+                    async for chunk in stream.iter_bytes():
+                        output_emitter.push(chunk)
+                else:
+                    async for line in stream.iter_lines():
+                        if not line or not line.startswith("data: "):
+                            continue
+
+                        data = line[6:]  # Remove "data: " prefix
+                        if data == "[DONE]":
+                            break
+
+                        try:
+                            event = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = event.get("type", "")
+
+                        if event_type == "speech.audio.delta":
+                            # Decode base64 audio and push to emitter
+                            audio_b64 = event.get("delta", "") or event.get("audio", "")
+                            if audio_b64:
+                                audio_data = base64.b64decode(audio_b64)
+                                output_emitter.push(audio_data)
+
+                        elif event_type == "speech.audio.done":
+                            # Extract token usage from the done event
+                            usage = event.get("usage", {})
+                            input_tokens = usage.get("input_tokens", 0)
+                            output_tokens = usage.get("output_tokens", 0)
+                            if input_tokens or output_tokens:
+                                self._set_token_usage(
+                                    input_tokens=input_tokens,
+                                    output_tokens=output_tokens,
+                                )
 
             output_emitter.flush()
 

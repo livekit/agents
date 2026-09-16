@@ -179,15 +179,15 @@ class TTS(tts.TTS):
             top_p: Controls the stability of the generated speech. A number between 0.0 and 1.0.
         """
         if is_given(model):
-            self._opts.model = model  # type: ignore[assignment]
+            self._opts.model = model
         if is_given(voice):
             self._opts.voice = voice
         if is_given(language):
-            self._opts.language = language  # type: ignore[assignment]
+            self._opts.language = language
         if is_given(format):
-            self._opts.format = format  # type: ignore[assignment]
+            self._opts.format = format
         if is_given(sample_rate):
-            self._opts.sample_rate = sample_rate  # type: ignore[assignment]
+            self._opts.sample_rate = sample_rate
         if is_given(temperature):
             self._opts.temperature = temperature
         if is_given(top_p):

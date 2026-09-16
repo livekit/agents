@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    UnexpectedModelBehavior,
     create_api_error_from_http,
 )
 from .job import (
@@ -58,6 +59,15 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .simulation import (
+    Scenario,
+    ScenarioGroup,
+    ScenarioUserdata,
+    SimulationContext,
+    SimulationDispatch,
+    SimulationRun,
+    SimulationVerdict,
+)
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -74,23 +84,47 @@ from .voice import (
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
+    AudioRecognition,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    ExpressiveOptions,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    NonverbalOptions,
     RecordingOptions,
     RunContext,
+    RunOutputOptions,
+    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    SpeechSteeringOptions,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
+    text_transforms,
+)
+from .voice.amd import (
+    AMD,
+    AMDCategory,
+    AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -103,6 +137,13 @@ from .voice.run_result import (
     RunEvent,
     RunResult,
     mock_tools,
+)
+from .voice.turn import (
+    EndpointingOptions,
+    InterruptionOptions,
+    PreemptiveGenerationOptions,
+    TurnHandlingOptions,
+    UserTurnLimitOptions,
 )
 from .worker import (
     AgentServer,
@@ -156,8 +197,15 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "SpeechCreatedEvent",
+    "ToolExecutionUpdatedEvent",
+    "ToolCallStarted",
+    "ToolCallUpdated",
+    "ToolCallEnded",
+    "ToolReplyUpdated",
     "MetricsCollectedEvent",
+    "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
     "FunctionCall",
     "FunctionCallOutput",
@@ -168,13 +216,27 @@ __all__ = [
     "ToolError",
     "RunContext",
     "Plugin",
+    "Scenario",
+    "ScenarioGroup",
+    "ScenarioUserdata",
+    "SimulationContext",
+    "SimulationDispatch",
+    "SimulationRun",
+    "SimulationVerdict",
     "AgentSession",
+    "AudioRecognition",
+    "ExpressiveOptions",
+    "NonverbalOptions",
+    "SpeechSteeringOptions",
     "RecordingOptions",
+    "RunOutputOptions",
+    "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
@@ -215,6 +277,18 @@ __all__ = [
     "FunctionCallEvent",
     "FunctionCallOutputEvent",
     "AgentHandoffEvent",
+    "AMD",
+    "AMDCategory",
+    "AMDPredictionEvent",
+    "TurnHandlingOptions",
+    "EndpointingOptions",
+    "InterruptionOptions",
+    "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

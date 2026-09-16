@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import collections
-import contextlib
 import json
 import os
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import aiohttp
 import httpx
+from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
-from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.llm.tool_context import (
     Tool,
 )
@@ -32,8 +32,10 @@ from openai.types.responses import (
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
+    ResponseIncompleteEvent,
     ResponseInputParam,
     ResponseOutputItemDoneEvent,
+    ResponseOutputMessage,
     ResponseTextDeltaEvent,
     ToolParam,
     response_create_params,
@@ -43,138 +45,151 @@ from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
 from ..models import _supports_reasoning_effort
+from ..tools import OpenAITool
+
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
+
+# ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
+_WS_HEARTBEAT = 30.0
+# max connections to try when a reused socket is stale, before the outer retry takes over
+_WS_SEND_MAX_ATTEMPTS = 6
 
 
 class _ResponsesWebsocket:
     def __init__(
-        self, api_key: str | None, timeout: httpx.Timeout | None, base_url: str | None = None
+        self, api_key: str | None, timeout: float | None, model: str, base_url: str | None = None
     ) -> None:
         self._api_key = api_key
-        self._timeout = timeout
-        self._base_url = base_url if base_url else OPENAI_RESPONSES_WS_URL
+        self._timeout = timeout or DEFAULT_API_CONNECT_OPTIONS.timeout
+        url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
+        if url.scheme in ("http", "https"):
+            url = url.with_scheme("ws" if url.scheme == "http" else "wss")
+        if url.host != "api.openai.com":
+            # OpenAI's native endpoint takes the model in the response.create
+            # payload; gateways need it on the upgrade URL to route the
+            # connection before the first frame.
+            url = url.update_query(model=model)
+        self._base_url = str(url)
 
-        self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
         self._session: aiohttp.ClientSession | None = None
-        self._input_ch = utils.aio.Chan[dict]()
-        self._output_queue: collections.deque[utils.aio.Chan[dict]] = collections.deque()
-        self._run_task: asyncio.Task | None = None
+
+        self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
+            connect_cb=self._create_ws,
+            close_cb=self._close_ws,
+            max_session_duration=3600,
+        )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._session is None:
             self._session = utils.http_context.http_session()
         return self._session
 
-    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+    async def _create_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         try:
             return await asyncio.wait_for(
                 self._ensure_http_session().ws_connect(
                     self._base_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
+                    heartbeat=_WS_HEARTBEAT,
                 ),
-                timeout=self._timeout.connect if self._timeout else None,
+                timeout,
             )
         except aiohttp.ClientError as e:
             raise APIConnectionError("failed to connect to OpenAI Responses WebSocket") from e
         except asyncio.TimeoutError as e:
             raise APIConnectionError("timed out connecting to OpenAI Responses WebSocket") from e
 
-    async def connect(self) -> None:
-        self._input_ch = utils.aio.Chan[dict]()
-        self._ws_conn = await self._create_ws_conn()
-        self._run_task = asyncio.create_task(
-            self._run_ws(self._ws_conn), name="_ResponsesWebsocket._run_task"
-        )
+    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        await ws.close()
 
-    async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
-        @utils.log_exceptions(logger=logger)
-        async def _send_task() -> None:
+    async def aclose(self) -> None:
+        await self._pool.aclose()
+
+    async def generate_response(self, msg: dict) -> AsyncGenerator[dict, None]:
+        def _default(o: object) -> object:
+            if isinstance(o, openai.BaseModel):
+                # exclude_none is load-bearing, not cosmetic. This hand-rolled WS
+                # transport serializes request models itself instead of going
+                # through the openai SDK (which omits unset fields). Without
+                # exclude_none, every Optional field the model defaults to None
+                # is emitted as an explicit `null` on the wire. The Responses API
+                # rejects explicit nulls on fields that expect an enum: e.g. after
+                # openai-python added `Reasoning.mode` (default None), a plain
+                # `Reasoning(effort=...)` began serializing `"mode": null`, which
+                # the API 400s with "Invalid type for 'reasoning.mode': expected
+                # one of 'standard' or 'pro', but got null instead." Omitting None
+                # mirrors the SDK's on-the-wire shape and is forward-compatible
+                # with future Optional additions to these models.
+                return o.model_dump(mode="json", exclude_none=True)
+            raise TypeError(f"unexpected type {type(o)}")
+
+        try:
+            data = json.dumps(msg, default=_default)
+        except TypeError as e:
+            raise APIConnectionError(f"failed to serialize request: {e}") from e
+
+        ws = await self._acquire_and_send(data)
+        completed = False
+        try:
             while True:
-                try:
-                    msg = await self._input_ch.recv()
-                except utils.aio.channel.ChanClosed:
-                    await ws_conn.close()
-                    return
-                try:
-
-                    def _default(o: object) -> object:
-                        if isinstance(o, openai.BaseModel):
-                            return o.model_dump()
-                        raise TypeError(f"unexpected type {type(o)}")
-
-                    data = json.dumps(msg, default=_default)
-                except TypeError as e:
-                    logger.warning("skipping ws message, failed to serialize: %s", e)
-                    continue
-                try:
-                    await ws_conn.send_str(data)
-                except Exception:
-                    logger.exception("failed to send event")
-
-        @utils.log_exceptions(logger=logger)
-        async def _recv_task() -> None:
-            while True:
-                msg = await ws_conn.receive()
-                if msg.type in (
+                raw_msg = await ws.receive()
+                if raw_msg.type == aiohttp.WSMsgType.ERROR:
+                    exc = raw_msg.data
+                    status_code = exc.status if isinstance(exc, aiohttp.ClientResponseError) else -1
+                    raise APIStatusError(
+                        str(exc), status_code=status_code, retryable=False
+                    ) from exc
+                if raw_msg.type in (
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    if not self._output_queue:  # if there are no more pending requests
-                        return
-                    raise APIConnectionError(
-                        message="OpenAI Responses WebSocket connection closed unexpectedly"
+                    raise APIStatusError(
+                        "OpenAI Responses WebSocket connection closed unexpectedly",
+                        status_code=raw_msg.data or -1,
+                        body=f"{raw_msg.data=} {raw_msg.extra=}",
                     )
-
-                if msg.type != aiohttp.WSMsgType.TEXT:
+                if raw_msg.type != aiohttp.WSMsgType.TEXT:
                     continue
 
-                event = json.loads(msg.data)
-                if self._output_queue:
-                    current = self._output_queue[0]
-                    with contextlib.suppress(utils.aio.channel.ChanClosed):
-                        current.send_nowait(event)
-
-                    if event["type"] in ["response.completed", "response.failed", "error"]:
-                        current.close()
-                        self._output_queue.popleft()
-
-        tasks = [
-            asyncio.create_task(_recv_task(), name="_recv_task"),
-            asyncio.create_task(_send_task(), name="_send_task"),
-        ]
-        try:
-            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for task in done:
-                task.result()
-
+                event = json.loads(raw_msg.data)
+                yield event
+                if event["type"] in [
+                    "response.completed",
+                    "response.failed",
+                    "response.incomplete",
+                    "error",
+                ]:
+                    completed = True
+                    return
         finally:
-            await utils.aio.cancel_and_wait(*tasks)
-            await ws_conn.close()
-            for ch in self._output_queue:
-                ch.close()
-            self._output_queue.clear()
-            while not self._input_ch.empty():
-                try:
-                    self._input_ch.recv_nowait()
-                except (utils.aio.channel.ChanClosed, utils.aio.channel.ChanEmpty):
-                    break
+            # only a cleanly completed exchange is safe to reuse; discard on any error
+            if completed:
+                self._pool.put(ws)
+            else:
+                self._pool.remove(ws)
 
-    async def aclose(self) -> None:
-        self._input_ch.close()
-        if self._run_task is not None:
-            await utils.aio.cancel_and_wait(self._run_task)
-
-    async def send_request(self, msg: dict) -> utils.aio.Chan[dict]:
-        output_ch = utils.aio.Chan[dict]()
-        self._output_queue.append(output_ch)
-        try:
-            await self._input_ch.send(msg)
-        except utils.aio.channel.ChanClosed:
-            self._output_queue.remove(output_ch)
-            raise
-        return output_ch
+    async def _acquire_and_send(self, data: str) -> aiohttp.ClientWebSocketResponse:
+        # a socket closed while idle surfaces only as a send failure on reuse
+        last_exc: Exception | None = None
+        for _ in range(_WS_SEND_MAX_ATTEMPTS):
+            ws = await self._pool.get(timeout=self._timeout)
+            reused = self._pool.last_connection_reused
+            try:
+                await ws.send_str(data)
+                return ws
+            except Exception as e:
+                self._pool.remove(ws)  # discard the failed socket
+                last_exc = e
+                if not reused:
+                    break  # a fresh connection failing to send is a real error, not staleness
+            except BaseException:
+                self._pool.remove(ws)  # cancellation: discard the socket, don't leak it
+                raise
+        raise APIConnectionError("failed to send request over WebSocket") from last_exc
 
 
 @dataclass
@@ -187,10 +202,17 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
     metadata: NotGivenOr[dict[str, str]]
+    service_tier: NotGivenOr[ServiceTier]
+    verbosity: NotGivenOr[Verbosity]
+    max_output_tokens: NotGivenOr[int]
     use_websocket: bool
 
 
 class LLM(llm.LLM):
+    # the plugin's ProviderTool subclass; subclasses (e.g. xAI) override this so server-side
+    # provider tools are recognized when serializing the request. See to_responses_fnc_ctx.
+    _provider_tool_type: type[llm.ProviderTool] = OpenAITool
+
     def __init__(
         self,
         *,
@@ -206,6 +228,9 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]] = NOT_GIVEN,
         store: NotGivenOr[bool] = NOT_GIVEN,
         metadata: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+        service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
+        verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -217,10 +242,14 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
+
+        if client is not None and use_websocket:
+            logger.warning("use_websocket is ignored when a custom client is provided, disabling")
+            use_websocket = False
 
         self._opts = _LLMOptions(
             model=model,
@@ -231,15 +260,20 @@ class LLM(llm.LLM):
             store=store,
             metadata=metadata,
             reasoning=reasoning,
+            service_tier=service_tier,
+            verbosity=verbosity,
+            max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
         )
         self._client = client
         self._owns_client = client is None
         self._ws: _ResponsesWebsocket | None = None
-        self._ws_lock = asyncio.Lock()
 
+        self._active_streams: int = 0
+        self._parallel_generation: bool = False
         self._prev_resp_id = ""
         self._prev_chat_ctx: ChatContext | None = None
+        self._pending_tool_calls = set[str]()  # tool call ids that are pending for a response
 
         if use_websocket:
             resolved_api_key = api_key if is_given(api_key) else os.environ.get("OPENAI_API_KEY")
@@ -250,7 +284,8 @@ class LLM(llm.LLM):
                 )
             self._ws = _ResponsesWebsocket(
                 api_key=resolved_api_key,
-                timeout=timeout,
+                timeout=timeout.connect if timeout is not None else None,
+                model=str(model),
                 base_url=base_url if is_given(base_url) else None,
             )
 
@@ -278,21 +313,19 @@ class LLM(llm.LLM):
         if self._owns_client and self._client:
             await self._client.close()
 
-    async def _ensure_ws(self) -> _ResponsesWebsocket:
-        if self._ws is None:
-            raise RuntimeError("_ensure_ws called but self._ws is None")
-        async with self._ws_lock:
-            dead = self._ws._run_task is not None and self._ws._run_task.done()
-            if self._ws._ws_conn is None or dead:
-                if dead and self._ws._ws_conn is not None:
-                    await self._ws._ws_conn.close()
-                    self._ws._ws_conn = None
-                await self._ws.connect()
-        return self._ws
-
     @property
     def model(self) -> str:
         return self._opts.model
+
+    @property
+    def provider(self) -> str:
+        if self._opts.use_websocket and self._ws is not None:
+            from urllib.parse import urlparse
+
+            return urlparse(self._ws._base_url).netloc
+        if self._client is not None:
+            return self._client._base_url.netloc.decode("utf-8")
+        return ""
 
     def chat(
         self,
@@ -324,13 +357,23 @@ class LLM(llm.LLM):
         if is_given(self._opts.reasoning):
             extra["reasoning"] = self._opts.reasoning
 
+        if is_given(self._opts.service_tier):
+            extra["service_tier"] = self._opts.service_tier
+
+        if is_given(self._opts.verbosity):
+            text_cfg = extra.get("text") or {}
+            extra["text"] = {**text_cfg, "verbosity": self._opts.verbosity}
+
+        if is_given(self._opts.max_output_tokens):
+            extra["max_output_tokens"] = self._opts.max_output_tokens
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: response_create_params.ToolChoice
             if isinstance(tool_choice, dict):
@@ -340,13 +383,20 @@ class LLM(llm.LLM):
                 }
                 extra["tool_choice"] = oai_tool_choice
             elif tool_choice in ("auto", "required", "none"):
-                oai_tool_choice = tool_choice  # type: ignore
+                oai_tool_choice = tool_choice
                 extra["tool_choice"] = oai_tool_choice
 
         input_chat_ctx = chat_ctx
-        if self._opts.store is not False and self._prev_chat_ctx is not None and self._prev_resp_id:
+        if (
+            self._opts.store is not False
+            and self._active_streams == 0
+            and self._prev_chat_ctx is not None
+            and self._prev_resp_id
+        ):
             n = len(self._prev_chat_ctx.items)
-            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(self._prev_chat_ctx):
+            if ChatContext(items=chat_ctx.items[:n]).is_equivalent(
+                self._prev_chat_ctx
+            ) and self._pending_tool_calls_completed(chat_ctx.items[n:]):
                 # send only the new items appended since the last response
                 input_chat_ctx = ChatContext(items=chat_ctx.items[n:])
                 extra["previous_response_id"] = self._prev_resp_id
@@ -362,6 +412,15 @@ class LLM(llm.LLM):
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
         )
+
+    def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
+        if not self._pending_tool_calls:
+            return True
+
+        completed_tool_calls = {
+            item.call_id for item in items if item.type == "function_call_output"
+        }
+        return all(call_id in completed_tool_calls for call_id in self._pending_tool_calls)
 
 
 class LLMStream(llm.LLMStream):
@@ -383,27 +442,44 @@ class LLMStream(llm.LLMStream):
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
         self._response_completed: bool = False
+        self._pending_tool_calls = set[str]()
+
         self._client = client
         self._llm: LLM = llm
         self._extra_kwargs = drop_unsupported_params(model, extra_kwargs)
         self._full_chat_ctx = full_chat_ctx.copy()
 
     async def _run(self) -> None:
+        if self._llm._active_streams > 0:
+            self._llm._parallel_generation = True
+        self._llm._active_streams += 1
+        try:
+            await self._run_impl()
+        finally:
+            self._llm._active_streams -= 1
+            if self._llm._active_streams == 0 and self._llm._parallel_generation:
+                self._llm._prev_resp_id = ""
+                self._llm._prev_chat_ctx = None
+                self._llm._parallel_generation = False
+
+    async def _run_impl(self) -> None:
         self._response_completed = False
         chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
-
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
             self._tool_ctx.parse_function_tools(
-                "openai.responses", strict=self._strict_tool_schema
+                "openai.responses",
+                strict=self._strict_tool_schema,
+                provider_tool_type=self._llm._provider_tool_type,
             ),
         )
 
         if self._llm._opts.use_websocket is not False:
             retryable = True
             try:
-                ws = await self._llm._ensure_ws()
+                if self._llm._ws is None:
+                    raise RuntimeError("use_websocket is True but _ws is None")
 
                 payload = {
                     "type": "response.create",
@@ -412,12 +488,11 @@ class LLMStream(llm.LLMStream):
                     "tools": tool_schemas,
                     **self._extra_kwargs,
                 }
-                ws_stream = await ws.send_request(payload)
-
-                async for raw_event in ws_stream:
+                async for raw_event in self._llm._ws.generate_response(payload):
                     parsed_ev = self._parse_ws_event(raw_event)
-                    self._process_event(parsed_ev)
-                    retryable = False
+                    chunk = self._process_event(parsed_ev)
+                    if chunk is not None and chunk.has_response():
+                        retryable = False
 
                 if not self._response_completed:
                     raise APIConnectionError(retryable=True)
@@ -444,8 +519,9 @@ class LLMStream(llm.LLMStream):
 
                 async with stream:
                     async for event in stream:
-                        self._process_event(event)
-                        retryable = False
+                        chunk = self._process_event(event)
+                        if chunk is not None and chunk.has_response():
+                            retryable = False
 
             except openai.APITimeoutError:
                 raise APITimeoutError(retryable=retryable)  # noqa: B904
@@ -463,9 +539,30 @@ class LLMStream(llm.LLMStream):
                 raise APIConnectionError(retryable=retryable) from e
 
     def _parse_ws_event(self, event: dict) -> ResponseStreamEvent | None:
+        # Strip prompt_cache_retention from any response object before validation:
+        # the OpenAI SDK Pydantic type doesn't match actual API values (e.g. "in_memory"
+        # vs "in-memory"). We don't use this field so dropping it is safe.
+        if (
+            isinstance(event.get("response"), dict)
+            and "prompt_cache_retention" in event["response"]
+        ):
+            event = {
+                **event,
+                "response": {
+                    k: v for k, v in event["response"].items() if k != "prompt_cache_retention"
+                },
+            }
+
         event_type = event.get("type", "")
         if event_type == "error":
-            return ResponseErrorEvent.model_validate(event)
+            # Top-level protocol error frames (e.g. a request-validation 400) do
+            # NOT carry `sequence_number`, which ResponseErrorEvent marks required.
+            # Validating them as-is raises a pydantic ValidationError that masks
+            # the real API message ("... 1 validation error ... sequence_number
+            # Field required ..."). Default the field so the genuine error
+            # surfaces as a clean APIStatusError via _handle_error instead.
+            merged = {"sequence_number": -1, **event.get("error", {}), **event}
+            return ResponseErrorEvent.model_validate(merged)
         elif event_type == "response.created":
             return ResponseCreatedEvent.model_validate(event)
         elif event_type == "response.output_item.done":
@@ -476,11 +573,14 @@ class LLMStream(llm.LLMStream):
             return ResponseCompletedEvent.model_validate(event)
         elif event_type == "response.failed":
             return ResponseFailedEvent.model_validate(event)
+        elif event_type == "response.incomplete":
+            return ResponseIncompleteEvent.model_validate(event)
         return None
 
-    def _process_event(self, event: ResponseStreamEvent | None) -> None:
+    def _process_event(self, event: ResponseStreamEvent | None) -> llm.ChatChunk | None:
+        """Handle one stream event, returning the chunk it sent to the caller, if any."""
         if event is None:
-            return
+            return None
         chunk = None
         if isinstance(event, ResponseErrorEvent):
             self._handle_error(event)
@@ -494,8 +594,11 @@ class LLMStream(llm.LLMStream):
             chunk = self._handle_response_completed(event)
         if isinstance(event, ResponseFailedEvent):
             self._handle_response_failed(event)
+        if isinstance(event, ResponseIncompleteEvent):
+            self._handle_response_incomplete(event)
         if chunk is not None:
             self._event_ch.send_nowait(chunk)
+        return chunk
 
     def _handle_error(self, event: ResponseErrorEvent) -> None:
         error_code = -1
@@ -513,13 +616,38 @@ class LLMStream(llm.LLMStream):
             retryable=False,
         )
 
+    def _handle_response_incomplete(self, event: ResponseIncompleteEvent) -> None:
+        details = event.response.incomplete_details
+        reason = details.reason if details else None
+        raise APIStatusError(
+            f"response incomplete: {reason or 'reason unavailable'}",
+            status_code=-1,
+            retryable=False,
+        )
+
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         self._response_id = event.response.id
 
     def _handle_response_completed(self, event: ResponseCompletedEvent) -> llm.ChatChunk | None:
+        for item in event.response.output:
+            # Every item.type is a discriminator of openai's ResponseOutputItem union.
+            # Of those, only these are produced/consumed by the agent itself; all other
+            # members of the union are tools the Responses API runs server-side (e.g.
+            # openai web_search, xAI web_search and x_search's custom_tool_call subcalls),
+            # so anything not in this set is a provider-executed tool.
+            if item.type not in ("message", "reasoning", "function_call", "function_call_output"):
+                logger.info(
+                    "provider tool executed",
+                    extra={
+                        "tool_type": item.type,
+                        "lk.pii.result": item.model_dump(exclude_none=True),
+                    },
+                )
+
         self._response_completed = True
         self._llm._prev_chat_ctx = self._full_chat_ctx
         self._llm._prev_resp_id = self._response_id
+        self._llm._pending_tool_calls = self._pending_tool_calls
 
         chunk = None
         if usage := event.response.usage:
@@ -532,6 +660,7 @@ class LLMStream(llm.LLMStream):
                     if usage.input_tokens_details
                     else 0,
                     total_tokens=usage.total_tokens,
+                    service_tier=getattr(event.response, "service_tier", None),
                 ),
             )
         return chunk
@@ -551,6 +680,18 @@ class LLMStream(llm.LLMStream):
                             call_id=event.item.call_id,
                         )
                     ],
+                ),
+            )
+            self._pending_tool_calls.add(event.item.call_id)
+        elif isinstance(event.item, ResponseOutputMessage) and event.item.phase is not None:
+            # Models like gpt-5.3-codex label assistant messages as intermediate
+            # `commentary` or the `final_answer`
+            chunk = llm.ChatChunk(
+                id=self._response_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=None,
+                    extra={"openai": {"phase": event.item.phase}},
                 ),
             )
         return chunk

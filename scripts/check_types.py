@@ -2,6 +2,22 @@
 """Run mypy type checking on all livekit packages.
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
+Uses mypy's incremental mode (.mypy_cache) for fast re-checks after the first run.
+Passes given arguments to mypy. Arguments after `--` passed to `uv run`.
+
+Third-party type stubs are declared in the `typing` dependency group in
+pyproject.toml and locked in uv.lock. We intentionally do NOT use
+`mypy --install-types`: it requires pip, installs unpinned stubs,
+and requires a forward pass in most cases.
+
+When a dependency introduces a stub not declared yet, mypy records
+the complete set of stub packages it wants in `.mypy_cache/missing_stubs`,
+the same list `--install-types` consumes.
+See https://github.com/python/mypy/issues/10600#issuecomment-2481074163.
+
+We read that file for the full set, then fail with the
+exact `uv add` command to declare and lock them. The script never installs stubs
+itself, so every run is a single deterministic pass..
 """
 
 import subprocess
@@ -15,10 +31,17 @@ EXCLUDED_PLUGINS = [
     "rtzr",
 ]
 
-# Stub packages that mypy --install-types pulls in but that break our type checking
-EXCLUDED_STUBS = [
-    "scipy-stubs",
-]
+# mypy records the full set of stub packages it wants here, one per line.
+_MISSING_STUBS = ".mypy_cache/missing_stubs"
+
+
+INSTALL_STUBS_MESSAGE = """
+check_types: mypy needs type stubs that aren't currently installed.
+
+Make sure to add them to the `typing` group and lock them with:
+
+    uv add --group typing {}
+"""
 
 
 def get_packages(repo_root: Path) -> list[str]:
@@ -38,42 +61,63 @@ def get_packages(repo_root: Path) -> list[str]:
     return packages
 
 
-def main() -> int:
+def read_missing_stubs(repo_root: Path) -> list[str]:
+    """The full stub-package list mypy recorded in .mypy_cache/missing_stubs."""
+    marker = repo_root / _MISSING_STUBS
+    if not marker.exists():
+        return []
+    return sorted(set(map(str.strip, marker.read_text().splitlines())))
+
+
+def main() -> None:
+    """
+    Command:
+        `python scripts/check_types.py --verbose -- --no-sync`
+    Translates to:
+        `uv run --no-sync mypy ... --verbose`
+    """
     repo_root = Path(__file__).parent.parent
     packages = get_packages(repo_root)
+
+    try:
+        mypy_args_end = sys.argv.index("--")
+    except ValueError:
+        mypy_args, uv_run_args = sys.argv[1:], []
+    else:
+        mypy_args, uv_run_args = sys.argv[1:mypy_args_end], sys.argv[mypy_args_end + 1 :]
 
     pkg_args: list[str] = []
     for pkg in packages:
         pkg_args.extend(["-p", pkg])
 
-    # Ensure pip is available (required for mypy --install-types)
-    subprocess.run(
-        ["uv", "pip", "install", "pip"],
-        capture_output=True,
-        cwd=repo_root,
-    )
+    command = [
+        "uv",
+        "run",
+        "--group",
+        "typing",
+        *uv_run_args,
+        "mypy",
+        "--untyped-calls-exclude=smithy_aws_core",
+        # Analyze for linux regardless of the host OS, matching the CI gate.
+        # Host-platform analysis breaks on Windows: the unix branch of
+        # cli/readchar.py resolves against the empty win32 termios stub
+        # (20 attr-defined errors) and the win32 branches demand stubs the
+        # typing group intentionally doesn't carry (types-colorama,
+        # types-pywin32, ...). User-supplied args come later, so an explicit
+        # --platform still overrides this default.
+        "--platform",
+        "linux",
+        *pkg_args,
+        *mypy_args,
+    ]
+    print(*command, "\n")
+    returncode = subprocess.run(command, cwd=repo_root).returncode
 
-    # First pass: let mypy install missing type stubs
-    subprocess.run(
-        ["uv", "run", "mypy", "--install-types", "--non-interactive", *pkg_args],
-        capture_output=True,
-        cwd=repo_root,
-    )
+    if returncode and (missing := read_missing_stubs(repo_root)):
+        print(INSTALL_STUBS_MESSAGE.format(" ".join(missing)), file=sys.stderr)
 
-    # Remove stubs that break our type checking
-    subprocess.run(
-        ["uv", "pip", "uninstall", "-y", *EXCLUDED_STUBS],
-        capture_output=True,
-        cwd=repo_root,
-    )
-
-    # Second pass: actual type check
-    result = subprocess.run(
-        ["uv", "run", "mypy", "--untyped-calls-exclude=smithy_aws_core", *pkg_args],
-        cwd=repo_root,
-    )
-    return result.returncode
+    sys.exit(returncode)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

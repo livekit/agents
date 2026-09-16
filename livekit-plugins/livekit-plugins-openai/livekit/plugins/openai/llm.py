@@ -124,7 +124,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning_effort) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2"]:
+            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
                 reasoning_effort = "none"
             else:
                 reasoning_effort = "minimal"
@@ -175,7 +175,13 @@ class LLM(llm.LLM):
             ),
         )
 
+    async def _prewarm_impl(self) -> None:
+        # token-free request supported by openai and openai-compatible servers
+        await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
+
         if self._owns_client:
             await self._client.close()
 
@@ -210,6 +216,7 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
+        max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -249,6 +256,7 @@ class LLM(llm.LLM):
             prompt_cache_key=prompt_cache_key,
             top_p=top_p,
             verbosity=verbosity,
+            max_completion_tokens=max_completion_tokens,
         )
         llm._owns_client = True
         return llm
@@ -256,7 +264,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_cerebras(
         *,
-        model: str | CerebrasChatModels = "llama-4-scout-17b-16e-instruct",
+        model: str | CerebrasChatModels = "gpt-oss-120b",
         api_key: str | None = None,
         base_url: str = "https://api.cerebras.ai/v1",
         client: openai.AsyncClient | None = None,
@@ -1001,7 +1009,7 @@ class LLM(llm.LLM):
         if is_given(parallel_tool_calls):
             extra["parallel_tool_calls"] = parallel_tool_calls
 
-        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice  # type: ignore
+        tool_choice = tool_choice if is_given(tool_choice) else self._opts.tool_choice
         if is_given(tool_choice):
             oai_tool_choice: ChatCompletionToolChoiceOptionParam
             if isinstance(tool_choice, dict):

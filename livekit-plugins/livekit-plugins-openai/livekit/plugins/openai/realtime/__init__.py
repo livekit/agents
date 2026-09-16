@@ -1,11 +1,22 @@
+from .gpt_live_model import (
+    GPTLiveDelegation,
+    GPTLiveModel,
+    GPTLiveSession,
+    GPTLiveVoices,
+    ResponsesDelegationOptions,
+)
+from .inference_realtime_model import InferenceRealtimeModel
 from .realtime_model import RealtimeModel, RealtimeSession
-from .realtime_model_beta import RealtimeModelBeta, RealtimeSessionBeta
 
 __all__ = [
+    "InferenceRealtimeModel",
     "RealtimeSession",
     "RealtimeModel",
-    "RealtimeModelBeta",
-    "RealtimeSessionBeta",
+    "GPTLiveModel",
+    "GPTLiveSession",
+    "GPTLiveDelegation",
+    "GPTLiveVoices",
+    "ResponsesDelegationOptions",
 ]
 
 # Cleanup docs of unexported modules

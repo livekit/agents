@@ -147,19 +147,25 @@ class VADStream(ABC):
                 self._last_activity_time = time.perf_counter()
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
-        """Push some text to be synthesized"""
+        """Push some audio frame to be analyzed"""
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(frame)
 
     def flush(self) -> None:
-        """Mark the end of the current segment"""
+        """Mark the end of the current segment.
+
+        Implementations MUST treat this as a hard segment boundary: drop any accumulated
+        speech/silence state so the next pushed frame starts a fresh segment. Used by the
+        pipeline to recover from out-of-band end-of-turn signals (e.g. STT EOS) without
+        tearing down and recreating the stream.
+        """
         self._check_input_not_ended()
         self._check_not_closed()
         self._input_ch.send_nowait(self._FlushSentinel())
 
     def end_input(self) -> None:
-        """Mark the end of input, no more text will be pushed"""
+        """Mark the end of input, no more audio will be pushed"""
         self.flush()
         self._input_ch.close()
 

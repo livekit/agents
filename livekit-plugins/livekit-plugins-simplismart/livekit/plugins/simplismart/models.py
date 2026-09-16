@@ -1,6 +1,6 @@
 from typing import Literal
 
-TTSModels = Literal["canopylabs/orpheus-3b-0.1-ft", "maya-research/Veena"]
+TTSModels = Literal["canopylabs/orpheus-3b-0.1-ft", "maya-research/Veena", "qwen-tts"]
 
 STTModels = Literal[
     "openai/whisper-large-v2",

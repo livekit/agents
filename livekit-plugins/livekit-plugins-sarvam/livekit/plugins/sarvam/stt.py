@@ -22,11 +22,14 @@ from __future__ import annotations
 import asyncio
 import enum
 import json
+import logging
 import os
+import platform
+import time
 import weakref
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlencode
 
 import aiohttp
@@ -39,6 +42,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
     LanguageCode,
+    __version__ as livekit_version,
     stt,
     utils,
 )
@@ -48,6 +52,9 @@ from livekit.agents.utils.misc import is_given
 
 from .log import logger
 
+USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
+EOS_FALLBACK_TIMEOUT = 1.0
+
 # Sarvam API details
 SARVAM_STT_BASE_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_STT_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text/ws"
@@ -55,18 +62,24 @@ SARVAM_STT_TRANSLATE_BASE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 SARVAM_STT_TRANSLATE_STREAMING_URL = "wss://api.sarvam.ai/speech-to-text-translate/ws"
 
 # Models
-SarvamSTTModels = Literal["saarika:v2.5", "saaras:v2.5", "saaras:v3"]
+SarvamSTTModels = Literal["saaras:v3", "saaras:v4"]
 SarvamSTTModes = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
+_SUNSET_STT_MODELS = frozenset({"saarika:v2.5", "saaras:v2.5"})
+
+
+def _warn_if_sunset_stt_model(model: str) -> None:
+    if model in _SUNSET_STT_MODELS:
+        logger.warning(
+            f"Sarvam STT model '{model}' is sunset. Please migrate to 'saaras:v3' or 'saaras:v4'."
+        )
+
 
 # Valid mode values (single source of truth)
 ALLOWED_MODES: set[str] = {"transcribe", "translate", "verbatim", "translit", "codemix"}
 
 
 class SpeechToTextLanguage(str, Enum):
-    """Languages supported for STT.
-
-    saarika:v2.5 supports only a subset; saaras:v3 supports all.
-    """
+    """Languages supported for STT."""
 
     UNKNOWN = "unknown"
     HI_IN = "hi-IN"
@@ -80,7 +93,6 @@ class SpeechToTextLanguage(str, Enum):
     TE_IN = "te-IN"
     EN_IN = "en-IN"
     GU_IN = "gu-IN"
-    # saaras:v3-only languages (saarika:v2.5 raises error if requested)
     ASSAMESE = "as-IN"
     URDU = "ur-IN"
     NEPALI = "ne-IN"
@@ -96,20 +108,6 @@ class SpeechToTextLanguage(str, Enum):
 
 
 SAARAS_V3_LANGUAGES = {lang.value for lang in SpeechToTextLanguage}
-SAARIKA_V25_LANGUAGES: set[str] = {
-    SpeechToTextLanguage.UNKNOWN.value,
-    SpeechToTextLanguage.HI_IN.value,
-    SpeechToTextLanguage.BN_IN.value,
-    SpeechToTextLanguage.KN_IN.value,
-    SpeechToTextLanguage.ML_IN.value,
-    SpeechToTextLanguage.MR_IN.value,
-    SpeechToTextLanguage.OD_IN.value,
-    SpeechToTextLanguage.PA_IN.value,
-    SpeechToTextLanguage.TA_IN.value,
-    SpeechToTextLanguage.TE_IN.value,
-    SpeechToTextLanguage.EN_IN.value,
-    SpeechToTextLanguage.GU_IN.value,
-}
 
 
 @dataclass(frozen=True)
@@ -120,6 +118,7 @@ class ModelConfig:
         supports_prompt: Whether the model accepts prompt parameter.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
+        supports_vad_params: Whether the model accepts fine-grained VAD parameters.
         default_language: Default language code (None = auto-detect).
         default_mode: Default mode (None = not applicable).
         use_translate_endpoint: Whether to use speech_to_text_translate_streaming endpoint.
@@ -130,6 +129,7 @@ class ModelConfig:
     supports_prompt: bool
     supports_mode: bool
     supports_language: bool
+    supports_vad_params: bool
     default_language: str | None
     default_mode: str | None
     use_translate_endpoint: bool
@@ -138,30 +138,22 @@ class ModelConfig:
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
-    "saarika:v2.5": ModelConfig(
-        supports_prompt=False,
-        supports_mode=False,
-        supports_language=True,
-        default_language="unknown",
-        default_mode=None,
-        use_translate_endpoint=False,
-        use_translate_method=False,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
-    ),
-    "saaras:v2.5": ModelConfig(
-        supports_prompt=True,
-        supports_mode=False,
-        supports_language=False,
-        default_language=None,
-        default_mode=None,
-        use_translate_endpoint=True,
-        use_translate_method=True,
-        allowed_languages=SAARIKA_V25_LANGUAGES,
-    ),
     "saaras:v3": ModelConfig(
-        supports_prompt=True,
+        supports_prompt=False,
         supports_mode=True,
         supports_language=True,
+        supports_vad_params=True,
+        default_language="en-IN",
+        default_mode="transcribe",
+        use_translate_endpoint=False,
+        use_translate_method=False,
+        allowed_languages=SAARAS_V3_LANGUAGES,
+    ),
+    "saaras:v4": ModelConfig(
+        supports_prompt=False,
+        supports_mode=True,
+        supports_language=True,
+        supports_vad_params=True,
         default_language="en-IN",
         default_mode="transcribe",
         use_translate_endpoint=False,
@@ -249,6 +241,14 @@ def _model_supports_mode(model: str) -> bool:
     return False
 
 
+def _model_supports_vad_params(model: str) -> bool:
+    """Check whether the model supports fine-grained VAD parameters."""
+    model_config = _get_model_config(model)
+    if model_config:
+        return model_config.supports_vad_params
+    return False
+
+
 class ConnectionState(enum.Enum):
     """WebSocket connection states."""
 
@@ -266,7 +266,7 @@ class SarvamSTTOptions:
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
@@ -274,7 +274,7 @@ class SarvamSTTOptions:
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
     api_key: str
-    model: SarvamSTTModels | str = "saarika:v2.5"
+    model: SarvamSTTModels | str = "saaras:v4"
     mode: SarvamSTTModes | str = "transcribe"
     base_url: str | None = None
     streaming_url: str | None = None
@@ -283,6 +283,16 @@ class SarvamSTTOptions:
     sample_rate: int = 16000
     flush_signal: bool | None = None
     input_audio_codec: str | None = None
+    positive_speech_threshold: float | None = None
+    negative_speech_threshold: float | None = None
+    min_speech_frames: int | None = None
+    first_turn_min_speech_frames: int | None = None
+    negative_frames_count: int | None = None
+    negative_frames_window: int | None = None
+    start_speech_volume_threshold: float | None = None
+    interrupt_min_speech_frames: int | None = None
+    pre_speech_pad_frames: int | None = None
+    num_initial_ignored_frames: int | None = None
 
     def __post_init__(self) -> None:
         """Set URLs based on model if not explicitly provided."""
@@ -314,6 +324,32 @@ def _get_urls_for_model(model: str) -> tuple[str, str]:
     if model_config and model_config.use_translate_endpoint:
         return SARVAM_STT_TRANSLATE_BASE_URL, SARVAM_STT_TRANSLATE_STREAMING_URL
     return SARVAM_STT_BASE_URL, SARVAM_STT_STREAMING_URL
+
+
+def _extract_confidence(
+    payload: dict,
+    instance_logger: logging.Logger,
+) -> float:
+    """Read Sarvam's ``language_probability`` from a response payload.
+
+    Returns the value as a float when present and numeric. Falls back to
+    ``1.0`` when the field is absent, ``None``, or has an unexpected type
+    (defensive — the field is documented for the REST endpoint but not
+    explicitly for streaming, so contract drift is logged for visibility).
+    """
+    value = payload.get("language_probability")
+    # bool is a subclass of int — exclude explicitly so that an accidental
+    # JSON `false` doesn't silently become ``confidence=0.0``. Same pattern
+    # as livekit-plugins-slng/.../stt.py.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if value is not None:
+        instance_logger.debug(
+            "Unexpected language_probability type: %s (value=%r); falling back to confidence=1.0",
+            type(value).__name__,
+            value,
+        )
+    return 1.0
 
 
 def _calculate_audio_duration(
@@ -356,7 +392,61 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
 
+    if _model_supports_vad_params(opts.model):
+        if opts.positive_speech_threshold is not None:
+            params["positive_speech_threshold"] = str(opts.positive_speech_threshold)
+        if opts.negative_speech_threshold is not None:
+            params["negative_speech_threshold"] = str(opts.negative_speech_threshold)
+        if opts.min_speech_frames is not None:
+            params["min_speech_frames"] = str(opts.min_speech_frames)
+        if opts.first_turn_min_speech_frames is not None:
+            params["first_turn_min_speech_frames"] = str(opts.first_turn_min_speech_frames)
+        if opts.negative_frames_count is not None:
+            params["negative_frames_count"] = str(opts.negative_frames_count)
+        if opts.negative_frames_window is not None:
+            params["negative_frames_window"] = str(opts.negative_frames_window)
+        if opts.start_speech_volume_threshold is not None:
+            params["start_speech_volume_threshold"] = str(opts.start_speech_volume_threshold)
+        if opts.interrupt_min_speech_frames is not None:
+            params["interrupt_min_speech_frames"] = str(opts.interrupt_min_speech_frames)
+        if opts.pre_speech_pad_frames is not None:
+            params["pre_speech_pad_frames"] = str(opts.pre_speech_pad_frames)
+        if opts.num_initial_ignored_frames is not None:
+            params["num_initial_ignored_frames"] = str(opts.num_initial_ignored_frames)
+
     return f"{base_url}?{urlencode(params)}"
+
+
+def _looks_like_error_text(value: object) -> bool:
+    """Heuristic to detect server-side error hints in text payloads/reasons."""
+    if not isinstance(value, str):
+        return False
+
+    lowered = value.lower()
+    error_hints = (
+        "error",
+        "invalid",
+        "failed",
+        "forbidden",
+        "unauthorized",
+        "not found",
+        "rate limit",
+        "timeout",
+    )
+    return any(hint in lowered for hint in error_hints)
+
+
+def _has_error_field(data: dict) -> bool:
+    """Check whether a parsed message carries an explicit error indicator."""
+    if data.get("error") is not None:
+        return True
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        if nested.get("error") is not None:
+            return True
+        if nested.get("event_type") == "error" or nested.get("event") == "error":
+            return True
+    return False
 
 
 class STT(stt.STT):
@@ -368,7 +458,7 @@ class STT(stt.STT):
     Args:
         language: BCP-47 language code, e.g., "hi-IN", "en-IN"
         model: The Sarvam STT model to use
-        mode: Mode for saaras:v3 (transcribe/translate/verbatim/translit/codemix)
+        mode: Mode for saaras:v3/v4 (transcribe/translate/verbatim/translit/codemix)
         api_key: Sarvam.ai API key (falls back to SARVAM_API_KEY env var)
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
@@ -379,7 +469,7 @@ class STT(stt.STT):
         self,
         *,
         language: str = "en-IN",
-        model: SarvamSTTModels | str = "saarika:v2.5",
+        model: SarvamSTTModels | str = "saaras:v4",
         mode: SarvamSTTModes | str = "transcribe",
         api_key: str | None = None,
         base_url: str | None = None,
@@ -389,6 +479,16 @@ class STT(stt.STT):
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
         input_audio_codec: str | None = None,
+        positive_speech_threshold: float | None = None,
+        negative_speech_threshold: float | None = None,
+        min_speech_frames: int | None = None,
+        first_turn_min_speech_frames: int | None = None,
+        negative_frames_count: int | None = None,
+        negative_frames_window: int | None = None,
+        start_speech_volume_threshold: float | None = None,
+        interrupt_min_speech_frames: int | None = None,
+        pre_speech_pad_frames: int | None = None,
+        num_initial_ignored_frames: int | None = None,
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
@@ -417,10 +517,21 @@ class STT(stt.STT):
             sample_rate=sample_rate,
             flush_signal=flush_signal,
             input_audio_codec=input_audio_codec,
+            positive_speech_threshold=positive_speech_threshold,
+            negative_speech_threshold=negative_speech_threshold,
+            min_speech_frames=min_speech_frames,
+            first_turn_min_speech_frames=first_turn_min_speech_frames,
+            negative_frames_count=negative_frames_count,
+            negative_frames_window=negative_frames_window,
+            start_speech_volume_threshold=start_speech_volume_threshold,
+            interrupt_min_speech_frames=interrupt_min_speech_frames,
+            pre_speech_pad_frames=pre_speech_pad_frames,
+            num_initial_ignored_frames=num_initial_ignored_frames,
         )
         self._session = http_session
         self._logger = logger.getChild(self.__class__.__name__)
         self._streams = weakref.WeakSet[SpeechStream]()
+        _warn_if_sunset_stt_model(model)
 
     @property
     def model(self) -> str:
@@ -434,6 +545,28 @@ class STT(stt.STT):
         if not self._session:
             self._session = utils.http_context.http_session()
         return self._session
+
+    @staticmethod
+    def _single_attempt_conn_options(conn_options: APIConnectOptions) -> APIConnectOptions:
+        return APIConnectOptions(
+            max_retry=0,
+            retry_interval=conn_options.retry_interval,
+            timeout=conn_options.timeout,
+        )
+
+    async def recognize(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.SpeechEvent:
+        single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
+        return await super().recognize(
+            buffer,
+            language=language,
+            conn_options=single_attempt_conn_options,
+        )
 
     def _resolve_opts(
         self,
@@ -456,6 +589,8 @@ class STT(stt.STT):
             resolved_language = self._opts.language
         if not isinstance(resolved_model, str):
             resolved_model = self._opts.model
+        if is_given(model):
+            _warn_if_sunset_stt_model(resolved_model)
 
         if is_given(mode):
             resolved_mode = str(mode)
@@ -504,9 +639,7 @@ class STT(stt.STT):
         form_data = aiohttp.FormData()
         form_data.add_field("file", wav_bytes, filename="audio.wav", content_type="audio/wav")
 
-        # Add model and language_code to the form data if specified
-        # Sarvam API docs state language_code is optional for saarika:v2x but mandatory for v1
-        # Model is also optional, defaults to saarika:v2.5
+        # Add model and language_code to the form data
         if opts_language:
             form_data.add_field("language_code", opts_language)
         if opts_model:
@@ -516,7 +649,10 @@ class STT(stt.STT):
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
-        headers = {"api-subscription-key": self._api_key}
+        headers = {
+            "api-subscription-key": self._api_key,
+            "User-Agent": USER_AGENT,
+        }
 
         try:
             base_url, _ = _get_urls_for_model(opts_model)
@@ -533,13 +669,15 @@ class STT(stt.STT):
                     error_text = await res.text()
                     self._logger.error(f"Sarvam API error: {res.status} - {error_text}")
                     raise APIStatusError(
-                        message="Sarvam API Error",
+                        message=f"Sarvam API Error ({res.status}): {error_text}",
                         status_code=res.status,
                         body=error_text,
                     )
 
                 response_json = await res.json()
-                self._logger.debug(f"Sarvam API response: {response_json}")
+                self._logger.debug(
+                    "Sarvam API response received", extra={"lk.pii.response_json": response_json}
+                )
 
                 transcript_text = response_json.get("transcript", "")
                 request_id = response_json.get("request_id", "")
@@ -572,7 +710,7 @@ class STT(stt.STT):
                         text=transcript_text,
                         start_time=start_time,
                         end_time=end_time,
-                        confidence=1.0,  # Sarvam doesn't provide confidence score in this response
+                        confidence=_extract_confidence(response_json, self._logger),
                     )
                 ]
 
@@ -588,6 +726,9 @@ class STT(stt.STT):
         except aiohttp.ClientError as e:
             self._logger.error(f"Sarvam API client error: {e}")
             raise APIConnectionError(f"Sarvam API connection error: {e}") from e
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            # Preserve provider-originated status/body/retry metadata.
+            raise
         except Exception as e:
             self._logger.error(f"Error during Sarvam STT processing: {e}")
             raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
@@ -604,6 +745,16 @@ class STT(stt.STT):
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         flush_signal: NotGivenOr[bool] = NOT_GIVEN,
         input_audio_codec: NotGivenOr[str] = NOT_GIVEN,
+        positive_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        negative_speech_threshold: NotGivenOr[float] = NOT_GIVEN,
+        min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        first_turn_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_count: NotGivenOr[int] = NOT_GIVEN,
+        negative_frames_window: NotGivenOr[int] = NOT_GIVEN,
+        start_speech_volume_threshold: NotGivenOr[float] = NOT_GIVEN,
+        interrupt_min_speech_frames: NotGivenOr[int] = NOT_GIVEN,
+        pre_speech_pad_frames: NotGivenOr[int] = NOT_GIVEN,
+        num_initial_ignored_frames: NotGivenOr[int] = NOT_GIVEN,
     ) -> SpeechStream:
         """Create a streaming transcription session."""
         opts_language, opts_model, opts_mode = self._resolve_opts(
@@ -625,6 +776,55 @@ class STT(stt.STT):
         opts_input_codec = (
             input_audio_codec if is_given(input_audio_codec) else self._opts.input_audio_codec
         )
+        opts_positive_speech = (
+            positive_speech_threshold
+            if is_given(positive_speech_threshold)
+            else self._opts.positive_speech_threshold
+        )
+        opts_negative_speech = (
+            negative_speech_threshold
+            if is_given(negative_speech_threshold)
+            else self._opts.negative_speech_threshold
+        )
+        opts_min_speech = (
+            min_speech_frames if is_given(min_speech_frames) else self._opts.min_speech_frames
+        )
+        opts_first_turn = (
+            first_turn_min_speech_frames
+            if is_given(first_turn_min_speech_frames)
+            else self._opts.first_turn_min_speech_frames
+        )
+        opts_neg_count = (
+            negative_frames_count
+            if is_given(negative_frames_count)
+            else self._opts.negative_frames_count
+        )
+        opts_neg_window = (
+            negative_frames_window
+            if is_given(negative_frames_window)
+            else self._opts.negative_frames_window
+        )
+        opts_vol_threshold = (
+            start_speech_volume_threshold
+            if is_given(start_speech_volume_threshold)
+            else self._opts.start_speech_volume_threshold
+        )
+        opts_interrupt = (
+            interrupt_min_speech_frames
+            if is_given(interrupt_min_speech_frames)
+            else self._opts.interrupt_min_speech_frames
+        )
+        opts_pre_pad = (
+            pre_speech_pad_frames
+            if is_given(pre_speech_pad_frames)
+            else self._opts.pre_speech_pad_frames
+        )
+        opts_initial_ignored = (
+            num_initial_ignored_frames
+            if is_given(num_initial_ignored_frames)
+            else self._opts.num_initial_ignored_frames
+        )
+        single_attempt_conn_options = self._single_attempt_conn_options(conn_options)
 
         # Create options for the stream
         stream_opts = SarvamSTTOptions(
@@ -637,6 +837,16 @@ class STT(stt.STT):
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
             input_audio_codec=opts_input_codec,
+            positive_speech_threshold=opts_positive_speech,
+            negative_speech_threshold=opts_negative_speech,
+            min_speech_frames=opts_min_speech,
+            first_turn_min_speech_frames=opts_first_turn,
+            negative_frames_count=opts_neg_count,
+            negative_frames_window=opts_neg_window,
+            start_speech_volume_threshold=opts_vol_threshold,
+            interrupt_min_speech_frames=opts_interrupt,
+            pre_speech_pad_frames=opts_pre_pad,
+            num_initial_ignored_frames=opts_initial_ignored,
         )
 
         # Create a fresh session for this stream to avoid conflicts
@@ -647,7 +857,7 @@ class STT(stt.STT):
         stream = SpeechStream(
             stt=self,
             opts=stream_opts,
-            conn_options=conn_options,
+            conn_options=single_attempt_conn_options,
             api_key=self._api_key,
             http_session=stream_session,
         )
@@ -691,6 +901,14 @@ class SpeechStream(stt.SpeechStream):
             None  # Store WebSocket reference for flush
         )
         self._should_flush = False  # Flag to trigger flush
+
+        self._utterance_speech_start_wall: float | None = None
+        self._pending_final_data: dict[str, Any] | None = None
+        self._pending_eos = False
+        self._eos_fallback_task: asyncio.Task[None] | None = None
+        self._eos_fallback_timeout = EOS_FALLBACK_TIMEOUT
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
 
         # Task management for cleanup
         self._audio_task: asyncio.Task | None = None
@@ -745,6 +963,96 @@ class SpeechStream(stt.SpeechStream):
         if request_id:
             self._server_request_id = str(request_id)
 
+    def _positive_time(self, value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value <= 0:
+            return None
+        # Shift into the stream timeline so the value survives reconnects: the base
+        # class advances start_time_offset by the session start -> audio start delay.
+        return float(value) + self.start_time_offset
+
+    def _reset_utterance_state(self) -> None:
+        self._cancel_eos_fallback()
+        self._pending_final_data = None
+        self._pending_eos = False
+        self._utterance_speech_start_wall = time.time()
+        self._final_received_for_utterance = False
+        self._eos_emitted_for_utterance = False
+
+    def _cancel_eos_fallback(self) -> asyncio.Task[None] | None:
+        current_task = asyncio.current_task()
+        fallback_task = self._eos_fallback_task
+        self._eos_fallback_task = None
+        if fallback_task and fallback_task is not current_task and not fallback_task.done():
+            fallback_task.cancel()
+            return fallback_task
+        return None
+
+    def _send_final_transcript(self, transcript_data: dict[str, Any]) -> bool:
+        transcript_text = transcript_data.get("transcript", "")
+        if not transcript_text:
+            return False
+
+        language = LanguageCode(transcript_data.get("language_code", ""))
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
+        # Streaming reports timing via speech_start/speech_end (the batch
+        # `timestamps` array is not sent over the socket). When absent, end_time
+        # is 0.0 and the pipeline falls back to wall-clock for EOU timing.
+        speech_data = stt.SpeechData(
+            language=language,
+            text=transcript_text,
+            start_time=self._positive_time(transcript_data.get("speech_start")) or 0.0,
+            end_time=self._positive_time(transcript_data.get("speech_end")) or 0.0,
+            confidence=_extract_confidence(transcript_data, self._logger),
+        )
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                request_id=request_id,
+                alternatives=[speech_data],
+            )
+        )
+        return True
+
+    def _try_commit_utterance(self) -> None:
+        # Flush in order: FINAL_TRANSCRIPT first, then END_OF_SPEECH.
+        if self._pending_final_data is None or self._eos_emitted_for_utterance:
+            return
+
+        committed_data = self._pending_final_data
+        if self._send_final_transcript(committed_data):
+            self._logger.debug("Sarvam STT utterance committed", extra=self._build_log_context())
+            self._emit_end_of_speech()
+            self._pending_final_data = None
+
+    def _emit_end_of_speech(self) -> None:
+        if self._eos_emitted_for_utterance:
+            return
+
+        self._cancel_eos_fallback()
+
+        # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
+        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.END_OF_SPEECH,
+                request_id=self._server_request_id or "",
+            )
+        )
+        self._eos_emitted_for_utterance = True
+        self._pending_eos = False
+
+    async def _emit_pending_eos_after_timeout(self) -> None:
+        try:
+            timeout = self._eos_fallback_timeout
+            if timeout > 0:
+                await asyncio.sleep(timeout)
+            if self._pending_eos and not self._eos_emitted_for_utterance:
+                self._emit_end_of_speech()
+        except asyncio.CancelledError:
+            raise
+
     async def aclose(self) -> None:
         """Close the stream and clean up resources."""
         self._logger.debug("Starting stream cleanup", extra=self._build_log_context())
@@ -758,6 +1066,9 @@ class SpeechStream(stt.SpeechStream):
             tasks_to_cancel.append(self._audio_task)
         if self._message_task and not self._message_task.done():
             tasks_to_cancel.append(self._message_task)
+        fallback_task = self._cancel_eos_fallback()
+        if fallback_task is not None:
+            tasks_to_cancel.append(fallback_task)
 
         if tasks_to_cancel:
             try:
@@ -808,6 +1119,7 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("LanguageCode cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model cannot be empty")
+        _warn_if_sunset_stt_model(model)
 
         self._opts.language = LanguageCode(language)
         self._opts.model = model
@@ -821,7 +1133,7 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Options updated, triggering reconnection",
-            extra={**self._build_log_context(), "prompt": prompt},
+            extra={**self._build_log_context(), "lk.pii.prompt": prompt},
         )
         self._reconnect_event.set()
 
@@ -832,7 +1144,7 @@ class SpeechStream(stt.SpeechStream):
             await ws.send_str(json.dumps(config_message))
             self._logger.debug(
                 "Sent initial config for saaras model",
-                extra={**self._build_log_context(), "prompt": self._opts.prompt},
+                extra={**self._build_log_context(), "lk.pii.prompt": self._opts.prompt},
             )
         except Exception as e:
             self._logger.error(
@@ -847,51 +1159,27 @@ class SpeechStream(stt.SpeechStream):
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
-        num_retries = 0
-        max_retries = getattr(self._conn_options, "max_retry_count", 3)
-
-        while num_retries <= max_retries:
-            try:
-                await self._run_connection()
-                break  # Success, exit retry loop
-
-            except (
-                aiohttp.ClientConnectorError,
-                asyncio.TimeoutError,
-            ) as e:  # TODO: Check if retry should happen for every Exception type
-                if num_retries == max_retries:
-                    async with self._connection_lock:
-                        self._connection_state = ConnectionState.FAILED
-                    raise APIConnectionError(
-                        f"Failed to connect to STT WebSocket after {max_retries} attempts"
-                    ) from e
-
-                # Exponential backoff with jitter, max 30 seconds
-                retry_interval = min(2**num_retries + (num_retries * 0.1), 30)
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.RECONNECTING
-
-                self._logger.warning(
-                    f"Connection failed, retrying in {retry_interval:.1f}s",
-                    extra={
-                        **self._build_log_context(),
-                        "attempt": num_retries + 1,
-                        "max_retries": max_retries + 1,
-                        "error": str(e),
-                    },
-                )
-                await asyncio.sleep(retry_interval)
-                num_retries += 1
-
-            except Exception as e:
-                async with self._connection_lock:
-                    self._connection_state = ConnectionState.FAILED
-                self._logger.error(
-                    f"Unrecoverable error in WebSocket connection: {e}",
-                    extra=self._build_log_context(),
-                    exc_info=True,
-                )
-                raise APIConnectionError(f"WebSocket connection failed: {e}") from e
+        try:
+            await self._run_connection()
+        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
+            async with self._connection_lock:
+                self._connection_state = ConnectionState.FAILED
+            self._logger.error(f"Connection failed: {e}", extra=self._build_log_context())
+            raise APIConnectionError(f"Failed to connect to STT WebSocket: {e}") from e
+        except (APIStatusError, APIConnectionError, APITimeoutError):
+            async with self._connection_lock:
+                self._connection_state = ConnectionState.FAILED
+            # Preserve provider-originated status/body/retry metadata.
+            raise
+        except Exception as e:
+            async with self._connection_lock:
+                self._connection_state = ConnectionState.FAILED
+            self._logger.error(
+                f"Unexpected error in STT WebSocket session: {e}",
+                extra=self._build_log_context(),
+                exc_info=True,
+            )
+            raise APIStatusError(f"STT WebSocket session failed: {e}") from e
 
     async def _run_connection(self) -> None:
         """Run a single WebSocket connection attempt."""
@@ -908,15 +1196,21 @@ class SpeechStream(stt.SpeechStream):
         ws_url = _build_websocket_url(self._opts.streaming_url, self._opts)
 
         # Connect to WebSocket with proper authentication
-        headers = {"api-subscription-key": self._api_key}
+        headers = {
+            "api-subscription-key": self._api_key,
+            "User-Agent": USER_AGENT,
+        }
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url},
+            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(
-            self._session.ws_connect(ws_url, headers=headers),
+            self._session.ws_connect(
+                ws_url,
+                headers=headers,
+            ),
             self._conn_options.timeout,
         )
 
@@ -955,6 +1249,33 @@ class SpeechStream(stt.SpeechStream):
                 self._reconnect_event.clear()
                 return
 
+            # Keep listening for server-side terminal errors when audio finishes first.
+            if self._audio_task in done and self._message_task in pending:
+                audio_exc = self._audio_task.exception()
+                if audio_exc is not None:
+                    raise audio_exc
+
+                done2, pending2 = await asyncio.wait(
+                    [self._message_task, reconnect_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=self._conn_options.timeout,
+                )
+                done |= done2
+                pending = pending2
+
+                if reconnect_task in done2:
+                    self._logger.info(
+                        "Reconnection requested, closing current connection",
+                        extra=self._build_log_context(),
+                    )
+                    self._reconnect_event.clear()
+                    return
+
+                if not done2:
+                    raise APITimeoutError(
+                        "Timed out waiting for STT server response after audio input ended"
+                    )
+
             # Cancel remaining tasks using LiveKit's utility
             if pending:
                 await utils.aio.cancel_and_wait(*pending)
@@ -972,6 +1293,9 @@ class SpeechStream(stt.SpeechStream):
         finally:
             # Clean up tasks
             all_tasks = tasks + [reconnect_task]
+            fallback_task = self._cancel_eos_fallback()
+            if fallback_task is not None:
+                all_tasks.append(fallback_task)
             await utils.aio.cancel_and_wait(*all_tasks)
 
             # Close WebSocket
@@ -1089,17 +1413,23 @@ class SpeechStream(stt.SpeechStream):
         )
 
         try:
-            async for msg in ws:
+            while True:
+                msg = await ws.receive()
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
                         await self._handle_message(data)
                     except json.JSONDecodeError as e:
+                        if _looks_like_error_text(msg.data):
+                            raise APIStatusError(
+                                message=(f"Sarvam STT non-JSON error message: {msg.data}"),
+                                body={"raw_message": msg.data},
+                            ) from e
                         self._logger.warning(
                             "Invalid JSON received from WebSocket",
                             extra={
                                 **self._build_log_context(),
-                                "raw_data": msg.data,
+                                "lk.pii.raw_data": msg.data,
                                 "error": str(e),
                             },
                         )
@@ -1113,10 +1443,13 @@ class SpeechStream(stt.SpeechStream):
                             extra={**self._build_log_context(), "error": str(e)},
                             exc_info=True,
                         )
-                        raise APIStatusError(f"Message processing error: {e}") from e
+                        raise APIStatusError(
+                            message=f"Message processing error: {e}. Raw server message: {msg.data}",
+                            body={"raw_message": msg.data},
+                        ) from e
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    error_msg = f"WebSocket error: {ws.exception()}"
+                    error_msg = f"WebSocket error: {msg.data}"
                     self._logger.error(error_msg, extra=self._build_log_context())
                     raise APIConnectionError(error_msg)
 
@@ -1125,9 +1458,41 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    close_code = ws.close_code if ws.close_code is not None else msg.data
+                    close_reason = msg.extra
+                    is_expected_close = close_code in (1000, 1001, None)
+                    has_error_reason = _looks_like_error_text(close_reason)
+
+                    if not is_expected_close or has_error_reason:
+                        self._logger.error(
+                            f"WebSocket closed: {msg.type}",
+                            extra={
+                                **self._build_log_context(),
+                                "close_code": close_code,
+                                "close_reason": close_reason,
+                            },
+                        )
+                        msg_type = getattr(msg.type, "name", str(msg.type))
+                        raw_close = {
+                            "msg_type": msg_type,
+                            "close_code": close_code,
+                            "close_reason": close_reason,
+                        }
+                        raise APIStatusError(
+                            message=(
+                                "Sarvam STT WebSocket closed unexpectedly: "
+                                f"{json.dumps(raw_close, ensure_ascii=False)}"
+                            ),
+                            status_code=int(close_code) if isinstance(close_code, int) else -1,
+                            body=raw_close,
+                        )
                     self._logger.info(
                         f"WebSocket closed: {msg.type}",
-                        extra=self._build_log_context(),
+                        extra={
+                            **self._build_log_context(),
+                            "close_code": close_code,
+                            "close_reason": close_reason,
+                        },
                     )
                     break
 
@@ -1137,7 +1502,7 @@ class SpeechStream(stt.SpeechStream):
                         extra=self._build_log_context(),
                     )
 
-        except (APIStatusError, APIConnectionError):
+        except (APIStatusError, APIConnectionError, APITimeoutError):
             # Already logged at origin — just propagate
             raise
         except Exception as e:
@@ -1156,26 +1521,31 @@ class SpeechStream(stt.SpeechStream):
             if not msg_type:
                 self._logger.warning(
                     "Received message without type field",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
                 return
 
             if msg_type == "data":
                 await self._handle_transcript_data(data)
-            elif msg_type == "events":
-                await self._handle_events(data)
-            elif msg_type == "error":
+            elif msg_type in ("events", "event"):
+                if _has_error_field(data):
+                    await self._handle_error_message(data)
+                else:
+                    await self._handle_events(data)
+            elif msg_type in ("error", "errors"):
+                await self._handle_error_message(data)
+            elif _has_error_field(data):
                 await self._handle_error_message(data)
             else:
                 self._logger.debug(
                     f"Unknown message type: {msg_type}",
-                    extra={**self._build_log_context(), "data": data},
+                    extra={**self._build_log_context(), "lk.pii.data": data},
                 )
 
         except KeyError as e:
             self._logger.warning(
                 f"Missing required field in message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
             )
         except (APIStatusError, APIConnectionError):
             # Let API errors propagate without re-wrapping
@@ -1183,7 +1553,7 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Unexpected error handling message: {e}",
-                extra={**self._build_log_context(), "data": data},
+                extra={**self._build_log_context(), "lk.pii.data": data},
                 exc_info=True,
             )
             raise APIStatusError(f"Message processing error: {e}") from e
@@ -1192,9 +1562,10 @@ class SpeechStream(stt.SpeechStream):
         """Handle transcription result messages."""
         transcript_data = data.get("data", {})
         transcript_text = transcript_data.get("transcript", "")
-        language = LanguageCode(transcript_data.get("language_code", ""))
-        request_id = transcript_data.get("request_id", "")
         self._maybe_set_server_request_id(transcript_data)
+        # Prefer the per-message request_id from the server; fall back to the
+        # session-wide server request_id captured from an earlier message.
+        request_id = transcript_data.get("request_id") or self._server_request_id or ""
 
         if not transcript_text:
             self._logger.debug("Received empty transcript", extra=self._build_log_context())
@@ -1203,34 +1574,26 @@ class SpeechStream(stt.SpeechStream):
         try:
             # Create usage event with proper metrics extraction
             metrics = transcript_data.get("metrics", {})
-            request_data = {
-                "original_id": request_id,
-                "processing_latency": metrics.get("processing_latency", 0.0),
-            }
+            # request_data = {
+            #     "original_id": request_id,
+            #     "processing_latency": metrics.get("processing_latency", 0.0),
+            # }
             usage_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.RECOGNITION_USAGE,
-                request_id=json.dumps(request_data),
+                request_id=request_id,
                 recognition_usage=stt.RecognitionUsage(
                     audio_duration=metrics.get("audio_duration", 0.0),
                 ),
             )
             self._event_ch.send_nowait(usage_event)
 
-            # Create speech data
-            speech_data = stt.SpeechData(
-                language=language,
-                text=transcript_text,
-                start_time=transcript_data.get("speech_start", 0.0),
-                end_time=transcript_data.get("speech_end", 0.0),
-            )
-
-            # Create final transcript event with request_id
-            speech_event = stt.SpeechEvent(
-                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                request_id=request_id,
-                alternatives=[speech_data],
-            )
-            self._event_ch.send_nowait(speech_event)
+            if self._pending_eos:
+                self._pending_final_data = transcript_data
+                self._final_received_for_utterance = True
+                self._try_commit_utterance()
+            else:
+                if self._send_final_transcript(transcript_data):
+                    self._final_received_for_utterance = True
 
             self._logger.debug(
                 "Transcript processed successfully",
@@ -1238,7 +1601,6 @@ class SpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "text_length": len(transcript_text),
                     "language": self._opts.language,
-                    "confidence": speech_data.confidence,
                 },
             )
 
@@ -1247,7 +1609,7 @@ class SpeechStream(stt.SpeechStream):
                 f"Error processing transcript data: {e}",
                 extra={
                     **self._build_log_context(),
-                    "transcript_data": transcript_data,
+                    "lk.pii.transcript_data": transcript_data,
                 },
                 exc_info=True,
             )
@@ -1262,7 +1624,7 @@ class SpeechStream(stt.SpeechStream):
         if not signal_type:
             self._logger.warning(
                 "VAD event missing signal_type",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
             )
             return
 
@@ -1274,16 +1636,30 @@ class SpeechStream(stt.SpeechStream):
         try:
             if signal_type == "START_SPEECH":
                 if not self._speaking:
+                    self._reset_utterance_state()
                     self._speaking = True
-                    start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+                    start_event = stt.SpeechEvent(
+                        type=stt.SpeechEventType.START_OF_SPEECH,
+                        request_id=self._server_request_id or "",
+                        speech_start_time=self._utterance_speech_start_wall,
+                    )
                     self._event_ch.send_nowait(start_event)
                     self._logger.debug("Speech started", extra=self._build_log_context())
 
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
-                    end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
-                    self._event_ch.send_nowait(end_event)
+                    self._pending_eos = True
+                    self._try_commit_utterance()
+                    if not self._eos_emitted_for_utterance and self._pending_final_data is None:
+                        if self._final_received_for_utterance:
+                            self._emit_end_of_speech()
+                        elif self._eos_fallback_task is None or self._eos_fallback_task.done():
+                            # Give Sarvam a short grace period to deliver the
+                            # final transcript so LiveKit sees FINAL before EOS.
+                            self._eos_fallback_task = asyncio.create_task(
+                                self._emit_pending_eos_after_timeout()
+                            )
 
                     # Set flag to trigger flush when Sarvam detects end of speech
                     self._should_flush = True
@@ -1300,15 +1676,22 @@ class SpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 f"Error processing VAD event: {e}",
-                extra={**self._build_log_context(), "event_data": event_data},
+                extra={**self._build_log_context(), "lk.pii.event_data": event_data},
                 exc_info=True,
             )
             raise
 
     async def _handle_error_message(self, data: dict) -> None:
         """Handle error messages from the API."""
-        error_info = data.get("error", "Unknown error")
-        error_code = data.get("code", "unknown")
+        error_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+        error_info = (
+            data.get("error")
+            or error_data.get("error")
+            or error_data.get("message")
+            or "Unknown error"
+        )
+        error_code = data.get("code", error_data.get("code", "unknown"))
+        raw_error_message = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         self._maybe_set_server_request_id(data)
 
         self._logger.error(
@@ -1317,19 +1700,16 @@ class SpeechStream(stt.SpeechStream):
                 **self._build_log_context(),
                 "error_code": error_code,
                 "error_info": error_info,
-                "raw_message": data,
+                "lk.pii.raw_message": data,
             },
         )
 
-        # Determine if error is recoverable based on error code/type
-        recoverable_codes = ["rate_limit", "temporary_unavailable", "timeout"]
-        recoverable_keywords = ["rate limit", "temporary", "timeout", "connection"]
+        status_code = int(error_code) if isinstance(error_code, int) else -1
+        if isinstance(error_code, str) and error_code.isdigit():
+            status_code = int(error_code)
 
-        is_recoverable = error_code in recoverable_codes or any(
-            keyword in str(error_info).lower() for keyword in recoverable_keywords
+        raise APIStatusError(
+            message=f"Sarvam streaming API error: {raw_error_message}",
+            status_code=status_code,
+            body=data,
         )
-
-        if is_recoverable:
-            raise APIConnectionError(f"Recoverable API error: {error_info}")
-        else:
-            raise APIStatusError(f"API error: {error_info}")

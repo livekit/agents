@@ -198,6 +198,11 @@ class TTS(tts.TTS):
                     " or all languages with `preview` models"
                 )
 
+    class Markup(tts.TTS.Markup):
+        # markup delegation lives in the base class, keyed on _provider_key()
+        def _provider_key(self) -> str:
+            return "cartesia"
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -208,12 +213,29 @@ class TTS(tts.TTS):
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
-        url = self._opts.get_ws_url(
-            f"/tts/websocket?api_key={self._opts.api_key}&cartesia_version={self._opts.api_version}"
-        )
-        ws = await asyncio.wait_for(
-            session.ws_connect(url, headers={"User-Agent": USER_AGENT}), timeout
-        )
+        url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")
+        try:
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    url,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        API_AUTH_HEADER: self._opts.api_key,
+                    },
+                ),
+                timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            # authentication headers can appear in RequestInfo.
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            # transport errors can contain credentials in URLs.
+            raise APIConnectionError(type(e).__name__) from None
+
         c_request_id = ws._response.headers.get(REQUEST_ID_HEADER)
         logger.debug(
             "Established new Cartesia TTS WebSocket connection",
@@ -264,18 +286,22 @@ class TTS(tts.TTS):
         if is_given(language):
             self._opts.language = LanguageCode(language) if language else None
         if is_given(voice):
-            self._opts.voice = cast(str | list[float], voice)
+            self._opts.voice = voice
         if is_given(speed):
             self._opts.speed = cast(TTSVoiceSpeed | float, speed)
         if is_given(emotion):
             emotion = [emotion] if isinstance(emotion, str) else emotion
-            self._opts.emotion = cast(list[TTSVoiceEmotion | str], emotion)
+            self._opts.emotion = emotion
         if is_given(volume):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
             self._opts.pronunciation_dict_id = pronunciation_dict_id
-        if is_given(api_version):
+        if is_given(api_version) and api_version != self._opts.api_version:
             self._opts.api_version = api_version
+            # cartesia_version is a query parameter on the websocket URL, so a pooled
+            # socket keeps speaking the version it was opened with while
+            # _to_cartesia_options starts shaping the body for the new one.
+            self._pool.invalidate()
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
@@ -349,7 +375,7 @@ class ChunkedStream(tts.ChunkedStream):
                 self._opts.get_http_url("/tts/bytes"),
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
-                    API_VERSION_HEADER: API_VERSION,
+                    API_VERSION_HEADER: self._opts.api_version,
                     "User-Agent": USER_AGENT,
                 },
                 json=json,
@@ -397,6 +423,7 @@ class SynthesizeStream(tts.SynthesizeStream):
         sent_tokens = deque[str]()
 
         sent_tokenizer_stream = self._tts._sentence_tokenizer.stream()
+        flush_on_chunk = isinstance(self._tts._sentence_tokenizer, tokenize.SentenceTokenizer)
         if self._tts._stream_pacer:
             sent_tokenizer_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_tokenizer_stream,
@@ -407,6 +434,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws: aiohttp.ClientWebSocketResponse, cartesia_context_id: str
         ) -> None:
             base_pkt = _to_cartesia_options(self._opts, streaming=True)
+            if flush_on_chunk is True:
+                base_pkt["max_buffer_delay_ms"] = 0
             async for ev in sent_tokenizer_stream:
                 token_pkt = base_pkt.copy()
                 token_pkt["context_id"] = cartesia_context_id
@@ -462,6 +491,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 data = json.loads(msg.data)
                 segment_id = data.get("context_id")
+                # A pooled websocket may still hold audio/done from an interrupted
+                # previous context; ignore messages tagged with another context id.
+                if segment_id is not None and segment_id != cartesia_context_id:
+                    continue
                 if current_segment_id is None:
                     current_segment_id = segment_id
                     output_emitter.start_segment(segment_id=segment_id)
@@ -506,12 +539,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                         extra={"cartesia_context_id": cartesia_context_id, "error": data},
                     )
                     raise APIError(f"Cartesia returned error: {data}")
+                elif data.get("type") == "flush_done":
+                    pass
                 else:
-                    logger.warning("unexpected message %s", data)
+                    logger.warning("unexpected message", extra={"lk.pii.data": data})
 
         cartesia_context_id = utils.shortuuid()
         try:
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
                 tasks = [
                     asyncio.create_task(_input_task()),
                     asyncio.create_task(_sentence_stream_task(ws, cartesia_context_id)),
@@ -530,6 +567,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
+        except APIError:
+            raise
         except Exception as e:
             logger.exception(
                 "Cartesia connection error. Include the cartesia_context_id to support@cartesia.ai for help debugging.",

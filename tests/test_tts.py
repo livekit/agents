@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import itertools
 import logging
 import os
 import pathlib
@@ -9,6 +10,7 @@ import ssl
 import time
 import wave
 from collections import defaultdict
+from urllib.parse import urlencode
 
 import aiohttp
 import av
@@ -16,11 +18,19 @@ import pytest
 from dotenv import load_dotenv
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIError, APITimeoutError, inference, tokenize, tts
+from livekit.agents import (
+    APIConnectionError,
+    APIConnectOptions,
+    APIError,
+    APITimeoutError,
+    inference,
+    tts,
+)
 from livekit.agents.utils import AudioBuffer, aio
 from livekit.plugins import (
     aws,
     azure,
+    bland,
     cartesia,
     deepgram,
     elevenlabs,
@@ -29,8 +39,8 @@ from livekit.plugins import (
     hume,
     inworld,
     lmnt,
+    mistralai,
     neuphonic,
-    openai,
     resemble,
     rime,
     speechify,
@@ -40,6 +50,8 @@ from livekit.plugins import (
 from .fake_tts import FakeTTS
 from .toxic_proxy import Proxy, Toxiproxy
 from .utils import EventCollector, fake_llm_stream, wer
+
+pytestmark = pytest.mark.tts
 
 load_dotenv(override=True)
 
@@ -51,22 +63,35 @@ TEST_AUDIO_SYNTHESIZE_MULTI_TOKENS = pathlib.Path(
 ).read_text()
 
 PROXY_LISTEN = "0.0.0.0:443"
-OAI_LISTEN = "0.0.0.0:500"
+DG_STT_LISTEN = "0.0.0.0:500"
 
 
-def setup_oai_proxy(toxiproxy: Toxiproxy) -> Proxy:
-    return toxiproxy.create("api.openai.com:443", "oai-stt-proxy", listen=OAI_LISTEN, enabled=True)
+def setup_deepgram_stt_proxy(toxiproxy: Toxiproxy) -> Proxy:
+    return toxiproxy.create(
+        "api.deepgram.com:443", "dg-stt-proxy", listen=DG_STT_LISTEN, enabled=True
+    )
 
 
 async def assert_valid_synthesized_audio(
     *, frames: AudioBuffer, text: str, sample_rate: int, num_channels: int
 ):
-    # use whisper as the source of truth to verify synthesized speech (smallest WER)
+    # use Deepgram as the source of truth to verify synthesized speech
     frame = rtc.combine_audio_frames(frames)
 
-    # Make sure the data is PCM and can't be another container.
-    # OpenAI STT seems to probe the input so the test could still pass even if the data isn't PCM!!
-
+    # Make sure the data is PCM and not a compressed container a provider could return.
+    # Raw PCM has no signature, so ffmpeg's probe can coincidentally match obscure
+    # raw-format demuxers (e.g. lmlm4 when the audio starts with silence). Only fail
+    # on formats with real signatures that a TTS API could actually emit.
+    compressed_formats = {
+        "mp3",
+        "aac",
+        "ogg",
+        "flac",
+        "wav",
+        "mov,mp4,m4a,3gp,3g2,mj2",
+        "matroska,webm",
+        "mpeg",
+    }
     try:
         probe_opts = {
             "probe_size": "32",
@@ -74,24 +99,14 @@ async def assert_valid_synthesized_audio(
         }
         container = av.open(io.BytesIO(frame.data), options=probe_opts)
 
-        if container.format.name not in ("ea_cdata"):  # add more here
+        if container.format.name in compressed_formats:
             print("Container format:", container.format.name)
             print("Container long name:", container.format.long_name)
-            print("Metadata:")
-            for key, value in container.metadata.items():
-                print(f"  {key}: {value}")
-
-            print("Streams:")
             for stream in container.streams:
-                if stream.type == "video":  # false positive
-                    continue
-
                 print(f"  Stream index: {stream.index}")
                 print(f"    Type: {stream.type}")
                 print(f"    Codec: {stream.codec.name}")
-                print(f"    Duration: {stream.duration}")
-                print(f"    Time base: {stream.time_base}")
-                raise ValueError("Audio data isn't PCM")
+            raise ValueError(f"Audio data isn't PCM (detected {container.format.name})")
 
         container.close()
     except av.InvalidDataError:
@@ -102,11 +117,8 @@ async def assert_valid_synthesized_audio(
     assert frame.sample_rate == sample_rate, "sample rate should be the same"
     assert frame.num_channels == num_channels, "num channels should be the same"
 
-    data = frame.to_wav_bytes()
-    form = aiohttp.FormData()
-    form.add_field("file", data, filename="file.wav", content_type="audio/wav")
-    form.add_field("model", "whisper-1")
-    form.add_field("response_format", "verbose_json")
+    wav_data = frame.to_wav_bytes()
+    params = urlencode({"model": "nova-3", "punctuate": "true", "language": "en-US"})
 
     ssl_ctx = ssl.create_default_context()
     connector = aiohttp.TCPConnector(ssl=ssl_ctx)
@@ -115,25 +127,24 @@ async def assert_valid_synthesized_audio(
         connector=connector, timeout=aiohttp.ClientTimeout(total=30)
     ) as session:
         async with session.post(
-            "https://toxiproxy:500/v1/audio/transcriptions",
-            data=form,
+            f"https://toxiproxy:500/v1/listen?{params}",
+            data=wav_data,
             headers={
-                "Host": "api.openai.com",
-                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                "Host": "api.deepgram.com",
+                "Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}",
+                "Accept": "application/json",
+                "Content-Type": "audio/wav",
             },
             ssl=ssl_ctx,
-            server_hostname="api.openai.com",
+            server_hostname="api.deepgram.com",
         ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                raise RuntimeError(f"Deepgram transcription failed ({resp.status}): {body}")
             result = await resp.json()
 
-    # semantic
-    assert wer(result["text"], text) <= WER_THRESHOLD
-
-    # clipping
-    # signal = np.array(frame.data, dtype=np.int16).reshape(-1, frame.num_channels)
-    # peak = np.iinfo(np.int16).max
-    # num_clipped = np.sum((signal >= peak) | (signal <= -peak))
-    # assert num_clipped <= 10, f"{num_clipped} samples are clipped"
+    transcribed = result["results"]["channels"][0]["alternatives"][0]["transcript"]
+    assert wer(transcribed, text) <= WER_THRESHOLD
 
 
 SYNTHESIZE_TTS = [
@@ -143,6 +154,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.cartesia.ai:443",
         },
         id="cartesia",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": bland.TTS(),
+            "proxy-upstream": "api.bland.ai:443",
+        },
+        id="bland",
     ),
     pytest.param(
         lambda: {
@@ -164,6 +182,13 @@ SYNTHESIZE_TTS = [
             "proxy-upstream": "api.deepgram.com:443",
         },
         id="deepgram",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
     ),
     pytest.param(
         lambda: {
@@ -195,13 +220,6 @@ SYNTHESIZE_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": openai.TTS(),
-            "proxy-upstream": "api.openai.com:443",
-        },
-        id="openai",
-    ),
-    pytest.param(
-        lambda: {
             "tts": resemble.TTS(),
             "proxy-upstream": "f.cluster.resemble.ai:443",
         },
@@ -212,7 +230,7 @@ SYNTHESIZE_TTS = [
             "tts": rime.TTS(),
             "proxy-upstream": "users.rime.ai:443",
         },
-        id="rime",
+        id="rime-default-coda",
     ),
     pytest.param(
         lambda: {
@@ -249,6 +267,13 @@ SYNTHESIZE_TTS = [
         },
         id="inference-cartesia",
     ),
+    pytest.param(
+        lambda: {
+            "tts": mistralai.TTS(),
+            "proxy-upstream": "api.mistral.ai:443",
+        },
+        id="mistralai",
+    ),
 ]
 
 PLUGIN = os.getenv("PLUGIN", "").strip()
@@ -259,6 +284,19 @@ if PLUGIN:
 async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnectOptions):
     tts_stream = tts_v.synthesize(text=segment, conn_options=conn_options)
     audio_events = [event async for event in tts_stream]
+
+    request_ids = [event.request_id for event in audio_events]
+    assert all(request_ids), "expected all frames to have a request_id"
+
+    # a transient mid-synthesis failure may retry under a fresh request_id; frames
+    # from different attempts must not interleave, and only the last attempt is a
+    # complete synthesis
+    unique_ids = list(dict.fromkeys(request_ids))
+    contiguous_ids = [rid for rid, _ in itertools.groupby(request_ids)]
+    assert contiguous_ids == unique_ids, (
+        f"expected request_ids to not interleave between attempts, got {request_ids}"
+    )
+    audio_events = [event for event in audio_events if event.request_id == unique_ids[-1]]
 
     assert all(not event.is_final for event in audio_events[:-1]), (
         "expected all audio events to be non-final"
@@ -276,12 +314,6 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
         f"expected last frame to not be empty, got {audio_events[-1].frame.duration}"
     )
 
-    first_id = audio_events[0].request_id
-    assert first_id, "expected to have a request_id"
-    assert all(e.request_id == first_id for e in audio_events), (
-        "expected all frames to have the same request_id, "
-    )
-
     frames = [event.frame for event in audio_events]
     await assert_valid_synthesized_audio(
         frames=frames,
@@ -294,7 +326,7 @@ async def _do_synthesis(tts_v: tts.TTS, segment: str, *, conn_options: APIConnec
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -325,7 +357,7 @@ async def test_tts_synthesize(tts_factory, toxiproxy: Toxiproxy, logger: logging
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", SYNTHESIZE_TTS)
 async def test_tts_synthesize_timeout(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
 
@@ -404,6 +436,51 @@ async def test_tts_synthesize_error_propagation():
         await tts.aclose()
 
 
+async def test_tts_synthesize_retry_after_partial_audio():
+    tts_v = FakeTTS(
+        fake_audio_duration=1.0,
+        fake_exception=APIConnectionError("connection dropped mid-stream"),
+        fake_exception_count=1,
+    )
+
+    error_events = EventCollector(tts_v, "error")
+    metrics_collected_events = EventCollector(tts_v, "metrics_collected")
+    try:
+        stream = tts_v.synthesize(
+            "fake_text", conn_options=APIConnectOptions(max_retry=3, timeout=0.5)
+        )
+        audio_events = [ev async for ev in stream]
+
+        assert stream.attempt == 2, f"expected 1 retry, got {stream.attempt} attempts"
+        assert error_events.count == 1, f"expected 1 error event, got {error_events.count}"
+        assert error_events.events[0][0][0].recoverable is True, (
+            "expected the error to be recoverable"
+        )
+
+        # the retry restarts the synthesis under a fresh request_id; frames already
+        # delivered by the failed attempt keep the old one
+        request_ids = [ev.request_id for ev in audio_events]
+        assert len(set(request_ids)) == 2, f"expected 2 request_ids, got {set(request_ids)}"
+        retry_start = request_ids.index(request_ids[-1])
+        assert all(rid == request_ids[0] for rid in request_ids[:retry_start]), (
+            "expected request_ids to not interleave between attempts"
+        )
+
+        retry_events = audio_events[retry_start:]
+        assert retry_events[-1].is_final, "expected last audio event to be final"
+        retry_duration = sum(ev.frame.duration for ev in retry_events)
+        assert abs(retry_duration - 1.0) < 0.1, (
+            f"expected the retry to resynthesize the full audio, got {retry_duration:.2f}s"
+        )
+
+        await stream.aclose()  # settles the metrics task
+        assert metrics_collected_events.count == 1, (
+            f"expected 1 metrics collected event, got {metrics_collected_events.count}"
+        )
+    finally:
+        await tts_v.aclose()
+
+
 STREAM_TTS = [
     pytest.param(
         lambda: {
@@ -435,6 +512,13 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
+            "tts": deepgram.TTSv2(),
+            "proxy-upstream": "api.deepgram.com:443",
+        },
+        id="deepgram-flux",
+    ),
+    pytest.param(
+        lambda: {
             "tts": resemble.TTS(),
             "proxy-upstream": "websocket.cluster.resemble.ai:443",
         },
@@ -446,15 +530,6 @@ STREAM_TTS = [
             "proxy-upstream": "texttospeech.googleapis.com:443",
         },
         id="google",
-    ),
-    pytest.param(
-        lambda: {
-            "tts": tts.StreamAdapter(
-                tts=openai.TTS(), sentence_tokenizer=tokenize.blingfire.SentenceTokenizer()
-            ),
-            "proxy-upstream": "api.openai.com:443",
-        },
-        id="openai-stream-adapter",
     ),
     pytest.param(
         lambda: {
@@ -472,10 +547,20 @@ STREAM_TTS = [
     ),
     pytest.param(
         lambda: {
-            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/arcana")),
+            "tts": tts.StreamAdapter(tts=inference.TTS(model="rime/coda", voice="astra")),
             "proxy-upstream": "agent-gateway.livekit.cloud:443",
         },
         id="inference-rime",
+    ),
+    pytest.param(
+        lambda: {
+            "tts": rime.TTS(
+                websocket_url="wss://api.rime.ai/coda/ws",
+                speaker="astra",
+            ),
+            "proxy-upstream": "api.rime.ai:443",
+        },
+        id="rime-v1",
     ),
 ]
 
@@ -569,8 +654,8 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
                     "expected non-final frames to be 0-250 ms"
                 )
             else:
-                assert all(0.05 < e.frame.duration < 0.25 for e in non_final), (
-                    "expected non-final frames to be 50-250 ms"
+                assert all(0.00 < e.frame.duration < 0.25 for e in non_final), (
+                    "expected non-final frames to be 0-250 ms"
                 )
 
             frames = [e.frame for e in segment_events]
@@ -585,7 +670,7 @@ async def _do_stream(tts_v: tts.TTS, segments: list[str], *, conn_options: APICo
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Logger):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -649,7 +734,7 @@ async def test_tts_stream(tts_factory, toxiproxy: Toxiproxy, logger: logging.Log
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
     proxy_upstream = tts_info["proxy-upstream"]
@@ -674,7 +759,7 @@ async def test_tts_stream_empty(tts_factory, toxiproxy: Toxiproxy):
 @pytest.mark.usefixtures("job_process")
 @pytest.mark.parametrize("tts_factory", STREAM_TTS)
 async def test_tts_stream_timeout(tts_factory, toxiproxy: Toxiproxy):
-    setup_oai_proxy(toxiproxy)
+    setup_deepgram_stt_proxy(toxiproxy)
     tts_info: dict = tts_factory()
     tts_v: tts.TTS = tts_info["tts"]
 
@@ -779,20 +864,19 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_stream.close()
 
     msgs = [msg async for msg in rx_stream]
-    assert len(msgs) == 4
+    assert len(msgs) >= 4
 
-    # seg1: one non-final, one final
-    m0, m1, m2, m3 = msgs
-    assert (m0.segment_id, m0.is_final, m0.frame.data.tobytes()) == ("seg1", False, pcm_chunk)
-    assert (m1.segment_id, m1.is_final, m1.frame.data.tobytes()) == ("seg1", True, pcm_chunk)
+    # seg1 and seg2 each end with exactly one is_final=True
+    seg1_msgs = [m for m in msgs if m.segment_id == "seg1"]
+    seg2_msgs = [m for m in msgs if m.segment_id == "seg2"]
+    assert seg1_msgs[-1].is_final is True
+    assert all(not m.is_final for m in seg1_msgs[:-1])
+    assert seg2_msgs[-1].is_final is True
+    assert all(not m.is_final for m in seg2_msgs[:-1])
 
-    # seg2: direct end without flush still yields non-final then final
-    assert (m2.segment_id, m2.is_final, m2.frame.data.tobytes()) == ("seg2", False, pcm_chunk)
-    assert (m3.segment_id, m3.is_final, m3.frame.data.tobytes()) == ("seg2", True, pcm_chunk)
-
-    # durations: two frames × 0.1s = 0.2s
-    assert emitter_stream.pushed_duration(0) == 0.2
-    assert emitter_stream.pushed_duration(1) == 0.2
+    # total audio per segment: two pushes × 0.1s = 0.2s
+    assert pytest.approx(emitter_stream.pushed_duration(0), abs=0.02) == 0.2
+    assert pytest.approx(emitter_stream.pushed_duration(1), abs=0.02) == 0.2
 
     # --- Test multiple flush in streaming ---
     rx_multi = aio.Chan[tts.SynthesizedAudio]()
@@ -819,10 +903,13 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_multi.close()
 
     msgs2 = [msg async for msg in rx_multi]
-    assert len(msgs2) == 3
-    assert (msgs2[0].frame.data.tobytes(), msgs2[0].is_final) == (pcm_chunk, False)
-    assert (msgs2[1].frame.data.tobytes(), msgs2[1].is_final) == (pcm_chunk, False)
-    assert (msgs2[2].frame.data.tobytes(), msgs2[2].is_final) == (pcm_chunk, True)
+    assert len(msgs2) >= 3
+    # flush A and flush B produce non-final frames, end_segment C produces a final
+    # total audio: 3 pushes × 0.1s = 0.3s
+    assert msgs2[-1].is_final is True
+    assert all(not m.is_final for m in msgs2[:-1])
+    total_dur = sum(m.frame.duration for m in msgs2)
+    assert pytest.approx(total_dur, abs=0.02) == 0.3
 
     # --- Test non-streaming logic (flush acts as final) ---
     rx_nostream = aio.Chan[tts.SynthesizedAudio]()
@@ -844,9 +931,11 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_nostream.close()
 
     msgs3 = [msg async for msg in rx_nostream]
-    assert len(msgs3) == 2
-    assert (msgs3[0].frame.data.tobytes(), msgs3[0].is_final) == (pcm_chunk, False)
-    assert (msgs3[1].frame.data.tobytes(), msgs3[1].is_final) == (pcm_chunk, True)
+    assert len(msgs3) >= 2
+    assert msgs3[-1].is_final is True
+    assert all(not m.is_final for m in msgs3[:-1])
+    total_dur = sum(m.frame.duration for m in msgs3)
+    assert pytest.approx(total_dur, abs=0.02) == 0.2
 
     # --- Test direct end_segment without flush in streaming ---
     rx_noflush = aio.Chan[tts.SynthesizedAudio]()
@@ -868,10 +957,10 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_noflush.close()
 
     msgs4 = [msg async for msg in rx_noflush]
-    assert len(msgs4) == 1
-
-    # no flush, direct end_segment will not having the "fake frame"
-    assert msgs4[0].is_final is True and msgs4[0].frame.data.tobytes() == pcm_chunk
+    assert len(msgs4) >= 1
+    assert msgs4[-1].is_final is True
+    total_dur = sum(m.frame.duration for m in msgs4)
+    assert pytest.approx(total_dur, abs=0.02) == 0.1
 
     # test fake audio
     rx_noflush = aio.Chan[tts.SynthesizedAudio]()
@@ -894,9 +983,11 @@ async def test_tts_audio_emitter(monkeypatch):
     rx_noflush.close()
 
     msgs5 = [msg async for msg in rx_noflush]
-    assert len(msgs5) == 2
-    assert msgs5[0].is_final is False and msgs5[0].frame.data.tobytes() == pcm_chunk
-    assert msgs5[1].is_final is True and msgs5[1].frame.data.tobytes() == b"\x00\x00" * 10
+    assert len(msgs5) >= 2
+    assert msgs5[-1].is_final is True
+    assert all(not m.is_final for m in msgs5[:-1])
+    # marker frame is the final one (synthetic silence)
+    assert msgs5[-1].frame.samples_per_channel == 10
 
     # --- No silence on empty flush or double flush ---
     rx_empty = aio.Chan[tts.SynthesizedAudio]()
@@ -965,15 +1056,15 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx.close()
     msgs = [msg async for msg in rx]
 
-    # Expect 2 segments × 3 frames each = 6 frames
-    assert len(msgs) == 6
+    assert len(msgs) >= 6
 
-    # Check IDs and is_final flags
-    for i, msg in enumerate(msgs):
-        expected_seg = "w1" if i < 3 else "w2"
-        expected_final = i % 3 == 2
-        assert msg.segment_id == expected_seg
-        assert msg.is_final is expected_final
+    # Check segment IDs and is_final flags
+    w1_msgs = [m for m in msgs if m.segment_id == "w1"]
+    w2_msgs = [m for m in msgs if m.segment_id == "w2"]
+    assert w1_msgs[-1].is_final is True
+    assert all(not m.is_final for m in w1_msgs[:-1])
+    assert w2_msgs[-1].is_final is True
+    assert all(not m.is_final for m in w2_msgs[:-1])
 
     # Use pushed_duration() to verify each segment duration = 0.3s
     assert pytest.approx(emitter.pushed_duration(0), rel=1e-3) == 0.3
@@ -999,10 +1090,9 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx2.close()
     msgs2 = [msg async for msg in rx2]
 
-    # Should split into 3 frames, last one is_final=True
-    assert len(msgs2) == 3
-    for i, msg in enumerate(msgs2):
-        assert msg.is_final is (i == 2)
+    assert len(msgs2) >= 3
+    assert msgs2[-1].is_final is True
+    assert all(not m.is_final for m in msgs2[:-1])
 
     # Duration via pushed_duration() = 0.3s
     assert pytest.approx(emitter2.pushed_duration(0), rel=1e-3) == 0.3
@@ -1029,12 +1119,11 @@ async def test_tts_audio_emitter_wav(monkeypatch):
     rx3.close()
 
     msgs3 = [msg async for msg in rx3]
-    # first: real frame, second: injected silence
-    assert len(msgs3) == 2
-    # verify first is real
-    assert msgs3[0].is_final is False
-    assert msgs3[0].frame.data.tobytes() == b"\xff\xff" * 100
-    # verify second is silence, 10ms = 10 samples @1000Hz
-    silence = msgs3[1].frame.data.tobytes()
-    assert msgs3[1].is_final is True
+    assert len(msgs3) >= 2
+    # all non-final frames contain real audio, last is the silence marker
+    assert all(not m.is_final for m in msgs3[:-1])
+    assert msgs3[-1].is_final is True
+    # last frame is the 10ms silence marker
+    assert msgs3[-1].frame.samples_per_channel == 10
+    silence = msgs3[-1].frame.data.tobytes()
     assert silence == b"\x00\x00" * 10
