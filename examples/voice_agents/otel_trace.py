@@ -3,6 +3,7 @@ import logging
 from dotenv import load_dotenv
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span, SpanProcessor, TracerProvider
+from opentelemetry.util.types import AttributeValue
 
 from livekit.agents import (
     Agent,
@@ -47,11 +48,16 @@ load_dotenv()
 # Refer to their docs for latest instructions: https://langfuse.com/integrations/native/opentelemetry#opentelemetry-endpoint
 
 
+def get_context_data() -> dict[str, AttributeValue]:
+    if (ctx := get_job_context(required=False)) is None:
+        return {}
+    # Use the grouping key expected by your backend, e.g. langfuse.session.id.
+    return {"session.id": ctx.job.room.name}
+
+
 class SessionSpanProcessor(SpanProcessor):
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
-        if (ctx := get_job_context(required=False)) is not None:
-            # Use the grouping key expected by your backend, e.g. langfuse.session.id.
-            span.set_attribute("session.id", ctx.job.room.name)
+        span.set_attributes(get_context_data())
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
@@ -151,6 +157,8 @@ server = AgentServer()
 
 @server.rtc_session()
 async def entrypoint(ctx: JobContext) -> None:
+    ctx.log_context_fields.update(get_context_data())
+
     # (optional) add a shutdown callback to flush the trace before process exit
     async def flush_trace() -> None:
         trace_provider.force_flush()
