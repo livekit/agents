@@ -27,6 +27,7 @@ from ._exceptions import (
     APIStatusError,
     APITimeoutError,
     AssignmentTimeoutError,
+    UnexpectedModelBehavior,
     create_api_error_from_http,
 )
 from .job import (
@@ -58,6 +59,15 @@ from .llm.tool_context import (
     function_tool,
 )
 from .plugin import Plugin
+from .simulation import (
+    Scenario,
+    ScenarioGroup,
+    ScenarioUserdata,
+    SimulationContext,
+    SimulationDispatch,
+    SimulationRun,
+    SimulationVerdict,
+)
 from .types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -74,19 +84,31 @@ from .voice import (
     AgentSession,
     AgentStateChangedEvent,
     AgentTask,
+    AudioRecognition,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
     ErrorEvent,
+    ExpressiveOptions,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
     ModelSettings,
+    NonverbalOptions,
     RecordingOptions,
     RunContext,
+    RunOutputOptions,
     SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
+    SpeechSteeringOptions,
+    ToolCallEnded,
+    ToolCallStarted,
+    ToolCallUpdated,
+    ToolExecutionUpdatedEvent,
+    ToolReplyUpdated,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTranscriptionTimeoutEvent,
+    UserTurnExceededEvent,
     avatar,
     io,
     room_io,
@@ -98,6 +120,11 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.keyterm_detection import (
+    KeytermDetectionOptions,
+    KeytermsOptions,
+    STTContextOptions,
+)
 from .voice.room_io import RoomInputOptions, RoomIO, RoomOutputOptions
 from .voice.run_result import (
     AgentHandoffEvent,
@@ -116,6 +143,7 @@ from .voice.turn import (
     InterruptionOptions,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
+    UserTurnLimitOptions,
 )
 from .worker import (
     AgentServer,
@@ -169,7 +197,13 @@ __all__ = [
     "AgentFalseInterruptionEvent",
     "UserInputTranscribedEvent",
     "UserStateChangedEvent",
+    "UserTranscriptionTimeoutEvent",
     "SpeechCreatedEvent",
+    "ToolExecutionUpdatedEvent",
+    "ToolCallStarted",
+    "ToolCallUpdated",
+    "ToolCallEnded",
+    "ToolReplyUpdated",
     "MetricsCollectedEvent",
     "SessionUsageUpdatedEvent",
     "FunctionToolsExecutedEvent",
@@ -182,14 +216,27 @@ __all__ = [
     "ToolError",
     "RunContext",
     "Plugin",
+    "Scenario",
+    "ScenarioGroup",
+    "ScenarioUserdata",
+    "SimulationContext",
+    "SimulationDispatch",
+    "SimulationRun",
+    "SimulationVerdict",
     "AgentSession",
+    "AudioRecognition",
+    "ExpressiveOptions",
+    "NonverbalOptions",
+    "SpeechSteeringOptions",
     "RecordingOptions",
+    "RunOutputOptions",
     "text_transforms",
     "AgentEvent",
     "ModelSettings",
     "Agent",
     "AgentTask",
     "AssignmentTimeoutError",
+    "UnexpectedModelBehavior",
     "APIConnectionError",
     "APIError",
     "APIStatusError",
@@ -237,6 +284,11 @@ __all__ = [
     "EndpointingOptions",
     "InterruptionOptions",
     "PreemptiveGenerationOptions",
+    "UserTurnLimitOptions",
+    "KeytermsOptions",
+    "KeytermDetectionOptions",
+    "STTContextOptions",
+    "UserTurnExceededEvent",
 ]
 
 # Cleanup docs of unexported modules

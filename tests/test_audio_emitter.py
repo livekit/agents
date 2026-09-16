@@ -8,8 +8,11 @@ import wave
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import tts, utils
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT, TimedString
+
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
 def _make_pcm(sample_rate: int, num_channels: int, duration_ms: int) -> bytes:
@@ -263,3 +266,20 @@ async def test_every_frame_has_timed_transcript_metadata():
         assert USERDATA_TIMED_TRANSCRIPT in ev.frame.userdata, (
             f"frame {i} (is_final={ev.is_final}) missing {USERDATA_TIMED_TRANSCRIPT} in userdata"
         )
+
+
+@pytest.mark.asyncio
+async def test_push_frame_is_not_rechunked():
+    samples = SR * 220 // 1000
+    frame = rtc.AudioFrame(_make_pcm(SR, NC, 220), SR, NC, samples)
+
+    def produce(e):
+        e.push_frame(frame)
+        e.end_input()
+
+    _, events = await _run_emitter(produce)
+
+    # forwarded whole, minus the 10 ms tail held to tag the final frame; push() would ramp
+    # from a 20 ms first frame and hold the rest until more audio arrived
+    assert events[0].frame.duration == pytest.approx(0.21)
+    assert sum(ev.frame.duration for ev in events) == pytest.approx(0.22)

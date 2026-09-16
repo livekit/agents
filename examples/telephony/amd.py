@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -11,12 +12,9 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    JobProcess,
     cli,
     inference,
 )
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("basic-agent")
 
@@ -27,22 +25,12 @@ class MyAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are reaching out to a customer with a phone call. "
-                "You are calling to see if they are home. "
-                "You might encounter an answering machine with a DTMF menu or IVR system. "
-                "If you do, you will try to leave a message to ask them to call back."
+                "You are reaching out to a customer with a phone call. You might encounter voice mail prompt or IVR systems. The goal is to reach to a human."
             ),
         )
 
 
 server = AgentServer()
-
-
-def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load()
-
-
-server.setup_fnc = prewarm
 
 
 @server.rtc_session()
@@ -54,8 +42,6 @@ async def entrypoint(ctx: JobContext):
         stt=inference.STT("deepgram/nova-3", language="multi"),
         llm=inference.LLM("openai/gpt-4.1-mini"),
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
 
@@ -63,6 +49,15 @@ async def entrypoint(ctx: JobContext):
         agent=MyAgent(),
         room=ctx.room,
     )
+
+    async def hangup():
+        await ctx.api.room.delete_room(
+            api.DeleteRoomRequest(
+                room=ctx.room.name,
+            )
+        )
+
+    ctx.add_shutdown_callback(hangup)
 
     phone_number = os.getenv("SIP_PHONE_NUMBER")
     participant_identity = os.getenv("SIP_PARTICIPANT_IDENTITY")
@@ -84,16 +79,28 @@ async def entrypoint(ctx: JobContext):
         # start running amd before the SIP participant joins to avoid audio loss
         if phone_number and outbound_trunk_id and participant_identity:
             logger.info(f"creating SIP participant for {participant_identity}")
-            await ctx.api.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(
-                    room_name=ctx.room.name,
-                    sip_trunk_id=outbound_trunk_id,
-                    sip_call_to=phone_number,
-                    participant_identity=participant_identity,
-                    wait_until_answered=True,
+            # The API timeout must outlast the ring window; AMD's timeout starts after answer.
+            try:
+                await ctx.api.sip.create_sip_participant(
+                    api.CreateSIPParticipantRequest(
+                        room_name=ctx.room.name,
+                        sip_trunk_id=outbound_trunk_id,
+                        sip_call_to=phone_number,
+                        participant_identity=participant_identity,
+                        wait_until_answered=True,
+                    ),
+                    timeout=45,
                 )
-            )
-            participant = await ctx.wait_for_participant(identity=participant_identity)
+            except (api.SipCallError, asyncio.TimeoutError) as e:
+                logger.info(f"call was not answered: {e}")
+                ctx.shutdown("call not answered")
+                return
+            # The call may end just before wait_until_answered returns.
+            participant = ctx.room.remote_participants.get(participant_identity)
+            if participant is None:
+                logger.info("SIP participant missing, ending")
+                ctx.shutdown("participant missing")
+                return
             logger.info(
                 "participant joined",
                 extra={
@@ -141,15 +148,6 @@ async def entrypoint(ctx: JobContext):
             logger.info("mailbox unavailable, ending call", extra={"transcript": result.transcript})
 
             ctx.shutdown("mailbox unavailable")
-
-    async def hangup():
-        await ctx.api.room.delete_room(
-            api.DeleteRoomRequest(
-                room=ctx.room.name,
-            )
-        )
-
-    ctx.add_shutdown_callback(hangup)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timezone
 from inspect import istraceback
 from typing import Any
 
+from ..log import _add_global_log_fields
 from ..plugin import Plugin
 
 # noisy loggers are set to warn by default
@@ -140,6 +141,7 @@ class JsonFormatter(logging.Formatter):
 
         log_record.update(message_dict)
         _merge_record_extra(record, log_record)
+        log_record.setdefault("pid", record.process)
 
         log_record["timestamp"] = datetime.fromtimestamp(record.created, tz=timezone.utc)
 
@@ -201,7 +203,7 @@ class ColoredFormatter(logging.Formatter):
         return msg + self._esc_codes["esc_reset"]
 
 
-def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
+def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = False) -> None:
     root = logging.getLogger()
 
     handler = logging.StreamHandler(sys.stdout)
@@ -210,7 +212,13 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         if console:
             # reset the line before each log message
             colored_formatter = ColoredFormatter(
-                "\r%(asctime)s - %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s - %(message)s %(esc_gray)s%(extra)s"  # noqa: E501
+                "\r%(asctime)s %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s %(message)s %(esc_gray)s%(extra)s",  # noqa: E501
+                datefmt="%H:%M:%S",
+            )
+        elif compact:
+            colored_formatter = ColoredFormatter(
+                "%(asctime)s %(esc_levelcolor)s%(levelname)-4s%(esc_reset)s %(name)s %(message)s %(esc_gray)s%(extra)s",  # noqa: E501
+                datefmt="%H:%M:%S",
             )
         else:
             colored_formatter = ColoredFormatter(
@@ -223,6 +231,7 @@ def setup_logging(log_level: str, devmode: bool, console: bool) -> None:
         json_formatter = JsonFormatter()
         handler.setFormatter(json_formatter)
 
+    _add_global_log_fields(handler)
     root.addHandler(handler)
     root.setLevel(log_level)
 

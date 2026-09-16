@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import pathlib
+import wave
 from collections.abc import AsyncGenerator
 
 import jiwer as tr
@@ -64,6 +66,19 @@ async def read_audio_file(path) -> rtc.AudioFrame:
         frames.append(f)
 
     return rtc.combine_audio_frames(frames)
+
+
+def make_wav_file(frames: list[rtc.AudioFrame]) -> bytes:
+    if not frames:
+        return b""
+    combined = rtc.combine_audio_frames(frames)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(combined.num_channels)
+        wf.setsampwidth(2)  # int16
+        wf.setframerate(combined.sample_rate)
+        wf.writeframes(combined.data.tobytes())
+    return buf.getvalue()
 
 
 async def make_test_speech(

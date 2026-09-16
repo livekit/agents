@@ -24,10 +24,22 @@ class LLMMetrics(_BaseMetrics):
     timestamp: float
     duration: float
     ttft: float
+    """Time to first generated token in seconds. -1 if the response generated none."""
     cancelled: bool
     completion_tokens: int
     prompt_tokens: int
     prompt_cached_tokens: int
+    cache_creation_tokens: int = 0
+    """The number of tokens used to write to the prompt cache (e.g. Anthropic cache writes).
+
+    Not all providers report this. ``prompt_cached_tokens`` covers cache reads.
+    """
+    reasoning_tokens: int = 0
+    """The number of completion tokens spent on hidden reasoning.
+
+    Already counted in ``completion_tokens``; do not add it to totals. Not all providers
+    break reasoning out separately, and it is 0 when they don't.
+    """
     total_tokens: int
     tokens_per_second: float
     speech_id: str | None = None
@@ -112,6 +124,22 @@ class EOUMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class EOTInferenceMetrics(_BaseMetrics):
+    """Per-inference metrics emitted by the EOT model on each prediction."""
+
+    type: Literal["eot_inference_metrics"] = "eot_inference_metrics"
+    timestamp: float
+    total_duration: float
+    """Earliest audio creation time in an inference to response receive time."""
+    detection_delay: float
+    """Latest audio creation time in an inference to response receive time."""
+    prediction_duration: float
+    """Server side model inference time."""
+    num_requests: int = 1
+    """Number of inference requests made during one inference."""
+    metadata: Metadata | None = None
+
+
 class RealtimeModelMetrics(_BaseMetrics):
     class CachedTokenDetails(BaseModel):
         audio_tokens: int = 0
@@ -181,12 +209,26 @@ class InterruptionMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class AvatarMetrics(_BaseMetrics):
+    type: Literal["avatar_metrics"] = "avatar_metrics"
+    timestamp: float
+    playback_latency: float = 0
+    """Delay between forwarding the first audio frame to the avatar and the playback started."""
+    session_started_time: float | None = None
+    """Time when the avatar session was started."""
+    avatar_joined_time: float | None = None
+    """Time when the avatar participant joined and started video track."""
+    metadata: Metadata | None = None
+
+
 AgentMetrics = (
     STTMetrics
     | LLMMetrics
     | TTSMetrics
     | VADMetrics
     | EOUMetrics
+    | EOTInferenceMetrics
     | RealtimeModelMetrics
     | InterruptionMetrics
+    | AvatarMetrics
 )

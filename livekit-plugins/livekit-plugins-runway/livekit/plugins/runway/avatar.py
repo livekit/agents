@@ -56,6 +56,7 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
+        super().__init__()
         if not avatar_id and not preset_id:
             raise RunwayException("Either avatar_id or preset_id must be provided")
         if avatar_id and preset_id:
@@ -82,6 +83,14 @@ class AvatarSession(BaseAvatarSession):
         self._room: rtc.Room | None = None
         self._realtime_session_id: str | None = None
         self._end_session_task: asyncio.Task[None] | None = None
+
+    @property
+    def avatar_identity(self) -> str:
+        return self._avatar_participant_identity
+
+    @property
+    def provider(self) -> str:
+        return "runway"
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:
@@ -129,11 +138,13 @@ class AvatarSession(BaseAvatarSession):
         def _on_agent_session_close(_: Any) -> None:
             self._ensure_end_session_task()
 
-        agent_session.output.audio = DataStreamAudioOutput(
-            room=room,
-            destination_identity=self._avatar_participant_identity,
-            wait_remote_track=rtc.TrackKind.KIND_VIDEO,
-            sample_rate=SAMPLE_RATE,
+        agent_session.output.replace_audio_tail(
+            DataStreamAudioOutput(
+                room=room,
+                destination_identity=self._avatar_participant_identity,
+                wait_remote_track=rtc.TrackKind.KIND_VIDEO,
+                sample_rate=SAMPLE_RATE,
+            ),
         )
 
     async def _create_session(self, livekit_url: str, livekit_token: str, room_name: str) -> None:
@@ -268,3 +279,4 @@ class AvatarSession(BaseAvatarSession):
     async def aclose(self) -> None:
         if end_session_task := self._ensure_end_session_task():
             await asyncio.shield(end_session_task)
+        await super().aclose()

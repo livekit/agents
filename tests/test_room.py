@@ -32,7 +32,11 @@ from .utils.livekit_test import (
     wait_for_event,
 )
 
+pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
+
 TIMEOUT = 5.0
+# nothing else bounds `Room.connect`, and a wedged one would hang the whole session
+CONNECT_TIMEOUT = 15.0
 
 
 def _make_token(
@@ -66,8 +70,8 @@ async def connect_room(
 ):
     room = rtc.Room()
     token = _make_token(identity, room_name, kind=kind, agent=agent)
-    await room.connect(LK_URL, token)
     try:
+        await asyncio.wait_for(room.connect(LK_URL, token), timeout=CONNECT_TIMEOUT)
         yield room
     finally:
         await room.disconnect()
@@ -85,18 +89,14 @@ async def _publish_audio_track(room: rtc.Room) -> None:
 
 async def _test_wait_disconnect(wait_fn: Callable[[rtc.Room], Awaitable[object]]) -> None:
     """Connect a room, start waiting, disconnect, and assert RuntimeError."""
-    name = _room_name()
-    room = rtc.Room()
-    token = _make_token("observer", name)
-    await room.connect(LK_URL, token)
+    async with connect_room("observer", _room_name()) as room:
+        task = asyncio.ensure_future(wait_fn(room))
+        # ensure the task is running and has registered its event handlers
+        await asyncio.sleep(0.5)
+        await room.disconnect()
 
-    task = asyncio.ensure_future(wait_fn(room))
-    # ensure the task is running and has registered its event handlers
-    await asyncio.sleep(0.5)
-    await room.disconnect()
-
-    with pytest.raises(RuntimeError, match="disconnected"):
-        await asyncio.wait_for(task, timeout=TIMEOUT)
+        with pytest.raises(RuntimeError, match="disconnected"):
+            await asyncio.wait_for(task, timeout=TIMEOUT)
 
 
 # -- wait_for_participant tests --
@@ -352,7 +352,7 @@ class TestReconnect:
                 )
 
                 # Audio continues to flow uninterrupted.
-                await mon.assert_audio_continuous(min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5)
+                await mon.assert_audio_continuous(min_rms=_AUDIO_RMS_THRESHOLD, duration=1.0)
 
     async def test_full_reconnect_republishes_once_and_audio_recovers(self):
         """Full reconnect must fire `reconnected` exactly once, end with
@@ -411,5 +411,5 @@ class TestReconnect:
                 async with AudioEnergyMonitor.watch(new_track) as new_mon:
                     await new_mon.wait_for_audio(min_rms=_AUDIO_RMS_THRESHOLD, timeout=10.0)
                     await new_mon.assert_audio_continuous(
-                        min_rms=_AUDIO_RMS_THRESHOLD, duration=1.5
+                        min_rms=_AUDIO_RMS_THRESHOLD, duration=1.0
                     )

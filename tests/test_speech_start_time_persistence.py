@@ -29,6 +29,8 @@ import pytest
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
+pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
+
 
 class TestUserTurnStartPersistence:
     """Test cases for `AudioRecognition._user_turn_start` lifecycle."""
@@ -41,25 +43,42 @@ class TestUserTurnStartPersistence:
         # state read/written by _on_vad_event SOS/EOS branches
         audio_recognition._speech_start_time = None
         audio_recognition._vad_speech_started = False
+        # _speaking is a property backed by this event (set == silent/not speaking)
+        audio_recognition._user_silence_ev = asyncio.Event()
         audio_recognition._speaking = False
+        audio_recognition._agent_speaking = False
+        audio_recognition._turn_detector_stream = None
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
+        audio_recognition._eou_wait_span = None
+        audio_recognition._eou_wait_started_at_ns = None
+        audio_recognition._eou_wait_rearms = 0
+        audio_recognition._eou_wait_floor_ns = None
+        audio_recognition._eou_wait_not_committed = 0
+        audio_recognition._user_turn_resumes = 0
+        audio_recognition._eou_detection_span = None
         audio_recognition._user_turn_committed = False
         # disable EOU detection from EOS branch — we're testing VAD state, not EOT
         audio_recognition._vad_base_turn_detection = False
         audio_recognition._turn_detection_mode = None
         audio_recognition._stt = None
+        audio_recognition._stt_pipeline = None
         audio_recognition._stt_model = None
         audio_recognition._stt_provider = None
         audio_recognition._audio_transcript = ""
+        audio_recognition._audio_interim_transcript = ""
         audio_recognition._last_speaking_time = None
+        audio_recognition._transcription_timeout_handle = None
+        audio_recognition._turn_speech_duration = 0.0
 
         # collaborators
         audio_recognition._hooks = MagicMock()
         audio_recognition._session = MagicMock()
+        audio_recognition._session._root_span_context = None
         audio_recognition._session.amd = None
         audio_recognition._session._room_io = None
+        audio_recognition._session.options.transcription_timeout = None
 
         return audio_recognition
 

@@ -5,6 +5,8 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool, inference, llm
 
+pytestmark = pytest.mark.evals
+
 
 def _llm_model() -> llm.LLM:
     return inference.LLM(model="openai/gpt-4.1-mini")

@@ -16,18 +16,20 @@ if current_process().name == "job_proc":
 
 import asyncio
 import contextlib
+import contextvars
 import socket
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
 
 from livekit import rtc
 
-from ..job import JobContext, JobExecutorType, JobProcess, _JobContextVar
-from ..log import logger
-from ..telemetry import trace_types, tracer
+from ..job import JobContext, JobExecutorType, JobProcess, RunningJobInfo, _JobContextVar
+from ..log import _add_global_log_fields, logger
+from ..telemetry import loop_monitor, trace_types, tracer, utils as trace_utils
 from ..utils import aio, http_context, log_exceptions, shortuuid
 from .channel import Message
 from .inference_executor import InferenceExecutor
@@ -44,6 +46,13 @@ from .proto import (
     StartJobRequest,
 )
 
+# Defensive timeout for AgentSession.aclose() during job shutdown. Hardcoded for now
+# as a guardrail against close paths that hang indefinitely. If aclose() does not
+# return in this window, the rest of the shutdown sequence (on_session_end,
+# ShuttingDown ack, room.disconnect, shutdown callbacks) runs anyway so user-
+# registered shutdown callbacks are not silently dropped.
+_SESSION_ACLOSE_TIMEOUT = 60.0
+
 
 @dataclass
 class ProcStartArgs:
@@ -55,6 +64,7 @@ class ProcStartArgs:
     mp_cch: socket.socket
     log_cch: socket.socket
     logger_levels: dict[str, int]
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def proc_main(args: ProcStartArgs) -> None:
@@ -69,6 +79,7 @@ def proc_main(args: ProcStartArgs) -> None:
 
     log_cch = aio.duplex_unix._Duplex.open(args.log_cch)
     log_handler = LogQueueHandler(log_cch)
+    _add_global_log_fields(log_handler)
     root_logger.addHandler(log_handler)
 
     job_proc = _JobProc(
@@ -78,6 +89,7 @@ def proc_main(args: ProcStartArgs) -> None:
         session_end_timeout=args.session_end_timeout,
         executor_type=JobExecutorType.PROCESS,
         user_arguments=args.user_arguments,
+        simulation_end_fnc=args.simulation_end_fnc,
     )
 
     client = _ProcClient(args.mp_cch, args.log_cch, job_proc.initialize, job_proc.entrypoint)
@@ -185,12 +197,14 @@ class _JobProc:
         session_end_timeout: float,
         executor_type: JobExecutorType,
         user_arguments: Any | None = None,
+        simulation_end_fnc: Callable[[Any], Any] | None = None,
     ) -> None:
         self._executor_type = executor_type
         self._user_arguments = user_arguments
         self._initialize_process_fnc = initialize_process_fnc
         self._job_entrypoint_fnc = job_entrypoint_fnc
         self._session_end_fnc = session_end_fnc
+        self._simulation_end_fnc = simulation_end_fnc
         self._session_end_timeout = session_end_timeout
         self._job_task: asyncio.Task[None] | None = None
 
@@ -210,12 +224,16 @@ class _JobProc:
             user_arguments=self._user_arguments,
             http_proxy=init_req.http_proxy or None,
         )
+        # the framework's warm-up; a no-op under a forkserver, which imported it already
+        from . import _preload  # noqa: F401
+
         self._initialize_process_fnc(self._job_proc)
 
     @log_exceptions(logger=logger)
     async def entrypoint(self, cch: aio.ChanReceiver[Message]) -> None:
         self._exit_proc_flag = asyncio.Event()
         self._shutdown_fut: asyncio.Future[_ShutdownInfo] = asyncio.Future()
+        self._entrypoint_span_context: otel_context.Context | None = None
 
         @log_exceptions(logger=logger)
         async def _read_ipc_task() -> None:
@@ -236,7 +254,10 @@ class _JobProc:
 
                     with contextlib.suppress(asyncio.InvalidStateError):
                         self._shutdown_fut.set_result(
-                            _ShutdownInfo(reason=msg.reason, user_initiated=False)
+                            _ShutdownInfo(
+                                reason=msg.reason or "parent process shutdown",
+                                user_initiated=False,
+                            )
                         )
 
                 if isinstance(msg, InferenceResponse):
@@ -279,7 +300,9 @@ class _JobProc:
             self._ctx_shutdown_called = True
 
             with contextlib.suppress(asyncio.InvalidStateError):
-                self._shutdown_fut.set_result(_ShutdownInfo(user_initiated=True, reason=reason))
+                self._shutdown_fut.set_result(
+                    _ShutdownInfo(user_initiated=True, reason=reason or "user requested")
+                )
 
         self._room._info.name = msg.running_job.job.room.name
 
@@ -291,6 +314,8 @@ class _JobProc:
             on_shutdown=_on_ctx_shutdown,
             inference_executor=self._inf_client,
         )
+        # Reachable from SessionHost (via get_job_context) when a simulation finalizes.
+        self._job_ctx._simulation_end_fnc = self._simulation_end_fnc
 
         def _exit_proc_cb(_: asyncio.Task[None]) -> None:
             self._exit_proc_flag.set()
@@ -302,18 +327,33 @@ class _JobProc:
     async def _run_job_task(self) -> None:
         self._job_ctx._on_setup()
         self._job_ctx._start_log_buffering()
+        # before the first span: without a provider the job's root would not record
+        self._job_ctx._prepare_telemetry()
 
         job_ctx_token = _JobContextVar.set(self._job_ctx)
         http_context._new_session_ctx()
 
-        @tracer.start_as_current_span("job_entrypoint")
+        # the job's root span, from the availability request to the end of shutdown; the
+        # entrypoint returning is an event on it
+        job_span = _start_job_span(self._job_ctx)
+        self._entrypoint_span_context = trace.set_span_in_context(job_span)
+
         async def _traceable_entrypoint(job_ctx: JobContext) -> None:
-            job = job_ctx.job
-            current_span = trace.get_current_span()
-            current_span.set_attribute(trace_types.ATTR_JOB_ID, job.id)
-            current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job.agent_name)
-            current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job.room.name)
-            await self._job_entrypoint_fnc(job_ctx)
+            with tracer.use_span(
+                job_span, end_on_exit=False, record_exception=False, set_status_on_exception=False
+            ):
+                # the loop monitor's heartbeat predates the job: give its reports this context
+                if (monitor := loop_monitor.get_monitor(asyncio.get_running_loop())) is not None:
+                    monitor.set_report_context(contextvars.copy_context())
+                try:
+                    await self._job_entrypoint_fnc(job_ctx)
+                except asyncio.CancelledError:
+                    job_span.add_event("entrypoint_cancelled")
+                    raise
+                except Exception as e:
+                    trace_utils.record_exception(job_span, e)
+                    raise
+                job_span.add_event("entrypoint_returned")
 
         job_entry_task = asyncio.create_task(
             _traceable_entrypoint(self._job_ctx), name="job_user_entrypoint"
@@ -356,8 +396,32 @@ class _JobProc:
 
         job_entry_task.add_done_callback(_on_entry_done)
 
-        shutdown_info = await self._shutdown_fut
+        try:
+            shutdown_info = await self._shutdown_fut
+            with tracer.start_as_current_span(
+                "job_shutdown",
+                context=self._entrypoint_span_context,
+                attributes={
+                    trace_types.ATTR_SHUTDOWN_REASON: shutdown_info.reason,
+                    trace_types.ATTR_SHUTDOWN_USER_INITIATED: shutdown_info.user_initiated,
+                },
+            ):
+                await self._shutdown_job(job_entry_task, shutdown_info)
+        finally:
+            # whatever happened above (a cancel while waiting, a close that raised), the job
+            # ends: root span, temp dir, per-job telemetry state
+            job_span.end()
 
+            if tasks := self._job_ctx._pending_tasks:
+                await aio.cancel_and_wait(*tasks)
+
+            await self._job_ctx._on_cleanup()
+            await http_context._close_http_ctx()
+            _JobContextVar.reset(job_ctx_token)
+
+    async def _shutdown_job(
+        self, job_entry_task: asyncio.Task[None], shutdown_info: _ShutdownInfo
+    ) -> None:
         # wait for the entrypoint to finish, cancel if it takes too long
         if not job_entry_task.done():
             try:
@@ -365,22 +429,44 @@ class _JobProc:
             except asyncio.TimeoutError:
                 logger.warning("entrypoint did not exit in time, cancelling")
                 await aio.cancel_and_wait(job_entry_task)
+            except Exception:
+                # entrypoint raised; already logged via _on_entry_done.
+                # swallow so shutdown callbacks still run.
+                pass
 
         if session := self._job_ctx._primary_agent_session:
-            await session.aclose()
+            try:
+                await asyncio.wait_for(session.aclose(), timeout=_SESSION_ACLOSE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.error(
+                    "AgentSession.aclose() timed out after %.1fs; "
+                    "proceeding with shutdown so registered callbacks still run.",
+                    _SESSION_ACLOSE_TIMEOUT,
+                )
 
         if self._session_end_fnc:
-            try:
-                await asyncio.wait_for(
-                    self._session_end_fnc(self._job_ctx),
-                    timeout=self._session_end_timeout,
-                )
-            except asyncio.TimeoutError:
-                logger.error("on_session_end timed out after %ds", self._session_end_timeout)
-            except Exception:
-                logger.exception("error while executing the on_session_end callback")
+            with tracer.start_as_current_span(
+                "on_session_end",
+                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(self._session_end_fnc)},
+            ) as span:
+                try:
+                    await asyncio.wait_for(
+                        self._session_end_fnc(self._job_ctx),
+                        timeout=self._session_end_timeout,
+                    )
+                except asyncio.TimeoutError as e:
+                    trace_utils.record_exception(span, e)
+                    logger.error("on_session_end timed out after %ds", self._session_end_timeout)
+                except Exception as e:
+                    trace_utils.record_exception(span, e)
+                    logger.exception("error while executing the on_session_end callback")
 
-        await self._job_ctx._on_session_end()
+        with tracer.start_as_current_span("session_end_upload") as span:
+            try:
+                await self._job_ctx._on_session_end()
+            except Exception as e:
+                trace_utils.record_exception(span, e)
+                logger.exception("error in job_ctx._on_session_end")
 
         await self._client.send(ShuttingDown())
 
@@ -389,14 +475,29 @@ class _JobProc:
             extra={"reason": shutdown_info.reason, "user_initiated": shutdown_info.user_initiated},
         )
         await self._client.send(Exiting(reason=shutdown_info.reason))
-        await self._room.disconnect()
+        with tracer.start_as_current_span("room_disconnect"):
+            await self._room.disconnect()
+
+        async def _traced_shutdown_callback(
+            callback: Callable[[str], Awaitable[None]],
+        ) -> None:
+            if _is_framework_callback(callback):
+                # framework callbacks (the session's own close) get no span of their own
+                await callback(shutdown_info.reason)
+                return
+            # a hung callback here is why jobs hit the supervisor's shutdown deadline
+            with tracer.start_as_current_span(
+                "shutdown_callback",
+                attributes={trace_types.ATTR_CALLBACK_NAME: _callback_name(callback)},
+            ):
+                await callback(shutdown_info.reason)
 
         try:
             shutdown_tasks = []
             for callback in self._job_ctx._shutdown_callbacks:
                 shutdown_tasks.append(
                     asyncio.create_task(
-                        callback(shutdown_info.reason), name="job_shutdown_callback"
+                        _traced_shutdown_callback(callback), name="job_shutdown_callback"
                     )
                 )
 
@@ -404,12 +505,83 @@ class _JobProc:
         except Exception:
             logger.exception("error while shutting down the job")
 
-        if tasks := self._job_ctx._pending_tasks:
-            await aio.cancel_and_wait(*tasks)
 
-        self._job_ctx._on_cleanup()
-        await http_context._close_http_ctx()
-        _JobContextVar.reset(job_ctx_token)
+def _is_framework_callback(fnc: Any) -> bool:
+    """Registered by livekit-agents itself rather than by the user's entrypoint."""
+    module = getattr(fnc, "__module__", None) or ""
+    return module == "livekit.agents" or module.startswith("livekit.agents.")
+
+
+def _callback_name(fnc: Any) -> str:
+    return str(getattr(fnc, "__qualname__", None) or getattr(fnc, "__name__", None) or repr(fnc))
+
+
+def _server_timestamp_seconds(value: int) -> float:
+    """``JobState`` timestamps are int64; the server writes unix nanoseconds. Be tolerant
+    of milliseconds/seconds should that ever change."""
+    if value > 1e17:
+        return value / 1e9
+    if value > 1e11:
+        return value / 1e3
+    return float(value)
+
+
+def _start_job_span(job_ctx: JobContext) -> trace.Span:
+    """The job's root span, ``job_entrypoint``, back-dated to the availability request; ended
+    by ``_run_job_task`` after the shutdown sequence."""
+    job = job_ctx.job
+    info = job_ctx._info
+    entrypoint_started_at = time.time()
+    start_time_ns = int(info.received_at * 1e9) if info.received_at else None
+    span = tracer.start_span(
+        "job_entrypoint",
+        start_time=start_time_ns,
+        attributes={
+            trace_types.ATTR_JOB_ID: job.id,
+            trace_types.ATTR_AGENT_NAME: job.agent_name,
+            trace_types.ATTR_ROOM_NAME: job.room.name,
+            trace_types.ATTR_ROOM_SID: job.room.sid,
+            trace_types.ATTR_DISPATCH_ID: job.dispatch_id,
+            trace_types.ATTR_WORKER_ID: info.worker_id,
+            trace_types.ATTR_JOB_AGENT_ID: job.state.agent_id,
+        },
+    )
+    _record_dispatch_timeline(span, info, entrypoint_started_at)
+    return span
+
+
+def _record_dispatch_timeline(
+    span: trace.Span, info: RunningJobInfo, entrypoint_started_at: float
+) -> None:
+    """Stamp the dispatch stages on ``span``: one timestamped event per stage instant, and
+    the seconds between adjacent stages as attributes (they sum to the dispatch latency).
+
+    Timestamps travel from the worker through ``StartJobRequest``; a zero means the stage
+    is unknown (simulation, console, resumed job) and is skipped rather than guessed."""
+    stages = [
+        ("job_received", info.received_at),
+        ("job_accepted", info.accepted_at),
+        ("job_assigned", info.assigned_at),
+        ("process_assigned", info.launched_at),
+        ("entrypoint_started", entrypoint_started_at),
+    ]
+    for event_name, ts in stages:
+        if ts:
+            span.add_event(event_name, timestamp=int(ts * 1e9))
+
+    def _gap(attr: str, start: float, end: float) -> None:
+        if start and end:
+            span.set_attribute(attr, max(end - start, 0.0))
+
+    _gap(trace_types.ATTR_JOB_ACCEPT_LATENCY, info.received_at, info.accepted_at)
+    _gap(trace_types.ATTR_JOB_ASSIGNMENT_LATENCY, info.accepted_at, info.assigned_at)
+    _gap(trace_types.ATTR_JOB_LAUNCH_LATENCY, info.assigned_at, info.launched_at)
+    _gap(trace_types.ATTR_JOB_ENTRYPOINT_LATENCY, info.launched_at, entrypoint_started_at)
+    _gap(trace_types.ATTR_JOB_DISPATCH_LATENCY, info.received_at, entrypoint_started_at)
+    if (server_started := info.job.state.started_at) > 0:
+        # the server's own start time, for lining up with server-side traces
+        started = _server_timestamp_seconds(server_started)
+        span.add_event("job_started_on_server", timestamp=int(started * 1e9))
 
 
 @dataclass
@@ -421,6 +593,7 @@ class ThreadStartArgs:
     join_fnc: Callable[[], None]
     mp_cch: socket.socket
     user_arguments: Any | None
+    simulation_end_fnc: Callable[[Any], Any] | None = None
 
 
 def thread_main(
@@ -437,6 +610,7 @@ def thread_main(
             session_end_timeout=args.session_end_timeout,
             executor_type=JobExecutorType.THREAD,
             user_arguments=args.user_arguments,
+            simulation_end_fnc=args.simulation_end_fnc,
         )
 
         client = _ProcClient(args.mp_cch, None, job_proc.initialize, job_proc.entrypoint)

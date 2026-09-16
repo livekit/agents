@@ -20,7 +20,7 @@ import os
 import weakref
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import aiohttp
 
@@ -45,6 +45,8 @@ from ._utils import PeriodicCollector, _to_deepgram_url
 from .log import logger
 from .models import V2Models
 
+FluxRedaction = Literal["numbers", "aggressive_numbers"]
+
 
 @dataclass
 class STTOptions:
@@ -57,6 +59,9 @@ class STTOptions:
     eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN
     mip_opt_out: bool = False
+    numerals: bool = False
+    profanity_filter: bool = False
+    redact: NotGivenOr[FluxRedaction] = NOT_GIVEN
     tags: NotGivenOr[list[str]] = NOT_GIVEN
     language_hint: NotGivenOr[list[str]] = NOT_GIVEN
 
@@ -77,6 +82,9 @@ class STTv2(stt.STT):
         http_session: aiohttp.ClientSession | None = None,
         base_url: str = "wss://api.deepgram.com/v2/listen",
         mip_opt_out: bool = False,
+        numerals: bool = False,
+        profanity_filter: bool = False,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         # deprecated
         keyterms: NotGivenOr[list[str]] = NOT_GIVEN,
     ) -> None:
@@ -95,6 +103,9 @@ class STTv2(stt.STT):
             http_session: Optional aiohttp ClientSession to use for requests.
             base_url: The base URL for Deepgram API. Defaults to "https://api.deepgram.com/v1/listen".
             mip_opt_out: Whether to take part in the model improvement program
+            numerals: Whether to convert spoken numbers into numerical formats. Applied at connection time; Flux does not support toggling it mid-stream. Defaults to False.
+            profanity_filter: Whether to filter profanity from the transcription. Applied at connection time. Defaults to False.
+            redact: Redact numbers from the transcription, "numbers" or "aggressive_numbers". Flux does not support entity redaction (pci, pii, ...). Applied at connection time. Defaults to NOT_GIVEN.
 
         Raises:
             ValueError: If no API key is provided or found in environment variables.
@@ -110,6 +121,7 @@ class STTv2(stt.STT):
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
+                keyterms=True,
             )
         )
 
@@ -140,8 +152,13 @@ class STTv2(stt.STT):
         self._opts = STTOptions(
             model=model,
             sample_rate=sample_rate,
-            keyterm=keyterm if is_given(keyterm) else [],
+            keyterm=([keyterm] if isinstance(keyterm, str) else list(keyterm))
+            if is_given(keyterm)
+            else [],
             mip_opt_out=mip_opt_out,
+            numerals=numerals,
+            profanity_filter=profanity_filter,
+            redact=redact,
             tags=_validate_tags(tags) if is_given(tags) else [],
             language_hint=language_hint if is_given(language_hint) else [],
             eager_eot_threshold=eager_eot_threshold,
@@ -149,6 +166,9 @@ class STTv2(stt.STT):
             eot_timeout_ms=eot_timeout_ms,
             endpoint_url=base_url,
         )
+        # user keyterms; _opts.keyterm holds the effective set (user + session)
+        self._user_keyterm: list[str] = list(self._opts.keyterm)
+        self._session_keyterms: list[str] = []
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStreamv2]()
 
@@ -204,6 +224,9 @@ class STTv2(stt.STT):
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
@@ -236,9 +259,17 @@ class STTv2(stt.STT):
             )
             keyterm = keyterms
         if is_given(keyterm):
+            self._user_keyterm = [keyterm] if isinstance(keyterm, str) else list(keyterm)
+            keyterm = list(dict.fromkeys([*self._user_keyterm, *self._session_keyterms]))
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(numerals):
+            self._opts.numerals = numerals
+        if is_given(profanity_filter):
+            self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
@@ -261,17 +292,28 @@ class STTv2(stt.STT):
                 eot_timeout_ms=eot_timeout_ms,
                 keyterm=keyterm,
                 mip_opt_out=mip_opt_out,
+                numerals=numerals,
+                profanity_filter=profanity_filter,
+                redact=redact,
                 endpoint_url=endpoint_url,
                 tags=tags,
                 language_hint=language_hint,
                 eager_eot_threshold=eager_eot_threshold,
             )
 
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        merged = list(dict.fromkeys([*self._user_keyterm, *keyterms]))
+        self._opts.keyterm = merged
+        for stream in self._streams:
+            # tuned in-band, safe to apply mid-utterance
+            stream.update_options(keyterm=merged)
+
 
 class SpeechStreamv2(stt.SpeechStream):
-    # _KEEPALIVE_MSG: str = json.dumps({"type": "KeepAlive"})
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
-    # _FINALIZE_MSG: str = json.dumps({"type": "Finalize"})
 
     def __init__(
         self,
@@ -296,6 +338,9 @@ class SpeechStreamv2(stt.SpeechStream):
 
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
+        # active connection for in-band Configure updates; None while disconnected
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._reconfigure_atask: asyncio.Task[None] | None = None
 
     def update_options(
         self,
@@ -306,6 +351,9 @@ class SpeechStreamv2(stt.SpeechStream):
         eot_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         keyterm: NotGivenOr[str | list[str]] = NOT_GIVEN,
         mip_opt_out: NotGivenOr[bool] = NOT_GIVEN,
+        numerals: NotGivenOr[bool] = NOT_GIVEN,
+        profanity_filter: NotGivenOr[bool] = NOT_GIVEN,
+        redact: NotGivenOr[FluxRedaction] = NOT_GIVEN,
         tags: NotGivenOr[list[str]] = NOT_GIVEN,
         language_hint: NotGivenOr[list[str]] = NOT_GIVEN,
         endpoint_url: NotGivenOr[str] = NOT_GIVEN,
@@ -330,6 +378,12 @@ class SpeechStreamv2(stt.SpeechStream):
             self._opts.keyterm = keyterm
         if is_given(mip_opt_out):
             self._opts.mip_opt_out = mip_opt_out
+        if is_given(numerals):
+            self._opts.numerals = numerals
+        if is_given(profanity_filter):
+            self._opts.profanity_filter = profanity_filter
+        if is_given(redact):
+            self._opts.redact = redact
         if is_given(tags):
             self._opts.tags = _validate_tags(tags)
         if is_given(language_hint):
@@ -339,21 +393,70 @@ class SpeechStreamv2(stt.SpeechStream):
         if is_given(eager_eot_threshold):
             self._opts.eager_eot_threshold = eager_eot_threshold
 
-        self._reconnect_event.set()
+        # these only take effect on a fresh connection: Flux does not support
+        # toggling numerals, profanity_filter, or redact through Configure
+        # https://developers.deepgram.com/docs/numerals
+        needs_reconnect = any(
+            is_given(opt)
+            for opt in (
+                model,
+                sample_rate,
+                mip_opt_out,
+                numerals,
+                profanity_filter,
+                redact,
+                tags,
+                endpoint_url,
+            )
+        )
+        if needs_reconnect:
+            # reconnect carries the latest options
+            self._reconnect_event.set()
+            return
+
+        # send only changed fields; Flux keeps omitted ones unchanged
+        # https://developers.deepgram.com/docs/flux/configure
+        thresholds: dict[str, Any] = {}
+        if is_given(eager_eot_threshold):
+            thresholds["eager_eot_threshold"] = eager_eot_threshold
+        if is_given(eot_threshold):
+            thresholds["eot_threshold"] = eot_threshold
+        if is_given(eot_timeout_ms):
+            thresholds["eot_timeout_ms"] = eot_timeout_ms
+
+        changed_options: dict[str, Any] = {}
+        if thresholds:
+            changed_options["thresholds"] = thresholds
+        if is_given(keyterm):
+            # keyterms replaces the whole list, so send the full effective set
+            changed_options["keyterms"] = self._opts.keyterm
+        if is_given(language_hint):
+            changed_options["language_hints"] = self._opts.language_hint
+
+        if changed_options:
+            # chain off the previous send so deltas reach the server in order
+            self._reconfigure_atask = asyncio.create_task(
+                self._send_configure(changed_options, self._reconfigure_atask)
+            )
+
+    async def _send_configure(
+        self, options: dict[str, Any], prev: asyncio.Task[None] | None
+    ) -> None:
+        if prev is not None:
+            await asyncio.gather(prev, return_exceptions=True)
+
+        ws = self._ws
+        if ws is None or ws.closed:
+            # not connected; next connection carries the latest options
+            return
+        try:
+            await ws.send_str(json.dumps({"type": "Configure", **options}))
+        except Exception:
+            # closing; next connection carries the latest options
+            logger.debug("failed to send Configure to deepgram")
 
     async def _run(self) -> None:
         closing_ws = False
-
-        # async def keepalive_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-        #     # if we want to keep the connection alive even if no audio is sent,
-        #     # Deepgram expects a keepalive message.
-        #     # https://developers.deepgram.com/reference/listen-live#stream-keepalive
-        #     try:
-        #         while True:
-        #             await ws.send_str(SpeechStream._KEEPALIVE_MSG)
-        #             await asyncio.sleep(5)
-        #     except Exception:
-        #         return
 
         @utils.log_exceptions(logger=logger)
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -368,25 +471,34 @@ class SpeechStreamv2(stt.SpeechStream):
             )
 
             has_ended = False
-            async for data in self._input_ch:
-                frames: list[rtc.AudioFrame] = []
-                if isinstance(data, rtc.AudioFrame):
-                    frames.extend(audio_bstream.write(data.data.tobytes()))
-                elif isinstance(data, self._FlushSentinel):
-                    frames.extend(audio_bstream.flush())
-                    has_ended = True
+            try:
+                async for data in self._input_ch:
+                    frames: list[rtc.AudioFrame] = []
+                    if isinstance(data, rtc.AudioFrame):
+                        frames.extend(audio_bstream.write(data.data.tobytes()))
+                    elif isinstance(data, self._FlushSentinel):
+                        frames.extend(audio_bstream.flush())
+                        has_ended = True
 
-                for frame in frames:
-                    self._audio_duration_collector.push(frame.duration)
-                    await ws.send_bytes(frame.data.tobytes())
+                    for frame in frames:
+                        self._audio_duration_collector.push(frame.duration)
+                        await ws.send_bytes(frame.data.tobytes())
 
                     if has_ended:
                         self._audio_duration_collector.flush()
                         has_ended = False
 
-            # tell deepgram we are done sending audio/inputs
-            closing_ws = True
-            await ws.send_str(SpeechStreamv2._CLOSE_MSG)
+                # tell deepgram we are done sending audio/inputs
+                closing_ws = True
+                await ws.send_str(SpeechStreamv2._CLOSE_MSG)
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # a mid-write socket drop surfaces here as a raw connection error.
+                # if the close is expected (aclose or the http session closing) just
+                # return; otherwise re-raise as a retryable APIError so _main_task
+                # reconnects, symmetric with recv_task.
+                if closing_ws or self._session.closed:
+                    return
+                raise APIConnectionError("deepgram connection closed unexpectedly") from e
 
         @utils.log_exceptions(logger=logger)
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -410,6 +522,15 @@ class SpeechStreamv2(stt.SpeechStream):
                         body=f"{msg.data=} {msg.extra=}",
                     )
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+
+                    # the heartbeat closes the socket when a ping goes unanswered,
+                    # and that surfaces here rather than as a close frame.
+                    # ws.exception() is the only place the reason survives.
+                    raise APIConnectionError("deepgram connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected deepgram message type %s", msg.type)
                     continue
@@ -424,10 +545,11 @@ class SpeechStreamv2(stt.SpeechStream):
         while True:
             try:
                 ws = await self._connect_ws()
+                # expose the connection for in-band Configure updates
+                self._ws = ws
                 tasks = [
                     asyncio.create_task(send_task(ws)),
                     asyncio.create_task(recv_task(ws)),
-                    # asyncio.create_task(keepalive_task(ws)),
                 ]
                 tasks_group = asyncio.gather(*tasks)
                 wait_reconnect_task = asyncio.create_task(self._reconnect_event.wait())
@@ -451,10 +573,14 @@ class SpeechStreamv2(stt.SpeechStream):
                     tasks_group.cancel()
                     tasks_group.exception()  # retrieve the exception
             finally:
+                self._ws = None
+                if self._reconfigure_atask is not None:
+                    await utils.aio.gracefully_cancel(self._reconfigure_atask)
+                    self._reconfigure_atask = None
                 if ws is not None:
                     await ws.close()
 
-    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+    def _live_config(self) -> dict[str, Any]:
         live_config: dict[str, Any] = {
             "model": self._opts.model,
             "sample_rate": self._opts.sample_rate,
@@ -480,6 +606,20 @@ class SpeechStreamv2(stt.SpeechStream):
         if self._opts.language_hint:
             live_config["language_hint"] = self._opts.language_hint
 
+        if self._opts.numerals:
+            live_config["numerals"] = self._opts.numerals
+
+        if self._opts.profanity_filter:
+            live_config["profanity_filter"] = self._opts.profanity_filter
+
+        if is_given(self._opts.redact):
+            live_config["redact"] = self._opts.redact
+
+        return live_config
+
+    async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        live_config = self._live_config()
+
         try:
             ws = await asyncio.wait_for(
                 self._session.ws_connect(
@@ -489,15 +629,26 @@ class SpeechStreamv2(stt.SpeechStream):
                 ),
                 self._conn_options.timeout,
             )
-            ws_headers = {
-                k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
-            }
-            logger.debug(
-                "Established new Deepgram STT WebSocket connection:",
-                extra={"headers": ws_headers},
-            )
-        except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
-            raise APIConnectionError("failed to connect to deepgram") from e
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
+
+        ws_headers = {
+            k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
+        }
+        logger.debug(
+            "Established new Deepgram STT WebSocket connection:",
+            extra={"headers": ws_headers},
+        )
         return ws
 
     def _on_audio_duration_report(self, duration: float) -> None:
@@ -568,8 +719,14 @@ class SpeechStreamv2(stt.SpeechStream):
                 end_event = stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
                 self._event_ch.send_nowait(end_event)
 
+        elif data["type"] == "ConfigureSuccess":
+            logger.debug("deepgram applied Configure update", extra={"lk.pii.data": data})
+
+        elif data["type"] == "ConfigureFailure":
+            logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
+
         elif data["type"] == "Error":
-            logger.warning("deepgram sent an error", extra={"data": data})
+            logger.warning("deepgram sent an error", extra={"lk.pii.data": data})
             desc = data.get("description") or "unknown error from deepgram"
             code = -1
             raise APIStatusError(message=desc, status_code=code)

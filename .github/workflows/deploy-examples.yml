@@ -1,16 +1,14 @@
 name: Deploy Examples
 
 on:
+  # Manual runs deploy from the branch picked in the Actions "Use workflow
+  # from" selector — no input needed.
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch or ref to deploy from (default: main)"
-        type: string
-        required: false
-        default: "main"
+  # Called by publish.yml after a release to deploy the published commit.
   workflow_call:
     inputs:
       ref:
+        description: "Commit/branch/tag to deploy. Defaults to the triggering ref."
         type: string
         required: false
 
@@ -24,11 +22,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [healthcare, survey, frontdesk, drive-thru]
+        example: [healthcare, survey, frontdesk, drive_thru, inference, avatar, hotel_receptionist, expressive_agent]
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: ${{ inputs.ref || github.ref }}
+          # Fetch Git-LFS assets (e.g. examples/drive_thru/bg_noise.mp3) so the
+          # real binaries — not pointer files — get uploaded as the build context
+          # and copied into the image via `COPY . .`. This checkout authenticates
+          # with GITHUB_TOKEN, so its LFS fetch is allowed (unlike uv's anonymous
+          # git clone). Without this the agent crashes at runtime decoding a
+          # 131-byte pointer as audio.
+          lfs: true
 
       - name: Install LiveKit CLI
         run: |
@@ -47,15 +52,58 @@ jobs:
             --api-secret "$LIVEKIT_API_SECRET" \
             --default
 
+      - name: Regenerate livekit.toml from playground.yaml
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 <<'PY'
+          import yaml
+          from pathlib import Path
+          data = yaml.safe_load(Path("examples/playground.yaml").read_text())
+          subdomain = data["project"]["subdomain"]
+          slug = "${{ matrix.example }}"
+          entry = data["examples"][slug]
+          toml = (
+              "[project]\n"
+              f'  subdomain = "{subdomain}"\n'
+              "\n"
+              "[agent]\n"
+              f'  id = "{entry["agent_id"]}"\n'
+          )
+          Path(f"examples/{slug}/livekit.toml").write_text(toml)
+          print(f"wrote examples/{slug}/livekit.toml")
+          PY
+
+      - name: Pin in-repo dependencies to the deployed ref
+        env:
+          # Build the agent against the code at the ref we're deploying,
+          # not the latest release on PyPI. Without this, a branch deploy
+          # would silently run against the published livekit-agents instead
+          # of the branch's own SDK changes.
+          #
+          # Defaults to the commit sha, not the branch name: the ref lands in
+          # the uv git source, so a branch name keeps the same `uv sync` layer
+          # cache key across pushes and the deploy quietly reships stale code.
+          DEPLOY_REF: ${{ inputs.ref || github.sha }}
+        run: |
+          python3 .github/pin_example_to_ref.py \
+            "examples/${{ matrix.example }}" --ref "$DEPLOY_REF"
+
       - name: Build secrets file
         working-directory: examples/${{ matrix.example }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LEMONSLICE_API_KEY: ${{ secrets.LEMONSLICE_API_KEY }}
         run: |
           : > .env.deploy
+          # Register the agent under a deterministic name so the playground
+          # can dispatch to it explicitly. Matches the slug in playground.yaml.
+          echo "LIVEKIT_AGENT_NAME=${{ matrix.example }}" >> .env.deploy
           case "${{ matrix.example }}" in
             healthcare)
               keys="OPENAI_API_KEY"
+              ;;
+            avatar)
+              keys="LEMONSLICE_API_KEY"
               ;;
             *)
               keys=""

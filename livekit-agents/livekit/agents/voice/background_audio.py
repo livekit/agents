@@ -43,6 +43,64 @@ class BuiltinAudioClip(enum.Enum):
 AudioSource = AsyncIterator[rtc.AudioFrame] | str | BuiltinAudioClip
 
 
+def _frame_gain(
+    t: int,
+    n: int,
+    stop_t: int | None,
+    fade_in: float,
+    fade_out: float,
+    sample_rate: int,
+    volume: float,
+) -> np.ndarray | None:
+    """Combined gain to apply to ``n`` samples starting at sample ``t``.
+
+    Returns ``None`` when no modification is needed (volume == 1 and no fade
+    is active for this frame); the caller passes the frame through untouched.
+    Otherwise returns an ``np.ndarray`` of length ``n`` with the volume scalar
+    and the equal-power fade envelope baked in.
+
+    Equal-power (``sin(phase * pi/2)``) keeps a gentle slope at the silent end
+    of each ramp where a linear ramp would knee audibly.
+    """
+    fade_in_n = int(fade_in * sample_rate) if fade_in > 0 else 0
+    fade_out_n = int(fade_out * sample_rate) if fade_out > 0 else 0
+    needs_fade_in = fade_in_n > 0 and t < fade_in_n
+    needs_fade_out = fade_out_n > 0 and stop_t is not None
+    if not needs_fade_in and not needs_fade_out and volume == 1.0:
+        return None
+
+    gain = np.full(n, volume, dtype=np.float32)
+    if needs_fade_in:
+        idx = t + np.arange(n)
+        phase = np.clip(idx / fade_in_n, 0.0, 1.0)
+        gain *= np.sin(phase * (np.pi / 2)).astype(np.float32)
+    if stop_t is not None and fade_out_n > 0:
+        idx = t + np.arange(n)
+        phase = np.clip((idx - stop_t) / fade_out_n, 0.0, 1.0)
+        gain *= np.cos(phase * (np.pi / 2)).astype(np.float32)
+    return gain
+
+
+def _apply_gain(frame: rtc.AudioFrame, gain: np.ndarray | None) -> rtc.AudioFrame:
+    """Return ``frame`` with ``gain`` applied, or the frame unchanged when
+    ``gain`` is ``None`` (single source of truth for the no-op fast path).
+    """
+    if gain is None:
+        return frame
+
+    data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
+    if frame.num_channels > 1:
+        gain = np.repeat(gain, frame.num_channels)
+    data *= gain
+    np.clip(data, -32768, 32767, out=data)
+    return rtc.AudioFrame(
+        data=data.astype(np.int16).tobytes(),
+        sample_rate=frame.sample_rate,
+        num_channels=frame.num_channels,
+        samples_per_channel=frame.samples_per_channel,
+    )
+
+
 class AudioConfig(NamedTuple):
     """
     Definition for the audio to be played in the background
@@ -51,11 +109,18 @@ class AudioConfig(NamedTuple):
         volume: The volume of the audio (0.0-1.0)
         probability: The probability of the audio being played, when multiple
             AudioConfigs are provided (0.0-1.0)
+        fade_in: Duration in seconds to ramp the volume from 0 up to ``volume``
+            when playback starts. ``0`` (default) starts at full volume.
+        fade_out: Duration in seconds to ramp the volume back down to 0 when
+            ``PlayHandle.stop()`` is called. ``0`` (default) cuts immediately,
+            preserving the previous behaviour.
     """
 
     source: AudioSource
     volume: float = 1.0
     probability: float = 1.0
+    fade_in: float = 0.0
+    fade_out: float = 0.0
 
 
 # The queue size is set to 400ms, which determines how much audio Rust will buffer.
@@ -147,21 +212,19 @@ class BackgroundAudioPlayer:
 
     def _normalize_sound_source(
         self, source: AudioSource | AudioConfig | list[AudioConfig] | None
-    ) -> tuple[AudioSource, float] | None:
+    ) -> AudioConfig | None:
         if source is None:
             return None
 
-        if isinstance(source, BuiltinAudioClip):
-            return self._normalize_builtin_audio(source), 1.0
-        elif isinstance(source, list):
-            selected = self._select_sound_from_list(source)
-            if selected is None:
+        if isinstance(source, list):
+            source = self._select_sound_from_list(source)
+            if source is None:
                 return None
-            return selected.source, selected.volume
-        elif isinstance(source, AudioConfig):
-            return self._normalize_builtin_audio(source.source), source.volume
 
-        return source, 1.0
+        if isinstance(source, AudioConfig):
+            # `_replace` returns a new NamedTuple; the caller's instance is untouched.
+            return source._replace(source=self._normalize_builtin_audio(source.source))
+        return AudioConfig(self._normalize_builtin_audio(source))
 
     def _normalize_builtin_audio(self, source: AudioSource) -> AsyncIterator[rtc.AudioFrame] | str:
         if isinstance(source, BuiltinAudioClip):
@@ -200,21 +263,19 @@ class BackgroundAudioPlayer:
         if not self._mixer_atask:
             raise RuntimeError("BackgroundAudio is not started")
 
-        normalized = self._normalize_sound_source(audio)
-        if normalized is None:
+        cfg = self._normalize_sound_source(audio)
+        if cfg is None:
             play_handle = PlayHandle()
             play_handle._mark_playout_done()
             return play_handle
 
-        sound_source, volume = normalized
-
-        if loop and isinstance(sound_source, AsyncIterator):
+        if loop and isinstance(cfg.source, AsyncIterator):
             raise ValueError(
                 "Looping sound via AsyncIterator is not supported. Use a string file path or your own 'infinite' AsyncIterator with loop=False"  # noqa: E501
             )
 
-        play_handle = PlayHandle()
-        task = asyncio.create_task(self._play_task(play_handle, sound_source, volume, loop))
+        play_handle = PlayHandle(fade_out=cfg.fade_out)
+        task = asyncio.create_task(self._play_task(play_handle, cfg, loop))
         task.add_done_callback(lambda _: self._play_tasks.remove(task))
         task.add_done_callback(lambda _: play_handle._mark_playout_done())
         self._play_tasks.append(task)
@@ -267,14 +328,10 @@ class BackgroundAudioPlayer:
                 self._agent_session.on("agent_state_changed", self._agent_state_changed)
 
             if self._ambient_sound:
-                normalized = self._normalize_sound_source(self._ambient_sound)
-                if normalized:
-                    sound_source, volume = normalized
-                    selected_sound = AudioConfig(sound_source, volume)
-                    if isinstance(sound_source, str):
-                        self._ambient_handle = self.play(selected_sound, loop=True)
-                    else:
-                        self._ambient_handle = self.play(selected_sound)
+                cfg = self._normalize_sound_source(self._ambient_sound)
+                if cfg is not None:
+                    loop_ambient = isinstance(cfg.source, str)
+                    self._ambient_handle = self.play(cfg, loop=loop_ambient)
 
     async def aclose(self) -> None:
         """
@@ -325,38 +382,33 @@ class BackgroundAudioPlayer:
             self._thinking_handle.stop()
 
     @log_exceptions(logger=logger)
-    async def _play_task(
-        self, play_handle: PlayHandle, sound: AudioSource, volume: float, loop: bool
-    ) -> None:
+    async def _play_task(self, play_handle: PlayHandle, cfg: AudioConfig, loop: bool) -> None:
+        sound, volume, fade_in, fade_out = cfg.source, cfg.volume, cfg.fade_in, cfg.fade_out
+
         if isinstance(sound, BuiltinAudioClip):
             sound = sound.path()
-
         if isinstance(sound, str):
-            if loop:
-                sound = _loop_audio_frames(sound)
-            else:
-                sound = audio_frames_from_file(sound)
+            sound = _loop_audio_frames(sound) if loop else audio_frames_from_file(sound)
 
         stopped = False
 
         async def _gen_wrapper() -> AsyncGenerator[rtc.AudioFrame, None]:
+            t = 0  # cumulative samples (per channel) emitted so far
+            stop_t: int | None = None  # sample index when stop was requested
             try:
                 async for frame in sound:
                     if stopped:
                         break
+                    if stop_t is None and fade_out > 0 and play_handle._stop_fut.done():
+                        stop_t = t
 
-                    if volume != 1.0:
-                        data = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32)
-                        data *= 10 ** (np.log10(volume))
-                        np.clip(data, -32768, 32767, out=data)
-                        yield rtc.AudioFrame(
-                            data=data.astype(np.int16).tobytes(),
-                            sample_rate=frame.sample_rate,
-                            num_channels=frame.num_channels,
-                            samples_per_channel=frame.samples_per_channel,
-                        )
-                    else:
-                        yield frame
+                    n = frame.samples_per_channel
+                    gain = _frame_gain(t, n, stop_t, fade_in, fade_out, frame.sample_rate, volume)
+                    yield _apply_gain(frame, gain)
+
+                    t += n
+                    if stop_t is not None and (t - stop_t) >= int(fade_out * frame.sample_rate):
+                        break
             finally:
                 # use try/finally because the mixer's asyncio.wait_for can cancel
                 # __anext__, which finalizes the generator and skips code after
@@ -394,9 +446,10 @@ class BackgroundAudioPlayer:
 
 
 class PlayHandle:
-    def __init__(self) -> None:
+    def __init__(self, fade_out: float = 0.0) -> None:
         self._done_fut = asyncio.Future[None]()
         self._stop_fut = asyncio.Future[None]()
+        self._fade_out = fade_out
 
     def done(self) -> bool:
         """
@@ -407,13 +460,23 @@ class PlayHandle:
     def stop(self) -> None:
         """
         Stops the sound from playing.
+
+        If the source was started with a ``fade_out`` duration, this
+        triggers the fade-out and the handle stays "not done" until the
+        generator has finished tailing out. With ``fade_out=0`` (the
+        default), playback is cut immediately as before.
         """
         if self.done():
             return
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._stop_fut.set_result(None)
-            self._mark_playout_done()  # TODO(theomonnom): move this to _play_task
+            # Mark done immediately only when there's no fade-out to
+            # honour; otherwise the play task's wait_for_playout would
+            # return before the generator has tailed out, and the
+            # finally block would aclose() the generator mid-fade.
+            if self._fade_out <= 0:
+                self._mark_playout_done()
 
     async def wait_for_playout(self) -> None:
         """

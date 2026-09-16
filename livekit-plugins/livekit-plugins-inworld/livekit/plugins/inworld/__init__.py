@@ -22,6 +22,7 @@ from .stt import STT, SpeechStream
 from .tts import (
     TTS,
     ChunkedStream,
+    DeliveryMode,
     Encoding,
     SynthesizeStream,
     TextNormalization,
@@ -36,6 +37,7 @@ __all__ = [
     "TTS",
     "ChunkedStream",
     "SynthesizeStream",
+    "DeliveryMode",
     "Encoding",
     "TTSModels",
     "TextNormalization",

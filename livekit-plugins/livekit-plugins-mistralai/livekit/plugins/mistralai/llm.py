@@ -113,6 +113,9 @@ class LLM(llm.LLM):
             raise ValueError("Mistral AI API key is required. Set MISTRAL_API_KEY or pass api_key")
         self._client = client or Mistral(api_key=mistral_api_key)
 
+    async def _prewarm_impl(self) -> None:
+        await self._client.models.list_async()
+
     @property
     def model(self) -> str:
         return self._opts.model
@@ -364,7 +367,7 @@ class LLMStream(llm.LLMStream):
             args = self._provider_tool_args.pop(data.id, "")
             logger.debug(
                 "executed provider tool",
-                extra={"function": data.name, "arguments": args, "info": data.info},
+                extra={"function": data.name, "lk.pii.arguments": args, "lk.pii.info": data.info},
             )
 
         return chunks

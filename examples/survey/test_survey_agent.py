@@ -54,7 +54,7 @@ from livekit.agents import Agent, AgentSession, AgentTask, inference, llm
 from livekit.agents.beta.workflows import TaskGroup
 from livekit.agents.llm import FunctionCall
 
-from .survey_agent import (
+from .agent import (
     BehavioralTask,
     CommuteTask,
     ExperienceTask,
