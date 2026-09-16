@@ -295,8 +295,9 @@ class RunContext(Generic[Userdata_T]):
     ) -> tuple[FunctionCall, FunctionCallOutput]:
         """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
 
-        The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
-        are copied. ``make_tool_output`` is reused so error handling matches dispatch.
+        The new FunctionCall carries ``{call_id}{call_id_suffix}`` and names the real call
+        in ``update_of``; name/arguments/extra are copied. ``make_tool_output`` is reused so
+        error handling matches dispatch.
         """
         from .generation import make_tool_output
 
@@ -305,6 +306,7 @@ class RunContext(Generic[Userdata_T]):
             name=self.function_call.name,
             arguments=self.function_call.arguments,
             extra=dict(self.function_call.extra),
+            update_of=self.function_call.call_id if call_id_suffix else None,
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
         return (fnc_call, tool_output.fnc_call_out)

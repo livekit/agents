@@ -367,6 +367,13 @@ class FunctionCall(BaseModel):
     """Optional group ID for parallel function calls. When multiple function calls
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
+    update_of: str | None = None
+    """The call id this entry reports progress for, on a synthetic call.
+
+    A tool that reports through ``RunContext.update()`` records each report as a call and
+    an output of its own, so the model reads it as a result. This names the real call
+    those entries belong to.
+    """
 
 
 class FunctionCallOutput(BaseModel):
