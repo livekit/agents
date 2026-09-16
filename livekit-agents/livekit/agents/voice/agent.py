@@ -29,6 +29,7 @@ from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
+    from ..delegation import Delegate
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
@@ -52,6 +53,7 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        delegate: NotGivenOr[Delegate | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -138,6 +140,7 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
+        self._delegate: NotGivenOr[Delegate | None] = delegate
         self._activity: AgentActivity | None = None
 
     @property
@@ -155,6 +158,14 @@ class Agent:
             str: The core instructions that guide the agent's behavior.
         """
         return self._instructions
+
+    @property
+    def delegate(self) -> NotGivenOr[Delegate | None]:
+        """The delegate this agent hands reasoning and tool use to, overriding the session's.
+
+        Closed with the activity, the way the agent's own toolsets are.
+        """
+        return self._delegate
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:

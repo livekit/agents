@@ -20,6 +20,7 @@ from .. import inference, llm, stt, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
+    FunctionTool,
     StopResponse,
     ToolError,
     ToolFlag,
@@ -110,6 +111,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..delegation import Delegate
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
 
@@ -383,6 +385,10 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        self.__delegate_tool: FunctionTool | None = None
+        # the agent's own delegate lives as long as this activity, pause included, like its
+        # toolsets; the session's outlives a handoff
+        self._delegate: NotGivenOr[Delegate | None] = self._agent.delegate
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -703,7 +709,23 @@ class AgentActivity(RecognitionHooks):
         # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]
+        if self.delegate is not None:
+            tools = [*tools, self._delegate_tool()]
         return tools
+
+    def _delegate_tool(self) -> FunctionTool:
+        """Built once, so the schema the model sees keeps a stable identity across turns."""
+        if self.__delegate_tool is None:
+            from ..delegation import build_delegate_tool
+
+            announce = self._session._opts.delegation_options["announce"]
+            self.__delegate_tool = build_delegate_tool(announce=announce)
+        return self.__delegate_tool
+
+    @property
+    def delegate(self) -> Delegate | None:
+        """The delegate in force: the agent's if it set one, otherwise the session's."""
+        return self._delegate if is_given(self._delegate) else self._session.delegate
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -1643,6 +1665,11 @@ class AgentActivity(RecognitionHooks):
                 await asyncio.gather(
                     *(toolset.aclose() for toolset in toolsets), return_exceptions=True
                 )
+
+            # the agent's own delegate goes with it; the session's outlives the handoff
+            if is_given(self._delegate) and self._delegate is not None:
+                with contextlib.suppress(Exception):
+                    await self._delegate.aclose()
 
             # final sweep: anything non-cancellable that survived drain dies here
             await self._tool_executor.aclose()
