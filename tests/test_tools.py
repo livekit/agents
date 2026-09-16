@@ -2462,6 +2462,97 @@ class TestToolCallEvents:
             await executor.aclose()
 
     @pytest.mark.asyncio
+    async def test_silent_update_is_recorded_but_never_replied_to(self):
+        from livekit.agents.voice.events import (
+            RunContext,
+            ToolCallEnded,
+            ToolCallUpdated,
+            ToolReplyUpdated,
+        )
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("step one")
+            await ctx.update("step two", silent=True)
+            return "all done"
+
+        import asyncio as _asyncio
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        idle_event = _asyncio.Event()
+        activity = session.wait_for_idle.return_value
+
+        async def _wait_for_idle():
+            await idle_event.wait()
+            return activity
+
+        session.wait_for_idle = _wait_for_idle
+
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c6", name="progress_tool")
+
+        await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        while executor.has_running_tasks:
+            await _asyncio.sleep(0)
+        idle_event.set()
+        assert executor._reply_task is not None
+        await executor._reply_task
+
+        items = _emitted_items(session)
+        assert items[1] == ToolCallUpdated(id="c6", call_id="c6", message="step one")
+        # the silent update is still reported, flagged, and recorded on the agent
+        assert items[2] == ToolCallUpdated(
+            id="c6_update_1", call_id="c6", message="step two", silent=True
+        )
+        recorded = [
+            item.call_id
+            for call in session.current_agent.update_chat_ctx.await_args_list
+            for item in call.args[0].items
+        ]
+        assert recorded == [
+            "c6_update_1",
+            "c6_update_1",
+            "c6_final",
+            "c6_final",
+        ]
+        assert items[3] == ToolCallEnded(
+            id="c6_final", call_id="c6", message="all done", status="done"
+        )
+        # only the final return is voiced; the silent update carries no reply of its own
+        reply = items[4]
+        assert isinstance(reply, ToolReplyUpdated)
+        assert reply.update_ids == ["c6_final"]
+
+    @pytest.mark.asyncio
+    async def test_silent_first_update_suppresses_the_tool_reply(self):
+        from livekit.agents.voice.events import RunContext, ToolCallUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def progress_tool(ctx: RunContext) -> str:
+            """p"""
+            await ctx.update("on it", silent=True)
+            return "done"
+
+        speech = _make_fake_speech()
+        session = _make_reply_session(speech)
+        executor = _ToolExecutor()
+        run_ctx = _make_run_context_with_session(session, call_id="c7", name="progress_tool")
+
+        first = await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
+        assert "on it" in first
+        # the release happened, and generation reads this to drop the output's reply
+        assert run_ctx._suppress_reply is True
+
+        items = _emitted_items(session)
+        assert items[1] == ToolCallUpdated(id="c7", call_id="c7", message="on it", silent=True)
+
+        await _drain_executor(executor)
+
+    @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):
         from livekit.agents.voice.events import RunContext, ToolReplyUpdated
         from livekit.agents.voice.tool_executor import _ToolExecutor

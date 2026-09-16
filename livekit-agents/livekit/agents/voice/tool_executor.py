@@ -520,7 +520,9 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self, ctx: RunContext, items: list[ChatItem], *, silent: bool = False
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -532,7 +534,11 @@ class _ToolExecutor:
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
 
-        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+        # recorded above for the model; a silent update, or one no output asks a reply to,
+        # is not queued to be voiced
+        if silent or not any(
+            item.type == "function_call_output" and item.reply_required for item in items
+        ):
             return
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))

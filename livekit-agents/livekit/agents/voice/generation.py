@@ -977,6 +977,7 @@ async def _execute_tools_task(
                     fnc_call: llm.FunctionCall,
                     tool_description: str | None,
                     agent_label: str,
+                    run_ctx: RunContext,
                 ) -> None:
                     current_span = trace.get_current_span()
                     current_span.set_attributes(
@@ -999,6 +1000,9 @@ async def _execute_tools_task(
                     try:
                         val = await function_callable()
                         output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
+                        if run_ctx._suppress_reply:
+                            # a silent update() keeps the output item but asks for no speech
+                            output.fnc_call_out.reply_required = False
                     except BaseException as e:
                         if isinstance(e, ToolError):
                             logger.warning(
@@ -1043,6 +1047,7 @@ async def _execute_tools_task(
                         fnc_call,
                         _tool_description(function_tool),
                         activity.agent.label,
+                        run_ctx,
                     ),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
