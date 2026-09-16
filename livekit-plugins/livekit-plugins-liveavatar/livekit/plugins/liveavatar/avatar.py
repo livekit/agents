@@ -374,11 +374,10 @@ class AvatarSession(BaseAvatarSession):
             self._handle_agent_state_updated(event)
         elif event_type == "agent.audio_buffer_cleared":
             self._handle_agent_speak_interrupted(event)
-        elif event_type in (
-            "agent.audio_buffer_appended",
-            "agent.audio_buffer_committed",
-        ):
-            # command acks; playback follows speak_* / agent.state_updated
+        elif event_type == "agent.audio_buffer_appended":
+            pass  # one ack per speak chunk, too frequent to log
+        elif event_type == "agent.audio_buffer_committed":
+            # command ack; playback follows speak_* / agent.state_updated
             logger.debug(f"LiveAvatar {event_type}")
         elif event_type == "error":
             logger.error(f"LiveAvatar error: {event.get('error', event)}")
@@ -413,6 +412,8 @@ class AvatarSession(BaseAvatarSession):
     def _handle_agent_speak_started(self, event: dict) -> None:
         already_speaking = self._avatar_speaking
         self._avatar_speaking = True
-        self._avatar_interrupted = False
         if not already_speaking:
+            # only a new turn clears the latch; a redundant start would otherwise let
+            # a second notify_playback_finished through
+            self._avatar_interrupted = False
             self._audio_buffer.notify_playback_started()
