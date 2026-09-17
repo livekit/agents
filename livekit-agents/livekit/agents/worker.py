@@ -572,7 +572,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         name = _toml_agent_name(os.path.join(os.getcwd(), "livekit.toml"))
         if name:
             self._agent_name = name
-            self._agent_name_source = "toml"
+            self._agent_name_source = "livekit.toml"
 
     @property
     def worker_info(self) -> WorkerInfo:
