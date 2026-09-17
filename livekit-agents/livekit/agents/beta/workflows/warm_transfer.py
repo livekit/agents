@@ -444,16 +444,25 @@ async def _wait_for_twilio_cleanup(task: asyncio.Task[None]) -> None:
     task.add_done_callback(_twilio_cleanup_tasks.discard)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + _TWILIO_CLEANUP_TIMEOUT
+    cancellation: asyncio.CancelledError | None = None
     while not task.done():
         remaining = deadline - loop.time()
         if remaining <= 0:
             logger.warning("Twilio cleanup deadline exceeded; continuing cleanup in background")
-            return
+            break
         # asyncio.wait does not cancel the owned task on timeout or cancellation.
         # Repeated cancellation must not reset the absolute teardown deadline.
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await asyncio.wait({task}, timeout=remaining)
-    task.result()
+        except asyncio.CancelledError as error:
+            # Delay cancellation only for bounded cleanup; never turn shutdown into
+            # the original transfer failure when this helper returns.
+            if cancellation is None:
+                cancellation = error
+    if cancellation is not None:
+        raise cancellation
+    if task.done():
+        task.result()
 
 
 class TwilioConnectorWarmTransferTask(WarmTransferTask):

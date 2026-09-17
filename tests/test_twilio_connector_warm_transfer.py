@@ -452,7 +452,7 @@ async def test_stalled_cleanup_has_deadline_and_retains_late_cleanup(
                 dial.cancel()
         done, _ = await asyncio.wait({dial}, timeout=0.5)
         assert dial in done, "teardown exceeded its cleanup deadline"
-        with pytest.raises(asyncio.CancelledError if stall == "create" else ToolError):
+        with pytest.raises(asyncio.CancelledError):
             dial.result()
         assert not release.is_set()
         assert warm_transfer._twilio_cleanup_tasks
@@ -463,6 +463,56 @@ async def test_stalled_cleanup_has_deadline_and_retains_late_cleanup(
         assert not warm_transfer._twilio_cleanup_tasks
         twilio_client.calls.assert_called_once_with("CA_late")
         assert attempts == 2
+    finally:
+        release.set()
+        await asyncio.gather(dial, *warm_transfer._twilio_cleanup_tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_failure_cleanup_preserves_shutdown_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_client: Mock,
+    connector: AsyncMock,
+    cancelled: bool,
+) -> None:
+    task = TwilioConnectorWarmTransferTask(
+        HUMAN_NUMBER,
+        twilio_from_number=TWILIO_NUMBER,
+        twilio_account_sid="AC_test",
+        twilio_auth_token="test",
+    )
+    monkeypatch.setattr(
+        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
+    )
+    started = asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def cancel(**kwargs: str) -> None:
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=3)
+
+    twilio_client.calls.return_value.update.side_effect = cancel
+    dial = asyncio.create_task(
+        task._originate_human_agent(
+            room_name="consult",
+            identity="human",
+            room=Mock(),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if cancelled:
+            dial.cancel("shutdown")
+            await asyncio.sleep(0)
+            dial.cancel("shutdown again")
+            await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError if cancelled else ToolError):
+            await asyncio.wait_for(dial, timeout=1)
+        assert dial.cancelled() is cancelled
+        twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
     finally:
         release.set()
         await asyncio.gather(dial, *warm_transfer._twilio_cleanup_tasks, return_exceptions=True)
