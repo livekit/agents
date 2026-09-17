@@ -4,7 +4,8 @@ These tests simulate the full lifecycle of an AgentServer to verify the config
 override order matches what the simulation system depends on:
   url/keys:    CLI update_options, then constructor arg, then env var
   agent_name:  LIVEKIT_AGENT_NAME_OVERRIDE, then the rtc_session decorator arg,
-               then LIVEKIT_AGENT_NAME
+               then LIVEKIT_AGENT_NAME, then [agent] name in livekit.toml
+               (production only)
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ class _TestableServer(AgentServer):
         self.captured_config: dict | None = None
 
     async def run(self, **kwargs):
+        self._resolve_agent_name(devmode=kwargs.get("devmode", False))
         self.captured_config = {
             "ws_url": self._ws_url,
             "api_key": self._api_key,
@@ -177,3 +179,70 @@ class TestFullPrecedenceChain:
             # no LIVEKIT_AGENT_NAME_OVERRIDE set, so the explicit decorator arg wins
             # over the LIVEKIT_AGENT_NAME default
             assert config["agent_name"] == "decorator-agent"
+
+
+class TestAgentNameFromToml:
+    def test_toml_fallback_when_nothing_else_set(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "livekit.toml").write_text('[agent]\nname = "toml-agent"\n')
+        with patch.dict(os.environ, {}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session()
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == "toml-agent"
+
+    def test_env_wins_over_toml(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "livekit.toml").write_text('[agent]\nname = "toml-agent"\n')
+        with patch.dict(os.environ, {"LIVEKIT_AGENT_NAME": "env-agent"}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session()
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == "env-agent"
+
+    def test_devmode_ignores_toml(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "livekit.toml").write_text('[agent]\nname = "toml-agent"\n')
+        with patch.dict(os.environ, {}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session()
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO", dev=True))
+            assert config["agent_name"] == ""
+
+    def test_missing_toml_gives_empty_name(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with patch.dict(os.environ, {}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session()
+            async def entrypoint(ctx):
+                pass
+
+            config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == ""
+
+    def test_code_name_warns(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.chdir(tmp_path)
+        with patch.dict(os.environ, {}, clear=True):
+            server = _TestableServer()
+
+            @server.rtc_session(agent_name="decorator-agent")
+            async def entrypoint(ctx):
+                pass
+
+            with caplog.at_level("WARNING", logger="livekit.agents"):
+                config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
+            assert config["agent_name"] == "decorator-agent"
+            assert any("livekit.toml" in r.getMessage() for r in caplog.records)
