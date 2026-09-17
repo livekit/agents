@@ -164,12 +164,8 @@ class GPTLiveSession(_GPTLiveSession):
 
     def _is_fatal_error(self, error: types.ErrorBody) -> bool:
         code = error.code or error.type or ""
+        # Startup configuration errors are permanent; rejected updates leave the
+        # established session on its previous valid configuration.
         return (
             not self._session_started_fut.done() and code in _GATEWAY_FATAL_ERROR_CODES
         ) or super()._is_fatal_error(error)
-
-
-# Compatibility names retained for the former plugin API.
-InferenceGPTLiveModel = GPTLiveModel
-InferenceGPTLiveSession = GPTLiveSession
-InferenceResponsesDelegationOptions = GPTLiveResponsesDelegationOptions

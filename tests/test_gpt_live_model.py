@@ -29,6 +29,12 @@ from livekit.plugins.openai.tools import WebSearch
 pytestmark = pytest.mark.unit
 
 
+def test_direct_model_preserves_public_label() -> None:
+    model = GPTLiveModel(api_key="fake")
+
+    assert model.label == "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
+
+
 class _FakeWS:
     """A websocket that accepts everything and delivers nothing but, by default, the startup ack.
 

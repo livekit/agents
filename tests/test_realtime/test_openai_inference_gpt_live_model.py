@@ -190,7 +190,7 @@ async def test_native_session_start_keeps_gateway_model_and_options(
 
     event = session._session_start_event().model_dump(exclude_none=True)
 
-    assert isinstance(session, inference_gpt_live.InferenceGPTLiveSession)
+    assert isinstance(session, inference_gpt_live.GPTLiveSession)
     assert model.model == "openai/gpt-live-1"
     assert model.provider == "livekit"
     assert event["type"] == "session.start"

@@ -27,6 +27,11 @@ def test_inference_class_has_public_import() -> None:
     assert inference.InferenceClass is inference_utils.InferenceClass
 
 
+def test_public_inference_exports_resolve() -> None:
+    for name in inference.__all__:
+        assert getattr(inference, name) is not None
+
+
 def test_inference_session_id_is_omitted_without_job_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

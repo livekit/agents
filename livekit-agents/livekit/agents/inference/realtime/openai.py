@@ -186,8 +186,3 @@ class RealtimeSession(_RealtimeSession):
                 "unsupported_audio_format",
             }
         ) or super()._is_fatal_error(error)
-
-
-# Compatibility names retained for the former plugin API.
-InferenceRealtimeModel = RealtimeModel
-InferenceRealtimeSession = RealtimeSession

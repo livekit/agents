@@ -511,6 +511,7 @@ class RealtimeModel(llm.RealtimeModel):
             )
         )
         if type(self) is RealtimeModel:
+            # Preserve the pre-move metrics label for direct OpenAI sessions.
             self._label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
         is_azure = (

@@ -193,6 +193,9 @@ class GPTLiveModel(llm.DuplexModel):
                 mutable_tools=delegation == "responses",
             )
         )
+        if type(self) is GPTLiveModel:
+            # Preserve the pre-move metrics label for direct OpenAI sessions.
+            self._label = "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
         api_key = api_key or os.environ.get("OPENAI_API_KEY")
         if api_key is None:
             raise ValueError(

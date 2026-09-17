@@ -1,9 +1,9 @@
 """Compatibility imports for hosted GPT-Live; use :mod:`livekit.agents.inference`."""
 
 from livekit.agents.inference.realtime.gpt_live import (
-    InferenceGPTLiveModel,
-    InferenceGPTLiveSession,
-    InferenceResponsesDelegationOptions,
+    GPTLiveModel as InferenceGPTLiveModel,
+    GPTLiveResponsesDelegationOptions as InferenceResponsesDelegationOptions,
+    GPTLiveSession as InferenceGPTLiveSession,
 )
 
 __all__ = [
