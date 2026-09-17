@@ -15,7 +15,7 @@ from ._types import TaskInput, TaskUpdate
 
 try:
     import httpx
-    from a2a.client import Client, ClientConfig, ClientFactory
+    from a2a.client import Client, ClientCallContext, ClientConfig, ClientFactory
     from a2a.client.card_resolver import A2ACardResolver
     from a2a.extensions.common import HTTP_EXTENSION_HEADER
     from a2a.utils.constants import TransportProtocol
@@ -82,7 +82,10 @@ class TaskStream:
             )
             # the SDK under-declares its stream as an AsyncIterator; it is a generator, and
             # until it is closed it holds its HTTP connection
-            self._raw = cast("AsyncGenerator[Any, None]", client.send_message(request))
+            self._raw = cast(
+                "AsyncGenerator[Any, None]",
+                client.send_message(request, context=self._client._call_context),
+            )
             self._updates = cast(
                 "AsyncGenerator[TaskUpdate, None]", from_a2a_events(self._acknowledge(self._raw))
             )
@@ -158,6 +161,7 @@ class A2AClient:
         self._owns_http = httpx_client is None
         self._client: Client | None = None
         self._extension_active = False
+        self._call_context: ClientCallContext | None = None
         self._connect_lock = asyncio.Lock()
         self._turn = asyncio.Semaphore(1)
         self._context_id = context_id or shortuuid("lk-ctx-")
@@ -187,7 +191,7 @@ class A2AClient:
         if reason:
             request.metadata.CopyFrom(struct({REASON: reason}))
         try:
-            await client.cancel_task(request)
+            await client.cancel_task(request, context=self._call_context)
         except Exception:
             # best-effort by contract: a server may have finished, or may not support it
             logger.debug("the endpoint did not cancel the task", extra={"task_id": task_id})
@@ -212,8 +216,12 @@ class A2AClient:
             card = await A2ACardResolver(self._http, self._url).get_agent_card()
             self._extension_active = offers_extension(card)
             if self._extension_active:
-                # asking is what activates it; a server that does not echo it back has not
-                self._http.headers[HTTP_EXTENSION_HEADER] = EXTENSION_URI
+                # asking is what activates it; a server that does not echo it back has not.
+                # per request rather than on the client, which the caller may share with
+                # endpoints that never offered the profile
+                self._call_context = ClientCallContext(
+                    service_parameters={HTTP_EXTENSION_HEADER: EXTENSION_URI}
+                )
 
             self._client = ClientFactory(config).create(card)
             logger.debug(

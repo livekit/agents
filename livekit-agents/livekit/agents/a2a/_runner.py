@@ -189,17 +189,14 @@ class RequestRun:
             self._push_update(TaskUpdate(state="completed", text=text, item=item))
 
     def on_tool_call_updated(self, update: ToolCallUpdated) -> None:
-        """A tool's own report, in the tool's words unless this session's model answers it."""
-        if update.silent:
-            return  # kept to the model: the caller sees nothing of it
-
+        """A tool's own report: always an item, and its words too where nobody else says them."""
         # the framework records the report as a call and an output but surfaces neither, so
         # the pair is rebuilt here in the shape the protocol names
         name = self.open_calls.get(update.call_id, "")
         call = FunctionCall(call_id=update.id, name=name, arguments="", update_of=update.call_id)
         call.extra[REQUEST_ID_KEY] = self._request_id
-        # the model is answering this one, so its line goes out instead of the tool's words
-        text = "" if update.reply_pending else update.message
+        # a line of this session's own is about to carry the report, or nobody is to hear it
+        text = "" if update.reply_pending or update.silent else update.message
         self._push_update(TaskUpdate(text=text, item=call))
 
     def on_tool_call_ended(self, update: ToolCallEnded) -> None:

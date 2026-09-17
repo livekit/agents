@@ -1,4 +1,4 @@
-"""text_session over the real wire: our client and a stock one, against a loopback port."""
+"""a2a_session over the real wire: our client and a stock one, against a loopback port."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
-from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
+from livekit.agents.a2a._server import AGENT_CARD_PATH, A2ASessionContext, mount
 from livekit.agents.llm import ToolFlag
 
 from .fake_llm import FakeLLM
@@ -63,7 +63,7 @@ def _fare_desk_llm() -> FakeLLM:
 
 
 class _Served:
-    """A text session endpoint on a real loopback port."""
+    """An A2A session endpoint on a real loopback port."""
 
     def __init__(self, base_url: str, executor: Any) -> None:
         self.base_url = base_url
@@ -78,7 +78,7 @@ async def _serving(
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known
 
-    async def fare_desk(ctx: TextSessionContext) -> None:
+    async def fare_desk(ctx: A2ASessionContext) -> None:
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(
             agent=Agent(instructions="fare desk", tools=[check_fares, say_goodbye, hold_seat])

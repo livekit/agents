@@ -207,6 +207,33 @@ async def test_a_report_travels_as_a_call_naming_what_it_reports_for() -> None:
     assert item.name == "check_fares"
 
 
+async def test_a_silent_report_travels_as_an_item_with_no_text() -> None:
+    """Inaudible, not invisible: a chat UI renders it and nobody on either side says it."""
+
+    @function_tool
+    async def check_fares(ctx: RunContext) -> str:
+        """Slow work that reports where nobody is meant to hear it."""
+        await ctx.update("checking the fare rules", silent=True)
+        return "fare is 240 USD"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("what is the fare", "", calls=[_tool_call("check_fares", "cf1")])],
+        fallbacks=["It is 240 USD."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
+
+    updates = await _collect(
+        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
+    )
+    await _close(session, runner)
+
+    reports = [
+        u for u in updates if u.item is not None and getattr(u.item, "update_of", None) == "cf1"
+    ]
+    assert len(reports) == 1 and reports[0].text == ""
+    assert _texts(updates) == ["It is 240 USD."]
+
+
 async def test_a_line_the_expert_said_outright_is_said_as_written() -> None:
     @function_tool
     async def read_back(ctx: RunContext) -> str:

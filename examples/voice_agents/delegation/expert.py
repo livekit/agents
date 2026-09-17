@@ -44,7 +44,7 @@ from livekit.agents import (
     cli,
     inference,
 )
-from livekit.agents.a2a import TextSessionContext
+from livekit.agents.a2a import A2ASessionContext
 from livekit.agents.llm import ToolFlag, function_tool
 
 logger = logging.getLogger("fare-desk")
@@ -816,7 +816,7 @@ class FareDesk(Agent):
     endpoint="fare-desk",
     description="Fares, seats, bookings, changes, refunds and baggage for Northwind Air.",
 )
-async def fare_desk(ctx: TextSessionContext) -> None:
+async def fare_desk(ctx: A2ASessionContext) -> None:
     userdata = Userdata(airline=seed_airline())
     session = AgentSession[Userdata](
         llm=inference.LLM("google/gemma-4-31b-it"), userdata=userdata, max_tool_steps=8

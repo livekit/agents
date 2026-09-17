@@ -46,7 +46,7 @@ DISPATCHED = (
 def build_delegate_tool(description: str | None = None, *, announce: bool = True) -> FunctionTool:
     """Build the tool that reaches whichever delegate is in force."""
 
-    async def delegate(ctx: RunContext, task: str) -> str:
+    async def delegate(ctx: RunContext, task: str) -> str | None:
         session = ctx.session
         activity = session.current_agent._get_activity_or_raise()
         handler = activity._delegation["delegate"]
@@ -103,6 +103,11 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                             call_id=ctx.function_call.call_id,
                         ),
                     )
+                if update.verbatim:
+                    # said as written, then kept to the model: no return, so no reply repeats it
+                    session.say(update.text)
+                    await ctx.update(update.text, silent=True)
+                    return None
                 # completed, canceled and input-required all answer: a cancelled delegation
                 # still says what happened, side effects included, and a question is what the
                 # conversation relays to the user
