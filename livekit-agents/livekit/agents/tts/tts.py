@@ -908,6 +908,7 @@ class AudioEmitter:
 
         self._write_ch = aio.Chan[
             bytes
+            | rtc.AudioFrame
             | AudioEmitter._FlushSegment
             | AudioEmitter._StartSegment
             | AudioEmitter._EndSegment
@@ -982,6 +983,17 @@ class AudioEmitter:
             return
 
         self._write_ch.send_nowait(data)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Forward an already-framed chunk as-is, skipping the progressive re-chunking of
+        :meth:`push`. For adapters wrapping a TTS whose emitter already framed the audio."""
+        if not self._started:
+            raise RuntimeError("AudioEmitter isn't started")
+
+        if self._write_ch.closed:
+            return
+
+        self._write_ch.send_nowait(frame)
 
     def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None:
         if not self._started:
@@ -1272,7 +1284,9 @@ class AudioEmitter:
                         )
 
                 if self._is_raw_pcm:
-                    if isinstance(data, bytes):
+                    if isinstance(data, rtc.AudioFrame):
+                        _emit_frame(data)
+                    elif isinstance(data, bytes):
                         if audio_byte_stream is None:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
@@ -1285,22 +1299,23 @@ class AudioEmitter:
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
-                    elif audio_byte_stream:
-                        if isinstance(data, AudioEmitter._FlushSegment):
+                    elif isinstance(data, AudioEmitter._FlushSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-                            _flush_frame()
                             audio_byte_stream.clear()  # reset progressive for next burst
+                        _flush_frame()
 
-                        elif isinstance(data, AudioEmitter._EndSegment):
+                    elif isinstance(data, AudioEmitter._EndSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
 
-                            _emit_frame(is_final=True)
-                            dump_segment()
-                            segment_ctx = audio_byte_stream = last_frame = None
-                        else:
-                            logger.warning("unknown data type: %s", type(data))
+                        _emit_frame(is_final=True)
+                        dump_segment()
+                        segment_ctx = audio_byte_stream = last_frame = None
+                    else:
+                        logger.warning("unknown data type: %s", type(data))
                 else:
                     if isinstance(data, bytes):
                         if not audio_decoder:

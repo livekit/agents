@@ -11,6 +11,7 @@ error (observable via SpeechHandle.exception()) without crashing the turn task.
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -43,6 +44,8 @@ class _FakeActivity(SimpleNamespace):
             _rt_session=rt_session,
             _authorization_allowed=authorization_allowed,
             _user_silence_event=user_silence,
+            # the fake model reports supports_overlapping_speech=False, so the caller gates
+            _rt_overlapping_speech_enabled=False,
             tools=[],
             _on_enter_ignored_tools=lambda tool_ctx: [],
             _tool_choice=None,
@@ -66,8 +69,16 @@ def _run_reply_task(activity: _FakeActivity, speech_handle: SpeechHandle) -> asy
     return asyncio.create_task(coro)
 
 
-async def _resolve_reply_future(rt_session: FakeRealtimeSession) -> None:
+async def _resolve_reply_future(rt_session: FakeRealtimeSession, task: asyncio.Task[None]) -> None:
+    deadline = time.monotonic() + 5.0
     while not rt_session._reply_futs:
+        # a reply task that died never reaches generate_reply, so waiting on the future alone
+        # would spin here forever; surface why it stopped instead
+        if task.done():
+            task.result()  # re-raises whatever killed it
+            raise AssertionError("the reply task finished without calling generate_reply")
+        if time.monotonic() >= deadline:
+            raise AssertionError("timed out waiting for generate_reply")
         await asyncio.sleep(0)
     rt_session._reply_futs[-1].set_result(cast(llm.GenerationCreatedEvent, object()))
 
@@ -79,7 +90,7 @@ async def test_update_chat_ctx_success_generates_reply() -> None:
     handle._authorize_generation()
 
     task = _run_reply_task(activity, handle)
-    await _resolve_reply_future(rt_session)
+    await _resolve_reply_future(rt_session, task)
     await task
 
     assert rt_session.generate_reply_calls == 1
@@ -97,7 +108,7 @@ async def test_update_chat_ctx_realtime_error_still_generates_reply() -> None:
     handle._authorize_generation()
 
     task = _run_reply_task(activity, handle)
-    await _resolve_reply_future(rt_session)
+    await _resolve_reply_future(rt_session, task)
     await task
 
     assert rt_session.generate_reply_calls == 1

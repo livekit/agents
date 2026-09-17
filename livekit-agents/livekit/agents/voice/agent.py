@@ -9,8 +9,17 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm import (
+    LLM,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    RealtimeModel,
+    ToolError,
+    find_function_tools,
+)
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.duplex_adapter import _DuplexRealtimeSession
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -47,7 +56,9 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -91,7 +102,10 @@ class Agent:
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
-        self._llm = llm
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm
+        )
         self._tts = tts
         self._vad = vad
         self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
@@ -266,7 +280,9 @@ class Agent:
         *,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
     ) -> None:
@@ -289,6 +305,9 @@ class Agent:
             llm = inference.LLM.from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
+
+        if isinstance(llm, DuplexModel):
+            llm = DuplexRealtimeAdapter(llm)
 
         if self._activity is None:
             # not running: replace stored config, applied on the next start
@@ -491,6 +510,7 @@ class Agent:
             assert activity.stt is not None, "stt_node called but no STT node is available"
 
             wrapped_stt = activity.stt
+            temporary_adapter: stt.StreamAdapter | None = None
 
             if not activity.stt.capabilities.streaming:
                 if not activity.vad:
@@ -499,36 +519,41 @@ class Agent:
                         "Or manually wrap your STT in a stt.StreamAdapter"
                     )
 
-                wrapped_stt = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                temporary_adapter = stt.StreamAdapter(stt=wrapped_stt, vad=activity.vad)
+                wrapped_stt = temporary_adapter
 
-            conn_options = activity.session.conn_options.stt_conn_options
-            async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                _audio_input_started_at: float = (
-                    activity._audio_recognition._input_started_at
-                    if activity._audio_recognition is not None
-                    and activity._audio_recognition._input_started_at is not None
-                    else (
-                        activity.session._recorder_io.recording_started_at
-                        if activity.session._recorder_io
-                        and activity.session._recorder_io.recording_started_at
-                        else activity.session._started_at
-                        if activity.session._started_at
-                        else time.time()
+            try:
+                conn_options = activity.session.conn_options.stt_conn_options
+                async with wrapped_stt.stream(conn_options=conn_options) as stream:
+                    _audio_input_started_at: float = (
+                        activity._audio_recognition._input_started_at
+                        if activity._audio_recognition is not None
+                        and activity._audio_recognition._input_started_at is not None
+                        else (
+                            activity.session._recorder_io.recording_started_at
+                            if activity.session._recorder_io
+                            and activity.session._recorder_io.recording_started_at
+                            else activity.session._started_at
+                            if activity.session._started_at
+                            else time.time()
+                        )
                     )
-                )
-                stream.start_time_offset = time.time() - _audio_input_started_at
+                    stream.start_time_offset = time.time() - _audio_input_started_at
 
-                @utils.log_exceptions(logger=logger)
-                async def _forward_input() -> None:
-                    async for frame in audio:
-                        stream.push_frame(frame)
+                    @utils.log_exceptions(logger=logger)
+                    async def _forward_input() -> None:
+                        async for frame in audio:
+                            stream.push_frame(frame)
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for event in stream:
-                        yield event
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for event in stream:
+                            yield event
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def llm_node(
@@ -570,9 +595,10 @@ class Agent:
 
             expressive_active = activity._resolve_expressive_options() is not None
             wrapped_tts = activity.tts
+            temporary_adapter: tts.StreamAdapter | None = None
 
             if not activity.tts.capabilities.streaming:
-                wrapped_tts = tts.StreamAdapter(
+                temporary_adapter = tts.StreamAdapter(
                     tts=wrapped_tts,
                     sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(
                         retain_format=True,
@@ -580,29 +606,34 @@ class Agent:
                         xml_aware=expressive_active,
                     ),
                 )
+                wrapped_tts = temporary_adapter
 
-            # Mark whether expressive is active for this synthesis, synchronously
-            # just before stream() snapshots it. Doing it here (the single synthesis
-            # choke point for both generate_reply and say()) scopes it to this turn
-            # rather than leaving stale state on the instance. The provider's chunk
-            # defaults then drive the TTS's input tokenizer.
-            activity.tts._set_expressive(expressive_active)
+            try:
+                # Mark whether expressive is active for this synthesis, synchronously
+                # just before stream() snapshots it. Doing it here (the single synthesis
+                # choke point for both generate_reply and say()) scopes it to this turn
+                # rather than leaving stale state on the instance. The provider's chunk
+                # defaults then drive the TTS's input tokenizer.
+                activity.tts._set_expressive(expressive_active)
 
-            conn_options = activity.session.conn_options.tts_conn_options
-            async with wrapped_tts.stream(conn_options=conn_options) as stream:
+                conn_options = activity.session.conn_options.tts_conn_options
+                async with wrapped_tts.stream(conn_options=conn_options) as stream:
 
-                async def _forward_input() -> None:
-                    async for chunk in text:
-                        stream.push_text(chunk)
+                    async def _forward_input() -> None:
+                        async for chunk in text:
+                            stream.push_text(chunk)
 
-                    stream.end_input()
+                        stream.end_input()
 
-                forward_task = asyncio.create_task(_forward_input())
-                try:
-                    async for ev in stream:
-                        yield ev.frame
-                finally:
-                    await utils.aio.cancel_and_wait(forward_task)
+                    forward_task = asyncio.create_task(_forward_input())
+                    try:
+                        async for ev in stream:
+                            yield ev.frame
+                    finally:
+                        await utils.aio.cancel_and_wait(forward_task)
+            finally:
+                if temporary_adapter is not None:
+                    await temporary_adapter.aclose()
 
         @staticmethod
         async def transcription_node(
@@ -637,6 +668,23 @@ class Agent:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
+
+    @property
+    def duplex_session(self) -> llm.DuplexSession:
+        """
+        Retrieve the duplex session of the current agent, for provider-specific APIs.
+
+        A duplex model is driven through an adapter that presents it as a realtime session; this
+        returns the plugin's own session, where a provider puts what the abstraction does not carry.
+
+        Raises:
+            RuntimeError: If the agent is not running, or is not running on a duplex model
+        """
+        rt_session = self._get_activity_or_raise().realtime_llm_session
+        if not isinstance(rt_session, _DuplexRealtimeSession):
+            raise RuntimeError("no duplex session, this agent is not running a DuplexModel")
+
+        return rt_session.duplex_session
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:

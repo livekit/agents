@@ -1020,6 +1020,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             pass
         except Exception:
             logger.warning("error processing session message", exc_info=True)
+        finally:
+            for future in self._pending_requests.values():
+                if not future.done():
+                    future.set_exception(RuntimeError("remote session transport closed"))
+            self._pending_requests.clear()
 
     def _dispatch_response(self, response: agent_pb.SessionResponse) -> None:
         future = self._pending_requests.pop(response.request_id, None)
@@ -1031,6 +1036,11 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
         request: agent_pb.SessionRequest,
         timeout: float = 60.0,
     ) -> agent_pb.SessionResponse:
+        if self._recv_task is None:
+            raise RuntimeError("remote session not started")
+        if self._recv_task.done():
+            raise RuntimeError("remote session transport closed")
+
         req_type = request.WhichOneof("request")
         future: asyncio.Future[agent_pb.SessionResponse] = asyncio.Future()
         self._pending_requests[request.request_id] = future
@@ -1040,15 +1050,15 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
             await self._transport.send_message(msg)
             resp = await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            self._pending_requests.pop(request.request_id, None)
             logger.warning(
                 "remote session request timed out",
                 extra={"request_id": request.request_id, "type": req_type, "timeout": timeout},
             )
             raise
-        except Exception:
+        finally:
             self._pending_requests.pop(request.request_id, None)
-            raise
+            if future.done() and not future.cancelled():
+                future.exception()
 
         if resp.error:
             raise RuntimeError(f"session request {req_type} failed: {resp.error}")
@@ -1077,6 +1087,8 @@ class RemoteSession(rtc.EventEmitter[RemoteSessionEventTypes]):
                 if asyncio.get_event_loop().time() >= deadline:
                     raise TimeoutError("wait_for_ready timed out") from None
             except Exception as e:
+                if self._recv_task is None or self._recv_task.done():
+                    raise
                 # the transport reports that it is not up yet instead of dropping
                 # the ping, and that state is exactly what this call polls
                 # through. The request timeout paced the retries before; pace

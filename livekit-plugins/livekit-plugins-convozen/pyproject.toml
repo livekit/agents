@@ -44,7 +44,7 @@ classifiers = [
 ]
 # [codecs] is required: Ragini returns a RIFF/WAV container, which AudioEmitter
 # decodes with AudioStreamDecoder rather than the plugin parsing headers itself.
-dependencies = ["livekit-agents[codecs]>=1.7.1"]
+dependencies = ["livekit-agents[codecs]>=1.8.2"]
 
 [project.urls]
 Homepage = "https://convozen.ai"

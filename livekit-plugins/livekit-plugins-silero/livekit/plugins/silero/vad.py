@@ -456,7 +456,7 @@ class VADStream(agents.vad.VADStream):
                 )
                 if inference_duration > SLOW_INFERENCE_THRESHOLD:
                     logger.warning(
-                        "inference is slower than realtime",
+                        "VAD inference is slower than realtime",
                         extra={"delay": extra_inference_time},
                     )
 

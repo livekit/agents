@@ -40,6 +40,7 @@ class _FakeRoom:
         self.name = "test-room"
         self._token = "test-token"
         self._server_url = "wss://test.livekit.cloud"
+        self.connected = True
 
     def on(self, event: str, callback: object) -> None:
         self._events[event].append(callback)
@@ -54,7 +55,7 @@ class _FakeRoom:
         return len(self._events.get(event, []))
 
     def isconnected(self) -> bool:
-        return True
+        return self.connected
 
     def register_text_stream_handler(self, topic: str, callback: object) -> None:
         self.on(f"text:{topic}", callback)
@@ -270,6 +271,39 @@ async def test_transcription_output_strips_markup_but_keeps_links() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rpc_tracing_is_installed_when_the_room_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session may start on a room that connects later (ctx.connect() after session.start(),
+    or a room the user connects). Tracing goes in on the connected transition, not only when
+    the room is already up at start(); install is idempotent so a reconnect is harmless."""
+    from livekit.agents.voice.room_io import room_io as room_io_mod
+
+    install = MagicMock(return_value=True)
+    monkeypatch.setattr(room_io_mod.rpc_tracing, "install", install)
+
+    room = _FakeRoom()
+    room.connected = False
+    agent_session = SimpleNamespace(
+        off=MagicMock(),
+        input=SimpleNamespace(audio=None, video=None),
+        output=SimpleNamespace(audio=None, transcription=None),
+    )
+    room_io = RoomIO(agent_session, room)
+
+    room_io._on_connection_state_changed(rtc.ConnectionState.CONN_DISCONNECTED)
+    install.assert_not_called()
+    assert not room_io._room_connected_fut.done()
+
+    room.connected = True
+    room_io._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
+    install.assert_called_once_with(room.local_participant)
+    assert room_io._room_connected_fut.done()
+
+    room_io._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)  # reconnected
+    assert install.call_count == 2  # same singleton each time; the SDK dedups by identity
+
+
 async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_outputs() -> None:
     room = _FakeRoom()
     agent_session = SimpleNamespace(
@@ -979,7 +1013,8 @@ async def test_audio_output_finishes_playout_when_paused_after_forwarding_drains
 
 @pytest.mark.asyncio
 async def test_audio_output_drops_a_paused_frame_from_an_interrupted_segment() -> None:
-    old_frame = rtc.AudioFrame(b"\x01\x00" * 960, 48000, 1, 960)  # 20ms
+    # a whole frame: a smaller one stays in the byte stream while paused, since no timer runs
+    old_frame = rtc.AudioFrame(b"\x01\x00" * 2400, 48000, 1, 2400)  # 50ms
     new_frame = rtc.AudioFrame(b"\x02\x00" * 1920, 48000, 1, 1920)  # 40ms
 
     with patch("livekit.rtc.AudioSource", _QueuedAudioSource):
@@ -1025,7 +1060,7 @@ async def test_audio_output_drops_a_paused_frame_from_an_interrupted_segment() -
 
 @pytest.mark.asyncio
 async def test_audio_output_waits_for_active_submission_and_source_playout() -> None:
-    # One progressive chunk leaves no buffered remainder after the forwarder dequeues it.
+    # A lone 20ms chunk is released to the empty source at once, so nothing stays buffered.
     frame = rtc.AudioFrame(bytes(960 * 2), 48000, 1, 960)  # 20ms
 
     with patch("livekit.rtc.AudioSource", _BlockingAudioSource):

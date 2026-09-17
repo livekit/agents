@@ -35,6 +35,10 @@ INPUT_STALL_TIMEOUT = 1.0
 # beyond it keeps a drifting capture clock from sliding the channel
 RESYNC_TOLERANCE = 0.1
 
+# a resampler reports its input as arrived before it emits it, so the writer waits this long for
+# the samples it still holds rather than writing silence over their place
+MAX_RESAMPLER_LAG = 0.1
+
 
 @dataclass
 class _Captured:
@@ -108,6 +112,13 @@ class _Track:
             self._source_rate = None
         self._run_start = None
         self._run_samples = 0
+
+    @property
+    def placed_through(self) -> int | None:
+        """How far the open run reaches, or None when the resampler holds nothing back."""
+        if self._resampler is None or self._run_start is None:
+            return None
+        return round((self._run_start - self._t0) * self._sample_rate) + self._run_samples
 
     def _place(self, frames: list[rtc.AudioFrame]) -> None:
         if not frames:
@@ -293,6 +304,16 @@ class RecorderIO:
                         continue
 
                     end = round((item.until - self._t0) * self._sample_rate)
+                    held = end - round(MAX_RESAMPLER_LAG * self._sample_rate)
+                    for track in tracks:
+                        if (through := track.placed_through) is None:
+                            continue
+                        if through >= held:
+                            end = min(end, through)
+                        else:
+                            # the source stopped delivering; place what it holds before
+                            # the cursor moves past the run it belongs to
+                            track.end_run()
                     if end <= cursor:
                         continue
 

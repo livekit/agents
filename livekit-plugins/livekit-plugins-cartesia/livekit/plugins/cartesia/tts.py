@@ -296,8 +296,12 @@ class TTS(tts.TTS):
             self._opts.volume = volume
         if is_given(pronunciation_dict_id):
             self._opts.pronunciation_dict_id = pronunciation_dict_id
-        if is_given(api_version):
+        if is_given(api_version) and api_version != self._opts.api_version:
             self._opts.api_version = api_version
+            # cartesia_version is a query parameter on the websocket URL, so a pooled
+            # socket keeps speaking the version it was opened with while
+            # _to_cartesia_options starts shaping the body for the new one.
+            self._pool.invalidate()
 
         if speed or emotion or volume or pronunciation_dict_id:
             self._check_generation_config()
@@ -371,7 +375,7 @@ class ChunkedStream(tts.ChunkedStream):
                 self._opts.get_http_url("/tts/bytes"),
                 headers={
                     API_AUTH_HEADER: self._opts.api_key,
-                    API_VERSION_HEADER: API_VERSION,
+                    API_VERSION_HEADER: self._opts.api_version,
                     "User-Agent": USER_AGENT,
                 },
                 json=json,

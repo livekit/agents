@@ -230,7 +230,11 @@ class TTS(tts.TTS):
             except Exception:
                 pass
 
-        self._prewarm_task = asyncio.create_task(_prewarm())
+        # Don't replace a prewarm still in flight: the old task would lose its only reference,
+        # and aclose() cancels just the latest one, so it could still be using the client after
+        # close. utils.ConnectionPool.prewarm guards the same way.
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(_prewarm())
 
     async def aclose(self) -> None:
         if self._prewarm_task:

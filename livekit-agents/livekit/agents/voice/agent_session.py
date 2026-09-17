@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
@@ -31,11 +32,25 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..job import get_job_context
-from ..llm import LLM, AgentHandoff, ChatContext, MetricsReport
+from ..llm import (
+    LLM,
+    AgentHandoff,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    MetricsReport,
+    RealtimeModel,
+)
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
-from ..telemetry import trace_types, tracer
+from ..telemetry import (
+    gen_ai as gen_ai_telemetry,
+    loop_monitor,
+    trace_types,
+    tracer,
+    utils as trace_utils,
+)
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -374,7 +389,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         *,
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         stt_context_options: NotGivenOr[STTContextOptions] = NOT_GIVEN,
@@ -606,7 +623,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if not is_given(vad):
             vad = inference.VAD(model="silero")
         self._vad = vad or None
-        self._llm = llm or None
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: LLM | RealtimeModel | None = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else (llm or None)
+        )
         self._tts = tts or None
 
         # eagerly establish DNS/TLS to the LLM provider so the first inference
@@ -698,12 +718,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._foreground_guards: set[asyncio.Future[None]] = set()
         # TODO(theomonnom): need a better way to expose early assistant metrics
         self._early_assistant_metrics: MetricsReport | None = None
+        # the latest user turn no agent speech has reported e2e_latency for yet
+        self._unanswered_user_metrics: MetricsReport | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None
         self._agent_speaking_span: trace.Span | None = None
         self._session_span: trace.Span | None = None
         self._root_span_context: otel_context.Context | None = None
+        # event loop stalls seen while this session ran, summarised on the agent_session span
+        self._loop_stall_count = 0
+        self._loop_stall_total = 0.0
+        self._loop_stall_max = 0.0
+        # parent for the startup spans while start() runs; passed explicitly, never current
+        self._session_start_context: otel_context.Context | None = None
         self._session_ctx_token: Token[otel_context.Context] | None = None
 
         self._recorded_events: list[AgentEvent] = []
@@ -958,6 +986,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._root_span_context = otel_context.get_current()
             current_span = trace.get_current_span()
             current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
+            self._loop_stall_count = 0
+            self._loop_stall_total = 0.0
+            self._loop_stall_max = 0.0
+            # the session is the convention's workflow: agent turns (`invoke_agent`),
+            # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
+            gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
+
+            # startup as one bar: room connect, participant wait, model prewarm, on_enter
+            session_start_span = tracer.start_span("session_start")
+            self._session_start_context = trace.set_span_in_context(session_start_span)
 
             self._agent = agent
             self._update_agent_state("initializing")
@@ -1015,7 +1053,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     room_options.text_output = False
 
                 self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
-                await self._room_io.start()
+                # passed, not made current: RoomIO's tasks live for the whole session
+                await self._room_io.start(trace_context=self._session_start_context)
 
                 if hosting:
                     # only the primary session can have a session host
@@ -1048,11 +1087,21 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
 
-                current_span.set_attribute(trace_types.ATTR_ROOM_NAME, job_ctx.room.name)
-                current_span.set_attribute(trace_types.ATTR_JOB_ID, job_ctx.job.id)
-                current_span.set_attribute(trace_types.ATTR_AGENT_NAME, job_ctx.job.agent_name)
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_ROOM_NAME: job_ctx.room.name,
+                        trace_types.ATTR_JOB_ID: job_ctx.job.id,
+                        trace_types.ATTR_AGENT_NAME: job_ctx.job.agent_name,
+                        # join keys shared with server, SIP and client traces
+                        trace_types.ATTR_ROOM_SID: job_ctx.job.room.sid,
+                        trace_types.ATTR_DISPATCH_ID: job_ctx.job.dispatch_id,
+                        trace_types.ATTR_WORKER_ID: job_ctx._info.worker_id,
+                        trace_types.ATTR_JOB_AGENT_ID: job_ctx.job.state.agent_id,
+                    }
+                )
                 if self._room_io:
-                    # automatically connect to the room when room io is used
+                    # automatically connect to the room when room io is used; room_connect
+                    # finds session_start through the primary session (telemetry.session_context)
                     tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
 
                 # session can be restarted, register the callbacks only once
@@ -1077,12 +1126,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
 
             try:
-                await asyncio.gather(*tasks)
-            finally:
-                await utils.aio.cancel_and_wait(*tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                finally:
+                    await utils.aio.cancel_and_wait(*tasks)
 
-            if self._session_host is not None:
-                await self._session_host.start()
+                if self._session_host is not None:
+                    await self._session_host.start()
+            except Exception as e:
+                trace_utils.record_exception(session_start_span, e)
+                raise
+            finally:
+                session_start_span.end()
+                self._session_start_context = None
 
             # important: no await should be done after this!
 
@@ -1206,92 +1262,52 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             | None
         ) = None,
     ) -> None:
+        # drain and on_exit run under the root span; the caller's context is restored after,
+        # since aclose() may run in the caller's own task
+        root_token: Token[otel_context.Context] | None = None
         if self._root_span_context:
-            # make `activity.drain` and `on_exit` under the root span
-            otel_context.attach(self._root_span_context)
+            root_token = otel_context.attach(self._root_span_context)
+        try:
+            await self._aclose_locked(reason=reason, drain=drain, error=error)
+        finally:
+            if root_token is not None:
+                otel_context.detach(root_token)
 
+    async def _aclose_locked(
+        self,
+        *,
+        reason: CloseReason,
+        drain: bool,
+        error: (
+            llm.LLMError
+            | stt.STTError
+            | tts.TTSError
+            | llm.RealtimeModelError
+            | inference.InterruptionDetectionError
+            | None
+        ),
+    ) -> None:
         async with self._lock:
             if not self._started:
                 return
 
-            self._closing = True
-            self._cancel_user_away_timer()
-            self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
-
-            if self._amd is not None:
-                await self._amd.aclose()
-                self._amd = None
-
-            activity = self._activity
-            while activity and isinstance(agent_task := activity.agent, AgentTask):
-                # notify AgentTask to complete and wait it to resume the parent agent
-                agent_task.cancel()
-                await agent_task._wait_for_inactive()
-
-                if old_agent := agent_task._old_agent:
-                    activity = old_agent._activity
-                else:
-                    break
-
-            if activity is not None:
-                if not drain:
-                    try:
-                        # force interrupt speeches when closing the session
-                        await activity.interrupt(force=True)
-                    except RuntimeError:
-                        # uninterruptible speech
-                        pass
-                await activity.drain()
-
-                # wait any uninterruptible speech to finish
-                if activity.current_speech:
-                    await activity.current_speech
-
-                # detach the inputs and outputs
-                self.input.audio = None
-                self.input.video = None
-                self.output.audio = None
-                self.output.transcription = None
-
-                if (
-                    reason != CloseReason.ERROR
-                    and (audio_recognition := activity._audio_recognition) is not None
-                ):
-                    # wait for the user transcript to be committed
-                    audio_recognition._commit_user_turn(
-                        audio_detached=True,
-                        transcript_timeout=self._opts.session_close_transcript_timeout,
-                    )
-
-                await activity.aclose()
-            self._activity = None
-
-            if self._agent_speaking_span:
-                self._agent_speaking_span.end()
-                self._agent_speaking_span = None
-
-            if self._user_speaking_span:
-                self._user_speaking_span.end()
-                self._user_speaking_span = None
-
-            if self._forward_audio_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_audio_atask)
-
-            if self._forward_video_atask is not None:
-                await utils.aio.cancel_and_wait(self._forward_video_atask)
-
-            if self._recorder_io:
-                await self._recorder_io.aclose()
-
-            if self._ivr_activity is not None:
-                await self._ivr_activity.aclose()
-
-            toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
-            if toolsets:
-                await asyncio.gather(
-                    *(toolset.aclose() for toolset in toolsets),
-                    return_exceptions=True,
-                )
+            # teardown as one bar under agent_session; drain and on_exit nest inside it
+            close_span = tracer.start_span(
+                "session_close",
+                attributes={
+                    trace_types.ATTR_CLOSE_REASON: reason.value,
+                    trace_types.ATTR_CLOSE_DRAIN: drain,
+                },
+            )
+            if error is not None:
+                close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
+            close_token = otel_context.attach(trace.set_span_in_context(close_span))
+            try:
+                await self._teardown_activity(reason=reason, drain=drain)
+            finally:
+                close_span.end()
+                # the rest of the teardown (close event, room io) is under agent_session
+                otel_context.detach(close_token)
 
             if self._session_span:
                 self._session_span.end()
@@ -1324,6 +1340,87 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._room_io = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
+
+    async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
+        """The part of closing that runs under the ``session_close`` span."""
+        self._closing = True
+        self._cancel_user_away_timer()
+        self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
+
+        if self._amd is not None:
+            await self._amd.aclose()
+            self._amd = None
+
+        activity = self._activity
+        while activity and isinstance(agent_task := activity.agent, AgentTask):
+            # notify AgentTask to complete and wait it to resume the parent agent
+            agent_task.cancel()
+            await agent_task._wait_for_inactive()
+
+            if old_agent := agent_task._old_agent:
+                activity = old_agent._activity
+            else:
+                break
+
+        if activity is not None:
+            if not drain:
+                try:
+                    # force interrupt speeches when closing the session
+                    await activity.interrupt(force=True)
+                except RuntimeError:
+                    # uninterruptible speech
+                    pass
+            await activity.drain()
+
+            # wait any uninterruptible speech to finish
+            if activity.current_speech:
+                await activity.current_speech
+
+            # detach the inputs and outputs
+            self.input.audio = None
+            self.input.video = None
+            self.output.audio = None
+            self.output.transcription = None
+
+            if (
+                reason != CloseReason.ERROR
+                and (audio_recognition := activity._audio_recognition) is not None
+            ):
+                # wait for the user transcript to be committed
+                audio_recognition._commit_user_turn(
+                    audio_detached=True,
+                    transcript_timeout=self._opts.session_close_transcript_timeout,
+                )
+
+            await activity.aclose()
+        self._activity = None
+
+        if self._agent_speaking_span:
+            self._agent_speaking_span.end()
+            self._agent_speaking_span = None
+
+        if self._user_speaking_span:
+            self._user_speaking_span.end()
+            self._user_speaking_span = None
+
+        if self._forward_audio_atask is not None:
+            await utils.aio.cancel_and_wait(self._forward_audio_atask)
+
+        if self._forward_video_atask is not None:
+            await utils.aio.cancel_and_wait(self._forward_video_atask)
+
+        if self._recorder_io:
+            await self._recorder_io.aclose()
+
+        if self._ivr_activity is not None:
+            await self._ivr_activity.aclose()
+
+        toolsets = [tool for tool in self._tools if isinstance(tool, llm.Toolset)]
+        if toolsets:
+            await asyncio.gather(
+                *(toolset.aclose() for toolset in toolsets),
+                return_exceptions=True,
+            )
 
     async def aclose(self) -> None:
         await self._aclose_impl(reason=CloseReason.USER_INITIATED)
@@ -1740,18 +1837,41 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 # are direct children of the root span, not nested under a tool call.
                 otel_context.attach(self._root_span_context)
 
+            # one span for the handoff: the old agent's drain/pause and on_exit, then the new
+            # one's start/resume and on_enter nest under it. It is made current only around
+            # calls that spawn no long-lived tasks, and passed explicitly to the ones that do
+            handoff_span: trace.Span | None = None
+            handoff_ctx: otel_context.Context | None = None
+            if self._activity is not None and self._next_activity is not None:
+                handoff_span = tracer.start_span(
+                    "update_agent",
+                    attributes={
+                        trace_types.ATTR_PREVIOUS_AGENT_LABEL: self._activity.agent.label,
+                        trace_types.ATTR_AGENT_LABEL: self._next_activity.agent.label,
+                    },
+                )
+                handoff_ctx = trace.set_span_in_context(handoff_span)
+            under_handoff = (
+                tracer.use_span(handoff_span, end_on_exit=False)
+                if handoff_span is not None
+                else contextlib.nullcontext()
+            )
+
             reuse_resources: _ReusableResources | None = None
             try:
                 previous_activity_v = self._activity
                 if (activity := self._activity) is not None:
                     if previous_activity == "close":
-                        reuse_resources = await activity.drain(new_activity=self._next_activity)
-                        await activity.aclose()
+                        activity._new_turns_blocked = True
+                        with under_handoff:
+                            reuse_resources = await activity.drain(new_activity=self._next_activity)
+                            await activity.aclose()
                     elif previous_activity == "pause":
-                        reuse_resources = await activity.pause(
-                            blocked_tasks=blocked_tasks or [],
-                            new_activity=self._next_activity,
-                        )
+                        with under_handoff:
+                            reuse_resources = await activity.pause(
+                                blocked_tasks=blocked_tasks or [],
+                                new_activity=self._next_activity,
+                            )
 
                 if self._closing and new_activity == "start":
                     # disallow starting a new activity when the session is closing
@@ -1786,13 +1906,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
                 if new_activity == "start":
-                    await self._activity.start(reuse_resources=reuse_resources)
+                    await self._activity.start(
+                        reuse_resources=reuse_resources,
+                        trace_context=(
+                            handoff_ctx if handoff_ctx is not None else self._session_start_context
+                        ),
+                    )
                 elif new_activity == "resume":
-                    await self._activity.resume(reuse_resources=reuse_resources)
-            except BaseException:
+                    await self._activity.resume(
+                        reuse_resources=reuse_resources, trace_context=handoff_ctx
+                    )
+            except BaseException as e:
+                if handoff_span is not None and isinstance(e, Exception):
+                    trace_utils.record_exception(handoff_span, e)
                 if reuse_resources is not None:
                     await reuse_resources.cleanup()
                 raise
+            finally:
+                if handoff_span is not None:
+                    handoff_span.end()
 
         # move it outside the lock to allow calling _update_activity in on_enter of a new agent
         if wait_on_enter:
@@ -1915,6 +2047,22 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aec_warmup_timer = None
 
     def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        if (span := self._session_span) is not None and span.is_recording():
+            span.add_event("participant_linked", trace_utils.participant_attributes(participant))
+            if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+                # join keys with the telephony trace; only the end user's number is PII
+                span.set_attributes(
+                    {
+                        (
+                            trace_types.ATTR_SIP_PHONE_NUMBER
+                            if key == "sip.phoneNumber"
+                            else trace_types.ATTR_SIP_PREFIX + key.removeprefix("sip.")
+                        ): value
+                        for key, value in participant.attributes.items()
+                        if key.startswith("sip.")
+                    }
+                )
+
         if self._aec_warmup_duration_explicit:
             return
 
@@ -1928,6 +2076,40 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if is_outbound_sip and self._aec_warmup_timer is not None:
             self._aec_warmup_timer.cancel()
             self._aec_warmup_timer = None
+
+    def _record_loop_stall(self, duration: float, *, timestamp_ns: int) -> None:
+        """Mark a blocked event loop on the agent_session span: one event per stall plus a
+        running count / total / max, so a session with stalls is findable from its list entry."""
+        span = self._session_span
+        if span is None or not span.is_recording():
+            return
+        self._loop_stall_count += 1
+        self._loop_stall_total += duration
+        self._loop_stall_max = max(self._loop_stall_max, duration)
+        span.add_event(
+            loop_monitor.SPAN_NAME,
+            {trace_types.ATTR_BLOCKING_DURATION: duration},
+            timestamp=timestamp_ns,
+        )
+        span.set_attributes(
+            {
+                trace_types.ATTR_BLOCKING_COUNT: self._loop_stall_count,
+                trace_types.ATTR_BLOCKING_TOTAL_DURATION: self._loop_stall_total,
+                trace_types.ATTR_BLOCKING_MAX_DURATION: self._loop_stall_max,
+            }
+        )
+
+    def _add_session_event(
+        self, name: str, attributes: dict[str, Any], *, timestamp: float | None = None
+    ) -> None:
+        """Timestamped marker on the agent_session span (state changes, room events)."""
+        if (span := self._session_span) is None or not span.is_recording():
+            return
+        span.add_event(
+            name,
+            attributes,
+            timestamp=int(timestamp * 1_000_000_000) if timestamp is not None else None,
+        )
 
     def _update_agent_state(
         self,
@@ -1983,6 +2165,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._agent_state
         self._agent_state = state
+        self._add_session_event(
+            "agent_state_changed",
+            {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
+        )
         self.emit(
             "agent_state_changed",
             AgentStateChangedEvent(old_state=old_state, new_state=state),
@@ -2027,6 +2213,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         old_state = self._user_state
         self._user_state = state
+        self._add_session_event(
+            "user_state_changed",
+            {trace_types.ATTR_OLD_STATE: old_state, trace_types.ATTR_NEW_STATE: state},
+            timestamp=last_speaking_time,
+        )
         self.emit(
             "user_state_changed",
             UserStateChangedEvent(

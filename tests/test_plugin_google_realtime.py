@@ -527,3 +527,312 @@ def test_gemini_api_scheduling_does_not_warn(
         RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
 
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
+
+
+class _FakeLiveSession:
+    """Stands in for the genai live session and records what the plugin sends."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, object]] = []
+        self._closed = asyncio.Event()
+
+    async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
+        self.sent.append(("content", turns))
+
+    async def send_tool_response(self, *, function_responses: object) -> None:
+        self.sent.append(("tool_response", function_responses))
+
+    async def send_realtime_input(self, **kwargs: object) -> None:
+        pass
+
+    async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+        await self._closed.wait()
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+@asynccontextmanager
+async def _connected_session(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    handle: str | None,
+    known: llm.ChatContext | None = None,
+    sent_after_handle: llm.ChatContext | None = None,
+    pending: llm.ChatContext | None = None,
+    caller_handle: bool = False,
+) -> AsyncIterator[tuple[RealtimeSession, _FakeLiveSession]]:
+    """Connect once onto a fake socket.
+
+    `known` is the state the handle stands for, `sent_after_handle` what the previous
+    socket synced after the handle arrived, `pending` the update that arrives before the
+    connect loop runs. `caller_handle` passes the handle through `RealtimeModel` instead,
+    so its baseline is unknown.
+    """
+    from google.genai.live import AsyncLive
+
+    fake = _FakeLiveSession()
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    if caller_handle:
+        session = RealtimeModel(
+            session_resumption=types.SessionResumptionConfig(handle=handle)
+        ).session()
+    else:
+        session = RealtimeModel().session()
+        session._session_resumption_handle = handle
+    if known is not None:
+        session._resumption_chat_ctx = known
+        session._chat_ctx = sent_after_handle if sent_after_handle is not None else known
+    if pending is not None:
+        await session.update_chat_ctx(pending)
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        # let the send task drain the queued events onto the fake socket
+        await asyncio.sleep(0.05)
+        yield session, fake
+    finally:
+        await session.aclose()
+
+
+def _texts(sent: list[tuple[str, object]]) -> list[list[str]]:
+    return [
+        [p.text for c in turns for p in c.parts]  # type: ignore[attr-defined]
+        for kind, turns in sent
+        if kind == "content"
+    ]
+
+
+async def test_fresh_session_replays_chat_ctx(monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+    ctx.add_message(role="assistant", content="hi")
+
+    async with _connected_session(monkeypatch, handle=None, pending=ctx) as (session, fake):
+        assert _texts(fake.sent) == [["hello", "hi"]]
+        assert session._pending_chat_ctx is None
+
+
+async def test_resumed_session_skips_chat_ctx_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The server restored the conversation from the handle; replaying it would duplicate it."""
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content="hello")
+
+    async with _connected_session(monkeypatch, handle="resume-1", known=ctx, pending=ctx) as (
+        session,
+        fake,
+    ):
+        assert fake.sent == []
+        assert session._pending_chat_ctx is None
+        assert [m.text_content for m in session.chat_ctx.messages()] == ["hello"]
+
+
+async def test_resumed_session_sends_only_the_disconnected_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Items appended during the restart are new to the resumed session; the rest is not."""
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    updated = known.copy()
+    updated.add_message(role="user", content="one more thing")
+
+    async with _connected_session(monkeypatch, handle="resume-1", known=known, pending=updated) as (
+        session,
+        fake,
+    ):
+        assert _texts(fake.sent) == [["one more thing"]]
+        assert [m.text_content for m in session.chat_ctx.messages()] == [
+            "hello",
+            "one more thing",
+        ]
+
+
+async def test_resumed_session_delivers_the_tool_result_from_the_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The resumed session still holds the call open, so the result produced meanwhile answers it."""
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="book it")
+    known.items.append(llm.FunctionCall(call_id="call-1", name="book", arguments="{}"))
+    updated = known.copy()
+    updated.items.append(
+        llm.FunctionCallOutput(call_id="call-1", name="book", output="done", is_error=False)
+    )
+
+    async with _connected_session(monkeypatch, handle="resume-1", known=known, pending=updated) as (
+        _,
+        fake,
+    ):
+        assert [kind for kind, _ in fake.sent] == ["tool_response"]
+        responses = fake.sent[0][1]
+        assert [r.id for r in responses] == ["call-1"]  # type: ignore[attr-defined]
+
+
+async def test_resumed_session_resends_what_the_handle_missed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A message synced after the last handle is not in the server snapshot; resend it."""
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    later = known.copy()
+    later.add_message(role="user", content="sent before the socket dropped")
+
+    async with _connected_session(
+        monkeypatch, handle="resume-1", known=known, sent_after_handle=later
+    ) as (session, fake):
+        assert _texts(fake.sent) == [["sent before the socket dropped"]]
+        assert session._pending_chat_ctx is None
+
+
+async def test_caller_provided_handle_adopts_the_history_without_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a handle from the constructor the baseline is unknown; the history is the server's."""
+    history = llm.ChatContext.empty()
+    history.add_message(role="user", content="from the previous process")
+    history.add_message(role="assistant", content="noted")
+
+    async with _connected_session(
+        monkeypatch, handle="resume-1", pending=history, caller_handle=True
+    ) as (session, fake):
+        assert fake.sent == []
+        assert [m.text_content for m in session.chat_ctx.messages()] == [
+            "from the previous process",
+            "noted",
+        ]
+
+
+@llm.function_tool
+async def _restart_tool() -> str:
+    """Any new tool makes update_tools restart the socket."""
+    return ""
+
+
+async def test_handle_does_not_claim_a_queued_but_unsent_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handle that lands while a diff is still queued must not cover it; a restart re-sends it."""
+    from google.genai.live import AsyncLive
+
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    updated = known.copy()
+    updated.add_message(role="user", content="queued behind the handle")
+
+    class _GatedSession(_FakeLiveSession):
+        """First socket: the connect-time handle arrives while the send is still blocked."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = asyncio.Event()
+
+        async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
+            await self.gate.wait()
+            await super().send_client_content(turns=turns, turn_complete=turn_complete)
+
+        async def receive(self) -> AsyncIterator[types.LiveServerMessage]:
+            yield types.LiveServerMessage(
+                session_resumption_update=types.LiveServerSessionResumptionUpdate(
+                    new_handle="resume-2", resumable=True
+                )
+            )
+            await self._closed.wait()
+
+    sockets: list[_FakeLiveSession] = [_GatedSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    session._resumption_chat_ctx = known
+    session._chat_ctx = known
+    await session.update_chat_ctx(updated)
+    try:
+        while session._session_resumption_handle != "resume-2":
+            await asyncio.sleep(0.01)
+        # the diff is queued but its send is blocked, so the new handle must not cover it
+        assert [m.text_content for m in session._resumption_chat_ctx.messages()] == ["hello"]
+
+        # restart before the send completes: the channel drain drops the queued diff
+        await session.update_tools([_restart_tool])
+        while len(opened) < 2:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert _texts(opened[1].sent) == [["queued behind the handle"]]
+    finally:
+        await session.aclose()
+
+
+async def test_failed_send_with_a_queued_update_replays_each_item_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error restart drops the queue; the resume diff must be the only thing that re-sends."""
+    from google.genai.live import AsyncLive
+
+    known = llm.ChatContext.empty()
+    known.add_message(role="user", content="hello")
+    first = known.copy()
+    first.add_message(role="user", content="first update")
+
+    class _FailingSession(_FakeLiveSession):
+        """Blocks the first send until released, then fails it."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.blocked = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def send_client_content(self, *, turns: object, turn_complete: bool) -> None:
+            self.blocked.set()
+            await self.release.wait()
+            raise RuntimeError("socket gone")
+
+    sockets: list[_FakeLiveSession] = [_FailingSession(), _FakeLiveSession()]
+    opened: list[_FakeLiveSession] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        fake = sockets[len(opened)]
+        opened.append(fake)
+        yield fake
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    session._session_resumption_handle = "resume-1"
+    session._resumption_chat_ctx = known
+    session._chat_ctx = known
+    await session.update_chat_ctx(first)
+    try:
+        failing = sockets[0]
+        assert isinstance(failing, _FailingSession)
+        await asyncio.wait_for(failing.blocked.wait(), timeout=2)
+        # a second update queues behind the blocked send
+        second = first.copy()
+        second.add_message(role="user", content="second update")
+        await session.update_chat_ctx(second)
+        failing.release.set()
+
+        while len(opened) < 2:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert opened[0].sent == []
+        assert _texts(opened[1].sent) == [["first update", "second update"]]
+        assert session._unsent_item_ids == set()
+    finally:
+        await session.aclose()
