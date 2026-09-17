@@ -154,6 +154,14 @@ def test_stt_is_not_streaming() -> None:
     assert caps.streaming is False
     assert caps.interim_results is False
     assert caps.keyterms is True
+    assert caps.aligned_transcript is False
+
+
+def test_stt_word_timestamps_do_not_declare_alignment() -> None:
+    """Akshara word timings are utterance-relative, not stream-relative."""
+    from livekit.plugins.convozen import STT
+
+    assert STT(api_key="k", word_timestamps=True).capabilities.aligned_transcript is False
 
 
 def test_stt_model_and_provider() -> None:

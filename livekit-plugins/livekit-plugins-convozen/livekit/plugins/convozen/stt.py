@@ -135,7 +135,9 @@ class STT(stt.STT):
                 normalized ``[0, 1]`` value. ``None`` lets the server derive one from
                 ``lang_tags``.
             word_timestamps: Request per-word timings, surfaced as
-                ``SpeechData.words``. Adds a little server-side work.
+                ``SpeechData.words``. Timings are relative to the start of each
+                recognized utterance rather than the audio stream, so the STT does
+                not declare ``aligned_transcript``. Adds a little server-side work.
             api_key: ConvoZen API key. Falls back to the ``CONVOZEN_API_KEY``
                 environment variable.
             base_url: API base URL. Falls back to ``CONVOZEN_BASE_URL``, then to the
@@ -152,6 +154,9 @@ class STT(stt.STT):
                 streaming=False,
                 interim_results=False,
                 keyterms=True,
+                # Word timings are relative to each recognized utterance, not the
+                # audio stream, so they don't meet the aligned-transcript contract.
+                aligned_transcript=False,
             )
         )
 

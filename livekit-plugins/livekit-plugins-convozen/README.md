@@ -71,9 +71,11 @@ exposed as `SpeechData.metadata["score"]` and `SpeechData.confidence` is left un
 Keyterms configured on the `AgentSession` are forwarded as `keywords`, merged with
 any passed to the constructor.
 
-`word_timestamps` returns one entry per word. The start times track the audio, but
-the spans are narrower than the spoken words, so treat `start_time` as meaningful
-and the width as not.
+`word_timestamps` returns one entry per word. Timings are measured from the start
+of each recognized utterance, not from the start of the session, so the STT does not
+declare `aligned_transcript`. The start times track the audio, but the spans are
+narrower than the spoken words, so treat `start_time` as meaningful and the width as
+not.
 
 ### Text-to-speech
 
