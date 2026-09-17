@@ -254,6 +254,9 @@ class SpeechStream(stt.SpeechStream):
         sent_ms = 0
         while sent_ms < total_ms:
             await ws.send(self._convert_audio(chunk))
+            # pace like real-time audio — the endpointer discounts a burst of
+            # silence that arrives all at once
+            await asyncio.sleep(chunk_ms / 1000)
             sent_ms += chunk_ms
         logger.info("60db STT: sent %dms of trailing silence", sent_ms)
 
@@ -280,7 +283,9 @@ class SpeechStream(stt.SpeechStream):
                     self._session_started = False
                     break
                 elif msg_type == "error":
-                    logger.error("60db STT: server error: %s", data.get("error"))
+                    raise APIConnectionError(
+                        f"60db STT: server error: {data.get('error', 'unknown error')}"
+                    )
                 else:
                     logger.debug("60db STT: unknown message type '%s': %s", msg_type, data)
 
@@ -288,6 +293,10 @@ class SpeechStream(stt.SpeechStream):
             logger.info("60db STT: receive loop - connection closed")
         except asyncio.CancelledError:
             pass
+        except APIConnectionError:
+            # server errors must reach the caller (surfaced by _run when it
+            # joins this task), not be swallowed by the generic handler below
+            raise
         except Exception as e:
             logger.error("60db STT: receive loop error: %s", e)
 
@@ -320,7 +329,9 @@ class SpeechStream(stt.SpeechStream):
         )
 
         if is_final:
-            logger.info("60db STT: final transcript: '%s'", text)
+            # don't log the transcript itself — speech content is sensitive
+            # and message-body redaction cannot protect it in log output
+            logger.debug("60db STT: final transcript received")
 
     def _convert_audio(self, pcm: bytes) -> bytes:
         """Convert PCM audio to the target format (default: mulaw 8kHz)."""

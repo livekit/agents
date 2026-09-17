@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIStatusError,
     APITimeoutError,
     llm,
 )
@@ -56,6 +58,23 @@ class LLM(llm.LLM):
         if not self._api_key:
             raise ValueError(
                 "60db API key is required. Set SIXTY_DB_API_KEY env var or pass api_key argument."
+            )
+
+        # never send the bearer key (or conversation content) to an arbitrary
+        # plaintext destination — https/wss anywhere, http/ws only for localhost
+        parsed_url = urlparse(self._api_url)
+        if parsed_url.scheme not in ("http", "https", "ws", "wss"):
+            raise ValueError(
+                f"60db LLM: unsupported API URL scheme {parsed_url.scheme!r} in {self._api_url!r}"
+            )
+        if parsed_url.scheme in ("http", "ws") and parsed_url.hostname not in (
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ):
+            raise ValueError(
+                "60db LLM: plaintext API URL is only allowed for localhost; "
+                "use an https:// URL to avoid exposing the API key and chat content"
             )
 
         self._client = httpx.AsyncClient(
@@ -201,7 +220,11 @@ class LLMStream(llm.LLMStream):
                     try:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
-                        logger.warning("60db LLM: failed to parse SSE data: %s", data_str)
+                        # don't log the payload — malformed model output can
+                        # carry generated text or tool arguments
+                        logger.warning(
+                            "60db LLM: failed to parse SSE data (length=%d)", len(data_str)
+                        )
                         continue
 
                     # Skip non-choice messages (e.g. chat_id, done)
@@ -304,8 +327,24 @@ class LLMStream(llm.LLMStream):
         except httpx.TimeoutException as e:
             raise APITimeoutError() from e
         except httpx.HTTPStatusError as e:
-            raise APIConnectionError(
-                f"60db LLM: HTTP {e.response.status_code}: {e.response.text}"
+            status_code = e.response.status_code
+            body: object = None
+            try:
+                # the response is streamed, so the body must be read before use
+                await e.response.aread()
+                try:
+                    body = e.response.json()
+                except Exception:
+                    body = e.response.text
+            except Exception:
+                pass  # body is optional context for the error
+            # APIStatusError marks 4xx (except 408/429/499) as non-retryable, so
+            # invalid requests/auth no longer burn through the retry budget
+            raise APIStatusError(
+                f"60db LLM: HTTP {status_code}",
+                status_code=status_code,
+                request_id=e.response.headers.get("x-request-id"),
+                body=body,
             ) from e
         except Exception as e:
             raise APIConnectionError(f"60db LLM: connection error: {e}") from e
