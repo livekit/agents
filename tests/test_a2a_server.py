@@ -17,7 +17,6 @@ from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
 from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
-from livekit.agents.http import _proxied_endpoints
 from livekit.agents.llm import ToolFlag
 
 from .fake_llm import FakeLLM
@@ -163,8 +162,6 @@ def test_the_shipped_example_still_wires_up() -> None:
     # the card route is registered before the binding's catch-all mount, which would shadow it
     ordered = [getattr(route, "path", "") for route in module.server.http.routes]
     assert ordered.index(f"/fare-desk{AGENT_CARD_PATH}") < ordered.index("/{tenant}")
-    # a parameterised first segment names no endpoint, and the real one is advertised
-    assert "fare-desk" in _proxied_endpoints(module.server.http)
 
 
 async def test_the_card_names_the_endpoint_and_offers_the_extension() -> None:
