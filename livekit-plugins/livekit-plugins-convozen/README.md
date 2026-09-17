@@ -18,7 +18,7 @@ pip install livekit-plugins-convozen
 
 ## Pre-requisites
 
-You'll need an API key from [ConvoZen](https://convozen.ai/). It can be set as an environment variable:
+You'll need an API key from [ConvoZen](https://app.convozen.ai/developers/models). It can be set as an environment variable:
 `CONVOZEN_API_KEY`
 
 To reach a self-hosted deployment, pass `base_url=` or set `CONVOZEN_BASE_URL` —
