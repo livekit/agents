@@ -580,15 +580,16 @@ class TranscriptSynchronizer:
                 extra={"impl_id": old_impl.id},
             )
 
-        # always create a new impl even if aclose() failed, to avoid leaving
-        # self._impl pointing to a closed impl which causes the agent to get stuck
-        self._impl = _SegmentSynchronizerImpl(
-            options=self._opts, next_in_chain=self._text_output.next_in_chain
-        )
+        if not self._closed:
+            # always create a new impl even if aclose() failed, to avoid leaving
+            # self._impl pointing to a closed impl which causes the agent to get stuck
+            self._impl = _SegmentSynchronizerImpl(
+                options=self._opts, next_in_chain=self._text_output.next_in_chain
+            )
 
-        # apply the current pause state to the new impl
-        if self._paused:
-            self._impl.pause()
+            # apply the current pause state to the new impl
+            if self._paused:
+                self._impl.pause()
 
     def rotate_segment(self) -> None:
         if self._closed:
