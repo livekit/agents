@@ -61,3 +61,29 @@ def test_barrier_cancellation_does_not_cancel_segment_rotation() -> None:
         await sync.barrier()
 
     asyncio.run(run())
+
+
+def test_cancelled_close_does_not_replace_closed_segment() -> None:
+    async def run() -> None:
+        sync = TranscriptSynchronizer(
+            next_in_chain_text=_TextOutput(), next_in_chain_audio=_AudioOutput()
+        )
+        release = asyncio.Event()
+        original_impl = sync._impl
+
+        async def delayed_close() -> None:
+            await release.wait()
+
+        original_impl.aclose = delayed_close
+        sync.rotate_segment()
+        close = asyncio.create_task(sync.aclose())
+        await asyncio.sleep(0)
+        close.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await close
+        release.set()
+        await sync.barrier()
+
+        assert sync._impl is original_impl
+
+    asyncio.run(run())
