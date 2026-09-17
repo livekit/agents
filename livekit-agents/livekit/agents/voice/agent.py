@@ -29,7 +29,7 @@ from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
-    from ..delegation import Delegate
+    from ..delegation import Delegate, DelegationOptions
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
@@ -53,7 +53,7 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
-        delegate: NotGivenOr[Delegate | None] = NOT_GIVEN,
+        delegate: NotGivenOr[Delegate | DelegationOptions | None] = NOT_GIVEN,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -140,7 +140,12 @@ class Agent:
                 "passing MCP servers to AgentSession or Agent is deprecated "
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
-        self._delegate: NotGivenOr[Delegate | None] = delegate
+        # kept unresolved: only the keys set here override the session's, key by key
+        self._delegation: DelegationOptions = {}
+        if isinstance(delegate, dict):
+            self._delegation.update(delegate)
+        elif is_given(delegate):
+            self._delegation = {"delegate": delegate}
         self._activity: AgentActivity | None = None
 
     @property
@@ -165,7 +170,7 @@ class Agent:
 
         Closed with the activity, the way the agent's own toolsets are.
         """
-        return self._delegate
+        return self._delegation["delegate"] if "delegate" in self._delegation else NOT_GIVEN
 
     @property
     def tools(self) -> list[llm.Tool | llm.Toolset]:

@@ -46,7 +46,7 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import MESSAGE_SOURCE_KEY, FunctionToolsExecutedEvent
+from livekit.agents.voice.events import TURN_ENDED_KEY, FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.served_request import Directive
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
@@ -499,11 +499,9 @@ async def test_assistant_messages_carry_their_source() -> None:
         "Let me check the weather for you.",
         "Sunny today.",
     ]
-    assert [item.extra[MESSAGE_SOURCE_KEY] for item in assistant] == [
-        "say",
-        "tool_call",
-        "turn_end",
-    ]
+    # a said line and a turn that called nothing are both ends; the line on the way to a
+    # tool call is not, and which of the two said it is on the speech, not the message
+    assert [item.extra.get(TURN_ENDED_KEY) for item in assistant] == [True, None, True]
 
 
 async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:

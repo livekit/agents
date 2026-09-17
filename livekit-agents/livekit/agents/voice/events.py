@@ -43,14 +43,13 @@ if TYPE_CHECKING:
 
 Userdata_T = TypeVar("Userdata_T")
 
-MESSAGE_SOURCE_KEY = "message_source"
-"""``ChatMessage.extra`` key on an assistant message: what produced it.
+TURN_ENDED_KEY = "lk.turn_ended"
+"""``ChatMessage.extra`` key, ``True`` on an assistant message nothing follows on its speech.
 
-``turn_end`` for a model turn that called nothing, ``tool_call`` for one that ended in tool
-calls, ``say`` for text handed to :meth:`AgentSession.say`.
+A model turn that called nothing, or a line handed to :meth:`AgentSession.say`; absent on
+one that ended in tool calls, which is said on the way rather than as a conclusion. Which of
+the two said it is on the speech, as :attr:`SpeechCreatedEvent.source`.
 """
-
-MessageSource = Literal["turn_end", "tool_call", "say"]
 
 
 class RunContext(Generic[Userdata_T]):
@@ -78,9 +77,9 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
-        # set by a silent first update(): the output is recorded but nothing voices it
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
         self._suppress_reply = False
-        # set by the first update(): what the step that answers it may call
         self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
@@ -220,9 +219,9 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
-            silent: Record the message without voicing it. On the first update this
-                releases control without speaking; on a later one the items still land in
-                the chat context and history, but no reply is generated from them.
+            silent: Whether the user hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without speaking.
             tool_choice: What the reply to this update may call. ``"none"`` by default: a
                 report is not a result, so the model speaks to it rather than acting on it,
                 and without that it can answer a report by calling the same tool again. Set
@@ -265,6 +264,11 @@ class RunContext(Generic[Userdata_T]):
         if self._executor is None:
             return  # standalone — no executor, so no tool lifecycle to report
 
+        # an agent relays what a tool reports in its own words, so answering it here would
+        # only restate a fact the report already carries, with the caller waiting through it
+        serving_delegation = self.request is not None and self.request.is_delegation
+        reply = not silent and not serving_delegation
+
         self._session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
@@ -272,13 +276,10 @@ class RunContext(Generic[Userdata_T]):
                     call_id=self.function_call.call_id,
                     message=raw_message,
                     silent=silent,
+                    reply_pending=reply,
                 )
             ),
         )
-
-        # the event above carries what the tool asked for; a session that never answers
-        # progress drops the model round on top of it
-        reply = not silent and self._session._reply_to_tool_updates
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
@@ -351,7 +352,7 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
-    "delegation_directive",
+    "directive_received",
     "error",
     "close",
     "debug_message",
@@ -542,7 +543,9 @@ class ToolCallUpdated(BaseModel):
     call_id: str
     message: str
     silent: bool = False
-    """Recorded for the model but never voiced — no reply is generated from it."""
+    """Kept to the model: the user hears nothing about it and nothing relays it."""
+    reply_pending: bool = False
+    """This session's model is answering it, and its line is what gets voiced."""
 
 
 class ToolCallEnded(BaseModel):
@@ -572,17 +575,17 @@ class ToolReplyUpdated(BaseModel):
     """Id of the reply speech; ``speech_created`` carries its handle."""
 
 
-class DelegationDirectiveEvent(BaseModel):
-    """A delegate asked the conversation to act once it has said the answer.
+class DirectiveReceivedEvent(BaseModel):
+    """Something this conversation asked of was done, and asks it to act after answering.
 
     Advice, not an action: what to do about the kind is the application's decision.
     """
 
-    type: Literal["delegation_directive"] = "delegation_directive"
+    type: Literal["directive_received"] = "directive_received"
     kind: DirectiveKind
     reason: str = ""
-    call_id: str
-    """The ``lk_agents_delegate`` call this came back from."""
+    call_id: str | None = None
+    """The call it came back from, where one did, so several in flight stay apart."""
     created_at: float = Field(default_factory=time.time)
 
 
@@ -664,7 +667,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
-    | DelegationDirectiveEvent
+    | DirectiveReceivedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,

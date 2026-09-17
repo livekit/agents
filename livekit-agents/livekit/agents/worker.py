@@ -405,7 +405,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # built here and not in run(): the @server.http decorators run at import time
         self._http = FastAPI()
         self._http.state.agent_server = self
-        self._text_sessions: list[_SessionExecutor] = []
+        self._a2a_sessions: list[_SessionExecutor] = []
 
         self._lock = asyncio.Lock()
 
@@ -422,15 +422,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """
         return self._http
 
-    def text_session(
-        self, *, endpoint: str, description: str, name: str | None = None
+    def a2a_session(
+        self,
+        *,
+        endpoint: str,
+        description: str,
+        name: str | None = None,
+        idle_timeout: float | None = None,
     ) -> Callable[[TextSessionHandler], TextSessionHandler]:
         """Serve an ``AgentSession`` at ``/<endpoint>`` on :attr:`http`, speaking A2A.
 
         The handler runs once per conversation. It builds the session, starts it, and hands
         it over; the framework feeds each incoming request through it as a turn::
 
-            @server.text_session(endpoint="fare-desk", description="Answers fare questions.")
+            @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
             async def fare_desk(ctx: TextSessionContext) -> None:
                 session = AgentSession(llm="openai/gpt-4.1")
                 await session.start(agent=FareDesk())
@@ -444,13 +449,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         def decorator(handler: TextSessionHandler) -> TextSessionHandler:
             from .a2a._server import mount
 
-            self._text_sessions.append(
+            self._a2a_sessions.append(
                 mount(
                     self._http,
                     endpoint=endpoint,
                     handler=handler,
                     description=description,
                     name=name,
+                    idle_timeout=idle_timeout,
                 )
             )
             return handler
@@ -645,14 +651,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise Exception("worker is already running")
 
             if self._entrypoint_fnc is None:
-                if not self._text_sessions:
+                if not self._a2a_sessions:
                     raise RuntimeError(
                         "No RTC session entrypoint has been registered.\n"
                         "Define one using the @server.rtc_session() decorator, for example:\n"
                         '    @server.rtc_session(agent_name="my_agent")\n'
                         "    async def my_agent(ctx: JobContext):\n"
                         "        ...\n"
-                        "Or serve text sessions alone with @server.text_session().\n"
+                        "Or serve A2A sessions alone with @server.a2a_session().\n"
                     )
                 # nothing here answers a room, so no job can ever be dispatched: serve the
                 # HTTP app, stay out of the job dispatcher, and warm no processes for it
@@ -1120,9 +1126,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # before closing the proc pool (they accepted before shutdown)
             await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
 
-            for text_session in self._text_sessions:
+            for a2a_session in self._a2a_sessions:
                 with contextlib.suppress(Exception):
-                    await text_session.aclose()
+                    await a2a_session.aclose()
 
             await self._proc_pool.aclose()
 

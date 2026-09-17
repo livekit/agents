@@ -20,13 +20,13 @@ python voice.py console   # call in
 
 Ask something real. The seeded airline has an interesting case waiting:
 
-| caller | what makes them worth asking about |
-|---|---|
-| `dana@example.com` | Gold, and her Tokyo flight tomorrow is delayed 245 minutes — our fault, so the change fee is waived and her seat moves for nothing |
-| `ortiz@example.com` | on a BASIC fare, which cannot be changed or refunded at all |
-| `raman@example.com` | holds 120 USD of travel credit, which a new booking spends |
+| caller              | what makes them worth asking about                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `dana@example.com`  | Gold, and her Tokyo flight tomorrow is delayed 245 minutes — our fault, so the change fee is waived and her seat moves for nothing |
+| `ortiz@example.com` | on a BASIC fare, which cannot be changed or refunded at all                                                                        |
+| `raman@example.com` | holds 120 USD of travel credit, which a new booking spends                                                                         |
 
-*"My flight to Tokyo tomorrow is delayed — what else can you put me on?"* makes the desk
+_"My flight to Tokyo tomorrow is delayed — what else can you put me on?"_ makes the desk
 check the weather at both ends, find the evening flight, and work out that the delay waives
 both the fee and the fare difference.
 
@@ -46,7 +46,7 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 
 ## What to look at
 
-- **`@server.text_session(endpoint="fare-desk")`** serves an `AgentSession` over A2A on the
+- **`@server.a2a_session(endpoint="fare-desk")`** serves an `AgentSession` over A2A on the
   agent server's own HTTP app. The handler runs once per conversation, builds its session and
   hands it over; every later request on that `contextId` is a turn of the same session, so
   the desk remembers who it is talking to.
@@ -59,8 +59,8 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 - **`collect_email` lives on the voice side**, because spelling an address back is a
   conversation and the desk is not on the phone. The desk asks for one in its answer.
 - **`delegate=A2ADelegate(url)`** is the whole of the voice side's delegation code. The
-  session closes the delegate when the call ends, which tells the desk to drop the
-  conversation rather than wait for it to go idle.
+  session closes the delegate when the call ends, which is what tells the desk to drop the
+  conversation.
 
 ## Talking to the desk without a voice agent
 

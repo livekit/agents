@@ -177,6 +177,22 @@ async def get_running_tasks(ctx: RunContext) -> list[dict]:
     ]
 
 
+async def cancel_tool_call(session: AgentSession, call_id: str) -> bool:
+    """Cancel one tool call running in this session.
+
+    False when nothing by that call id is running, when the tool does not allow
+    cancellation, or when the speech that issued it disallows interruptions.
+    """
+    task = _RunningTasks.get(session, {}).get(call_id)
+    if task is None:
+        return False
+
+    try:
+        return await task.executor.cancel(call_id)
+    except ToolError:
+        return False
+
+
 @function_tool(name="lk_agents_cancel_task")
 async def cancel_task(ctx: RunContext, call_id: str) -> str:
     """Cancel a running tool call by call_id."""
@@ -184,6 +200,7 @@ async def cancel_task(ctx: RunContext, call_id: str) -> str:
     if task is None:
         raise ToolError(f"Task {call_id} not found")
 
+    # unlike cancel_tool_call, a refusal is worth saying: the model asked for this one
     if not await task.executor.cancel(call_id):
         raise ToolError(f"Task {call_id} not found or already completed")
     return f"Task {call_id} cancelled successfully."
@@ -422,7 +439,9 @@ class _ToolExecutor:
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice="none")
+            # a return is a result to act on, unlike a report, so the reply that phrases it
+            # is as free to call something as the reply to an ordinary tool would be
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -592,8 +611,7 @@ class _ToolExecutor:
         updates = self._pending_updates[:]
         self._pending_updates.clear()
 
-        # one reply covering everything buffered, which is one thing said about several
-        # results rather than several things said at once
+        # one reply covering everything buffered
         pending_items = [item for u in updates for item in u.items]
         if not pending_items:
             return
@@ -617,8 +635,7 @@ class _ToolExecutor:
 
         # if the update is still the tail, the agent hasn't spoken since — summarize
         # directly; otherwise let the LLM decide whether it already covered this
-        tail = target_agent.chat_ctx.items
-        at_tail = bool(tail) and tail[-1].id == pending_items[-1].id
+        at_tail = (items := target_agent.chat_ctx.items) and items[-1].id == pending_items[-1].id
         template = (
             self._tool_options["reply_at_tail_template"]
             if at_tail

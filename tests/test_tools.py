@@ -2030,30 +2030,36 @@ class TestCancelAll:
             await _cleanup_fakes(t)
 
 
-class TestSessionCancelToolCall:
+class TestCancelToolCall:
     """AgentSession.cancel_tool_call — the public way to stop one running call."""
 
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
     async def test_cancels_a_cancellable_call(self):
-        from livekit.agents import AgentSession
-        from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor
+        from livekit.agents.voice.tool_executor import (
+            _RunningTasks,
+            _ToolExecutor,
+            cancel_tool_call,
+        )
 
         executor = _ToolExecutor()
         t = _register_fake(executor, "a", "tool_x", allow_cancellation=True)
         session = executor._running_tasks["a"].ctx.session
         _RunningTasks[session] = executor._running_tasks
         try:
-            assert await AgentSession.cancel_tool_call(session, "a") is True
+            assert await cancel_tool_call(session, "a") is True
             assert t.done()
         finally:
             await _cleanup_fakes(t)
 
     @pytest.mark.asyncio
     async def test_leaves_a_call_it_may_not_stop(self):
-        from livekit.agents import AgentSession
-        from livekit.agents.voice.tool_executor import _RunningTasks, _ToolExecutor
+        from livekit.agents.voice.tool_executor import (
+            _RunningTasks,
+            _ToolExecutor,
+            cancel_tool_call,
+        )
 
         executor = _ToolExecutor()
         non_cancellable = _register_fake(executor, "a", "tool_x", allow_cancellation=False)
@@ -2063,10 +2069,10 @@ class TestSessionCancelToolCall:
         session = executor._running_tasks["a"].ctx.session
         _RunningTasks[session] = executor._running_tasks
         try:
-            assert await AgentSession.cancel_tool_call(session, "a") is False
-            assert await AgentSession.cancel_tool_call(session, "b") is False
+            assert await cancel_tool_call(session, "a") is False
+            assert await cancel_tool_call(session, "b") is False
             # nothing by that call id is running
-            assert await AgentSession.cancel_tool_call(session, "nope") is False
+            assert await cancel_tool_call(session, "nope") is False
             assert not non_cancellable.done() and not protected.done()
         finally:
             await _cleanup_fakes(non_cancellable, protected)
@@ -2168,7 +2174,7 @@ def _make_reply_session(speech: Any) -> Any:
     return session
 
 
-def _make_run_context_with_session(session: Any, call_id: str, name: str):
+def _make_run_context_with_session(session: Any, call_id: str, name: str, request: Any = None):
     from unittest.mock import MagicMock
 
     from livekit.agents.llm import FunctionCall
@@ -2177,6 +2183,7 @@ def _make_run_context_with_session(session: Any, call_id: str, name: str):
     speech_handle = MagicMock()
     speech_handle.num_steps = 1
     speech_handle.allow_interruptions = True
+    speech_handle.request = request
     return RunContext(
         session=session,
         speech_handle=speech_handle,
@@ -2228,7 +2235,7 @@ class TestSpeechHandleItemCallbacks:
         seen: list[str] = []
         chat_ctx = ChatContext.empty()
 
-        handle.add_item_added_callback(lambda item: seen.append(item.id))
+        handle._add_item_added_callback(lambda item: seen.append(item.id))
         first = chat_ctx.add_message(role="assistant", content="one", id="m1")
         handle._item_added([first])
         assert seen == ["m1"]
@@ -2236,8 +2243,8 @@ class TestSpeechHandleItemCallbacks:
         def _record(item):
             seen.append(item.id)
 
-        handle.add_item_added_callback(_record)
-        handle.remove_item_added_callback(_record)
+        handle._add_item_added_callback(_record)
+        handle._remove_item_added_callback(_record)
         second = chat_ctx.add_message(role="assistant", content="two", id="m2")
         handle._item_added([second])
         assert seen == ["m1", "m2"]
@@ -2415,8 +2422,12 @@ class TestToolCallEvents:
         items = _emitted_items(session)
         assert isinstance(items[0], ToolCallStarted)
         # first update is inline (plain call_id), the second is buffered
-        assert items[1] == ToolCallUpdated(id="c5", call_id="c5", message="step one")
-        assert items[2] == ToolCallUpdated(id="c5_update_1", call_id="c5", message="step two")
+        assert items[1] == ToolCallUpdated(
+            id="c5", call_id="c5", message="step one", reply_pending=True
+        )
+        assert items[2] == ToolCallUpdated(
+            id="c5_update_1", call_id="c5", message="step two", reply_pending=True
+        )
         # the final return is deferred through the coalescer
         assert items[3] == ToolCallEnded(
             id="c5_final", call_id="c5", message="all done", status="done"
@@ -2474,7 +2485,9 @@ class TestToolCallEvents:
         await executor._reply_task
 
         items = _emitted_items(session)
-        assert items[1] == ToolCallUpdated(id="c6", call_id="c6", message="step one")
+        assert items[1] == ToolCallUpdated(
+            id="c6", call_id="c6", message="step one", reply_pending=True
+        )
         # the silent update is still reported, flagged, and recorded on the agent
         assert items[2] == ToolCallUpdated(
             id="c6_update_1", call_id="c6", message="step two", silent=True
@@ -2525,8 +2538,10 @@ class TestToolCallEvents:
         await _drain_executor(executor)
 
     @pytest.mark.asyncio
-    async def test_session_that_never_replies_to_progress(self):
+    async def test_a_delegation_never_replies_to_progress(self):
+        """An agent relays the report in the tool's own words, so a reply would restate it."""
         from livekit.agents.voice.events import RunContext, ToolCallUpdated, ToolReplyUpdated
+        from livekit.agents.voice.served_request import ServedRequest
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
@@ -2540,7 +2555,6 @@ class TestToolCallEvents:
 
         speech = _make_fake_speech()
         session = _make_reply_session(speech)
-        session._reply_to_tool_updates = False
         idle_event = _asyncio.Event()
         activity = session.wait_for_idle.return_value
 
@@ -2551,7 +2565,12 @@ class TestToolCallEvents:
         session.wait_for_idle = _wait_for_idle
 
         executor = _ToolExecutor()
-        run_ctx = _make_run_context_with_session(session, call_id="c12", name="progress_tool")
+        run_ctx = _make_run_context_with_session(
+            session,
+            call_id="c12",
+            name="progress_tool",
+            request=ServedRequest(is_delegation=True),
+        )
 
         first = await executor.execute(tool=progress_tool, run_ctx=run_ctx, raw_arguments={})
         assert "step one" in first
@@ -2562,9 +2581,10 @@ class TestToolCallEvents:
             await executor._reply_task
 
         items = _emitted_items(session)
-        # every report still goes out, flagged as the tool wrote it
+        # every report still goes out, in the tool's own words and drawing no reply
         assert [i.id for i in items if isinstance(i, ToolCallUpdated)] == ["c12", "c12_update_1"]
         assert [i.silent for i in items if isinstance(i, ToolCallUpdated)] == [False, False]
+        assert [i.reply_pending for i in items if isinstance(i, ToolCallUpdated)] == [False, False]
         # only the tool's return is answered; the reports are recorded, not voiced
         scheduled = [i for i in items if isinstance(i, ToolReplyUpdated)]
         assert [i.update_ids for i in scheduled if i.status == "scheduled"] == [["c12_final"]]

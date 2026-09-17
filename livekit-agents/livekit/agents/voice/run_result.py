@@ -222,7 +222,7 @@ class RunResult(Generic[Run_T]):
         self._handles.add(handle)
 
         if isinstance(handle, SpeechHandle):
-            handle.add_item_added_callback(self._item_added)
+            handle._add_item_added_callback(self._item_added)
 
         handle.add_done_callback(self._mark_done_if_needed)
 
@@ -234,7 +234,7 @@ class RunResult(Generic[Run_T]):
         handle.remove_done_callback(self._mark_done_if_needed)
 
         if isinstance(handle, SpeechHandle):
-            handle.remove_item_added_callback(self._item_added)
+            handle._remove_item_added_callback(self._item_added)
         return True
 
     def _mark_done_if_needed(self, handle: SpeechHandle | asyncio.Future[Any] | None) -> None:

@@ -10,7 +10,7 @@ import pytest
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._runner import REQUEST_ID_KEY, RequestRun, SessionRunner
-from livekit.agents.llm import ChatContext, FunctionToolCall, ToolFlag
+from livekit.agents.llm import ChatContext, FunctionCall, FunctionToolCall, ToolFlag
 from livekit.agents.voice.tool_executor import _RunningTasks
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
@@ -58,7 +58,6 @@ async def _serve(agent: Agent, *, llm: FakeLLM) -> tuple[AgentSession, SessionRu
     session = AgentSession(llm=llm)
     await session.start(agent=agent)
     runner = SessionRunner(session)
-    runner.attach()
     return session, runner
 
 
@@ -152,6 +151,34 @@ async def test_a_tools_report_is_relayed_as_written_and_draws_no_reply() -> None
         ("working", "checking the fare rules"),
         ("completed", "It is 240 USD."),
     ]
+
+
+async def test_a_person_s_turn_is_answered_by_the_expert_s_own_words() -> None:
+    """A delegation relays the tool's words; a person's turn draws a line about them, and
+    the report then travels as an item rather than being said twice."""
+
+    @function_tool
+    async def check_fares(ctx: RunContext) -> str:
+        """Slow work that reports progress."""
+        await ctx.update("checking the fare rules")
+        return "fare is 240 USD"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("what is the fare", "", calls=[_tool_call("check_fares", "cf1")])],
+        fallbacks=["Looking that up.", "It is 240 USD."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
+
+    updates = await _collect(runner.submit(TaskInput(text="what is the fare"), request_id="r1"))
+    await _close(session, runner)
+
+    # the tool's own words stay in the item; what is said is the expert's line about them
+    assert "checking the fare rules" not in _texts(updates)
+    reports = [
+        u for u in updates if u.item is not None and getattr(u.item, "update_of", None) == "cf1"
+    ]
+    assert len(reports) == 1 and reports[0].text == ""
+    assert _texts(updates) == ["Looking that up.", "It is 240 USD."]
 
 
 async def test_a_report_travels_as_a_call_naming_what_it_reports_for() -> None:
@@ -380,7 +407,7 @@ async def test_an_ordinary_session_has_no_request_to_direct() -> None:
     assert branch == ["close"]
 
 
-async def test_the_conversation_is_shown_once_across_requests() -> None:
+async def test_the_conversation_is_merged_once_across_requests() -> None:
     """The caller sends what it holds, whole; the receiver takes the delta by item id."""
     llm = _AnsweringLLM(
         fake_responses=[_says("first", "one"), _says("second", "two")],
@@ -399,18 +426,36 @@ async def test_the_conversation_is_shown_once_across_requests() -> None:
         runner.submit(TaskInput(instruction="second", chat_ctx=chat_ctx), request_id="r2")
     )
 
-    notes = [
-        item.text_content or ""
-        for item in session.current_agent.chat_ctx.items
-        if item.type == "message" and "since the last request" in (item.text_content or "")
-    ]
+    items = session.current_agent.chat_ctx.items
     await _close(session, runner)
 
-    assert len(notes) == 2
-    assert "change my Monday flight" in notes[0]
-    # the item already shown is not shown again
-    assert "change my Monday flight" not in notes[1]
-    assert "and the Tuesday one" in notes[1]
+    # the caller's turns keep their own ids and roles rather than being quoted in a note
+    caller_turns = [item.id for item in items if item.id in ("m1", "m2")]
+    assert caller_turns == ["m1", "m2"]
+    assert all(item.role == "user" for item in items if item.id in ("m1", "m2"))
+    # what this session recorded itself is untouched, and nothing is merged twice
+    assert len(items) == len({item.id for item in items})
+
+
+async def test_what_the_caller_holds_arrives_as_conversation_not_plumbing() -> None:
+    """A caller's calls, handoffs and instructions are not what was said."""
+    llm = _AnsweringLLM(fake_responses=[_says("first", "one")], fallbacks=[])
+    session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
+
+    chat_ctx = ChatContext.empty()
+    chat_ctx.add_message(role="user", content="change my Monday flight", id="m1")
+    chat_ctx.insert(FunctionCall(id="fc1", call_id="c1", name="lk_agents_delegate", arguments="{}"))
+    chat_ctx.add_message(role="system", content="you are a phone agent", id="s1")
+    await _collect(
+        runner.submit(TaskInput(instruction="first", chat_ctx=chat_ctx), request_id="r1")
+    )
+
+    ids = {item.id for item in session.current_agent.chat_ctx.items}
+    await _close(session, runner)
+
+    assert "m1" in ids
+    assert "fc1" not in ids
+    assert "s1" not in ids
 
 
 async def test_cancelling_ends_the_request_with_what_it_had() -> None:
@@ -478,7 +523,7 @@ async def test_a_stop_reaches_a_call_the_executor_does_not_have_yet() -> None:
             # what is under test is the stop only the call itself can take
             assert item.call_id not in _RunningTasks.get(session, {}), "not the window"
             run._stopping = True
-            runner._spawn(run._stop_call(item.call_id))
+            runner._spawn(run._cancel_tool_call(item.call_id))
 
     run.on_item = stop_in_the_window  # type: ignore[method-assign]
 
