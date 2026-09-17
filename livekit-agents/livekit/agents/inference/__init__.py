@@ -15,13 +15,7 @@ from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
-    from .realtime import (
-        GPTLiveModel,
-        GPTLiveResponsesDelegationOptions,
-        GPTLiveSession,
-        RealtimeModel,
-        RealtimeSession,
-    )
+    from .realtime import RealtimeModel, RealtimeSession
 
 
 # AvatarSession subclasses voice.avatar.AvatarSession. Because this package is
@@ -34,13 +28,7 @@ def __getattr__(name: str) -> Any:
         from . import avatar
 
         return getattr(avatar, name)
-    if name in (
-        "GPTLiveModel",
-        "GPTLiveResponsesDelegationOptions",
-        "GPTLiveSession",
-        "RealtimeModel",
-        "RealtimeSession",
-    ):
+    if name in ("RealtimeModel", "RealtimeSession"):
         from . import realtime
 
         return getattr(realtime, name)
@@ -69,7 +57,4 @@ __all__ = [
     "TurnDetectorVersions",
     "RealtimeModel",
     "RealtimeSession",
-    "GPTLiveModel",
-    "GPTLiveSession",
-    "GPTLiveResponsesDelegationOptions",
 ]

@@ -15,7 +15,6 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
-from livekit.agents.llm._realtime import gpt_live as gpt_live_engine
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.telemetry import pii
 from livekit.plugins.openai.realtime import gpt_live_model
@@ -27,12 +26,6 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
 from livekit.plugins.openai.tools import WebSearch
 
 pytestmark = pytest.mark.unit
-
-
-def test_direct_model_preserves_public_label() -> None:
-    model = GPTLiveModel(api_key="fake")
-
-    assert model.label == "livekit.plugins.openai.realtime.gpt_live_model.GPTLiveModel"
 
 
 class _FakeWS:
@@ -258,7 +251,7 @@ async def test_reconnect_drains_and_waits_for_each_sessions_close(
         return ws
 
     monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
-    monkeypatch.setattr(gpt_live_engine, "_SESSION_CLOSE_TIMEOUT", 0.5)
+    monkeypatch.setattr(gpt_live_model, "_SESSION_CLOSE_TIMEOUT", 0.5)
     model = GPTLiveModel(api_key="sk-test", max_session_duration=0.1 if timed else None)
     session = model.session()
     metrics: list[RealtimeModelMetrics] = []
@@ -392,7 +385,7 @@ async def test_provider_content_is_only_logged_under_pii_fields(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     ws = _connect_hook(monkeypatch)
-    monkeypatch.setattr(gpt_live_engine, "lk_oai_debug", 1)
+    monkeypatch.setattr(gpt_live_model, "lk_oai_debug", 1)
     caplog.set_level(logging.DEBUG, logger=gpt_live_model.logger.name)
     private = "private-customer-payload"
     model = GPTLiveModel(api_key="sk-test")

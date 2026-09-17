@@ -18,7 +18,7 @@ session = AgentSession(
 )
 ```
 
-**Note:** Realtime models are available through `inference.RealtimeModel` and `inference.GPTLiveModel`; use provider plugin classes for direct credentials. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
+**Note:** OpenAI Realtime models are available through `inference.RealtimeModel`; use provider plugin classes for direct credentials. See the [Real-time Models](#-real-time-models) examples in `voice_agents/`.
 
 ## 📁 Example Categories
 
