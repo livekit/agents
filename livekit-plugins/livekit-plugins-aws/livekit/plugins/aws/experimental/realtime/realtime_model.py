@@ -931,6 +931,11 @@ class RealtimeSession(  # noqa: F811
                 await self._initialize_client()
             assert self._bedrock_client is not None, "bedrock_client is None"
 
+            # The stream opened below is assigned its own ID, so drop any ID held from a previous
+            # one: a replacement that fails before reporting its own must not read back as the
+            # stream it replaced.
+            self._session_id = None
+
             logger.info("Initializing Bedrock stream")
             t0 = time.perf_counter()
             self._stream_response = (
@@ -1775,7 +1780,8 @@ class RealtimeSession(  # noqa: F811
 
         Assigned by the service and identical across every server event of a stream, so this is
         the identifier to quote when reporting a session to AWS. One ``RealtimeSession`` can span
-        several of them: recycling and turn restarts open a new stream, and the ID changes with it.
+        several of them: recycling and turn restarts open a new stream, and this resets to ``None``
+        until that stream reports an ID of its own.
         """
         return self._session_id
 
