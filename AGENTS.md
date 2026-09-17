@@ -93,7 +93,7 @@ livekit-agents/livekit/agents/
 ├── tts/                # Text-to-speech with fallback and stream pacing
 ├── ipc/                # Inter-process communication for distributed job execution
 ├── cli/                # CLI commands (console, dev, start, connect)
-├── inference/          # Remote model inference (LLM, STT, TTS)
+├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 └── utils/              # Audio processing, codecs, HTTP, async utilities
 

@@ -27,6 +27,16 @@ def test_plugin_import_is_canonical_class() -> None:
     assert InferenceRealtimeSession is RealtimeSession
 
 
+def test_hosted_model_keeps_canonical_label() -> None:
+    model = RealtimeModel(
+        "openai/gpt-realtime",
+        api_key="key",
+        api_secret="secret",
+    )
+
+    assert model.label == "livekit.agents.inference.realtime.openai.RealtimeModel"
+
+
 class _FakeWebSocket:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []

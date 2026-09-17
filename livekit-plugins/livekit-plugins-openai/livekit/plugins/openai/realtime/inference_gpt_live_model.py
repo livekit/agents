@@ -1,4 +1,4 @@
-"""Deprecated hosted GPT-Live imports; use :mod:`livekit.agents.inference`."""
+"""Compatibility imports for hosted GPT-Live; use :mod:`livekit.agents.inference`."""
 
 from livekit.agents.inference.realtime.gpt_live import (
     InferenceGPTLiveModel,

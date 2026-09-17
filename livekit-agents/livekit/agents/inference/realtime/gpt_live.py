@@ -6,6 +6,7 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 import aiohttp
 
+from livekit.agents import llm
 from livekit.agents.inference._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
@@ -31,10 +32,15 @@ from ...llm._realtime.gpt_live import (
     ResponsesDelegationOptions,
     _ResponsesDelegationOptionsBase,
 )
+from ...llm._realtime.openai_tools import OpenAITool
 
 
 class GPTLiveResponsesDelegationOptions(_ResponsesDelegationOptionsBase, total=False):
-    """Responses options supported through LiveKit Inference."""
+    """Responses options supported through LiveKit Inference.
+
+    A key left unset is not sent, and the service's own default applies.
+    Only the default service tier is available through LiveKit Inference.
+    """
 
     service_tier: Literal["default"]
 
@@ -147,6 +153,14 @@ class GPTLiveSession(_GPTLiveSession):
         if opts.provider:
             headers[HEADER_INFERENCE_PROVIDER] = opts.provider
         return url, headers
+
+    async def _update_tools(self, tools: list[llm.Tool]) -> None:
+        provider_tools = llm.ToolContext(tools).provider_tools
+        if any(isinstance(tool, OpenAITool) for tool in provider_tools):
+            raise llm.RealtimeError(
+                "LiveKit Inference GPT-Live does not support OpenAI-hosted tools"
+            )
+        await super()._update_tools(tools)
 
     def _is_fatal_error(self, error: types.ErrorBody) -> bool:
         code = error.code or error.type or ""

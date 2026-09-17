@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from livekit.agents import inference
+from livekit.agents import inference, llm
 from livekit.agents._exceptions import APIError
 from livekit.agents.inference.realtime import gpt_live as inference_gpt_live
 from livekit.agents.llm._realtime import gpt_live_types
@@ -12,6 +12,7 @@ from livekit.plugins.openai.realtime import (
     GPTLiveModel as DirectGPTLiveModel,
     GPTLiveSession as DirectGPTLiveSession,
 )
+from livekit.plugins.openai.tools import WebSearch
 
 GPTLiveModel = inference.GPTLiveModel
 
@@ -19,9 +20,12 @@ pytestmark = pytest.mark.unit
 
 
 def test_plugin_import_is_canonical_class() -> None:
+    import livekit.plugins.openai.realtime as openai_realtime
     from livekit.plugins.openai.realtime import (
         InferenceGPTLiveModel,
         InferenceResponsesDelegationOptions,
+        gpt_live_types as plugin_gpt_live_types,
+        utils as plugin_realtime_utils,
     )
     from livekit.plugins.openai.realtime.inference_gpt_live_model import (
         InferenceGPTLiveSession,
@@ -32,6 +36,8 @@ def test_plugin_import_is_canonical_class() -> None:
     assert (
         InferenceResponsesDelegationOptions is inference_gpt_live.GPTLiveResponsesDelegationOptions
     )
+    assert openai_realtime.gpt_live_types is plugin_gpt_live_types
+    assert openai_realtime.utils is plugin_realtime_utils
 
 
 class _FakeWebSocket:
@@ -98,6 +104,21 @@ def test_accepts_default_inference_service_tier() -> None:
         api_key="key",
         api_secret="secret",
     )
+
+
+async def test_rejects_openai_hosted_tools(paused_gpt_live_main: None) -> None:
+    model = GPTLiveModel(
+        "openai/gpt-live-1",
+        api_key="key",
+        api_secret="secret",
+    )
+    session = model.session()
+
+    with pytest.raises(llm.RealtimeError, match="does not support OpenAI-hosted tools"):
+        await session._update_tools([WebSearch()])
+
+    await session.aclose()
+    await model.aclose()
 
 
 @pytest.mark.parametrize(

@@ -92,6 +92,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
+from .openai_types import RealtimeModels
 from .openai_utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
     AZURE_DEFAULT_TURN_DETECTION,
@@ -105,14 +106,6 @@ from .openai_utils import (
     to_oai_tool_choice,
     to_turn_detection,
 )
-
-RealtimeModels = Literal[
-    "gpt-realtime",
-    "gpt-realtime-1.5",
-    "gpt-realtime-2",
-    "gpt-realtime-2025-08-28",
-    "gpt-4o-realtime-preview",
-]
 
 # When a response is created with the OpenAI Realtime API, those events are sent in this order:
 # 1. response.created (contains resp_id)
@@ -517,6 +510,8 @@ class RealtimeModel(llm.RealtimeModel):
                 per_response_tool_choice=True,
             )
         )
+        if type(self) is RealtimeModel:
+            self._label = "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
 
         is_azure = (
             api_version is not None or entra_token is not None or azure_deployment is not None

@@ -77,6 +77,8 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 
 class _ResponsesDelegationOptionsBase(TypedDict, total=False):
+    """Fields shared by direct and hosted Responses delegation."""
+
     model: str
     """Responses model slug; ``gpt-5.6-luna`` when unset."""
     instructions: str
@@ -92,7 +94,10 @@ class _ResponsesDelegationOptionsBase(TypedDict, total=False):
 
 
 class ResponsesDelegationOptions(_ResponsesDelegationOptionsBase, total=False):
-    """Backend Responses options for direct OpenAI GPT-Live sessions."""
+    """Backend Responses options for direct OpenAI GPT-Live sessions.
+
+    A key left unset is not sent, and the service's own default applies.
+    """
 
     service_tier: Literal["auto", "default", "flex", "priority"]
 

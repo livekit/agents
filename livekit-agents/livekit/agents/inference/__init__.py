@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any
 
+from ._utils import InferenceClass
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
@@ -57,6 +58,7 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
+    "InferenceClass",
     "VADModels",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
