@@ -91,6 +91,14 @@ def _needs_reply_placeholder(model: str) -> bool:
     return not any(tag in model for tag in MODELS_WITHOUT_REPLY_PLACEHOLDER)
 
 
+def _to_client_content_params(msg: types.LiveClientContent) -> dict[str, object]:
+    """Omit empty turns so the SDK sends a bare turn completion."""
+    return {
+        **({"turns": msg.turns} if msg.turns else {}),
+        "turn_complete": msg.turn_complete if msg.turn_complete is not None else True,
+    }
+
+
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     """
     Validate that the model name matches the API being used.
@@ -1107,10 +1115,7 @@ class RealtimeSession(llm.RealtimeSession):
                     ):
                         break
                 if isinstance(msg, types.LiveClientContent):
-                    await session.send_client_content(
-                        turns=msg.turns,  # type: ignore
-                        turn_complete=msg.turn_complete if msg.turn_complete is not None else True,
-                    )
+                    await session.send_client_content(**_to_client_content_params(msg))  # type: ignore
                 elif isinstance(msg, types.LiveClientToolResponse) and msg.function_responses:
                     await session.send_tool_response(function_responses=msg.function_responses)
                 elif isinstance(msg, types.LiveClientRealtimeInput):

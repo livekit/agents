@@ -12,7 +12,11 @@ from google.genai import types
 
 from livekit.agents import llm, utils
 from livekit.plugins.google.realtime.api_proto import ClientEvents
-from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
+from livekit.plugins.google.realtime.realtime_api import (
+    RealtimeModel,
+    RealtimeSession,
+    _to_client_content_params,
+)
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
@@ -54,6 +58,29 @@ async def _settle_genai_finalizers() -> AsyncIterator[None]:
 
 # 10ms of silence at the output sample rate (24kHz mono, 16-bit)
 _PCM_FRAME = b"\x00\x01" * 240
+
+
+def test_client_content_params_omit_empty_turns() -> None:
+    # generate_reply() sends no turns on models that take no placeholder user
+    # turn; the SDK throws on `turns=[]`, which killed the send task.
+    assert _to_client_content_params(types.LiveClientContent(turns=[], turn_complete=True)) == {
+        "turn_complete": True
+    }
+    assert _to_client_content_params(types.LiveClientContent(turn_complete=True)) == {
+        "turn_complete": True
+    }
+
+
+def test_client_content_params_pass_non_empty_turns() -> None:
+    turns = [types.Content(role="user", parts=[types.Part(text="hi")])]
+    assert _to_client_content_params(types.LiveClientContent(turns=turns)) == {
+        "turns": turns,
+        "turn_complete": True,
+    }
+    assert _to_client_content_params(types.LiveClientContent(turns=turns, turn_complete=False)) == {
+        "turns": turns,
+        "turn_complete": False,
+    }
 
 
 @asynccontextmanager
