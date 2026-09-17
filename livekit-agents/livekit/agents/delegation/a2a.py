@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..a2a import A2AClient, TaskInput
-from ._delegate import Delegate, DelegateStream
+from .delegate import Delegate, DelegateStream
 
 if TYPE_CHECKING:
     import httpx

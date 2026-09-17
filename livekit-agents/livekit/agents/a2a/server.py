@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 from ..log import logger
 from ..utils import aio, shortuuid
-from ._codec import from_a2a_request, to_a2a_events
-from ._extension import EXTENSION_URI, REASON, agent_card, pb, struct
-from ._runner import RequestRun, SessionRunner
-from ._types import TaskUpdate
+from .codec import from_a2a_request, to_a2a_events
+from .extension import EXTENSION_URI, REASON, agent_card, pb, struct
+from .runner import RequestRun, SessionRunner
+from .types import TaskUpdate
 
 try:
     from a2a.server.agent_execution import AgentExecutor, RequestContext

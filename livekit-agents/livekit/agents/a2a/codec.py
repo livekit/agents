@@ -14,7 +14,7 @@ from typing import Any
 from ..llm.chat_context import ChatContext, ChatItem
 from ..utils import shortuuid
 from ..voice.served_request import Directive
-from ._extension import (
+from .extension import (
     ANSWER_ARTIFACT_NAME,
     DIRECTIVE,
     KIND,
@@ -29,7 +29,7 @@ from ._extension import (
     text_of,
     value,
 )
-from ._types import TaskInput, TaskState, TaskUpdate
+from .types import TaskInput, TaskState, TaskUpdate
 
 _STATE_FROM_A2A: dict[Any, TaskState] = {
     pb.TaskState.TASK_STATE_SUBMITTED: "working",

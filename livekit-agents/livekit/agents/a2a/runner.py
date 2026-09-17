@@ -30,7 +30,7 @@ from ..voice.events import (
 from ..voice.served_request import ServedRequest
 from ..voice.speech_handle import SpeechHandle
 from ..voice.tool_executor import cancel_tool_call
-from ._types import TaskInput, TaskUpdate
+from .types import TaskInput, TaskUpdate
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession

@@ -15,8 +15,8 @@ from fastapi import FastAPI
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
-from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
-from livekit.agents.a2a._server import AGENT_CARD_PATH, A2ASessionContext, mount
+from livekit.agents.a2a.extension import EXTENSION_URI, KIND, as_dict
+from livekit.agents.a2a.server import AGENT_CARD_PATH, A2ASessionContext, mount
 from livekit.agents.llm import ToolFlag
 
 from .fake_llm import FakeLLM

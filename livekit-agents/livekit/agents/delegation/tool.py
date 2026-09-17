@@ -8,7 +8,7 @@ from ..llm.tool_context import FunctionTool, ToolError, function_tool
 # imported at runtime: the tool's signature is resolved with get_type_hints() when a call
 # arrives, so RunContext has to be a real name by then
 from ..voice.events import RunContext
-from ._delegate import DELEGATE_TOOL_NAME
+from .delegate import DELEGATE_TOOL_NAME
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
 

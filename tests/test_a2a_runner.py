@@ -9,7 +9,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
-from livekit.agents.a2a._runner import REQUEST_ID_KEY, RequestRun, SessionRunner
+from livekit.agents.a2a.runner import REQUEST_ID_KEY, RequestRun, SessionRunner
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionToolCall, ToolFlag
 from livekit.agents.voice.tool_executor import _RunningTasks
 

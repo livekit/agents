@@ -9,7 +9,7 @@ Needs the ``a2a`` extra: ``pip install 'livekit-agents[a2a]'``.
 
 from typing import TYPE_CHECKING, Any
 
-from ._delegate import (
+from .delegate import (
     DELEGATE_TOOL_NAME,
     Delegate,
     DelegateStream,
@@ -18,12 +18,12 @@ from ._delegate import (
 )
 
 if TYPE_CHECKING:
-    from ._a2a import A2ADelegate
-    from ._tool import build_delegate_tool
+    from .a2a import A2ADelegate
+    from .tool import build_delegate_tool
 
 # core reads the options from this package, so nothing that needs the a2a extra may load
 # with it; what does is resolved on first use instead
-_LAZY = {"A2ADelegate": "._a2a", "build_delegate_tool": "._tool"}
+_LAZY = {"A2ADelegate": ".a2a", "build_delegate_tool": ".tool"}
 
 
 def __getattr__(name: str) -> Any:

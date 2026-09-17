@@ -64,7 +64,7 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 if TYPE_CHECKING:
-    from .a2a._server import A2ASessionHandler, _SessionExecutor
+    from .a2a.server import A2ASessionHandler, _SessionExecutor
 
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -466,7 +466,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """
 
         def decorator(handler: A2ASessionHandler) -> A2ASessionHandler:
-            from .a2a._server import mount
+            from .a2a.server import mount
 
             self._a2a_sessions.append(
                 mount(

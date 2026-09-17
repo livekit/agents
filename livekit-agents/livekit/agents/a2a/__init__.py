@@ -10,14 +10,14 @@ Needs the ``a2a`` extra: ``pip install 'livekit-agents[a2a]'``.
 """
 
 from ..voice.served_request import Directive
-from ._client import A2AClient, TaskStream
-from ._codec import (
+from .client import A2AClient, TaskStream
+from .codec import (
     from_a2a_events,
     from_a2a_request,
     to_a2a_events,
     to_a2a_request,
 )
-from ._extension import (
+from .extension import (
     ANSWER_ARTIFACT_NAME,
     DIRECTIVE,
     EXTENSION_URI,
@@ -26,9 +26,9 @@ from ._extension import (
     VERBATIM,
     agent_card,
 )
-from ._runner import REQUEST_ID_KEY
-from ._server import A2ASessionContext, A2ASessionHandler
-from ._types import TaskInput, TaskState, TaskUpdate
+from .runner import REQUEST_ID_KEY
+from .server import A2ASessionContext, A2ASessionHandler
+from .types import TaskInput, TaskState, TaskUpdate
 
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
