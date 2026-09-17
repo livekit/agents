@@ -93,8 +93,12 @@ jobs:
         run: uv run pytest --evals
 
   tests:
-    # don't run tests for PRs on forks
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    # don't run tests for PRs on forks; these integration tests hit paid
+    # provider APIs (Cartesia, Deepgram, ElevenLabs, ...) and only make sense
+    # where the provider secrets are configured on the repo
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) &&
+      secrets.LIVEKIT_API_KEY != ''
     strategy:
       fail-fast: false
       matrix:
