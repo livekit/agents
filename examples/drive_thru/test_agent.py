@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from livekit.agents import AgentSession, ChatContext, inference, llm
 from livekit.agents.voice.run_result import mock_tools
 
 from .agent import DriveThruAgent, new_userdata
+
+pytestmark = pytest.mark.skipif(
+    not (os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")),
+    reason="requires LiveKit inference gateway credentials (LIVEKIT_API_KEY)",
+)
 
 
 def _main_llm() -> llm.LLM | llm.RealtimeModel:
