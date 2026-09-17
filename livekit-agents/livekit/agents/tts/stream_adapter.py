@@ -134,7 +134,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                     text, conn_options=self._wrapped_tts_conn_options
                 ) as tts_stream:
                     async for audio in tts_stream:
-                        output_emitter.push(audio.frame.data.tobytes())
+                        output_emitter.push_frame(audio.frame)
                         duration += audio.frame.duration
                     output_emitter.flush()
 

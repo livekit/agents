@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import json
 import logging
@@ -503,6 +504,46 @@ def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
     assert finals[0].alternatives[0].language == "es"
 
 
+@pytest.mark.parametrize(
+    "message_type",
+    ["partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"],
+)
+@pytest.mark.parametrize(
+    ("language", "language_data", "expected_language"),
+    [
+        ("es", {}, "es"),
+        ("es", {"language_code": None}, "es"),
+        ("es", {"language_code": ""}, "es"),
+        ("es", {"language_code": "fra"}, "fr"),
+        (None, {}, "en"),
+        (None, {"language_code": None}, "en"),
+        (None, {"language_code": ""}, "en"),
+        (None, {"language_code": "fra"}, "fr"),
+    ],
+)
+def test_transcript_language_falls_back_to_configured_language(
+    message_type: str,
+    language: str | None,
+    language_data: dict[str, str | None],
+    expected_language: str,
+) -> None:
+    stream = _new_stream(
+        language=language,
+        include_timestamps=message_type == "committed_transcript_with_timestamps",
+        include_language_detection=False,
+    )
+
+    stream._process_stream_event({"message_type": message_type, "text": "hola", **language_data})
+
+    transcript = stream._event_ch.events[-1]
+    assert transcript.type == (
+        stt.SpeechEventType.INTERIM_TRANSCRIPT
+        if message_type == "partial_transcript"
+        else stt.SpeechEventType.FINAL_TRANSCRIPT
+    )
+    assert transcript.alternatives[0].language == expected_language
+
+
 class _FakeWS:
     """Records outgoing messages. receive() parks so recv_task stays alive."""
 
@@ -523,10 +564,10 @@ class _FakeWS:
         self._closed.set()
 
 
-def _live_stream(ws: _FakeWS) -> elevenlabs_stt.SpeechStream:
+def _live_stream(ws: _FakeWS, **kwargs: Any) -> elevenlabs_stt.SpeechStream:
     """A real SpeechStream running its real _run loop against a fake socket."""
-    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
-    opts = dataclasses.replace(instance._opts, sample_rate=16000)
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
+    opts = dataclasses.replace(instance._opts)
     stream = elevenlabs_stt.SpeechStream(
         stt=instance,
         opts=opts,
@@ -713,5 +754,53 @@ async def test_provider_error_reaches_stream_consumer(message_type: str, retryab
         assert exc.value.retryable is retryable
         assert stream._num_retries == 0
         assert ws._closed.is_set()
+    finally:
+        await stream.aclose()
+
+
+def test_audio_chunk_duration_defaults_to_50ms() -> None:
+    assert _stt()._opts.audio_chunk_duration_ms == 50
+
+
+@pytest.mark.parametrize("duration", [0, -1, 0.5, 100.0, True, False, None, "100"])
+def test_invalid_audio_chunk_duration_is_rejected(duration: Any) -> None:
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms must be a positive integer"):
+        _stt(audio_chunk_duration_ms=duration)
+
+
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 48000])
+@pytest.mark.parametrize("duration", [1, 50, 75, 100, 200])
+@pytest.mark.parametrize("tail_ms", [0, 1])
+async def test_configured_audio_chunks_preserve_audio_and_commit(
+    sample_rate: int, duration: int, tail_ms: int
+) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(ws, sample_rate=sample_rate, audio_chunk_duration_ms=duration)
+    # Distinct PCM bytes reveal drops, duplication and reordering across input frames.
+    total_samples = sample_rate * (duration * 2 + tail_ms) // 1000
+    audio = bytes(i % 251 for i in range(total_samples * 2))
+    input_frame_bytes = sample_rate * 20 // 1000 * 2
+    chunk_bytes = sample_rate * duration // 1000 * 2
+    expected_chunks = [audio[i : i + chunk_bytes] for i in range(0, len(audio), chunk_bytes)]
+    try:
+        for offset in range(0, len(audio), input_frame_bytes):
+            data = audio[offset : offset + input_frame_bytes]
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=len(data) // 2,
+                )
+            )
+        # Complete chunks must be released before the caller flushes.
+        await _wait_until(lambda: len(ws.sent) >= len(audio) // chunk_bytes)
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) >= len(expected_chunks) + 1)
+
+        assert [base64.b64decode(msg["audio_base_64"]) for msg in ws.sent[:-1]] == expected_chunks
+        assert [msg["commit"] for msg in ws.sent] == [False] * len(expected_chunks) + [True]
+        assert all(msg["sample_rate"] == sample_rate for msg in ws.sent)
+        assert ws.sent[-1]["audio_base_64"] == ""
     finally:
         await stream.aclose()
