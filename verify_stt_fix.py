@@ -5,9 +5,8 @@ import asyncio
 import wave
 
 from livekit.agents import stt
-from livekit.rtc import AudioFrame
-
 from livekit.plugins._60db import STT
+from livekit.rtc import AudioFrame
 
 
 async def main() -> None:

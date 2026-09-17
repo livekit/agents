@@ -18,16 +18,8 @@ import sys
 import wave
 from pathlib import Path
 
-# Fix Windows console encoding for emoji/unicode in LLM output
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-
 import httpx
+import pytest
 import websockets
 from dotenv import load_dotenv
 
@@ -40,6 +32,16 @@ API_KEY = os.getenv("SIXTY_DB_API_KEY", "")
 TTS_URL = os.getenv("SIXTY_DB_TTS_URL", "wss://api.60db.ai/ws/tts")
 STT_URL = os.getenv("SIXTY_DB_STT_URL", "wss://api.60db.ai/ws/stt")
 LLM_URL = os.getenv("SIXTY_DB_LLM_URL", "https://api.60db.ai/v1/chat/completions")
+
+# live end-to-end test — categorized as unit but always skipped in CI (no API
+# key there); run manually with `python tests/test_services.py`
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(
+        not API_KEY,
+        reason="live end-to-end test; requires SIXTY_DB_API_KEY",
+    ),
+]
 
 REF_DIR = Path("Refrencefile")
 TTS_OUTPUT = REF_DIR / "tts_output.wav"
@@ -360,4 +362,13 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    # Fix Windows console encoding for emoji/unicode in LLM output (only when
+    # run as a script — doing this at import time breaks pytest's capture)
+    if sys.platform == "win32":
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+        )
+        sys.stderr = io.TextIOWrapper(
+            sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+        )
     asyncio.run(main())

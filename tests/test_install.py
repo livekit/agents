@@ -2,6 +2,10 @@
 import subprocess
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 def test_pip_metadata():
     """Package metadata is correct (name, version, editable location)."""

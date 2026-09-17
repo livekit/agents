@@ -8,15 +8,15 @@ import asyncio
 import wave
 
 from livekit.agents import stt
-from livekit.rtc import AudioFrame
-
 from livekit.plugins._60db import STT
+from livekit.rtc import AudioFrame
 
 CHUNK_MS = 30
 
 
-async def run_variant(name: str, wav_path: str, *, encoding: str, sample_rate: int,
-                      trailing_silence_s: float) -> str:
+async def run_variant(
+    name: str, wav_path: str, *, encoding: str, sample_rate: int, trailing_silence_s: float
+) -> str:
     model = STT(encoding=encoding, sample_rate=sample_rate)
     wf = wave.open(wav_path, "rb")
     rate, ch = wf.getframerate(), wf.getnchannels()
@@ -62,12 +62,21 @@ async def run_variant(name: str, wav_path: str, *, encoding: str, sample_rate: i
 
 async def main() -> None:
     variants = [
-        ("A: mulaw/8k, longer audio (5.9s)", "tests/change-sophie.wav",
-         dict(encoding="mulaw", sample_rate=8000, trailing_silence_s=0)),
-        ("B: mulaw/8k, short audio + 1s silence", "tts_output.wav",
-         dict(encoding="mulaw", sample_rate=8000, trailing_silence_s=1.0)),
-        ("C: LINEAR16/16k, longer audio", "tests/change-sophie.wav",
-         dict(encoding="LINEAR16", sample_rate=16000, trailing_silence_s=0)),
+        (
+            "A: mulaw/8k, longer audio (5.9s)",
+            "tests/change-sophie.wav",
+            {"encoding": "mulaw", "sample_rate": 8000, "trailing_silence_s": 0},
+        ),
+        (
+            "B: mulaw/8k, short audio + 1s silence",
+            "tts_output.wav",
+            {"encoding": "mulaw", "sample_rate": 8000, "trailing_silence_s": 1.0},
+        ),
+        (
+            "C: LINEAR16/16k, longer audio",
+            "tests/change-sophie.wav",
+            {"encoding": "LINEAR16", "sample_rate": 16000, "trailing_silence_s": 0},
+        ),
     ]
     results = {}
     for name, path, kwargs in variants:
