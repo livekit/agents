@@ -37,11 +37,11 @@ _STATE_FROM_A2A: dict[Any, TaskState] = {
     pb.TaskState.TASK_STATE_COMPLETED: "completed",
     pb.TaskState.TASK_STATE_CANCELED: "canceled",
     pb.TaskState.TASK_STATE_FAILED: "failed",
-    # a server that declines could not answer, and the caller has the same thing to do about
-    # either; likewise an auth challenge is a question only the caller's side can resolve
+    # a server that declines, or one that wants the caller to authenticate first, could not
+    # answer this caller: nothing resumes a task
     pb.TaskState.TASK_STATE_REJECTED: "failed",
+    pb.TaskState.TASK_STATE_AUTH_REQUIRED: "failed",
     pb.TaskState.TASK_STATE_INPUT_REQUIRED: "input-required",
-    pb.TaskState.TASK_STATE_AUTH_REQUIRED: "input-required",
 }
 
 _STATE_TO_A2A: dict[TaskState, Any] = {
