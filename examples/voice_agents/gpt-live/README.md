@@ -44,6 +44,10 @@ An `llm.ImageContent` in the chat context — a data URL, an external URL, or a 
 chat_ctx.add_message(role="user", content=["what is on my screen?", ImageContent(image=shot)])
 ```
 
+An image keeps the role that carried it, so a standing reference image on a `system` or `developer` message reaches the backend as one. Only `assistant` is left out: an assistant turn is output, and the API has no way to take one as input. A message carrying nothing but an image is fine — it adds no words to the conversation and its image still goes.
+
+The item itself is built by the same converter the Responses plugin uses (`to_provider_format(format="openai.responses")`), so the detail level, an external url the backend can fetch itself, and the ordering of an image against its caption are decided in one place rather than twice.
+
 `push_video(frame)` sends a single frame and records nothing, exactly as on `RealtimeModel`. `RoomInputOptions(video_enabled=True)` feeds the room's video track through it at the session's `video_sampler` rate, about 1 fps while the caller speaks — every one of those frames is input the backend keeps, so a track left on for a whole call costs far more than one image sent when it is wanted.
 
 Either way nothing runs on its own: the image waits in the backend's input until the voice model next delegates, or until a tool result continues the backend. So send the screenshot, then let the caller ask about it.

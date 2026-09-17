@@ -1527,8 +1527,8 @@ async def test_an_image_in_the_chat_context_goes_where_it_can_be_seen(
         new = ws.sent[sent_before:]
         assert [e["type"] for e in new] == ["response.item.create", "session.thinking.append"]
         assert new[0]["item"]["content"] == [
-            {"type": "input_text", "text": "what is on my screen?"},
             {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+            {"type": "input_text", "text": "what is on my screen?"},
         ]
         assert new[1]["content"] == "user: what is on my screen?"
     finally:
@@ -1638,7 +1638,6 @@ async def test_an_image_in_the_startup_history_still_reaches_the_backend(
         await asyncio.sleep(0.05)
 
         assert [e["type"] for e in ws.sent] == ["session.start", "response.item.create"]
-        # the words ride in the startup history, so the image does not repeat them
         assert ws.sent[0]["session"]["input"] == [
             {
                 "type": "message",
@@ -1646,9 +1645,16 @@ async def test_an_image_in_the_startup_history_still_reaches_the_backend(
                 "content": [{"type": "input_text", "text": "What is shown?"}],
             }
         ]
-        assert ws.sent[1]["item"]["content"] == [
-            {"type": "input_image", "image_url": _PNG, "detail": "auto"}
-        ]
+        # startup history is the voice model's; the backend reads its own queue, so the words
+        # ride with the image there too rather than being left behind
+        assert ws.sent[1]["item"] == {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+                {"type": "input_text", "text": "What is shown?"},
+            ],
+        }
     finally:
         await session.aclose()
         await model.aclose()
@@ -1684,7 +1690,10 @@ async def test_a_startup_image_is_composed_again_for_the_next_connection(
         await asyncio.sleep(0.05)
 
         assert [e["type"] for e in sockets[1].sent] == ["session.start", "response.item.create"]
-        assert sockets[1].sent[1]["item"]["content"][0]["type"] == "input_image"
+        assert [c["type"] for c in sockets[1].sent[1]["item"]["content"]] == [
+            "input_image",
+            "input_text",
+        ]
     finally:
         for ws in sockets:
             ws.emit(
@@ -1737,5 +1746,101 @@ async def test_a_delegation_scoped_append_does_not_cross_connections(
             ws.emit(
                 {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
             )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_wordless_startup_image_is_not_lost_with_its_empty_history_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A message carrying only an image renders to no startup history at all, so the image has to
+    be collected before that item is skipped rather than after it is kept."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=[llm.ImageContent(image=_PNG)], id="m_bare")
+    ctx.add_message(role="user", content=["and this one?", llm.ImageContent(image=_PNG)], id="m2")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == [
+            "session.start",
+            "response.item.create",
+            "response.item.create",
+        ]
+        # only the captioned message has words for the history
+        assert ws.sent[0]["session"]["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "and this one?"}],
+            }
+        ]
+        # both images go, oldest first, and only the captioned one carries words
+        assert ws.sent[1]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"}
+        ]
+        assert ws.sent[2]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+            {"type": "input_text", "text": "and this one?"},
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_image_keeps_the_role_that_carried_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Responses input item takes user, system and developer, so a standing reference image on
+    a system message reaches the backend as one. An assistant turn is output and has no way in."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="assistant", content=["here", llm.ImageContent(image=_PNG)], id="a1")
+    ctx.add_message(
+        role="system", content=["the floor plan", llm.ImageContent(image=_PNG)], id="s1"
+    )
+    ctx.add_message(role="user", content=["mine", llm.ImageContent(image=_PNG)], id="u1")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.sleep(0.05)
+
+        # the system and user images, oldest first; the assistant's has nowhere to go
+        assert [e["type"] for e in ws.sent] == [
+            "session.start",
+            "response.item.create",
+            "response.item.create",
+        ]
+        assert [e["item"]["role"] for e in ws.sent[1:]] == ["system", "user"]
+
+        sent_before = len(ws.sent)
+        await session._append_items(
+            [
+                llm.ChatMessage(
+                    role="developer", content=["and this", llm.ImageContent(image=_PNG)], id="d1"
+                ),
+                llm.ChatMessage(
+                    role="assistant", content=["also", llm.ImageContent(image=_PNG)], id="a2"
+                ),
+            ]
+        )
+        await asyncio.sleep(0.05)
+
+        # the append path agrees with startup: developer goes as itself, assistant is narrated
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == [
+            "response.item.create",
+            "session.instructions.append",
+            "session.thinking.append",
+        ]
+        assert new[0]["item"]["role"] == "developer"
+        assert new[2]["content"] == "assistant: also"
+    finally:
         await session.aclose()
         await model.aclose()

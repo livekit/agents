@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
@@ -24,8 +24,8 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.responses import ResponseInputImage, ResponseInputText, ResponseTextConfigParam
-from openai.types.responses.response_input_item import FunctionCallOutput, Message
+from openai.types.responses import ResponseTextConfigParam
+from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
 
 from ..log import logger
@@ -339,9 +339,14 @@ class GPTLiveSession(
         """The whole configuration, composed fresh for each connection."""
         # the conversation so far is startup history, newest first until the cap is reached
         items: list[types.InputItem] = []
-        images: list[list[ResponseInputText | ResponseInputImage]] = []
+        images: list[dict[str, Any]] = []
         dropped = 0
         for item in reversed(self._history.items):
+            # session.start has no image part, so a message's images are queued behind it.
+            # this comes first because a message carrying only an image renders to no history
+            # item at all, and would otherwise be skipped with it
+            if (queued := _to_backend_input(item)) is not None:
+                images.append(queued)
             if (rendered := _render_item(item)) is None:
                 continue
             role, text = rendered
@@ -354,18 +359,14 @@ class GPTLiveSession(
                 else types.InputTextPart(text=text)
             )
             items.append(types.InputItem(role=role, content=[part]))
-            # session.start carries this message's words but has no image part, so its images
-            # are queued behind it; the words are already there and are not repeated
-            if isinstance(item, llm.ChatMessage) and (parts := _to_input_images(item)):
-                images.append(parts)
         if dropped:
             logger.warning(
                 "gpt-live startup history exceeds what a session accepts; dropping the oldest",
                 extra={"dropped": dropped, "kept": len(items)},
             )
         items.reverse()
-        for parts in reversed(images):
-            self._send_backend_input(parts, label="image_")
+        for image in reversed(images):
+            self._send_backend_input(image, label="image_")
 
         return types.SessionStartEvent(
             event_id=utils.shortuuid("session_start_"),
@@ -986,13 +987,13 @@ class GPTLiveSession(
                     "the agent's video input off."
                 )
             return
-        self._send_backend_input([_to_input_image(llm.ImageContent(image=frame))], label="image_")
+        message = llm.ChatMessage(role="user", content=[llm.ImageContent(image=frame)])
+        if (item := _to_backend_input(message)) is not None:
+            self._send_backend_input(item, label="image_")
 
-    def _send_backend_input(
-        self, content: list[ResponseInputText | ResponseInputImage], *, label: str
-    ) -> bool:
-        """Queue one user input item for the backend; a response.create is what runs it."""
-        if not content:
+    def _send_backend_input(self, item: dict[str, Any], *, label: str) -> bool:
+        """Queue one input item for the backend; a response.create is what runs it."""
+        if not item:
             return False
         if self._opts.delegation != "responses":
             logger.warning(
@@ -1000,12 +1001,7 @@ class GPTLiveSession(
                 'dropped. Pass delegation="responses" to send images.'
             )
             return False
-        self.send_event(
-            types.ResponseItemCreateEvent(
-                event_id=utils.shortuuid(label),
-                item=Message(type="message", role="user", content=content),
-            )
-        )
+        self.send_event(types.ResponseItemCreateEvent(event_id=utils.shortuuid(label), item=item))
         return True
 
     def append_instructions(self, text: str, *, delegation_id: str | None = None) -> None:
@@ -1091,6 +1087,10 @@ class GPTLiveSession(
         backend_outputs: list[llm.FunctionCallOutput] = []
         lines: list[str] = []
         for item in items:
+            # an image has nowhere else to go, since the voice model has no image channel; its
+            # words are placed below as usual, and ride with it as its caption
+            if (queued := _to_backend_input(item)) is not None:
+                self._send_backend_input(queued, label="image_")
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 if text := item.text_content:
                     self.append_instructions(text)
@@ -1099,9 +1099,6 @@ class GPTLiveSession(
                 or any(item.call_id in c for c in self._backend_running_responses.values())
             ):
                 backend_outputs.append(item)
-            elif isinstance(item, llm.ChatMessage) and item.role == "user":
-                if (line := self._route_user_message(item)) is not None:
-                    lines.append(line)
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
@@ -1134,19 +1131,6 @@ class GPTLiveSession(
         # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
         # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
-
-    def _route_user_message(self, item: llm.ChatMessage) -> str | None:
-        """Send an image to the backend; returns the line the voice model still needs."""
-        text = item.text_content
-        line = f"user: {text}" if text else None
-        if not (parts := _to_input_images(item)):
-            return line
-        # an image has nowhere else to go, since the voice model has no image channel, and text
-        # that arrives with one rides along so the caption reaches the model that can see it
-        if text:
-            parts.insert(0, ResponseInputText(type="input_text", text=text))
-        self._send_backend_input(parts, label="image_")
-        return line
 
     def _generate_reply(
         self,
@@ -1182,28 +1166,24 @@ class GPTLiveSession(
             )
 
 
-def _to_input_images(item: llm.ChatMessage) -> list[ResponseInputText | ResponseInputImage]:
-    """A message's images as Responses input parts; empty when it carries none."""
-    return [
-        _to_input_image(content)
-        for content in item.content
-        if isinstance(content, llm.ImageContent)
-    ]
+def _to_backend_input(item: llm.ChatItem) -> dict[str, Any] | None:
+    """A chat item as the Responses input item the backend reads, when it carries an image.
 
+    The shape is the Responses plugin's own, so a url the backend can fetch, the detail level and
+    the ordering of an image against its caption are all decided in one place.
 
-def _to_input_image(image: llm.ImageContent) -> ResponseInputImage:
-    """An image as the Responses input part the backend reads; a url is passed through as it is."""
-    img = llm.utils.serialize_image(image)
-    if img.external_url:
-        url = img.external_url
-    else:
-        assert img.data_bytes is not None
-        url = f"data:{img.mime_type};base64,{base64.b64encode(img.data_bytes).decode()}"
-    return ResponseInputImage(
-        type="input_image",
-        image_url=url,
-        detail=cast(Literal["low", "high", "auto"], img.inference_detail),
+    None unless the item is a message carrying an image under a role the API takes as input; an
+    assistant turn is output, so its images have nowhere to go.
+    """
+    if not isinstance(item, llm.ChatMessage) or item.role == "assistant":
+        return None
+    if not any(isinstance(content, llm.ImageContent) for content in item.content):
+        return None
+    items, _ = llm.ChatContext([item]).to_provider_format(
+        format="openai.responses", inject_dummy_user_message=False
     )
+    # the converter leaves a message's type implicit; the event's union discriminates on it
+    return {"type": "message", **items[0]} if items else None
 
 
 def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:
