@@ -47,13 +47,13 @@ VERSION_PREFIX = "/v1"
 """Where the binding's methods live under the endpoint, and what the card's URL points at."""
 
 
-class TextSessionContext:
-    """What a text session handler is given: one conversation, and where to put its session.
+class A2ASessionContext:
+    """What an A2A session handler is given: one conversation, and where to put its session.
 
     The handler runs once per conversation — build the session, start it, hand it over::
 
         @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
-        async def fare_desk(ctx: TextSessionContext) -> None:
+        async def fare_desk(ctx: A2ASessionContext) -> None:
             session = AgentSession(llm="openai/gpt-4.1")
             await session.start(agent=FareDesk())
             ctx.attach(session)
@@ -75,7 +75,7 @@ class TextSessionContext:
         self._runner = SessionRunner(session)
 
 
-TextSessionHandler = Callable[[TextSessionContext], Coroutine[Any, Any, None]]
+A2ASessionHandler = Callable[[A2ASessionContext], Coroutine[Any, Any, None]]
 
 
 class _Conversation:
@@ -87,8 +87,8 @@ class _Conversation:
     # TODO(v1): with a session store, an idle conversation persists what it holds and the
     # next request on that context rehydrates it, which is what moves it into a job process
 
-    def __init__(self, context_id: str, handler: TextSessionHandler) -> None:
-        self._ctx = TextSessionContext(context_id)
+    def __init__(self, context_id: str, handler: A2ASessionHandler) -> None:
+        self._ctx = A2ASessionContext(context_id)
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
         self.runs: dict[str, RequestRun] = {}
@@ -104,7 +104,7 @@ class _Conversation:
         await self._ready
         if self._ctx._runner is None:
             raise RuntimeError(
-                "the text session handler returned without calling ctx.attach(session)"
+                "the A2A session handler returned without calling ctx.attach(session)"
             )
         return self._ctx._runner
 
@@ -126,7 +126,7 @@ class _SessionExecutor(AgentExecutor):
     One conversation is one handler run, found or created by ``context_id``.
     """
 
-    def __init__(self, handler: TextSessionHandler, *, idle_timeout: float | None) -> None:
+    def __init__(self, handler: A2ASessionHandler, *, idle_timeout: float | None) -> None:
         self._handler = handler
         self._conversations: dict[str, _Conversation] = {}
         self._by_task: dict[str, RequestRun] = {}
@@ -194,7 +194,7 @@ class _SessionExecutor(AgentExecutor):
         try:
             runner = await conversation.runner()
         except Exception as exc:
-            logger.exception("text session handler failed", extra={"context_id": context_id})
+            logger.exception("the A2A session handler failed", extra={"context_id": context_id})
             failed = TaskUpdate(state="failed", text=str(exc) or type(exc).__name__)
             await self._emit(event_queue, failed, task_id, context_id)
             return
@@ -216,8 +216,8 @@ class _SessionExecutor(AgentExecutor):
         run = self._by_task.get(task_id)
         if run is None:
             return
-        # the binding builds this context without the cancel request's params, so the reason
-        # the caller sent arrives empty until it carries them
+        # a2a-sdk's ActiveTask.cancel builds this context without the cancel request, so the
+        # reason the caller sent arrives empty until the SDK hands the params over
         reason = context.metadata.get(REASON, "")
         logger.debug("cancelling a task", extra={"task_id": task_id, "reason": reason})
         # the binding stops whatever was streaming this task before it asks us, so the end
@@ -250,7 +250,7 @@ def mount(
     app: FastAPI,
     *,
     endpoint: str,
-    handler: TextSessionHandler,
+    handler: A2ASessionHandler,
     description: str,
     name: str | None = None,
     idle_timeout: float | None = None,
@@ -295,7 +295,7 @@ def mount(
 
 __all__ = [
     "AGENT_CARD_PATH",
-    "TextSessionContext",
-    "TextSessionHandler",
+    "A2ASessionContext",
+    "A2ASessionHandler",
     "mount",
 ]

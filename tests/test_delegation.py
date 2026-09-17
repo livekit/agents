@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 
 from livekit.agents import Agent, AgentSession, DirectiveReceivedEvent
-from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
-from livekit.agents.llm import FunctionToolCall
+from livekit.agents.a2a import TaskInput, TaskUpdate
+from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate, Delegate
+from livekit.agents.llm import FunctionCall, FunctionToolCall
 
 from .fake_llm import FakeLLM
 from .test_a2a_runner import _AnsweringLLM, _says
@@ -37,6 +38,41 @@ def _voice_llm(*, instruction: str = "what is the fare") -> FakeLLM:
         ],
         fallbacks=["Sure, let me check.", "It is 240 USD."],
     )
+
+
+class _Scripted(Delegate):
+    """A delegate that answers with the updates it was handed."""
+
+    def __init__(self, *updates: TaskUpdate) -> None:
+        self._updates = list(updates)
+
+    def submit(self, task_input: TaskInput) -> Any:
+        return _ScriptedStream(list(self._updates))
+
+
+class _ScriptedStream:
+    def __init__(self, updates: list[TaskUpdate]) -> None:
+        self._updates = updates
+
+    async def __aenter__(self) -> Any:
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        return None
+
+    def __aiter__(self) -> Any:
+        return self
+
+    async def __anext__(self) -> TaskUpdate:
+        if not self._updates:
+            raise StopAsyncIteration
+        return self._updates.pop(0)
+
+    async def cancel(self, reason: str = "") -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
 
 
 def _outputs(session: AgentSession) -> list[str]:
@@ -140,9 +176,6 @@ async def test_the_conversation_is_sent_without_its_calls() -> None:
 
 
 async def test_a_failing_expert_raises_a_tool_error() -> None:
-    from livekit.agents.a2a import TaskInput
-    from livekit.agents.delegation import Delegate
-
     class _Failing(Delegate):
         def submit(self, task_input: TaskInput) -> Any:
             return _FailingStream()
@@ -158,8 +191,6 @@ async def test_a_failing_expert_raises_a_tool_error() -> None:
             return self
 
         async def __anext__(self) -> Any:
-            from livekit.agents.a2a import TaskUpdate
-
             return TaskUpdate(state="failed", text="the fare service is unreachable")
 
         async def cancel(self, reason: str = "") -> None:
@@ -201,8 +232,6 @@ async def test_the_session_closes_the_delegate_it_owns() -> None:
 
 async def test_an_agent_overrides_the_sessions_settings_key_by_key() -> None:
     """What the agent sets wins; what it leaves alone stays as the session had it."""
-    from livekit.agents.a2a import TaskInput
-    from livekit.agents.delegation import Delegate
 
     class _Marker(Delegate):
         def submit(self, task_input: TaskInput) -> Any:
@@ -225,9 +254,6 @@ async def test_an_agent_overrides_the_sessions_settings_key_by_key() -> None:
 
 
 async def test_an_agents_delegate_overrides_the_sessions() -> None:
-    from livekit.agents.a2a import TaskInput
-    from livekit.agents.delegation import Delegate
-
     class _Marker(Delegate):
         def submit(self, task_input: TaskInput) -> Any:
             raise AssertionError("not reached")
@@ -247,8 +273,6 @@ async def test_an_agents_delegate_overrides_the_sessions() -> None:
 async def test_a_delegation_that_ends_without_a_state_is_a_failure() -> None:
     """Rule 1: a stream that ends without a terminal status failed, and the conversation
     has to hear that rather than a stray StopAsyncIteration."""
-    from livekit.agents.a2a import TaskInput
-    from livekit.agents.delegation import Delegate
 
     class _Silent(Delegate):
         def submit(self, task_input: TaskInput) -> Any:
@@ -279,5 +303,49 @@ async def test_a_delegation_that_ends_without_a_state_is_a_failure() -> None:
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
         assert any("without an answer" in output for output in _outputs(session))
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
+async def test_a_verbatim_answer_is_said_as_written_and_draws_no_reply() -> None:
+    """Rule 6: said once, as written. The model is given it to know, not to phrase."""
+    answer = "Your confirmation code is AB12."
+    delegate = _Scripted(TaskUpdate(state="completed", text=answer, verbatim=True))
+    # announce off, so the dispatch note is silent and nothing but the answer is spoken
+    session = AgentSession(llm=_voice_llm(), delegate={"delegate": delegate, "announce": False})
+    await session.start(agent=Agent(instructions="voice"))
+    try:
+        session.generate_reply(user_input="how much is it")
+        await asyncio.sleep(5)
+
+        said = [
+            item.text_content
+            for item in session.history.items
+            if item.type == "message" and item.role == "assistant"
+        ]
+        assert said == ["one sec", answer]
+        # recorded for the model, and with no result entry the executor files no reply
+        assert any(answer in output for output in _outputs(session))
+        assert _answer(session) is None
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
+async def test_an_update_carrying_only_an_item_is_not_relayed() -> None:
+    """A silent report reaches the caller to be rendered, not to be said."""
+    report = FunctionCall(call_id="cf1_update_0", name="check_fares", arguments="", update_of="cf1")
+    delegate = _Scripted(
+        TaskUpdate(item=report),
+        TaskUpdate(state="completed", text="It is 240 USD."),
+    )
+    session = AgentSession(llm=_voice_llm(), delegate={"delegate": delegate, "announce": False})
+    await session.start(agent=Agent(instructions="voice"))
+    try:
+        session.generate_reply(user_input="how much is it")
+        await asyncio.sleep(5)
+
+        assert _answer(session) == "It is 240 USD."
+        # the dispatch note and the answer, and nothing the item-only update put there
+        assert len(_outputs(session)) == 2
     finally:
         await asyncio.wait_for(session.aclose(), timeout=10.0)

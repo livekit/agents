@@ -26,7 +26,7 @@ from ._extension import (
     VERBATIM,
     agent_card,
 )
-from ._server import TextSessionContext, TextSessionHandler
+from ._server import A2ASessionContext, A2ASessionHandler
 from ._types import TaskInput, TaskState, TaskUpdate
 
 __all__ = [
@@ -37,11 +37,11 @@ __all__ = [
     "REASON",
     "VERBATIM",
     "A2AClient",
+    "A2ASessionContext",
+    "A2ASessionHandler",
     "Directive",
     "TaskInput",
     "TaskState",
-    "TextSessionContext",
-    "TextSessionHandler",
     "TaskStream",
     "TaskUpdate",
     "agent_card",

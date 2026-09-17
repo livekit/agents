@@ -59,7 +59,7 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 if TYPE_CHECKING:
-    from .a2a._server import TextSessionHandler, _SessionExecutor
+    from .a2a._server import A2ASessionHandler, _SessionExecutor
 
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -427,14 +427,14 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         description: str,
         name: str | None = None,
         idle_timeout: float | None = None,
-    ) -> Callable[[TextSessionHandler], TextSessionHandler]:
+    ) -> Callable[[A2ASessionHandler], A2ASessionHandler]:
         """Serve an ``AgentSession`` at ``/<endpoint>`` on :attr:`http`, speaking A2A.
 
         The handler runs once per conversation. It builds the session, starts it, and hands
         it over; the framework feeds each incoming request through it as a turn::
 
             @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
-            async def fare_desk(ctx: TextSessionContext) -> None:
+            async def fare_desk(ctx: A2ASessionContext) -> None:
                 session = AgentSession(llm="openai/gpt-4.1")
                 await session.start(agent=FareDesk())
                 ctx.attach(session)
@@ -444,7 +444,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         ``/<endpoint>/v1``.
         """
 
-        def decorator(handler: TextSessionHandler) -> TextSessionHandler:
+        def decorator(handler: A2ASessionHandler) -> A2ASessionHandler:
             from .a2a._server import mount
 
             self._a2a_sessions.append(

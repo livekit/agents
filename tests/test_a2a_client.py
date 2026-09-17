@@ -286,6 +286,23 @@ async def test_the_extension_is_activated_only_where_it_is_offered() -> None:
     assert agent.headers[0]["a2a-extensions"] == EXTENSION_URI
 
 
+async def test_a_supplied_http_client_keeps_its_own_headers() -> None:
+    """The header goes per request: a caller's client reaches other endpoints too."""
+    agent = ForeignAgent(ANSWERED, offers_extension=True)
+    transport = StreamingASGITransport(agent)
+    http = httpx.AsyncClient(transport=transport, timeout=None)
+    client = a2a.A2AClient(BASE_URL, httpx_client=http)
+    try:
+        await _collect(client, a2a.TaskInput(instruction="find it"))
+    finally:
+        await asyncio.wait_for(client.aclose(), timeout=10.0)
+        await asyncio.wait_for(http.aclose(), timeout=10.0)
+        await asyncio.wait_for(transport.aclose(), timeout=10.0)
+
+    assert agent.headers[0]["a2a-extensions"] == EXTENSION_URI
+    assert "a2a-extensions" not in http.headers
+
+
 async def test_the_request_carries_the_context_and_the_delegation_tag() -> None:
     agent = ForeignAgent(ANSWERED, offers_extension=True)
     async with _client(agent) as client:
