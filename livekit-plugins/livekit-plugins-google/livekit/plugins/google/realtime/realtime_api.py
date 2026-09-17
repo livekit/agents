@@ -1619,6 +1619,9 @@ class RealtimeSession(llm.RealtimeSession):
             cancelled=False,
             input_tokens=usage_metadata.prompt_token_count or 0,
             output_tokens=usage_metadata.response_token_count or 0,
+            # Gemini includes thinking tokens in response_token_count. Keep None when
+            # omitted so a reported zero remains distinguishable from a missing count.
+            reasoning_tokens=usage_metadata.thoughts_token_count,
             total_tokens=usage_metadata.total_token_count or 0,
             tokens_per_second=(usage_metadata.response_token_count or 0) / duration
             if duration > 0
