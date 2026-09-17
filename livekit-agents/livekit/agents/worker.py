@@ -385,7 +385,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
         self._agent_name = ""
-        self._agent_name_source: Literal["override", "code", "env", "toml", "none"] = "none"
+        self._agent_name_source: Literal["override", "code", "env", "livekit.toml", "none"] = "none"
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
