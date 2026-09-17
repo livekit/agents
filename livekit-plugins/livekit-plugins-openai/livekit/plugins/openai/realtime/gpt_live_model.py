@@ -414,6 +414,10 @@ class GPTLiveSession(
                     finally:
                         # what arrives now is history for the next connection, not an append
                         self._session_start_sent = False
+                        # this connection is over, so anything queued from here on was written
+                        # for its replacement. only reached once a connection was established,
+                        # which leaves the first epoch intact when the opening attempts fail
+                        self._connection_epoch += 1
                 except APIError as e:
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
@@ -446,7 +450,6 @@ class GPTLiveSession(
     def _reset_for_reconnect(self) -> None:
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
-        self._connection_epoch += 1
         self._bstream.clear()
         self._input_resampler = None
         self._session_started_fut = asyncio.Future()

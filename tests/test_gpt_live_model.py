@@ -1844,3 +1844,48 @@ async def test_an_image_keeps_the_role_that_carried_it(monkeypatch: pytest.Monke
     finally:
         await session.aclose()
         await model.aclose()
+
+
+async def test_a_frame_pushed_while_reconnecting_reaches_the_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Between a connection ending and its replacement opening there is no session, so what is
+    queued in the gap was written for whatever comes next and must not be dropped with the dead
+    one — it is the newest view the backend has."""
+    sockets: list[_LifecycleWS] = []
+    gate = asyncio.Event()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        if sockets:  # hold the replacement open so the push lands with nothing connected
+            await gate.wait()
+        sockets.append(ws := _LifecycleWS())
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        await sockets[0].close()
+        await asyncio.sleep(0.05)  # the first is gone and the second is held at the gate
+        assert len(sockets) == 1
+
+        session.push_video(rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4)))
+        gate.set()
+        await asyncio.sleep(0.05)  # let the replacement be created
+
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "response.item.create"]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
