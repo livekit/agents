@@ -18,7 +18,7 @@ pip install livekit-plugins-convozen
 
 ## Pre-requisites
 
-You'll need an API key from ConvoZen. It can be set as an environment variable:
+You'll need an API key from [ConvoZen](https://app.convozen.ai/developers/models). It can be set as an environment variable:
 `CONVOZEN_API_KEY`
 
 To reach a self-hosted deployment, pass `base_url=` or set `CONVOZEN_BASE_URL` —
@@ -82,11 +82,11 @@ not.
 ```python
 convozen.TTS(
     voice="roohi",  # any voice id the account has access to
-    model="ragini-v1",  # or the lighter "ragini-lite"
+    model="ragini-v1",  # or the lighter "ragini-lite" or "ragini-v2"
     language="hi",
     speed=1.0,
     # sample_rate defaults to the model's native rate:
-    # 24000 for ragini-v1, 22050 for ragini-lite
+    # 24000 for ragini-v1, 22050 for ragini-lite , 24000 for ragini-v2
 )
 ```
 
@@ -97,5 +97,5 @@ server-side work without a plugin upgrade.
 Audio is streamed back as it is generated, which is what keeps time-to-first-audio
 down. Pass `stream_response=False` to receive one complete WAV instead.
 
-Sample rates of 8000, 16000, 22050 and 24000 Hz are all supported; the default is
+Sample rates of 22050 and 24000 Hz are supported; the default is
 the model's native rate.
