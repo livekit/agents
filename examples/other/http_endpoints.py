@@ -14,14 +14,6 @@ The other routes cover streaming in both directions, server-sent events and a we
     curl -o /dev/null localhost:8321/download/12582912
     curl -N localhost:8321/sse/5
     websocat ws://localhost:8321/ws
-
-Experimental: `server.http_tunnel` also serves them through LiveKit, so they can be
-reached without the worker accepting inbound connections. It reads LIVEKIT_URL and the
-API key and secret from the environment, the same as the server itself. The first path
-segment names the endpoint, and the cloud forwards the rest untouched, so every command
-above works against the cloud by swapping the host and adding a token:
-
-    curl -H "Authorization: Bearer $TOKEN" $LIVEKIT_HTTP_URL/agent-http/sse/5
 """
 
 import asyncio
@@ -37,14 +29,12 @@ from pydantic import BaseModel
 
 from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
 from livekit.agents.http import agent_health
-from livekit.agents.tunnel import WebSocketTunnel
 
 logger = logging.getLogger("http-endpoints")
 
 load_dotenv()
 
 server = AgentServer(port=8321)
-server.http_tunnel = WebSocketTunnel()
 
 server.http.add_middleware(
     CORSMiddleware,
@@ -112,7 +102,7 @@ async def sse(count: int) -> StreamingResponse:
 
 @server.http.websocket("/ws")
 async def ws(sock: WebSocket) -> None:
-    """A socket, which the tunnel carries as the bytes of an upgrade like any other."""
+    """A socket, served by the same app as everything else here."""
     await sock.accept()
     with contextlib.suppress(Exception):
         while True:

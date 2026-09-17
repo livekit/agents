@@ -40,7 +40,7 @@ from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
-from .http import _HttpRunner, _proxied_endpoints, _register_builtin_routes
+from .http import _HttpRunner, _register_builtin_routes
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -60,7 +60,6 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from .a2a._server import TextSessionHandler, _SessionExecutor
-    from .tunnel import Tunnel
 
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -401,7 +400,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._worker_load: float = 0.0
 
         self._http_server: _HttpRunner | None = None
-        self._http_tunnel: Tunnel | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = FastAPI()
         self._http.state.agent_server = self
@@ -462,22 +460,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return handler
 
         return decorator
-
-    @property
-    def http_tunnel(self) -> Tunnel | None:
-        """Experimental: serve ``http`` through LiveKit Cloud as well as locally.
-
-        Set it before ``run()``, which starts and stops it with the HTTP server::
-
-            server.http_tunnel = WebSocketTunnel()
-        """
-        return self._http_tunnel
-
-    @http_tunnel.setter
-    def http_tunnel(self, value: Tunnel | None) -> None:
-        if not self._closed:
-            raise RuntimeError("http_tunnel must be set before the server runs")
-        self._http_tunnel = value
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:
@@ -851,14 +833,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     f"HTTP server listening on {self._http_server.host}:{self._http_server.port}"
                 )
 
-                if self._http_tunnel is not None:
-                    # after the port is resolved, since every stream is piped to it
-                    endpoints = _proxied_endpoints(self._http)
-                    await self._http_tunnel.start(
-                        target_port=self._http_server.port, endpoints=endpoints
-                    )
-                    logger.info(f"HTTP tunnel serving {endpoints} through the cloud")
-
             if self._prometheus_server:
                 await self._prometheus_server.start()
                 logger.info(
@@ -1137,9 +1111,6 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._http_session is not None:
                 await self._http_session.close()
-
-            if self._http_tunnel is not None:
-                await self._http_tunnel.aclose()
 
             if self._http_server is not None:
                 await self._http_server.aclose()
