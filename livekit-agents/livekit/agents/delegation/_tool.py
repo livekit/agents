@@ -49,7 +49,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
     async def delegate(ctx: RunContext, task: str) -> str:
         session = ctx.session
         activity = session.current_agent._get_activity_or_raise()
-        handler = activity.delegate
+        handler = activity._delegation["delegate"]
         if handler is None:
             raise RuntimeError("the delegate tool ran with no delegate configured")
 
@@ -68,7 +68,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                 exclude_config_update=True,
                 exclude_instructions=True,
             ),
-            metadata=dict(session._opts.delegation_options["metadata"]),
+            metadata=dict(activity._delegation["metadata"]),
         )
 
         # the terminal update leaves the delegation running, holding a session there or an
@@ -93,11 +93,11 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                 if update.state == "failed":
                     raise ToolError(update.text or "the delegation failed")
                 if update.directive is not None:
-                    from ..voice.events import DelegationDirectiveEvent
+                    from ..voice.events import DirectiveReceivedEvent
 
                     session.emit(
-                        "delegation_directive",
-                        DelegationDirectiveEvent(
+                        "directive_received",
+                        DirectiveReceivedEvent(
                             kind=update.directive.kind,
                             reason=update.directive.reason,
                             call_id=ctx.function_call.call_id,

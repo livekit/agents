@@ -319,14 +319,10 @@ class SpeechHandle:
     def request(self, value: ServedRequest | None) -> None:
         self._request = value
 
-    def add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
-        """Call ``callback`` with each chat item this speech records, as it is recorded.
-
-        Items recorded before the callback was added are in :attr:`chat_items`.
-        """
+    def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)
 
-    def remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
+    def _remove_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.discard(callback)
 
     def _item_added(self, items: Sequence[llm.ChatItem]) -> None:

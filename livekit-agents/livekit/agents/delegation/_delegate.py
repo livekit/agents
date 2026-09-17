@@ -29,8 +29,13 @@ class DelegateStream(Protocol):
         exc: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None: ...
-    async def cancel(self, reason: str = "") -> None: ...
-    async def aclose(self) -> None: ...
+    async def cancel(self, reason: str = "") -> None:
+        """Ask the far side to stop the work; best-effort."""
+        ...
+
+    async def aclose(self) -> None:
+        """Stop reading and release what this stream holds here."""
+        ...
 
 
 class Delegate(ABC):
@@ -49,11 +54,13 @@ class Delegate(ABC):
 
 
 class DelegationOptions(TypedDict, total=False):
-    """Configuration for delegation, as a plain dict::
+    """A delegate and how the conversation reaches it, as a plain dict::
 
-    AgentSession(delegate=..., delegation_options={"metadata": {"customer_id": "c-42"}})
+    AgentSession(delegate={"delegate": A2ADelegate(url), "metadata": {"customer_id": "c-42"}})
     """
 
+    delegate: Delegate | None
+    """Where the work goes. Defaults to ``None``, which offers the tool to nobody."""
     metadata: dict[str, Any]
     """Application data attached to every delegation. JSON-serializable. Defaults to ``{}``."""
     announce: bool
@@ -64,8 +71,13 @@ class DelegationOptions(TypedDict, total=False):
     """
 
 
-def resolve_delegation_options(config: DelegationOptions | None = None) -> DelegationOptions:
-    """Fill in defaults for missing keys."""
-    opts = DelegationOptions(metadata={}, announce=True)
-    opts.update(config or {})
+def resolve_delegation_options(
+    config: Delegate | DelegationOptions | None = None,
+) -> DelegationOptions:
+    """Fill in defaults, taking a bare delegate as the one-key form of the same thing."""
+    opts = DelegationOptions(delegate=None, metadata={}, announce=True)
+    if isinstance(config, Delegate):
+        opts["delegate"] = config
+    elif config is not None:
+        opts.update(config)
     return opts

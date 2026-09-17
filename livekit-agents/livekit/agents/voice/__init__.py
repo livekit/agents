@@ -10,14 +10,14 @@ from .agent_session import (
 )
 from .audio_recognition import AudioRecognition
 from .events import (
-    MESSAGE_SOURCE_KEY,
+    TURN_ENDED_KEY,
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
-    DelegationDirectiveEvent,
+    DirectiveReceivedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -62,8 +62,8 @@ __all__ = [
     "ModelSettings",
     "AgentTask",
     "SpeechHandle",
-    "MESSAGE_SOURCE_KEY",
-    "DelegationDirectiveEvent",
+    "TURN_ENDED_KEY",
+    "DirectiveReceivedEvent",
     "Directive",
     "DirectiveKind",
     "RunContext",

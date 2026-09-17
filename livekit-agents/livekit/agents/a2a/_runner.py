@@ -19,8 +19,8 @@ from ..llm.chat_context import ChatItem, FunctionCall, FunctionCallOutput
 from ..log import logger
 from ..utils import aio
 from ..voice.events import (
-    MESSAGE_SOURCE_KEY,
-    ErrorEvent,
+    TURN_ENDED_KEY,
+    CloseEvent,
     SpeechCreatedEvent,
     ToolCallEnded,
     ToolCallUpdated,
@@ -29,15 +29,14 @@ from ..voice.events import (
 )
 from ..voice.served_request import ServedRequest
 from ..voice.speech_handle import SpeechHandle
+from ..voice.tool_executor import cancel_tool_call
 from ._types import TaskInput, TaskUpdate
 
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
 
-REQUEST_ID_KEY = "request_id"
+REQUEST_ID_KEY = "lk.request_id"
 """``extra`` key on the items a request produced, so a stored history says which."""
-
-_DELTA_PREAMBLE = "What the caller and the agent said since the last request:"
 
 _RESULT_ENTRY = "_final"
 """What the executor suffixes a released tool's return entry with, to tell it from a report."""
@@ -53,8 +52,10 @@ class RequestRun:
         self._runner = runner
         self._input = task_input
         self._request_id = request_id
-        self._served = ServedRequest(metadata=dict(task_input.metadata))
-        self._ch = aio.Chan[TaskUpdate]()
+        self._served = ServedRequest(
+            metadata=dict(task_input.metadata), is_delegation=task_input.is_delegation
+        )
+        self._event_ch = aio.Chan[TaskUpdate]()
         self._finished: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._terminal: TaskUpdate | None = None
         self._ended = False
@@ -74,7 +75,7 @@ class RequestRun:
         self._stopping = False
 
         self._task = asyncio.create_task(self._run(), name="RequestRun._run")
-        self._task.add_done_callback(lambda _: self._ch.close())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
     def request_id(self) -> str:
@@ -88,11 +89,18 @@ class RequestRun:
         return self._finished.done()
 
     async def _run(self) -> None:
+        runner = self._runner
         try:
-            await self._runner._feed(self)
+            async with runner._setup:
+                await runner._sync_chat_ctx(self)
+                handle = runner.session.generate_reply(user_input=self._input.body)
+                # whatever was said before this turn, such as on_enter, belongs to it
+                for orphan in list(runner._orphans.values()):
+                    self.claim(orphan)
+                self.claim(handle)
         except Exception as exc:
             logger.exception("failed to start a request", extra={"request_id": self._request_id})
-            self._push(TaskUpdate(state="failed", text=str(exc) or type(exc).__name__))
+            self._push_update(TaskUpdate(state="failed", text=str(exc) or type(exc).__name__))
             return
         await self._finished
 
@@ -103,33 +111,33 @@ class RequestRun:
         not allow cancellation runs on unheard.
         """
         self.cancelled_at = time.monotonic()
-        await self._stop_work()
+        await self._stop()
         self.maybe_finish()
         return self._terminal or TaskUpdate(state="canceled", text=self.last_word)
 
-    async def _stop_work(self) -> None:
+    async def _stop(self) -> None:
         """Interrupt this request's speeches and stop the calls that allow it.
 
         Awaited from a caller rather than from inside a cancellation, since stopping a call
-        is itself awaitable.
+        is itself awaitable. A speech that disallows interruption plays out unheard.
         """
         self._stopping = True
         for handle in self.speeches.values():
-            if not handle.done():
+            if not handle.done() and handle.allow_interruptions:
                 handle.interrupt()
         for call_id in list(self.open_calls):
-            await self._stop_call(call_id)
+            await self._cancel_tool_call(call_id)
 
-    async def _stop_call(self, call_id: str) -> None:
+    async def _cancel_tool_call(self, call_id: str) -> None:
         with contextlib.suppress(Exception):
-            await self._runner.session.cancel_tool_call(call_id)
+            await cancel_tool_call(self._runner.session, call_id)
 
-    def _push(self, update: TaskUpdate) -> None:
+    def _push_update(self, update: TaskUpdate) -> None:
         if self._finished.done():
             return
         if update.state == "completed" and self._served.directive is not None:
             update.directive = self._served.directive
-        self._ch.send_nowait(update)
+        self._event_ch.send_nowait(update)
         if update.state != "working":
             self._terminal = update
             self._finished.set_result(None)
@@ -146,7 +154,7 @@ class RequestRun:
         self._runner._orphans.pop(handle.id, None)
         for item in handle.chat_items:
             self.on_item(item, handle)
-        handle.add_item_added_callback(lambda item: self.on_item(item, handle))
+        handle._add_item_added_callback(lambda item: self.on_item(item, handle))
         handle.add_done_callback(lambda _: self.maybe_finish())
 
     def on_item(self, item: ChatItem, handle: SpeechHandle) -> None:
@@ -155,10 +163,10 @@ class RequestRun:
             self._runner._by_call[item.call_id] = self
             self.open_calls[item.call_id] = item.name
             # a call is structure with nothing to say, so it travels without relayed text
-            self._push(TaskUpdate(item=item))
+            self._push_update(TaskUpdate(item=item))
             if self._stopping:
                 # a stop that already ran could not reach a call the turn had not made yet
-                self._runner._spawn(self._stop_call(item.call_id))
+                self._runner._spawn(self._cancel_tool_call(item.call_id))
             return
 
         if item.type != "message" or item.role != "assistant":
@@ -166,30 +174,33 @@ class RequestRun:
 
         item.extra.setdefault(REQUEST_ID_KEY, self._request_id)
         text = item.text_content or ""
-        source = item.extra.get(MESSAGE_SOURCE_KEY)
-        if source != "turn_end":
-            # a line from inside a tool, or one the expert said outright
-            self._push(TaskUpdate(text=text, item=item, verbatim=source == "say"))
+        said = self._runner._speech_sources.get(handle.id) == "say"
+        if said or not item.extra.get(TURN_ENDED_KEY):
+            # a line said outright, or one on the way to a tool call
+            self._push_update(TaskUpdate(text=text, item=item, verbatim=said))
             return
 
         self.last_word, self.concluded_at = text, time.monotonic()
         # the speech this arrived on does not count against itself
-        if self.open_work(besides=handle.id):
+        if self.has_open_work(besides=handle.id):
             # a conclusion with work still open announces that work
-            self._push(TaskUpdate(text=text, item=item))
+            self._push_update(TaskUpdate(text=text, item=item))
         else:
-            self._push(TaskUpdate(state="completed", text=text, item=item))
+            self._push_update(TaskUpdate(state="completed", text=text, item=item))
 
     def on_tool_call_updated(self, update: ToolCallUpdated) -> None:
-        """A tool's own report, relayed as it was written; the model never answers it."""
+        """A tool's own report, in the tool's words unless this session's model answers it."""
         if update.silent:
-            return
+            return  # kept to the model: the caller sees nothing of it
+
         # the framework records the report as a call and an output but surfaces neither, so
         # the pair is rebuilt here in the shape the protocol names
         name = self.open_calls.get(update.call_id, "")
         call = FunctionCall(call_id=update.id, name=name, arguments="", update_of=update.call_id)
         call.extra[REQUEST_ID_KEY] = self._request_id
-        self._push(TaskUpdate(text=update.message, item=call))
+        # the model is answering this one, so its line goes out instead of the tool's words
+        text = "" if update.reply_pending else update.message
+        self._push_update(TaskUpdate(text=text, item=call))
 
     def on_tool_call_ended(self, update: ToolCallEnded) -> None:
         name = self.open_calls.pop(update.call_id, "")
@@ -203,7 +214,7 @@ class RequestRun:
             output = FunctionCallOutput(
                 call_id=update.id, name=name, output=update.message, is_error=False
             )
-            self._push(TaskUpdate(item=output))
+            self._push_update(TaskUpdate(item=output))
         self.maybe_finish()
 
     def on_result_delivered(self, call_id: str, covered: Container[str]) -> None:
@@ -228,21 +239,21 @@ class RequestRun:
 
     # -- completion
 
-    def open_work(self, *, besides: str | None = None) -> bool:
+    def has_open_work(self, *, besides: str | None = None) -> bool:
         return bool(self.open_calls or self.awaiting_reply or self.pending_replies - {besides})
 
     def maybe_finish(self) -> None:
         if self._finished.done():
             return
-        if any(not handle.done() for handle in self.speeches.values()) or self.open_work():
+        if any(not handle.done() for handle in self.speeches.values()) or self.has_open_work():
             return
         if self.cancelled_at and self.concluded_at < self.cancelled_at:
             # work of this turn was stopped and nothing was concluded after it
             stopped = ", ".join(self.cancelled) or "the work"
             what = self.last_word or f"{stopped} was cancelled before it finished"
-            self._push(TaskUpdate(state="canceled", text=what))
+            self._push_update(TaskUpdate(state="canceled", text=what))
         else:
-            self._push(TaskUpdate(state="completed", text=self.last_word))
+            self._push_update(TaskUpdate(state="completed", text=self.last_word))
 
     # -- reading
 
@@ -250,16 +261,16 @@ class RequestRun:
         """The caller stopped listening: stop the work and drop the request."""
         if not self._finished.done():
             self._finished.set_result(None)
-        await self._stop_work()
+        await self._stop()
         await aio.cancel_and_wait(self._task)
-        self._ch.close()
+        self._event_ch.close()
         self._runner._forget(self)
 
     async def __anext__(self) -> TaskUpdate:
         if self._ended:
             raise StopAsyncIteration
         try:
-            update = await self._ch.__anext__()
+            update = await self._event_ch.__anext__()
         except StopAsyncIteration:
             if not self._task.cancelled() and (exc := self._task.exception()):
                 raise exc from None
@@ -287,25 +298,29 @@ class SessionRunner:
     """One conversation's session, and the requests fed through it as turns.
 
     The activity's scheduler serializes generation and playout, so requests are taken in
-    arrival order with no queue here.
+    arrival order with no queue here. Listening starts here, before the first request.
     """
 
     def __init__(self, session: AgentSession) -> None:
         self._session = session
+
         self._by_call: dict[str, RequestRun] = {}
         self._orphans: dict[str, SpeechHandle] = {}
         """speeches nothing has claimed: a deferred reply before its event, or on_enter."""
-        self._seen_items: set[str] = set()
-        """conversation items already shown, so each request carries only what is new."""
+        self._speech_sources: dict[str, str] = {}
+        """speech id -> what drew it, since say() is what makes a speech's text verbatim."""
         self._live: list[RequestRun] = []
         self._setup = asyncio.Lock()
-        self._attached = False
         self._chores: set[asyncio.Task[None]] = set()
+
         self._listeners: list[tuple[str, Any]] = [
             ("speech_created", self._on_speech_created),
             ("tool_execution_updated", self._on_tool_execution_updated),
-            ("error", self._on_error),
+            ("close", self._on_close),
         ]
+        self._listening = True
+        for event, listener in self._listeners:
+            session.on(event, listener)  # type: ignore[arg-type]
 
     @property
     def session(self) -> AgentSession:
@@ -317,51 +332,37 @@ class SessionRunner:
         self._chores.add(task)
         task.add_done_callback(self._chores.discard)
 
-    def attach(self) -> None:
-        """Listen to the session. Called before the first request is fed."""
-        if self._attached:
-            return
-        self._attached = True
-        # the expert relays a tool's report as written; a model round would restate it
-        self._session._reply_to_tool_updates = False
-        for event, listener in self._listeners:
-            self._session.on(event, listener)  # type: ignore[arg-type]
-
     def submit(self, task_input: TaskInput, *, request_id: str) -> RequestRun:
         run = RequestRun(self, task_input, request_id)
         self._live.append(run)
         return run
 
-    async def _feed(self, run: RequestRun) -> None:
-        async with self._setup:
-            await self._show_conversation(run)
-            handle = self._session.generate_reply(user_input=run._input.body)
-            # whatever was said before this turn, such as on_enter, belongs to it
-            for orphan in list(self._orphans.values()):
-                run.claim(orphan)
-            run.claim(handle)
+    async def _sync_chat_ctx(self, run: RequestRun) -> None:
+        """Take into this session whatever the caller said that it has not seen.
 
-    async def _show_conversation(self, run: RequestRun) -> None:
-        """Give the session what was said since its last request, ahead of this one."""
-        lines: list[str] = []
-        for item in run._input.chat_ctx.items:
-            if item.type != "message" or item.id in self._seen_items:
-                continue
-            self._seen_items.add(item.id)
-            if item.role in ("user", "assistant") and (text := item.text_content):
-                lines.append(f"{'caller' if item.role == 'user' else 'agent'}: {text}")
-        if not lines:
+        The caller sends the conversation whole and the merge takes the delta by item id,
+        so what this session did itself stays as it recorded it. The caller's plumbing —
+        its calls, its handoffs, its instructions — is not conversation and does not travel.
+        """
+        if not run._input.chat_ctx.items:
             return
 
         agent = self._session.current_agent
         chat_ctx = agent.chat_ctx.copy()
-        chat_ctx.add_message(role="user", content=f"{_DELTA_PREAMBLE}\n" + "\n".join(lines))
+        chat_ctx.merge(
+            run._input.chat_ctx,
+            exclude_function_call=True,
+            exclude_instructions=True,
+            exclude_config_update=True,
+        )
         await agent.update_chat_ctx(chat_ctx)
 
     def _forget(self, run: RequestRun) -> None:
         with contextlib.suppress(ValueError):
             self._live.remove(run)
         self._by_call = {k: v for k, v in self._by_call.items() if v is not run}
+        for speech_id in run.speeches:
+            self._speech_sources.pop(speech_id, None)
 
     # -- routing: every session event reaches the request it belongs to
 
@@ -369,6 +370,7 @@ class SessionRunner:
         from ..voice.agent import _get_activity_task_info
 
         handle = ev.speech_handle
+        self._speech_sources[handle.id] = ev.source
         if handle.request is not None:
             return
         # a line said, or a reply drawn, from inside a tool belongs to the request that
@@ -391,7 +393,7 @@ class SessionRunner:
             call_id = update.function_call.call_id
             owner = self._by_call.get(call_id)
             if owner is not None and owner._stopping and call_id in owner.open_calls:
-                self._spawn(owner._stop_call(call_id))
+                self._spawn(owner._cancel_tool_call(call_id))
             return
         if update.type == "tool_reply_updated":
             owners = [(c, self._by_call[c]) for c in update.call_ids if c in self._by_call]
@@ -418,17 +420,25 @@ class SessionRunner:
         else:
             owner.on_tool_call_ended(update)
 
-    def _on_error(self, ev: ErrorEvent) -> None:
+    def _on_close(self, ev: CloseEvent) -> None:
+        """The session is gone, so nothing will answer what is still in flight.
+
+        The session decides what an error means — it ignores a recoverable one and closes
+        itself once the unrecoverable ones pass its limit — so this is the one signal that
+        a request will never be answered, whether an error caused it or not.
+        """
         for run in list(self._live):
-            run._push(TaskUpdate(state="failed", text=str(ev.error)))
+            run._push_update(
+                TaskUpdate(state="failed", text=str(ev.error) if ev.error else "the session closed")
+            )
 
     async def aclose(self) -> None:
-        if self._attached:
-            self._attached = False
+        if self._listening:
+            self._listening = False
             for event, listener in self._listeners:
                 self._session.off(event, listener)  # type: ignore[arg-type]
         for run in list(self._live):
-            run._push(TaskUpdate(state="failed", text="the session was closed"))
+            run._push_update(TaskUpdate(state="failed", text="the session was closed"))
             await run.aclose()
         if self._chores:
             await asyncio.gather(*self._chores, return_exceptions=True)

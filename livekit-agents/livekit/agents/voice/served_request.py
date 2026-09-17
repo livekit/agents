@@ -40,6 +40,12 @@ class ServedRequest:
 
     metadata: dict[str, Any] = field(default_factory=dict)
     """Application data the caller attached to this request, handed over untouched."""
+    is_delegation: bool = False
+    """Whether an agent asked for this, rather than a person taking their turn.
+
+    An agent relays what a tool reports in the tool's own words, so this session's model
+    stays out of it; a person's turn is answered by this session's model as usual.
+    """
     directive: Directive | None = None
     """What the caller is asked to do after saying the answer, if anything."""
 

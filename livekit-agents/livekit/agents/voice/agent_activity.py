@@ -62,7 +62,7 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
-    MESSAGE_SOURCE_KEY,
+    TURN_ENDED_KEY,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -116,7 +116,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
-    from ..delegation import Delegate
+    from ..delegation import DelegationOptions
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
 
@@ -390,10 +390,11 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        self._delegation: DelegationOptions = {
+            **self._session._opts.delegation,
+            **self._agent._delegation,
+        }
         self.__delegate_tool: FunctionTool | None = None
-        # the agent's own delegate lives as long as this activity, pause included, like its
-        # toolsets; the session's outlives a handoff
-        self._delegate: NotGivenOr[Delegate | None] = self._agent.delegate
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -714,23 +715,16 @@ class AgentActivity(RecognitionHooks):
         # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]
-        if self.delegate is not None:
-            tools = [*tools, self._delegate_tool()]
+
+        if self._delegation["delegate"] is not None:
+            if self.__delegate_tool is None:
+                # built once, so the schema the model sees keeps its identity across turns
+                from ..delegation import build_delegate_tool
+
+                self.__delegate_tool = build_delegate_tool(announce=self._delegation["announce"])
+            tools = [*tools, self.__delegate_tool]
+
         return tools
-
-    def _delegate_tool(self) -> FunctionTool:
-        """Built once, so the schema the model sees keeps a stable identity across turns."""
-        if self.__delegate_tool is None:
-            from ..delegation import build_delegate_tool
-
-            announce = self._session._opts.delegation_options["announce"]
-            self.__delegate_tool = build_delegate_tool(announce=announce)
-        return self.__delegate_tool
-
-    @property
-    def delegate(self) -> Delegate | None:
-        """The delegate in force: the agent's if it set one, otherwise the session's."""
-        return self._delegate if is_given(self._delegate) else self._session.delegate
 
     @property
     def min_consecutive_speech_delay(self) -> float:
@@ -1672,9 +1666,10 @@ class AgentActivity(RecognitionHooks):
                 )
 
             # the agent's own delegate goes with it; the session's outlives the handoff
-            if is_given(self._delegate) and self._delegate is not None:
+            agent_delegate = self._agent.delegate
+            if is_given(agent_delegate) and agent_delegate is not None:
                 with contextlib.suppress(Exception):
-                    await self._delegate.aclose()
+                    await agent_delegate.aclose()
 
             # final sweep: anything non-cancellable that survived drain dies here
             await self._tool_executor.aclose()
@@ -3381,7 +3376,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
-                extra={MESSAGE_SOURCE_KEY: "say"},
+                extra={TURN_ENDED_KEY: True},
             )
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
@@ -3890,14 +3885,10 @@ class AgentActivity(RecognitionHooks):
             # (the transcript forwarder strips it only for the room transcript), so the
             # markup lives directly on the stored assistant message.
             # the llm stream is drained by now, so this step's tool calls are known
-            extra_kwargs: dict = {
-                "extra": {
-                    **llm_gen_data.generated_extra,
-                    MESSAGE_SOURCE_KEY: "tool_call"
-                    if llm_gen_data.generated_functions
-                    else "turn_end",
-                }
-            }
+            extra: dict[str, Any] = dict(llm_gen_data.generated_extra)
+            if not llm_gen_data.generated_functions:
+                extra[TURN_ENDED_KEY] = True
+            extra_kwargs: dict = {"extra": extra}
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -4118,7 +4109,6 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
-                said=True,
             )
             return
 
@@ -4224,7 +4214,6 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
-        said: bool = False,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4238,7 +4227,6 @@ class AgentActivity(RecognitionHooks):
                     generation_ev=generation_ev,
                     model_settings=model_settings,
                     instructions=instructions,
-                    said=said,
                     inference_span=inference_span,
                 )
             finally:
@@ -4251,7 +4239,6 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
-        said: bool = False,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
@@ -4560,13 +4547,7 @@ class AgentActivity(RecognitionHooks):
                 content=[forwarded_text],
                 id=message_id,
                 interrupted=interrupted,
-                # a model with `supports_say` serves say() from here, and a said line ends
-                # no model turn
-                extra={
-                    MESSAGE_SOURCE_KEY: "say"
-                    if said
-                    else ("tool_call" if function_calls else "turn_end")
-                },
+                extra={} if function_calls else {TURN_ENDED_KEY: True},
             )
             if started_speaking_at is not None:
                 msg.created_at = started_speaking_at

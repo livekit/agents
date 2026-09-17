@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
-from livekit.agents.a2a._server import AGENT_CARD_PATH, IDLE_TIMEOUT, TextSessionContext, mount
+from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
 from livekit.agents.http import _proxied_endpoints
 from livekit.agents.llm import ToolFlag
 
@@ -74,7 +74,7 @@ class _Served:
 
 @contextlib.asynccontextmanager
 async def _serving(
-    endpoint: str = "fare-desk", *, idle_timeout: float = IDLE_TIMEOUT
+    endpoint: str = "fare-desk", *, idle_timeout: float | None = None
 ) -> AsyncIterator[_Served]:
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known
@@ -269,18 +269,31 @@ async def test_a_conversation_nobody_comes_back_to_is_dropped() -> None:
     """The backstop behind lk/kind = close: a caller that crashes says goodbye to nobody."""
     from livekit.agents.a2a import A2AClient
 
-    async with _serving(idle_timeout=0.2) as served:
+    async with _serving(idle_timeout=0.05) as served:
         client = A2AClient(f"{served.base_url}/fare-desk")
         try:
             await _collect(client, TaskInput(instruction="what is the change fee"))
             assert len(served.executor._conversations) == 1
-            for _ in range(60):
-                await asyncio.sleep(0.05)
-                if not served.executor._conversations:
-                    break
+
+            await asyncio.sleep(0.1)
+            await served.executor._drop_idle()
             # the goodbye below would drop it too, so the claim is made before saying one
             assert served.executor._conversations == {}
             assert not served.sessions[0]._started
+        finally:
+            await client.aclose()
+
+
+async def test_a_conversation_is_kept_unless_an_endpoint_asks_for_idle() -> None:
+    """Dropping loses what the conversation held, so it is off until something wants it."""
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            await _collect(client, TaskInput(instruction="what is the change fee"))
+            assert served.executor._sweeper is None
+            assert len(served.executor._conversations) == 1
         finally:
             await client.aclose()
 
@@ -318,16 +331,20 @@ async def test_a_stock_client_reads_the_same_endpoint() -> None:
     assert isinstance(payloads[0], pb.Task)
     assert payloads[0].id
 
-    artifacts = [p for p in payloads if isinstance(p, pb.TaskArtifactUpdateEvent)]
-    assert [a.artifact.parts[0].text for a in artifacts] == ["It is 240 USD."]
-
     statuses = [p for p in payloads if isinstance(p, pb.TaskStatusUpdateEvent)]
     assert statuses[-1].status.state == pb.TaskState.TASK_STATE_COMPLETED
-    # the progress is plain text a client that ignores our parts still reads
+
+    # a person's turn is answered by the desk's own model, which writes a line about the
+    # report on the way, so the fallbacks land in that order and the answer is the second
+    artifacts = [p for p in payloads if isinstance(p, pb.TaskArtifactUpdateEvent)]
+    assert [a.artifact.parts[0].text for a in artifacts] == ["Thanks for calling."]
+
+    # what goes out is still plain text a client that ignores our parts reads; the tool's
+    # own words stay in the chat item beside it rather than being said twice
     working = [s for s in statuses if s.status.state == pb.TaskState.TASK_STATE_WORKING]
-    assert "checking the fare rules" in [
-        part.text for s in working for part in s.status.message.parts if part.text
-    ]
+    said = [part.text for s in working for part in s.status.message.parts if part.text]
+    assert said == ["It is 240 USD."]
+    assert "checking the fare rules" not in said
 
 
 async def test_the_typed_item_rides_beside_the_relayed_text() -> None:
@@ -370,5 +387,5 @@ async def test_the_typed_item_rides_beside_the_relayed_text() -> None:
         if part.WhichOneof("content") == "data"
     ]
     assert set(kinds) == {"chat_item"}
-    # the report names the call it reports for
+    # the report names the call it reports for, and travels whether or not it is said
     assert any(d.get("update_of") == "cf1" for d in data_parts)

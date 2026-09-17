@@ -29,7 +29,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
-    DelegationDirectiveEvent,
+    DirectiveReceivedEvent,
     JobContext,
     RunContext,
     ToolExecutionUpdatedEvent,
@@ -114,8 +114,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         # one delegate per conversation: the session closes it when the call ends, which is
         # what tells the desk it can drop this conversation rather than wait for it to idle
-        delegate=A2ADelegate(FARE_DESK_URL),
-        delegation_options={"announce": False},
+        delegate={"delegate": A2ADelegate(FARE_DESK_URL), "announce": False},
         llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
         # llm=inference.LLM("openai/gpt-4.1-mini"),
         # stt=inference.STT("deepgram/nova-3", language="multi"),
@@ -123,8 +122,8 @@ async def entrypoint(ctx: JobContext) -> None:
         # tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
-    @session.on("delegation_directive")
-    def _on_directive(ev: DelegationDirectiveEvent) -> None:
+    @session.on("directive_received")
+    def _on_directive(ev: DirectiveReceivedEvent) -> None:
         # advice, acted on after the answer: shutdown drains, so whatever is queued plays
         # out before the call ends. what to do about a directive is yours
         logger.info(f"── directive: {ev.kind} ({ev.reason})")

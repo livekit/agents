@@ -44,7 +44,6 @@ from ..llm import (
     RealtimeModel,
 )
 from ..llm.chat_context import Instructions
-from ..llm.tool_context import ToolError
 from ..log import logger
 from ..metrics import AgentSessionUsage, ModelUsageCollector
 from ..telemetry import (
@@ -316,7 +315,7 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     recording_options: RecordingOptions
-    delegation_options: DelegationOptions
+    delegation: DelegationOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -405,8 +404,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         max_tool_steps: int = 3,
         # Delegation settings
-        delegate: NotGivenOr[Delegate | None] = NOT_GIVEN,
-        delegation_options: NotGivenOr[DelegationOptions] = NOT_GIVEN,
+        delegate: NotGivenOr[Delegate | DelegationOptions | None] = NOT_GIVEN,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
@@ -615,9 +613,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             recording_options=_RECORDING_ALL_OFF.copy(),
-            delegation_options=resolve_delegation_options(
-                delegation_options if is_given(delegation_options) else None
-            ),
+            delegation=resolve_delegation_options(delegate if is_given(delegate) else None),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -664,10 +660,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
-        # a session that relays a tool's progress verbatim records the report for its model
-        # without answering it; the report is the fact, and a reply would only restate it
-        self._reply_to_tool_updates = True
-        self._delegate: Delegate | None = delegate if is_given(delegate) else None
+        self._delegate: Delegate | None = self._opts.delegation["delegate"]
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
@@ -1720,21 +1713,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 activity = self._activity
                 speaking = activity is not None and not activity._user_silence_event.is_set()
                 self._update_user_state("speaking" if speaking else "listening")
-
-    async def cancel_tool_call(self, call_id: str) -> bool:
-        """Cancel one tool call running in this session.
-
-        False when nothing by that call id is running, when the tool does not allow
-        cancellation, or when the speech that issued it disallows interruptions.
-        """
-        task = _RunningTasks.get(self, {}).get(call_id)
-        if task is None:
-            return False
-
-        try:
-            return await task.executor.cancel(call_id)
-        except ToolError:
-            return False
 
     def clear_user_turn(self) -> None:
         # clear the transcription or input audio buffer of the user turn

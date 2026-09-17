@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, DelegationDirectiveEvent
+from livekit.agents import Agent, AgentSession, DirectiveReceivedEvent
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
 from livekit.agents.llm import FunctionToolCall
 
@@ -75,10 +75,17 @@ async def _conversation(llm: FakeLLM, **session_kwargs: Any) -> Any:
 async def test_the_delegate_tool_is_offered_when_a_delegate_is_in_force() -> None:
     async with _conversation(_voice_llm()) as (session, _):
         activity = session.current_agent._get_activity_or_raise()
-        names = {t.info.name for t in activity.tools if hasattr(t, "info")}
-        assert DELEGATE_TOOL_NAME in names
+
+        def _delegate_tool() -> Any:
+            return next(
+                t
+                for t in activity.tools
+                if getattr(t, "info", None) and t.info.name == DELEGATE_TOOL_NAME
+            )
+
+        assert _delegate_tool() is not None
         # built once, so the schema the model sees keeps its identity across turns
-        assert activity._delegate_tool() is activity._delegate_tool()
+        assert _delegate_tool() is _delegate_tool()
 
 
 async def test_a_session_without_a_delegate_offers_no_such_tool() -> None:
@@ -103,10 +110,10 @@ async def test_progress_is_relayed_and_the_answer_is_the_tools_return() -> None:
 
 
 async def test_a_directive_is_raised_on_the_session_after_the_answer() -> None:
-    events: list[DelegationDirectiveEvent] = []
+    events: list[DirectiveReceivedEvent] = []
 
     async with _conversation(_voice_llm(instruction="that is all")) as (session, _):
-        session.on("delegation_directive", events.append)
+        session.on("directive_received", events.append)
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
 
@@ -125,15 +132,11 @@ async def test_the_conversation_is_sent_without_its_calls() -> None:
         await asyncio.sleep(5)
 
     (expert,) = served.sessions
-    notes = [
-        item.text_content or ""
-        for item in expert.current_agent.chat_ctx.items
-        if item.type == "message" and "since the last request" in (item.text_content or "")
-    ]
-    assert notes, "the expert was shown the conversation"
+    items = expert.current_agent.chat_ctx.items
+    said = [item.text_content or "" for item in items if item.type == "message"]
+    assert any("how much is it" in text for text in said), "the caller's turn reached the expert"
     # the delegate call and its synthetic progress entries are not conversation
-    assert DELEGATE_TOOL_NAME not in notes[0]
-    assert "how much is it" in notes[0]
+    assert not [item for item in items if getattr(item, "name", "") == DELEGATE_TOOL_NAME]
 
 
 async def test_a_failing_expert_raises_a_tool_error() -> None:
@@ -196,6 +199,31 @@ async def test_the_session_closes_the_delegate_it_owns() -> None:
     assert closed == ["delegate"]
 
 
+async def test_an_agent_overrides_the_sessions_settings_key_by_key() -> None:
+    """What the agent sets wins; what it leaves alone stays as the session had it."""
+    from livekit.agents.a2a import TaskInput
+    from livekit.agents.delegation import Delegate
+
+    class _Marker(Delegate):
+        def submit(self, task_input: TaskInput) -> Any:
+            raise AssertionError("not reached")
+
+    session_delegate = _Marker()
+    session = AgentSession(
+        llm=_voice_llm(),
+        delegate={"delegate": session_delegate, "announce": False, "metadata": {"c": "42"}},
+    )
+    await session.start(agent=Agent(instructions="voice", delegate={"announce": True}))
+    try:
+        activity = session.current_agent._get_activity_or_raise()
+        assert activity._delegation["announce"] is True
+        # the keys the agent said nothing about are still the session's
+        assert activity._delegation["delegate"] is session_delegate
+        assert activity._delegation["metadata"] == {"c": "42"}
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
 async def test_an_agents_delegate_overrides_the_sessions() -> None:
     from livekit.agents.a2a import TaskInput
     from livekit.agents.delegation import Delegate
@@ -210,7 +238,7 @@ async def test_an_agents_delegate_overrides_the_sessions() -> None:
     await session.start(agent=Agent(instructions="voice", delegate=agent_delegate))
     try:
         activity = session.current_agent._get_activity_or_raise()
-        assert activity.delegate is agent_delegate
+        assert activity._delegation["delegate"] is agent_delegate
         assert session.delegate is session_delegate
     finally:
         await asyncio.wait_for(session.aclose(), timeout=10.0)

@@ -812,7 +812,7 @@ class FareDesk(Agent):
         return "nothing outstanding"
 
 
-@server.text_session(
+@server.a2a_session(
     endpoint="fare-desk",
     description="Fares, seats, bookings, changes, refunds and baggage for Northwind Air.",
 )

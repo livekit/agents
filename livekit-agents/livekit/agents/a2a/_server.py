@@ -46,16 +46,13 @@ AGENT_CARD_PATH = "/.well-known/agent-card.json"
 VERSION_PREFIX = "/v1"
 """Where the binding's methods live under the endpoint, and what the card's URL points at."""
 
-IDLE_TIMEOUT = 30 * 60
-"""How long a conversation nobody has come back to is kept before it is dropped."""
-
 
 class TextSessionContext:
     """What a text session handler is given: one conversation, and where to put its session.
 
     The handler runs once per conversation — build the session, start it, hand it over::
 
-        @server.text_session(endpoint="fare-desk", description="Answers fare questions.")
+        @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
         async def fare_desk(ctx: TextSessionContext) -> None:
             session = AgentSession(llm="openai/gpt-4.1")
             await session.start(agent=FareDesk())
@@ -76,7 +73,6 @@ class TextSessionContext:
         if self._runner is not None:
             raise RuntimeError("a session is already attached to this conversation")
         self._runner = SessionRunner(session)
-        self._runner.attach()
 
 
 TextSessionHandler = Callable[[TextSessionContext], Coroutine[Any, Any, None]]
@@ -130,7 +126,7 @@ class _SessionExecutor(AgentExecutor):
     One conversation is one handler run, found or created by ``context_id``.
     """
 
-    def __init__(self, handler: TextSessionHandler, *, idle_timeout: float) -> None:
+    def __init__(self, handler: TextSessionHandler, *, idle_timeout: float | None) -> None:
         self._handler = handler
         self._conversations: dict[str, _Conversation] = {}
         self._by_task: dict[str, RequestRun] = {}
@@ -141,7 +137,7 @@ class _SessionExecutor(AgentExecutor):
     def _conversation(self, context_id: str) -> _Conversation:
         if context_id not in self._conversations:
             self._conversations[context_id] = _Conversation(context_id, self._handler)
-        if self._sweeper is None:
+        if self._sweeper is None and self._idle_timeout is not None:
             self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
         conversation = self._conversations[context_id]
         conversation.touched_at = time.monotonic()
@@ -153,15 +149,20 @@ class _SessionExecutor(AgentExecutor):
         The backstop behind ``lk/kind = close``: a caller that crashes says goodbye to
         nobody, and the session it leaves behind holds a model connection open.
         """
+        assert self._idle_timeout is not None
         while True:
             await asyncio.sleep(self._idle_timeout / 4)
-            for context_id, conversation in list(self._conversations.items()):
-                if conversation.idle_for < self._idle_timeout:
-                    continue
-                logger.debug("dropping an idle conversation", extra={"context_id": context_id})
-                self._conversations.pop(context_id, None)
-                with contextlib.suppress(Exception):
-                    await conversation.aclose()
+            await self._drop_idle()
+
+    async def _drop_idle(self) -> None:
+        assert self._idle_timeout is not None
+        for context_id, conversation in list(self._conversations.items()):
+            if conversation.idle_for < self._idle_timeout:
+                continue
+            logger.debug("dropping an idle conversation", extra={"context_id": context_id})
+            self._conversations.pop(context_id, None)
+            with contextlib.suppress(Exception):
+                await conversation.aclose()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         context_id = context.context_id or shortuuid("ctx-")
@@ -252,7 +253,7 @@ def mount(
     handler: TextSessionHandler,
     description: str,
     name: str | None = None,
-    idle_timeout: float = IDLE_TIMEOUT,
+    idle_timeout: float | None = None,
 ) -> _SessionExecutor:
     """Register one A2A endpoint on ``app``, under ``/<endpoint>``.
 
@@ -294,7 +295,6 @@ def mount(
 
 __all__ = [
     "AGENT_CARD_PATH",
-    "IDLE_TIMEOUT",
     "TextSessionContext",
     "TextSessionHandler",
     "mount",
