@@ -29,8 +29,8 @@ make the model a streaming recognizer. Omit a language argument; the model canno
 force a decoder language and does not return a detected language code.
 
 Use `STT.prewarm()` in the worker's synchronous prewarm hook to load the model
-before a conversation, or let the first recognition call load it in a worker
-thread. One instance serializes inference. Canceling a recognition task discards
+before a conversation. Automatic session prewarm schedules a worker thread so
+the event loop stays responsive; the first recognition also loads lazily if needed. One instance serializes inference. Canceling a recognition task discards
 its result; native CPU work finishes before the next inference or `aclose()`.
 Close the recognizer explicitly when its owner shuts down.
 

@@ -166,3 +166,40 @@ async def test_cancelled_native_work_finishes_before_close():
     assert finished.is_set()
     with pytest.raises(RuntimeError, match="closed"):
         await recognizer.recognize(frame)
+
+
+async def test_automatic_prewarm_keeps_loop_responsive_and_close_waits():
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def load():
+        started.set()
+        assert release.wait(5)
+        finished.set()
+
+    recognizer = orukeet.STT(local_files_only=True)
+    recognizer._runtime._load = load
+    try:
+        recognizer.prewarm()
+        recognizer.prewarm()
+        assert await asyncio.to_thread(started.wait, 5)
+        close = asyncio.create_task(recognizer.aclose())
+        await asyncio.sleep(0)
+        assert not close.done()
+    finally:
+        release.set()
+    await asyncio.wait_for(close, 5)
+    assert finished.is_set()
+    assert recognizer._prewarm_task.done()
+
+
+@pytest.mark.parametrize("rate", [12000, 96000])
+async def test_uncommon_sample_rates_use_native_resampling(rate):
+    recognizer = orukeet.STT(local_files_only=True)
+    recognize = Mock(return_value="hello")
+    recognizer._runtime = SimpleNamespace(recognize=recognize, close=lambda: None)
+    samples = np.zeros(rate, dtype=np.int16)
+    frame = rtc.AudioFrame(samples.tobytes(), rate, 1, rate)
+    assert (await recognizer.recognize(frame)).alternatives[0].text == "hello"
+    assert recognize.call_args.args[1] == 16000
+    assert len(recognize.call_args.args[0]) == 16000
+    await recognizer.aclose()
