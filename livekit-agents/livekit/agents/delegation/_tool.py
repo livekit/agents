@@ -44,10 +44,7 @@ DISPATCHED = (
 
 
 def build_delegate_tool(description: str | None = None, *, announce: bool = True) -> FunctionTool:
-    """Build the tool that reaches whichever delegate is in force.
-
-    Built once per activity so the schema the model sees keeps a stable identity across turns.
-    """
+    """Build the tool that reaches whichever delegate is in force."""
 
     async def delegate(ctx: RunContext, task: str) -> str:
         session = ctx.session
@@ -78,7 +75,12 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
         # open HTTP stream here, until the stream is closed
         async with handler.submit(task_input) as stream:
             while True:
-                update: TaskUpdate = await anext(stream)
+                try:
+                    update: TaskUpdate = await anext(stream)
+                except StopAsyncIteration:
+                    # the stream ended without declaring a state, which is how a delegation
+                    # that died mid-flight reaches the caller
+                    raise ToolError("the delegation ended without an answer") from None
                 if update.state == "working":
                     if not update.text:
                         continue

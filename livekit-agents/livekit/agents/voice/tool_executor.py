@@ -267,10 +267,12 @@ def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | No
     request, and is otherwise unconstrained: outputs that disagree cannot all be satisfied,
     and one of them wanting the tools is enough to need them.
     """
-    distinct = set(requests)
-    if len(distinct) == 1 and (only := distinct.pop()) is not None:
-        return only
-    return None
+    distinct: list[ToolChoice | None] = []
+    for request in requests:
+        # a named choice is a dict, so this compares rather than hashes
+        if request not in distinct:
+            distinct.append(request)
+    return distinct[0] if len(distinct) == 1 else None
 
 
 class _ToolExecutor:
@@ -593,12 +595,11 @@ class _ToolExecutor:
 
         # no await after this line
 
-        pending = self._pending_updates[:]
+        updates = self._pending_updates[:]
         self._pending_updates.clear()
 
         # one reply covering everything buffered, which is one thing said about several
         # results rather than several things said at once
-        updates = pending
         pending_items = [item for u in updates for item in u.items]
         if not pending_items:
             return

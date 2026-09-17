@@ -310,9 +310,8 @@ class SpeechHandle:
     def request(self) -> ServedRequest | None:
         """The caller's request this speech answers, or None when nobody asked for it.
 
-        Set once by whatever feeds the session, when it takes the speech as a request's own.
-        A tool called by this speech reads it through :attr:`RunContext.request` and keeps
-        reading the same one, however far the conversation has moved on since.
+        Set once by whatever feeds the session, so a tool this speech called keeps reading
+        the same one however far the conversation has moved on since.
         """
         return self._request
 
@@ -323,9 +322,7 @@ class SpeechHandle:
     def add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         """Call ``callback`` with each chat item this speech records, as it is recorded.
 
-        Items recorded before the callback was added are in :attr:`chat_items`. A tool that
-        released early still belongs to the speech that called it, and reports through the
-        session's ``tool_execution_updated`` events rather than here.
+        Items recorded before the callback was added are in :attr:`chat_items`.
         """
         self._item_added_callbacks.add(callback)
 

@@ -370,9 +370,8 @@ class FunctionCall(BaseModel):
     update_of: str | None = None
     """The call id this entry reports progress for, on a synthetic call.
 
-    A tool that reports through ``RunContext.update()`` records each report as a call and
-    an output of its own, so the model reads it as a result. This names the real call
-    those entries belong to.
+    ``RunContext.update()`` records each report as a call and an output of its own, and this
+    names the real call they belong to.
     """
 
 

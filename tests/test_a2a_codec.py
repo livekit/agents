@@ -155,6 +155,10 @@ UPDATES: list[a2a.TaskUpdate] = [
     a2a.TaskUpdate(state="failed", text="the fare service is unreachable"),
     a2a.TaskUpdate(state="canceled", text="the hold was released"),
     a2a.TaskUpdate(state="input-required", text="Which Tuesday flight?"),
+    # the answer is an item as well as text, and the caller stores what it renders
+    a2a.TaskUpdate(state="completed", text="The change fee is $75.", item=_conversation().items[1]),
+    a2a.TaskUpdate(state="input-required", text="Which one?", item=_conversation().items[1]),
+    a2a.TaskUpdate(state="canceled", text="the hold was released", item=_conversation().items[2]),
 ]
 
 

@@ -39,9 +39,10 @@ __all__ = [
 ]
 
 EXTENSION_URI = "https://livekit.io/a2a/ext/agent-session/v1"
-"""Identifies the profile. A client activates it with the ``A2A-Extensions`` request header
-and the server echoes the set it activated; not echoed means not active, and both sides fall
-back to vanilla A2A."""
+"""Identifies the profile, and prefixes every key of it.
+
+A client asks for it with the ``A2A-Extensions`` header; not echoed back means not active.
+"""
 
 EXTENSION_DESCRIPTION = (
     "LiveKit agent session profile: conversation context, typed chat items, verbatim text, "
@@ -69,8 +70,8 @@ REASON = _key("reason")
 
 KIND_DELEGATION = "delegation"
 KIND_CLOSE = "close"
-"""On a message: the conversation is over. The task completes with no answer and the server
-drops the context, rather than holding it until it goes idle."""
+"""On a message: the conversation is over, and the server may drop it now rather than wait
+for it to go idle."""
 KIND_CHAT_CTX = "chat_ctx"
 KIND_CHAT_ITEM = "chat_item"
 
@@ -106,7 +107,7 @@ def agent_card(
 ) -> pb.AgentCard:
     """The card an endpoint serves: one ``delegate`` skill, text in and text out.
 
-    The extension is offered, never required, so a client that ignores it still works.
+    The extension is offered and never required, so a client that ignores it still works.
     """
     return pb.AgentCard(
         name=name,

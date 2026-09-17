@@ -58,12 +58,8 @@ _ANSWER_IN_ARTIFACT: frozenset[TaskState] = frozenset({"completed", "input-requi
 
 
 def encode_ctx(chat_ctx: ChatContext) -> dict[str, Any]:
-    """The conversation as JSON.
-
-    Timestamps are kept, so a receiver renders history at the time it happened rather than
-    the time it arrived. Images and audio are not: a conversation carries them by the
-    megabyte, and v1 delegates over text.
-    """
+    """The conversation as JSON, with timestamps so a receiver renders history in its own
+    order, and without images or audio, which a conversation carries by the megabyte."""
     return chat_ctx.to_dict(exclude_timestamp=False)
 
 
@@ -116,8 +112,8 @@ def to_a2a_request(
 def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
     """The input an incoming request carries — the inverse of :func:`to_a2a_request`.
 
-    A vanilla A2A client sends text and nothing else, which is a person's turn with an empty
-    conversation. That is what makes a plain client usable against a LiveKit endpoint.
+    A client that sends text and nothing else is a person's turn with an empty conversation,
+    which is what makes a plain A2A client usable against a LiveKit endpoint.
     """
     message = request.message
     chat_ctx = ChatContext.empty()
@@ -152,38 +148,38 @@ def to_a2a_events(update: TaskUpdate, *, task_id: str, context_id: str) -> list[
         status=pb.TaskStatus(state=_STATE_TO_A2A[update.state]),
     )
 
-    carries_answer = update.state in _ANSWER_IN_ARTIFACT
     if update.state == "completed" and update.directive is not None:
         status.metadata.CopyFrom(
             struct({DIRECTIVE: {"kind": update.directive.kind, "reason": update.directive.reason}})
         )
 
-    if not carries_answer:
-        # working reports as it goes; failed and canceled say why in the status message
-        parts: list[pb.Part] = []
-        if update.text:
-            parts.append(pb.Part(text=update.text))
-        if update.item is not None:
-            parts.append(
-                pb.Part(
-                    data=value(encode_item(update.item)),
-                    metadata=struct({KIND: KIND_CHAT_ITEM}),
-                )
-            )
-        if parts:
-            message = pb.Message(
-                message_id=shortuuid("msg-"),
-                task_id=task_id,
-                context_id=context_id,
-                role=pb.Role.ROLE_AGENT,
-                parts=parts,
-            )
-            if update.verbatim:
-                message.metadata.CopyFrom(struct({VERBATIM: True}))
-            status.status.message.CopyFrom(message)
-        return [status]
+    # the answer rides an artifact; working reports as it goes, and failed and canceled say
+    # why in the status message
+    answer = update.text if update.state in _ANSWER_IN_ARTIFACT else ""
 
-    if not update.text:
+    parts: list[pb.Part] = []
+    if update.text and not answer:
+        parts.append(pb.Part(text=update.text))
+    if update.item is not None:
+        parts.append(
+            pb.Part(
+                data=value(encode_item(update.item)),
+                metadata=struct({KIND: KIND_CHAT_ITEM}),
+            )
+        )
+    if parts:
+        message = pb.Message(
+            message_id=shortuuid("msg-"),
+            task_id=task_id,
+            context_id=context_id,
+            role=pb.Role.ROLE_AGENT,
+            parts=parts,
+        )
+        if update.verbatim and not answer:
+            message.metadata.CopyFrom(struct({VERBATIM: True}))
+        status.status.message.CopyFrom(message)
+
+    if not answer:
         # a task may conclude with nothing to add, the way a tool may return None
         return [status]
 
@@ -193,7 +189,7 @@ def to_a2a_events(update: TaskUpdate, *, task_id: str, context_id: str) -> list[
         artifact=pb.Artifact(
             artifact_id=shortuuid("art-"),
             name=ANSWER_ARTIFACT_NAME,
-            parts=[pb.Part(text=update.text)],
+            parts=[pb.Part(text=answer)],
         ),
         last_chunk=True,
     )
@@ -205,9 +201,8 @@ def to_a2a_events(update: TaskUpdate, *, task_id: str, context_id: str) -> list[
 async def from_a2a_events(events: AsyncIterable[Any]) -> AsyncIterator[TaskUpdate]:
     """A task's event stream as updates — the inverse of :func:`to_a2a_events`.
 
-    Artifacts accumulate until the terminal status arrives, so the deliverable and the
-    lifecycle reach the caller as one update. A stream that ends without a terminal status
-    failed, which the caller sees as the iterator ending early.
+    Artifacts accumulate until the terminal status, so the deliverable and the lifecycle
+    reach the caller as one update; a stream that ends without one ends this iterator early.
     """
     # keyed per artifact id: a server may stream several at once and `append` names the one it
     # extends, so keying on nothing would concatenate one artifact's chunks onto another's

@@ -2259,6 +2259,14 @@ class TestReplyToolChoice:
 
         assert _reply_tool_choice(["none", "auto"]) is None
 
+    def test_a_named_tool_is_a_request_like_any_other(self):
+        """A ToolChoice naming a function is a dict, which does not go into a set."""
+        from livekit.agents.voice.tool_executor import _reply_tool_choice
+
+        named = {"type": "function", "function": {"name": "look_up"}}
+        assert _reply_tool_choice([named, dict(named)]) == named
+        assert _reply_tool_choice([named, "none"]) is None
+
 
 class TestSpeechHandleItemCallbacks:
     """A caller watching what a speech records, item by item."""
