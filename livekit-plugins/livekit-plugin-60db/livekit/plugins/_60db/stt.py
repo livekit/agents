@@ -67,11 +67,13 @@ class STT(stt.STT):
         # never send the API key (or conversation audio) to an arbitrary
         # plaintext destination — wss anywhere, ws only for localhost
         parsed_ws_url = urlparse(self._ws_url)
-        if parsed_ws_url.scheme not in ("ws", "wss", "http", "https"):
+        # websockets.connect only accepts ws/wss URIs — reject others here with
+        # a clear message instead of letting them fail at connect time
+        if parsed_ws_url.scheme not in ("ws", "wss"):
             raise ValueError(
                 f"60db STT: unsupported URL scheme {parsed_ws_url.scheme!r} in {self._ws_url!r}"
             )
-        if parsed_ws_url.scheme in ("ws", "http") and parsed_ws_url.hostname not in (
+        if parsed_ws_url.scheme == "ws" and parsed_ws_url.hostname not in (
             "localhost",
             "127.0.0.1",
             "::1",

@@ -30,9 +30,7 @@ _DEFAULT_API_URL = "https://api.60db.ai/v1/chat/completions"
 
 # request fields LLMStream builds from validated inputs; extra_kwargs must not
 # be able to replace them
-_RESERVED_BODY_FIELDS = frozenset(
-    {"model", "messages", "stream", "tools", "tool_choice", "parallel_tool_calls"}
-)
+_RESERVED_BODY_FIELDS = frozenset({"model", "messages", "stream", "tools"})
 
 
 class LLM(llm.LLM):
@@ -188,11 +186,17 @@ class LLMStream(llm.LLMStream):
         if self._llm_instance._max_tokens is not None:
             body["max_tokens"] = self._llm_instance._max_tokens
 
-        # Merge any extra kwargs, but never let them override the reserved
-        # fields this stream builds from validated inputs
+        # Merge any extra kwargs. Reserved fields built from validated inputs
+        # can't be replaced, and explicitly given tool options win — but
+        # extra_kwargs may still supply tool options the dedicated parameters
+        # didn't set
         for key, value in self._extra_kwargs.items():
-            if key not in _RESERVED_BODY_FIELDS:
-                body[key] = value
+            if key in _RESERVED_BODY_FIELDS:
+                logger.warning("60db LLM: ignoring reserved extra_kwarg %r", key)
+                continue
+            if key in body:
+                continue
+            body[key] = value
 
         # Tool call accumulation state
         tool_call_id: str | None = None
