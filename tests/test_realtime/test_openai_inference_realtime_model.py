@@ -10,13 +10,21 @@ import pytest
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents._exceptions import APIError
-from livekit.plugins.openai.realtime import (
-    InferenceRealtimeModel,
-    inference_realtime_model as inference_realtime,
-)
-from livekit.plugins.openai.realtime.realtime_model import RealtimeSession
+from livekit.agents.inference import RealtimeModel
+from livekit.agents.inference.realtime import openai as inference_realtime
+from livekit.agents.inference.realtime.openai import RealtimeSession
 
 pytestmark = pytest.mark.unit
+
+
+def test_plugin_import_is_canonical_class() -> None:
+    from livekit.plugins.openai.realtime import InferenceRealtimeModel
+    from livekit.plugins.openai.realtime.inference_realtime_model import (
+        InferenceRealtimeSession,
+    )
+
+    assert InferenceRealtimeModel is RealtimeModel
+    assert InferenceRealtimeSession is RealtimeSession
 
 
 class _FakeWebSocket:
@@ -50,7 +58,7 @@ def paused_realtime_main(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_requires_provider_prefixed_model() -> None:
     with pytest.raises(ValueError, match="provider-prefixed"):
-        InferenceRealtimeModel("gpt-realtime", api_key="key", api_secret="secret")
+        RealtimeModel("gpt-realtime", api_key="key", api_secret="secret")
 
 
 @pytest.mark.parametrize(
@@ -77,7 +85,7 @@ def test_requires_livekit_credentials(
     kwargs[f"api_{missing}"] = None
 
     with pytest.raises(ValueError, match=message):
-        InferenceRealtimeModel("openai/gpt-realtime", **kwargs)
+        RealtimeModel("openai/gpt-realtime", **kwargs)
 
 
 def test_credentials_and_url_follow_inference_environment(
@@ -87,7 +95,7 @@ def test_credentials_and_url_follow_inference_environment(
     monkeypatch.setenv("LIVEKIT_INFERENCE_API_SECRET", "inference-secret")
     monkeypatch.setenv("LIVEKIT_INFERENCE_URL", "https://inference.example/v1")
 
-    model = InferenceRealtimeModel("openai/gpt-realtime")
+    model = RealtimeModel("openai/gpt-realtime")
 
     assert model._inference_opts.api_key == "inference-key"
     assert model._inference_opts.api_secret == "inference-secret"
@@ -100,7 +108,7 @@ async def test_openai_environment_does_not_enable_azure_mode(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_VERSION", "2025-04-01-preview")
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://azure.example")
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         base_url="https://inference.example/v1",
         api_key="key",
@@ -138,7 +146,7 @@ async def test_connection_refreshes_livekit_auth_and_custom_headers(
         lambda *, inference_class: {"X-Test-Class": inference_class or ""},
     )
     http_session = _FakeHTTPSession()
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         provider="openai",
         base_url="https://inference.example/v1",
@@ -168,7 +176,7 @@ async def test_connection_refreshes_livekit_auth_and_custom_headers(
 async def test_initial_session_update_omits_gateway_model_field(
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         api_key="key",
         api_secret="secret",
@@ -197,7 +205,7 @@ async def test_gateway_configuration_errors_are_fatal(
     code: str,
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         api_key="key",
         api_secret="secret",
@@ -212,7 +220,7 @@ async def test_gateway_invalid_audio_payload_is_recoverable(
     monkeypatch: pytest.MonkeyPatch,
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         api_key="key",
         api_secret="secret",
@@ -244,7 +252,7 @@ async def test_gateway_invalid_audio_payload_is_recoverable(
 async def test_gateway_configuration_error_stops_reconnect(
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         api_key="key",
         api_secret="secret",
@@ -270,7 +278,7 @@ async def test_gateway_malformed_error_code_is_recoverable(
     monkeypatch: pytest.MonkeyPatch,
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "openai/gpt-realtime",
         api_key="key",
         api_secret="secret",
@@ -300,7 +308,7 @@ async def test_gateway_malformed_error_code_is_recoverable(
 
 
 def test_new_api_does_not_expose_deprecated_temperature() -> None:
-    parameters = inspect.signature(InferenceRealtimeModel).parameters
+    parameters = inspect.signature(RealtimeModel).parameters
 
     assert "temperature" not in parameters
 
@@ -308,7 +316,7 @@ def test_new_api_does_not_expose_deprecated_temperature() -> None:
 async def test_xai_models_use_gateway_compatible_defaults(
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "xai/grok-voice-latest",
         api_key="key",
         api_secret="secret",
@@ -329,7 +337,7 @@ async def test_xai_models_use_gateway_compatible_defaults(
 async def test_xai_gateway_defaults_can_be_overridden(
     paused_realtime_main: None,
 ) -> None:
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "xai/grok-voice-latest",
         api_key="key",
         api_secret="secret",
@@ -358,7 +366,7 @@ def test_xai_explicit_turn_detection_is_preserved() -> None:
         interrupt_response=False,
     )
 
-    model = InferenceRealtimeModel(
+    model = RealtimeModel(
         "xai/grok-voice-latest",
         api_key="key",
         api_secret="secret",
