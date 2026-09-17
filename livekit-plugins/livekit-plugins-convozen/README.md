@@ -39,7 +39,7 @@ from livekit.plugins import convozen, openai, silero
 
 session = AgentSession(
     stt=convozen.STT(language="hi"),
-    llm=openai.LLM(model="gpt-4o-mini"),
+    llm=openai.LLM(model="gpt-5.6-luna"),
     tts=convozen.TTS(voice="roohi", language="hi"),
     vad=silero.VAD.load(),  # required — see above
 )
