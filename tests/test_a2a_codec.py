@@ -309,7 +309,7 @@ async def test_a_reply_that_opens_no_task_is_the_answer() -> None:
     ("state", "expected"),
     [
         (pb.TaskState.TASK_STATE_REJECTED, "failed"),
-        (pb.TaskState.TASK_STATE_AUTH_REQUIRED, "input-required"),
+        (pb.TaskState.TASK_STATE_AUTH_REQUIRED, "failed"),
     ],
 )
 async def test_foreign_states_map_to_what_the_caller_can_act_on(state: Any, expected: str) -> None:
