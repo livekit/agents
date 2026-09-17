@@ -198,6 +198,18 @@ model = aws.realtime.RealtimeModel.with_nova_sonic_2(
 - **MEDIUM**: Balanced approach with moderate response time. Reduces false positives while maintaining responsiveness (recommended)
 - **LOW**: Slowest response time with maximum patience, better for hesitant speakers
 
+### Session ID
+
+Nova Sonic assigns an ID to every stream it serves. It is the identifier AWS needs to trace a session, so the plugin logs it at `INFO` level as soon as the stream is established, before the user has said anything:
+
+```
+Nova Sonic sessionId: 6ca6a0e8-b0fa-4dbc-bd6b-dddee9da9bc7
+```
+
+The same value is available programmatically as `RealtimeSession.session_id`.
+
+Note that one agent session can span several Nova Sonic session IDs: the plugin recycles the stream before the service's session-duration limit and on credential refresh, and each new stream is assigned a new ID. One line is logged per ID, so include all of them when reporting an issue to AWS.
+
 ### Complete Example
 
 ```python
