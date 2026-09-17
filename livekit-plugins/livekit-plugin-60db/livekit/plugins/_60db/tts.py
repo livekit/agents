@@ -108,11 +108,14 @@ class ChunkedStream(tts.ChunkedStream):
                 ping_timeout=10,
                 max_size=10 * 1024 * 1024,
             ) as ws:
-                # Wait for connection_established
-                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
-                data = json.loads(msg)
-                if not data.get("connection_established"):
-                    raise APIConnectionError("60db TTS: expected connection_established")
+                # Wait for connection_established (the server may send a
+                # {"connecting": true} status message first)
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
+                    data = json.loads(msg)
+                    if data.get("connection_established"):
+                        break
+                    logger.debug("60db TTS ChunkedStream: status: %s", data)
                 logger.info("60db TTS ChunkedStream: connection established")
 
                 # Create context
@@ -210,11 +213,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 ping_timeout=10,
                 max_size=10 * 1024 * 1024,
             ) as ws:
-                # Wait for connection_established
-                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
-                data = json.loads(msg)
-                if not data.get("connection_established"):
-                    raise APIConnectionError("60db TTS: expected connection_established")
+                # Wait for connection_established (the server may send a
+                # {"connecting": true} status message first)
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
+                    data = json.loads(msg)
+                    if data.get("connection_established"):
+                        break
+                    logger.debug("60db TTS SynthesizeStream: status: %s", data)
 
                 # Create context
                 await ws.send(
@@ -250,10 +256,19 @@ class SynthesizeStream(tts.SynthesizeStream):
                 segment_id = utils.shortuuid()
                 output_emitter.start_segment(segment_id=segment_id)
 
+                # coordinate closing the context with the completion of the final flush
+                final_flush_done = asyncio.Event()
+                pending_flushes = 0
+                input_ended = False
+
                 # Send and receive tasks running in parallel
+                text_since_flush = False
+
                 async def send_task() -> None:
+                    nonlocal pending_flushes, input_ended, text_since_flush
                     async for input in self._input_ch:
                         if isinstance(input, str):
+                            text_since_flush = True
                             await ws.send(
                                 json.dumps(
                                     {
@@ -265,12 +280,25 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 )
                             )
                         elif isinstance(input, self._FlushSentinel):
+                            # skip empty flushes (no text since the last flush) — the
+                            # provider does not answer them with flush_completed
+                            if not text_since_flush:
+                                continue
+                            text_since_flush = False
+                            pending_flushes += 1
                             await ws.send(json.dumps({"flush_context": {"context_id": context_id}}))
 
-                    # Input ended — close the context
+                    # Input ended — wait for the final flush's audio to be received before
+                    # closing the context, otherwise the provider may stop generating early
+                    # and return truncated speech
+                    input_ended = True
+                    if pending_flushes == 0:
+                        final_flush_done.set()
+                    await final_flush_done.wait()
                     await ws.send(json.dumps({"close_context": {"context_id": context_id}}))
 
                 async def recv_task() -> None:
+                    nonlocal pending_flushes
                     while True:
                         msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
                         data = json.loads(msg)
@@ -283,6 +311,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                         if data.get("flush_completed"):
                             output_emitter.end_segment()
+                            if pending_flushes > 0:
+                                pending_flushes -= 1
+                            if input_ended and pending_flushes == 0:
+                                final_flush_done.set()
 
                         if data.get("context_closed"):
                             logger.info("60db TTS SynthesizeStream: context closed")

@@ -147,15 +147,19 @@ class SpeechStream(stt.SpeechStream):
                 self._ws = ws
                 logger.info("60db STT: WebSocket connected")
 
-                # Step 2: Wait for connection_established
-                msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
-                data = json.loads(msg)
-                if (
-                    not data.get("connection_established")
-                    and data.get("type") != "connection_established"
-                ):
-                    logger.error("60db STT: expected connection_established, got: %s", data)
-                    raise APIConnectionError("60db STT: failed to establish connection")
+                # Step 2: Wait for connection_established (the server may send a
+                # {"type": "connecting"} status message first)
+                while True:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self._conn_options.timeout)
+                    data = json.loads(msg)
+                    if (
+                        data.get("connection_established")
+                        or data.get("type") == "connection_established"
+                    ):
+                        break
+                    if data.get("type") == "error":
+                        raise APIConnectionError(f"60db STT: handshake error: {data}")
+                    logger.debug("60db STT: status: %s", data)
                 logger.info("60db STT: connection established")
 
                 # Step 3: Send start message
@@ -202,6 +206,13 @@ class SpeechStream(stt.SpeechStream):
                 finally:
                     # Send stop on close
                     if self._session_started and self._ws:
+                        # Send trailing silence first: the provider's endpointer
+                        # discards the final utterance when audio ends right
+                        # after speech, returning an empty transcript
+                        try:
+                            await self._send_trailing_silence(ws)
+                        except Exception as e:
+                            logger.warning("60db STT: failed to send trailing silence: %s", e)
                         try:
                             await ws.send(json.dumps({"type": "stop"}))
                             logger.info("60db STT: sent stop message")
@@ -228,6 +239,23 @@ class SpeechStream(stt.SpeechStream):
         finally:
             self._ws = None
             self._session_started = False
+
+    async def _send_trailing_silence(self, ws) -> None:
+        """Send ~1s of silence before stop so the endpointer closes the last utterance.
+
+        The 60db endpointer can discard the final utterance when the audio ends
+        immediately after speech (e.g. short clips), yielding an empty transcript.
+        """
+        rate = self._input_sample_rate or self._target_sample_rate
+        channels = self._input_channels or 1
+        chunk_ms = 30
+        total_ms = 1000
+        chunk = b"\x00" * (rate * 2 * channels * chunk_ms // 1000)  # 16-bit
+        sent_ms = 0
+        while sent_ms < total_ms:
+            await ws.send(self._convert_audio(chunk))
+            sent_ms += chunk_ms
+        logger.info("60db STT: sent %dms of trailing silence", sent_ms)
 
     async def _receive_loop(self) -> None:
         """Receive transcription messages from WebSocket."""
