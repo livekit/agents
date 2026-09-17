@@ -55,6 +55,11 @@ def _short(text: str | None, limit: int = 90) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def _trace(call_id: str, arrow: str, text: str | None, limit: int = 90) -> None:
+    """One line of the trace: which delegation, which direction, and what was said."""
+    logger.info(f"{_short(call_id, 12):<12} {arrow} {_short(text, limit)}")
+
+
 class Receptionist(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -102,7 +107,7 @@ class Receptionist(Agent):
             result = await GetEmailTask(chat_ctx=self.chat_ctx)
 
         email = result.email_address.strip().lower()
-        logger.info(f"caller identified as {email}")
+        _trace(ctx.function_call.call_id, "·", f"caller identified as {email}")
         # said back into the conversation, so the next delegation carries it to the desk
         return f"confirmed with the caller: {email}"
 
@@ -126,36 +131,45 @@ async def entrypoint(ctx: JobContext) -> None:
     def _on_directive(ev: DirectiveReceivedEvent) -> None:
         # advice, acted on after the answer: shutdown drains, so whatever is queued plays
         # out before the call ends. what to do about a directive is yours
-        logger.info(f"── directive: {ev.kind} ({ev.reason})")
+        _trace(ev.call_id or "", "⚑", f"{ev.kind} ({ev.reason})")
         if ev.kind == "end_session":
             session.shutdown()
 
-    # this side's half of the trace: what was asked of the desk, what it relayed back while
-    # it worked, and what it answered. The desk's own tool calls are in the other terminal.
+    # this side's half of the trace, one line per event under the call that owns it: ▶ what
+    # went to the desk, … what it relayed back while it worked, ◀ what it answered, ⚑ what it
+    # asked us to do; → ← · a tool of our own, its result, and what it learned on the way.
+    # The desk's half is in the other terminal, under its own task ids.
     #
-    #   ▶ delegated: caller's flight to Tokyo is delayed, find them something tomorrow
-    #   … relayed: holding a seat on NW812
-    #   ◀ answered: moved to NW812, 302.40 charged, the delay waived the fee
+    #   call_7f2a4b… ▶ my flight to Tokyo is delayed, what else can you put me on?
+    #   call_7f2a4b… … holding a seat on NW812
+    #   call_7f2a4b… ◀ moved to NW812, 302.40 charged, the delay waived the fee
+    delegations: set[str] = set()
+
     @session.on("tool_execution_updated")
     def _on_tool_execution_updated(ev: ToolExecutionUpdatedEvent) -> None:
         update = ev.update
         if update.type == "tool_call_started":
             call = update.function_call
             if call.name != DELEGATE_TOOL_NAME:
-                logger.info(f"     → {call.name}({_short(call.arguments)})")
+                _trace(call.call_id, "→", f"{call.name}({call.arguments})")
                 return
+            delegations.add(call.call_id)
             try:
                 task = json.loads(call.arguments or "{}").get("task", "")
             except ValueError:
                 task = call.arguments
-            logger.info(f"▶ delegated: {_short(task, 200)}")
+            _trace(call.call_id, "▶", task, limit=200)
         elif update.type == "tool_call_updated":
             # the dispatch note is recorded for the model and never spoken, and is not worth
             # a line; everything else here is the desk reporting as it works
             if not update.silent:
-                logger.info(f"… relayed: {_short(update.message)}")
+                _trace(update.call_id, "…", update.message)
         elif update.type == "tool_call_ended":
-            logger.info(f"◀ answered: {_short(update.message, 200)}")
+            # an answer said as written comes back with nothing to return, so the status is
+            # all there is to say about how it ended
+            arrow = "◀" if update.call_id in delegations else "←"
+            delegations.discard(update.call_id)
+            _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
     await session.start(agent=Receptionist(), room=ctx.room)
 

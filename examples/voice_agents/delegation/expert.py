@@ -38,13 +38,14 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    ConversationItemAddedEvent,
     RunContext,
     ToolError,
     ToolExecutionUpdatedEvent,
     cli,
     inference,
 )
-from livekit.agents.a2a import A2ASessionContext
+from livekit.agents.a2a import REQUEST_ID_KEY, A2ASessionContext
 from livekit.agents.llm import ToolFlag, function_tool
 
 logger = logging.getLogger("fare-desk")
@@ -277,6 +278,11 @@ def _short(text: str | None, limit: int = 90) -> str:
     """One clipped line. Tool payloads are long and it is the shape of the call that reads."""
     flat = " ".join((text or "").split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _trace(task_id: str, arrow: str, text: str | None, limit: int = 90) -> None:
+    """One line of the trace: which task, which direction, and what was said."""
+    logger.info(f"{_short(task_id, 12):<12} {arrow} {_short(text, limit)}")
 
 
 def _discount_percent(traveler: Traveler, bucket: str, owed: bool) -> int:
@@ -822,29 +828,44 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
         llm=inference.LLM("google/gemma-4-31b-it"), userdata=userdata, max_tool_steps=8
     )
 
-    # the desk's own half of the trace. The phone agent's half is in the other terminal:
-    # two processes, so the hand-off reads across two logs rather than one.
+    # the desk's own half of the trace, one line per event under the task it belongs to, so
+    # two requests in flight stay apart: ▶ what came in, → a tool call, … a report while it
+    # runs, ← its result, ◀ what went back. The phone agent's half is in the other terminal.
     #
-    #   ▶ request: caller's flight to Tokyo is delayed, find them something tomorrow
-    #        → check_weather({"airport": "HND", "date": "2026-09-23"})
-    #        ← done: {'conditions': 'typhoon warning', ...}
-    #        → rebook({"booking_ref": "NW7Q2K", "new_flight_no": "NW812", ...})
-    #        … rebook: holding a seat on NW812
-    #        ← done: {'booking_ref': 'NW7Q2K', 'charged_usd': 302.4}
-    names: dict[str, str] = {}
+    #                ▶ my flight to Tokyo is delayed, what else can you put me on?
+    #   5517e27c-a3… → rebook({"booking_ref": "NW7Q2K", "new_flight_no": "NW812", ...})
+    #   5517e27c-a3… … rebook: holding a seat on NW812
+    #   5517e27c-a3… ← done: {'booking_ref': 'NW7Q2K', 'charged_usd': 302.4}
+    #   5517e27c-a3… ◀ moved to NW812, 302.40 charged, the delay waived the fee
+    # call id -> the task that made the call, and the name of the tool it calls
+    calls: dict[str, tuple[str, str]] = {}
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
+        if ev.item.type != "message":
+            return
+        # the conversation frames the work, so it takes no task id: what came in at the top,
+        # what went back at the bottom, and the task's own lines in between
+        _trace("", "▶" if ev.item.role == "user" else "◀", ev.item.text_content, limit=200)
 
     @session.on("tool_execution_updated")
     def _on_tool_execution_updated(ev: ToolExecutionUpdatedEvent) -> None:
         update = ev.update
         if update.type == "tool_call_started":
             call = update.function_call
-            names[call.call_id] = call.name
-            logger.info(f"     → {call.name}({_short(call.arguments)})")
-        elif update.type == "tool_call_updated" and not update.silent:
-            logger.info(f"     … {names.get(update.call_id, '?')}: {_short(update.message)}")
+            task_id = call.extra.get(REQUEST_ID_KEY, "")
+            calls[call.call_id] = (task_id, call.name)
+            _trace(task_id, "→", f"{call.name}({call.arguments})")
+            return
+
+        # a deferred reply's update names several calls and belongs to none of them, so
+        # only the two that name one read the table
+        if update.type == "tool_call_updated" and not update.silent:
+            task_id, name = calls.get(update.call_id, ("", "?"))
+            _trace(task_id, "…", f"{name}: {update.message}")
         elif update.type == "tool_call_ended":
-            names.pop(update.call_id, "")
-            logger.info(f"     ← {update.status}: {_short(update.message)}")
+            task_id, name = calls.pop(update.call_id, ("", "?"))
+            _trace(task_id, "←", f"{update.status}: {update.message}")
 
     await session.start(agent=FareDesk())
     # TODO(v1): runs in the server process; the same handler moves to a job process with #4337
