@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import a2a
-from livekit.agents.a2a._extension import (
+from livekit.agents.a2a.extension import (
     ANSWER_ARTIFACT_NAME,
     DIRECTIVE,
     KIND,

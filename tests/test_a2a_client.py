@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from livekit.agents import a2a
-from livekit.agents.a2a._extension import EXTENSION_URI, KIND, REASON, as_dict, pb
+from livekit.agents.a2a.extension import EXTENSION_URI, KIND, REASON, as_dict, pb
 
 pytestmark = pytest.mark.unit
 

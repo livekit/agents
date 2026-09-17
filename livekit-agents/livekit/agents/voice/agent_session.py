@@ -31,7 +31,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
-from ..delegation._delegate import DelegationOptions, resolve_delegation_options
+from ..delegation.delegate import DelegationOptions, resolve_delegation_options
 from ..job import get_job_context
 from ..llm import (
     LLM,

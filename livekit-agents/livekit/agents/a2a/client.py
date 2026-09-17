@@ -9,9 +9,9 @@ from typing import Any, cast
 
 from ..log import logger
 from ..utils import shortuuid
-from ._codec import from_a2a_events, to_a2a_request
-from ._extension import EXTENSION_URI, REASON, offers_extension, pb, struct
-from ._types import TaskInput, TaskUpdate
+from .codec import from_a2a_events, to_a2a_request
+from .extension import EXTENSION_URI, REASON, offers_extension, pb, struct
+from .types import TaskInput, TaskUpdate
 
 try:
     import httpx
