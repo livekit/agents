@@ -82,11 +82,11 @@ not.
 ```python
 convozen.TTS(
     voice="roohi",  # any voice id the account has access to
-    model="ragini-v1",  # or the lighter "ragini-lite" or "ragini-v2"
+    model="ragini-v1",  # or the lighter "ragini-lite"
     language="hi",
     speed=1.0,
     # sample_rate defaults to the model's native rate:
-    # 24000 for ragini-v1, 22050 for ragini-lite , 24000 for ragini-v2
+    # 24000 for ragini-v1, 22050 for ragini-lite
 )
 ```
 
