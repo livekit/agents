@@ -1311,6 +1311,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 self.emit("close", CloseEvent(error=error, reason=reason))
 
+                if self._session_host:
+                    await self._session_host.aclose()
+                    self._session_host = None
+
+                # close room io after close event is emitted
+                if self._room_io:
+                    await self._room_io.aclose()
+                    self._room_io = None
+            finally:
+                # the session is closed whatever the teardown raised
+                self._started = False
                 self._cancel_user_away_timer()
                 self._user_state = "listening"
                 self._agent_state = "initializing"
@@ -1323,15 +1334,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         RuntimeError(f"session closed: {error}" if error else "session closed")
                     )
 
-                if self._session_host:
-                    await self._session_host.aclose()
-                    self._session_host = None
-
-                # close room io after close event is emitted
-                if self._room_io:
-                    await self._room_io.aclose()
-                    self._room_io = None
-            finally:
                 close_span.end()
                 otel_context.detach(close_token)
                 if self._session_span:
