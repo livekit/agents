@@ -1,0 +1,21 @@
+tests/test_amd_models.py
+  s_a55799479f59b9::t_11060e3698d9d4 82-85,315-318,340-344,441,456-459,483-487
+tests/test_amd_silence.py
+  s_a55799479f59b9::t_05f7fb7b467e83 499-503,505
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19c76e5f7adf4403d18ae1d8290ccd012ce28873",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
