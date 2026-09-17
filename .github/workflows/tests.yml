@@ -93,12 +93,13 @@ jobs:
         run: uv run pytest --evals
 
   tests:
-    # don't run tests for PRs on forks; these integration tests hit paid
-    # provider APIs (Cartesia, Deepgram, ElevenLabs, ...) and only make sense
-    # where the provider secrets are configured on the repo
-    if: >-
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) &&
-      secrets.LIVEKIT_API_KEY != ''
+    # don't run tests for PRs on forks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    # these integration tests hit paid provider APIs (Cartesia, Deepgram, ...)
+    # the secrets context isn't allowed in a job-level `if`, so expose it
+    # through env and gate the test step instead
+    env:
+      HAS_PROVIDER_CREDENTIALS: ${{ secrets.LIVEKIT_API_KEY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +125,7 @@ jobs:
           printf '%s' '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > tests/google.json
 
       - name: Run tests
+        if: env.HAS_PROVIDER_CREDENTIALS == 'true'
         shell: bash
         env:
           PLUGIN: ${{ matrix.plugin }}
@@ -181,7 +183,7 @@ jobs:
         with:
           pattern: lk-dump-*
           path: all_lk_dump
-          merge-multiple: true
+          merge-multiple: true 
 
       - name: create tarball
         id: tar

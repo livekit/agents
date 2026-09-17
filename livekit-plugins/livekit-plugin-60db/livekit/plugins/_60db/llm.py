@@ -28,6 +28,12 @@ load_dotenv(Path(".env.local"))
 
 _DEFAULT_API_URL = "https://api.60db.ai/v1/chat/completions"
 
+# request fields LLMStream builds from validated inputs; extra_kwargs must not
+# be able to replace them
+_RESERVED_BODY_FIELDS = frozenset(
+    {"model", "messages", "stream", "tools", "tool_choice", "parallel_tool_calls"}
+)
+
 
 class LLM(llm.LLM):
     """60db.ai HTTP-based LLM provider for LiveKit Agents."""
@@ -110,6 +116,8 @@ class LLM(llm.LLM):
             chat_ctx=chat_ctx,
             tools=tools or [],
             conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
             extra_kwargs=extra_kwargs if is_given(extra_kwargs) else {},
         )
 
@@ -127,11 +135,19 @@ class LLMStream(llm.LLMStream):
         chat_ctx: llm.ChatContext,
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
         extra_kwargs: dict[str, Any],
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._llm_instance: LLM = llm
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
         self._extra_kwargs = extra_kwargs
+        # chunks are emitted to the caller as they arrive; a retry after output
+        # was sent would duplicate speech or tool execution, so let the
+        # framework mark errors non-retryable once output has left the stream
+        self._retry_on_chunk_sent = False
 
     async def _run(self) -> None:
         # Convert chat context to OpenAI format
@@ -151,6 +167,12 @@ class LLMStream(llm.LLMStream):
         if tool_schemas:
             body["tools"] = tool_schemas
 
+        if is_given(self._tool_choice):
+            body["tool_choice"] = self._tool_choice
+
+        if is_given(self._parallel_tool_calls):
+            body["parallel_tool_calls"] = self._parallel_tool_calls
+
         if self._llm_instance._top_k is not None:
             body["top_k"] = self._llm_instance._top_k
 
@@ -166,8 +188,11 @@ class LLMStream(llm.LLMStream):
         if self._llm_instance._max_tokens is not None:
             body["max_tokens"] = self._llm_instance._max_tokens
 
-        # Merge any extra kwargs
-        body.update(self._extra_kwargs)
+        # Merge any extra kwargs, but never let them override the reserved
+        # fields this stream builds from validated inputs
+        for key, value in self._extra_kwargs.items():
+            if key not in _RESERVED_BODY_FIELDS:
+                body[key] = value
 
         # Tool call accumulation state
         tool_call_id: str | None = None

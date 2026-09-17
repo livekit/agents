@@ -5,6 +5,7 @@ import audioop
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import websockets
 from dotenv import load_dotenv
@@ -61,6 +62,23 @@ class STT(stt.STT):
         if not self._ws_url:
             raise ValueError(
                 "60db STT WebSocket URL is required. Set SIXTY_DB_STT_URL env var or pass ws_url argument."
+            )
+
+        # never send the API key (or conversation audio) to an arbitrary
+        # plaintext destination — wss anywhere, ws only for localhost
+        parsed_ws_url = urlparse(self._ws_url)
+        if parsed_ws_url.scheme not in ("ws", "wss", "http", "https"):
+            raise ValueError(
+                f"60db STT: unsupported URL scheme {parsed_ws_url.scheme!r} in {self._ws_url!r}"
+            )
+        if parsed_ws_url.scheme in ("ws", "http") and parsed_ws_url.hostname not in (
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ):
+            raise ValueError(
+                "60db STT: plaintext WebSocket URL is only allowed for localhost; "
+                "use a wss:// URL to avoid exposing the API key and audio"
             )
 
         logger.info("60db STT: initialized with ws_url=%s", self._ws_url)
@@ -135,7 +153,10 @@ class SpeechStream(stt.SpeechStream):
     async def _run(self) -> None:
         """Main run loop: connect WebSocket, handshake, stream audio, receive transcriptions."""
         try:
-            url = f"{self._ws_url}?apiKey={self._api_key}"
+            # a custom endpoint may already carry query params — appending
+            # another '?' would break apiKey parsing on the server
+            separator = "&" if "?" in self._ws_url else "?"
+            url = f"{self._ws_url}{separator}apiKey={self._api_key}"
             logger.info("60db STT: connecting to %s", self._ws_url)
 
             async with websockets.connect(
@@ -202,7 +223,9 @@ class SpeechStream(stt.SpeechStream):
                         await ws.send(audio_data)
 
                 except Exception as e:
-                    logger.error("60db STT: audio streaming error: %s", e)
+                    # a silent end here would drop the remaining transcript;
+                    # surface the failure so the caller knows recognition died
+                    raise APIConnectionError(f"60db STT: audio streaming error: {e}") from e
                 finally:
                     # Send stop on close
                     if self._session_started and self._ws:
