@@ -75,10 +75,10 @@ class Receptionist(Agent):
                 "one that knows today's date. If what comes back lists more than one "
                 "booking, ask which flight they mean by route and date. "
                 "The one thing you do yourself is take an email address, with collect_email, "
-                "and only when what came back asks for one — never to open with."
+                "and only when what came back asks for one — never to open with. "
+                "Wait for the caller to speak before you use any tool: until they have asked "
+                "for something there is nothing to delegate and nobody to look up."
             ),
-            # the conversation model. Its tool list is lk_agents_delegate and collect_email
-            # llm=openai.realtime.RealtimeModel(model="gpt-realtime-2"),
         )
 
     async def on_enter(self) -> None:
@@ -125,11 +125,11 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("delegation_directive")
     def _on_directive(ev: DelegationDirectiveEvent) -> None:
-        # advice, acted on after the answer has been said. What to do about it is yours:
-        # here the caller is done, so the room closes once the goodbye has played.
+        # advice, acted on after the answer: shutdown drains, so whatever is queued plays
+        # out before the call ends. what to do about a directive is yours
         logger.info(f"── directive: {ev.kind} ({ev.reason})")
         if ev.kind == "end_session":
-            ctx.delete_room()
+            session.shutdown()
 
     # this side's half of the trace: what was asked of the desk, what it relayed back while
     # it worked, and what it answered. The desk's own tool calls are in the other terminal.

@@ -16,8 +16,9 @@ from fastapi import FastAPI
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._extension import EXTENSION_URI, KIND, as_dict
-from livekit.agents.a2a._server import AGENT_CARD_PATH, TextSessionContext, mount
+from livekit.agents.a2a._server import AGENT_CARD_PATH, IDLE_TIMEOUT, TextSessionContext, mount
 from livekit.agents.http import _proxied_endpoints
+from livekit.agents.llm import ToolFlag
 
 from .fake_llm import FakeLLM
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -31,6 +32,14 @@ async def check_fares(ctx: RunContext) -> str:
     await ctx.update("checking the fare rules")
     await asyncio.sleep(0.05)
     return "fare is 240 USD"
+
+
+@function_tool(flags={ToolFlag.CANCELLABLE})
+async def hold_seat(ctx: RunContext) -> str:
+    """Hold a seat, slowly enough that a cancel can land on it."""
+    await ctx.update("holding the seat")
+    await asyncio.sleep(60)
+    return "held"
 
 
 @function_tool
@@ -48,6 +57,7 @@ def _fare_desk_llm() -> FakeLLM:
             _says("what is the change fee", "The change fee is $75."),
             _says("what is the fare", "", calls=[_tool_call("check_fares", "cf1")]),
             _says("that is all", "", calls=[_tool_call("say_goodbye", "sg1")]),
+            _says("hold it", "", calls=[_tool_call("hold_seat", "hs1")]),
         ],
         fallbacks=["It is 240 USD.", "Thanks for calling."],
     )
@@ -63,18 +73,26 @@ class _Served:
 
 
 @contextlib.asynccontextmanager
-async def _serving(endpoint: str = "fare-desk") -> AsyncIterator[_Served]:
+async def _serving(
+    endpoint: str = "fare-desk", *, idle_timeout: float = IDLE_TIMEOUT
+) -> AsyncIterator[_Served]:
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known
 
     async def fare_desk(ctx: TextSessionContext) -> None:
         session = AgentSession(llm=_fare_desk_llm())
-        await session.start(agent=Agent(instructions="fare desk", tools=[check_fares, say_goodbye]))
+        await session.start(
+            agent=Agent(instructions="fare desk", tools=[check_fares, say_goodbye, hold_seat])
+        )
         served.sessions.append(session)
         ctx.attach(session)
 
     executor = mount(
-        app, endpoint=endpoint, handler=fare_desk, description="Answers fare questions."
+        app,
+        endpoint=endpoint,
+        handler=fare_desk,
+        description="Answers fare questions.",
+        idle_timeout=idle_timeout,
     )
     served.executor = executor
 
@@ -226,6 +244,45 @@ async def test_closing_drops_the_conversation() -> None:
 
     # the expert's session went with it
     assert not served.sessions[0]._started
+
+
+async def test_cancelling_a_task_ends_it_canceled_over_the_wire() -> None:
+    """A cancel is a state the caller can act on, not a stream that stops mid-sentence."""
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving() as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        updates: list[TaskUpdate] = []
+        try:
+            async with client.send(TaskInput(instruction="hold it")) as stream:
+                async for update in stream:
+                    updates.append(update)
+                    if update.text == "holding the seat":
+                        await stream.cancel("user_interrupted")
+        finally:
+            await client.aclose()
+
+    assert updates[-1].state == "canceled"
+
+
+async def test_a_conversation_nobody_comes_back_to_is_dropped() -> None:
+    """The backstop behind lk/kind = close: a caller that crashes says goodbye to nobody."""
+    from livekit.agents.a2a import A2AClient
+
+    async with _serving(idle_timeout=0.2) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            await _collect(client, TaskInput(instruction="what is the change fee"))
+            assert len(served.executor._conversations) == 1
+            for _ in range(60):
+                await asyncio.sleep(0.05)
+                if not served.executor._conversations:
+                    break
+            # the goodbye below would drop it too, so the claim is made before saying one
+            assert served.executor._conversations == {}
+            assert not served.sessions[0]._started
+        finally:
+            await client.aclose()
 
 
 async def test_a_stock_client_reads_the_same_endpoint() -> None:

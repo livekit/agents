@@ -36,8 +36,7 @@ class DelegateStream(Protocol):
 class Delegate(ABC):
     """An expert the conversation hands work to, here or behind a socket.
 
-    A delegate is attached to one ``AgentSession`` or one ``Agent`` and closed by it, so one
-    holding a connection or a session of its own releases it in :meth:`aclose`. Give each
+    Attached to one ``AgentSession`` or one ``Agent`` and closed by it, so give each
     conversation its own.
     """
 
@@ -58,11 +57,10 @@ class DelegationOptions(TypedDict, total=False):
     metadata: dict[str, Any]
     """Application data attached to every delegation. JSON-serializable. Defaults to ``{}``."""
     announce: bool
-    """Whether answering the dispatch note is what acknowledges a delegation. Defaults to True.
+    """Whether answering the dispatch note is what acknowledges a delegation, default True.
 
-    A model cannot be relied on to write a line alongside the tool call, and realtime models
-    routinely emit the call and no speech. Turn it off for a model that does write one — the
-    tool then asks for it, which costs no round trip.
+    Turn it off for a model that reliably writes its own line alongside the call, which
+    costs no round trip.
     """
 
 

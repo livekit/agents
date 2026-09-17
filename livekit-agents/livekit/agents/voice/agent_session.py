@@ -1697,9 +1697,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     async def cancel_tool_call(self, call_id: str) -> bool:
         """Cancel one tool call running in this session.
 
-        Returns ``True`` when the call was cancelled. ``False`` when nothing by that
-        call id is running, when the tool does not allow cancellation, or when the
-        speech that issued it disallows interruptions.
+        False when nothing by that call id is running, when the tool does not allow
+        cancellation, or when the speech that issued it disallows interruptions.
         """
         task = _RunningTasks.get(self, {}).get(call_id)
         if task is None:

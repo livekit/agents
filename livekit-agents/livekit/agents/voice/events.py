@@ -46,8 +46,8 @@ Userdata_T = TypeVar("Userdata_T")
 MESSAGE_SOURCE_KEY = "message_source"
 """``ChatMessage.extra`` key on an assistant message: what produced it.
 
-``turn_end`` for a model turn that called nothing, ``tool_call`` for one that ended in
-tool calls, ``say`` for text handed to :meth:`AgentSession.say`.
+``turn_end`` for a model turn that called nothing, ``tool_call`` for one that ended in tool
+calls, ``say`` for text handed to :meth:`AgentSession.say`.
 """
 
 MessageSource = Literal["turn_end", "tool_call", "say"]
@@ -575,8 +575,7 @@ class ToolReplyUpdated(BaseModel):
 class DelegationDirectiveEvent(BaseModel):
     """A delegate asked the conversation to act once it has said the answer.
 
-    Advice, not an action: the answer is spoken first, and what to do about the kind is the
-    application's decision.
+    Advice, not an action: what to do about the kind is the application's decision.
     """
 
     type: Literal["delegation_directive"] = "delegation_directive"

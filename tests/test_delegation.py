@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, DelegationDirectiveEvent, RunContext, function_tool
+from livekit.agents import Agent, AgentSession, DelegationDirectiveEvent
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
 from livekit.agents.llm import FunctionToolCall
 
@@ -216,7 +216,40 @@ async def test_an_agents_delegate_overrides_the_sessions() -> None:
         await asyncio.wait_for(session.aclose(), timeout=10.0)
 
 
-@function_tool
-async def unrelated(ctx: RunContext) -> str:
-    """An ordinary tool that has nothing to do with delegation."""
-    return "ok"
+async def test_a_delegation_that_ends_without_a_state_is_a_failure() -> None:
+    """Rule 1: a stream that ends without a terminal status failed, and the conversation
+    has to hear that rather than a stray StopAsyncIteration."""
+    from livekit.agents.a2a import TaskInput
+    from livekit.agents.delegation import Delegate
+
+    class _Silent(Delegate):
+        def submit(self, task_input: TaskInput) -> Any:
+            return _SilentStream()
+
+    class _SilentStream:
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+        def __aiter__(self) -> Any:
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
+        async def cancel(self, reason: str = "") -> None:
+            return None
+
+        async def aclose(self) -> None:
+            return None
+
+    session = AgentSession(llm=_voice_llm(), delegate=_Silent())
+    await session.start(agent=Agent(instructions="voice"))
+    try:
+        session.generate_reply(user_input="how much is it")
+        await asyncio.sleep(5)
+        assert any("without an answer" in output for output in _outputs(session))
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=10.0)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections.abc import AsyncGenerator, AsyncIterator
 from types import TracebackType
 from typing import Any, cast
@@ -31,15 +30,15 @@ class TaskStream:
     """One task: the updates it produces, and the handle to cancel it.
 
     Read it under ``async with``, which closes the HTTP stream when the caller stops
-    listening. The server's task id arrives with the first event, so :attr:`task_id` is
-    empty until then and cancelling before it lands does nothing.
+    listening; :attr:`task_id` is empty until the first event, and cancelling before then
+    does nothing.
     """
 
     def __init__(self, client: A2AClient, task_input: TaskInput) -> None:
         self._client = client
         self._input = task_input
         self._task_id = ""
-        self._updates: AsyncIterator[TaskUpdate] | None = None
+        self._updates: AsyncGenerator[TaskUpdate, None] | None = None
         self._raw: AsyncGenerator[Any, None] | None = None
         self._holds_turn = False
 
@@ -58,10 +57,16 @@ class TaskStream:
             await self._client.cancel(self._task_id, reason=reason)
 
     async def aclose(self) -> None:
-        self._release_turn()
-        if self._raw is not None:
-            await self._raw.aclose()
-            self._raw = None
+        try:
+            # closing the outermost generator propagates down to the SDK's, which is what
+            # holds the HTTP connection; closing only that one strands the two wrapping it
+            if self._updates is not None:
+                await self._updates.aclose()
+            elif self._raw is not None:
+                await self._raw.aclose()
+        finally:
+            self._updates = self._raw = None
+            self._release_turn()
 
     async def _start(self) -> None:
         client = await self._client._connect()
@@ -78,7 +83,9 @@ class TaskStream:
             # the SDK under-declares its stream as an AsyncIterator; it is a generator, and
             # until it is closed it holds its HTTP connection
             self._raw = cast("AsyncGenerator[Any, None]", client.send_message(request))
-            self._updates = from_a2a_events(self._acknowledge(self._raw))
+            self._updates = cast(
+                "AsyncGenerator[TaskUpdate, None]", from_a2a_events(self._acknowledge(self._raw))
+            )
         except BaseException:
             self._release_turn()
             raise
@@ -132,12 +139,8 @@ class TaskStream:
 class A2AClient:
     """An A2A endpoint, as one conversation.
 
-    The card at ``<url>/.well-known/agent-card.json`` is read once, on the first send, so the
-    endpoint describes its own skills and auth rather than being a URL with an implicit
-    contract. The extension is activated only where the card offers it; otherwise both sides
-    speak plain A2A and the ``lk`` parts and metadata are ignored.
-
-    One instance is one ``context_id``, so give each conversation its own.
+    The card is read once on the first send, and the extension is activated only where that
+    card offers it; one instance is one ``context_id``, so give each conversation its own.
     """
 
     def __init__(
@@ -183,9 +186,11 @@ class A2AClient:
         request = pb.CancelTaskRequest(id=task_id)
         if reason:
             request.metadata.CopyFrom(struct({REASON: reason}))
-        with contextlib.suppress(Exception):
-            # best-effort by contract: a server may have finished, or may not support it
+        try:
             await client.cancel_task(request)
+        except Exception:
+            # best-effort by contract: a server may have finished, or may not support it
+            logger.debug("the endpoint did not cancel the task", extra={"task_id": task_id})
 
     def _take_open_questions(self) -> list[str]:
         """Tasks that ended asking something, handed over once for the server to match."""
@@ -224,15 +229,16 @@ class A2AClient:
     async def close_context(self) -> None:
         """Tell the endpoint the conversation is over, so it need not wait for idle.
 
-        Best-effort: a caller that crashes says nothing, so a server keeps its own idle
-        policy and this only saves it the wait.
+        Best-effort: a server keeps its own idle policy, and this only saves it the wait.
         """
         if self._client is None:
             return  # nothing was ever sent on this context
-        with contextlib.suppress(Exception):
+        try:
             async with self.send(TaskInput(closing=True)) as stream:
                 async for _ in stream:
                     pass
+        except Exception:
+            logger.debug("the endpoint did not take the goodbye", extra={"url": self._url})
 
     async def aclose(self) -> None:
         await self.close_context()

@@ -59,7 +59,7 @@ from .utils.hw import get_cpu_monitor
 from .version import __version__
 
 if TYPE_CHECKING:
-    from .a2a._server import TextSessionHandler
+    from .a2a._server import TextSessionHandler, _SessionExecutor
     from .tunnel import Tunnel
 
 
@@ -401,12 +401,11 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._worker_load: float = 0.0
 
         self._http_server: _HttpRunner | None = None
-        # COMMENT: Remove the http tunel for now, defer it after the protocol settled
         self._http_tunnel: Tunnel | None = None
         # built here and not in run(): the @server.http decorators run at import time
         self._http = FastAPI()
         self._http.state.agent_server = self
-        self._text_sessions: list[Any] = []
+        self._text_sessions: list[_SessionExecutor] = []
 
         self._lock = asyncio.Lock()
 

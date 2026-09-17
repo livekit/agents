@@ -12,10 +12,7 @@ if TYPE_CHECKING:
 
 
 class A2ADelegate(Delegate):
-    """An expert served at an HTTP endpoint speaking A2A.
-
-    The endpoint need not be ours: a card that does not offer the LiveKit profile is talked
-    to in plain A2A, which gets the instruction across as text and reads whatever comes back.
+    """An expert served at an HTTP endpoint speaking A2A, ours or not.
 
     One delegate is one conversation, so give each session its own::
 

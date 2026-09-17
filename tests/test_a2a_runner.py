@@ -11,6 +11,7 @@ from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a._runner import REQUEST_ID_KEY, RequestRun, SessionRunner
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolFlag
+from livekit.agents.voice.tool_executor import _RunningTasks
 
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
 
@@ -410,6 +411,91 @@ async def test_the_conversation_is_shown_once_across_requests() -> None:
     # the item already shown is not shown again
     assert "change my Monday flight" not in notes[1]
     assert "and the Tuesday one" in notes[1]
+
+
+async def test_cancelling_ends_the_request_with_what_it_had() -> None:
+    """A cancelled request still declares a terminal state: a stream that ends without one
+    reads as a failure, and the caller cannot tell the two apart."""
+
+    @function_tool(flags={ToolFlag.CANCELLABLE})
+    async def hold_seat(ctx: RunContext) -> str:
+        """Hold a seat, slowly."""
+        await ctx.update("holding the seat")
+        await asyncio.sleep(60)
+        return "held"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("hold it", "", calls=[_tool_call("hold_seat", "hs1")])],
+        fallbacks=["Holding."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[hold_seat]), llm=llm)
+
+    run = runner.submit(TaskInput(instruction="hold it"), request_id="r1")
+    updates: list[TaskUpdate] = []
+
+    async def _read() -> None:
+        async for update in run:
+            updates.append(update)
+            if update.text == "holding the seat":
+                await run.cancel()
+
+    await asyncio.wait_for(_read(), timeout=30.0)
+    await asyncio.wait_for(run.aclose(), timeout=10.0)
+    await _close(session, runner)
+
+    assert updates[-1].state == "canceled"
+    assert "hold_seat" in updates[-1].text
+
+
+async def test_a_stop_reaches_a_call_the_executor_does_not_have_yet() -> None:
+    """A call is in the turn's history before the executor registers it. A stop asked for in
+    that window finds nothing to stop, so it has to land when the executor takes the call."""
+    cancelled: list[str] = []
+
+    @function_tool(flags={ToolFlag.CANCELLABLE})
+    async def hold_seat(ctx: RunContext) -> str:
+        """Hold a seat, slowly."""
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            cancelled.append("hold_seat")
+            raise
+        return "held"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("hold it", "", calls=[_tool_call("hold_seat", "hs1")])],
+        fallbacks=["Holding."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[hold_seat]), llm=llm)
+
+    run = runner.submit(TaskInput(instruction="hold it"), request_id="r1")
+    seen = run.on_item
+
+    def stop_in_the_window(item: Any, handle: Any) -> None:
+        seen(item, handle)
+        if item.type == "function_call":
+            # the speech is deliberately left alone: interrupting it stops the call too, and
+            # what is under test is the stop only the call itself can take
+            assert item.call_id not in _RunningTasks.get(session, {}), "not the window"
+            run._stopping = True
+            runner._spawn(run._stop_call(item.call_id))
+
+    run.on_item = stop_in_the_window  # type: ignore[method-assign]
+
+    async def _until_the_call_lands() -> None:
+        async for update in run:
+            if update.item is not None and update.item.type == "function_call":
+                return
+
+    await asyncio.wait_for(_until_the_call_lands(), timeout=10.0)
+    await asyncio.sleep(2)
+    # closing the run interrupts the speech, which stops the call too: the claim is that the
+    # stop asked for in the window landed on its own
+    stopped_in_the_window = list(cancelled)
+    await asyncio.wait_for(run.aclose(), timeout=10.0)
+    await _close(session, runner)
+
+    assert stopped_in_the_window == ["hold_seat"]
 
 
 async def test_closing_the_run_cancels_the_work_it_can_stop() -> None:

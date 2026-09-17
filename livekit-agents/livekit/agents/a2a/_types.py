@@ -9,41 +9,36 @@ from ..llm.chat_context import ChatContext, ChatItem
 from ..voice.served_request import Directive
 
 TaskState = Literal["working", "completed", "failed", "canceled", "input-required"]
-"""How far a task has got, in A2A's task states.
+"""How far a task has got: ``working`` repeats, and every other state ends it.
 
-``working`` is intermediate and repeats; the rest end the task. ``input-required`` ends it
-too — the answer is a question, nothing waits on it, and the reply is a new task.
+``input-required`` ends it too — the answer is a question, and the reply is a new task.
 """
 
 
 @dataclass
 class TaskInput:
-    """One message sent on a context: a person's turn, or an agent asking for work.
+    """One message on a context: a person's turn, or an agent asking for work.
 
-    Exactly one of ``text`` and ``instruction`` is set, and which one is the difference
-    between a person's turn and a delegation on the wire. ``instruction`` may be empty: a
-    duplex model delegates without saying anything, and the receiver answers the last user
-    message in ``chat_ctx``.
+    Exactly one of ``text`` and ``instruction`` is set, and which one is what tells the two
+    apart on the wire.
     """
 
     text: str | None = None
     """A person's words."""
     instruction: str | None = None
-    """What an agent is asking for, in its words."""
+    """What an agent is asking for, in its words. Empty where it says nothing of its own."""
     chat_ctx: ChatContext = field(default_factory=ChatContext.empty)
-    """The whole conversation the sender holds. The receiver takes what it has not seen, by
-    item id, and ignores the rest; a delta is never computed by the sender."""
+    """The whole conversation the sender holds; the receiver takes the delta by item id."""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Application data, handed to the handler untouched. JSON-serializable."""
-
-    def __post_init__(self) -> None:
-        if self.closing:
-            self.text = self.text if self.text is not None else ""
-        if (self.text is None) == (self.instruction is None):
-            raise ValueError("a TaskInput carries exactly one of `text` and `instruction`")
-
     closing: bool = False
     """The conversation is over: nothing is being asked, and the receiver may drop it."""
+
+    def __post_init__(self) -> None:
+        if self.closing and self.text is None and self.instruction is None:
+            self.text = ""  # a goodbye asks for nothing and still has to be one of the two
+        if (self.text is None) == (self.instruction is None):
+            raise ValueError("a TaskInput carries exactly one of `text` and `instruction`")
 
     @property
     def is_delegation(self) -> bool:

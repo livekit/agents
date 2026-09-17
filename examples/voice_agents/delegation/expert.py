@@ -236,8 +236,8 @@ DEFAULT_FORECAST = ("clear", 24, 14, "low")
 @dataclass
 class Userdata:
     airline: Airline
-    # remembered by lookup_caller, so a later request in the same call need not ask again.
-    # The phone agent is the one that can collect it: the desk is not on the phone
+    # remembered by lookup_caller; the phone agent collects it, since the desk is not on
+    # the phone
     email: str = ""
     events: list[str] = field(default_factory=list)
 
@@ -806,8 +806,7 @@ class FareDesk(Agent):
     @function_tool
     async def end_of_call(self, ctx: RunContext[Userdata]) -> str:
         """Called when the caller has everything they came for and is done."""
-        # advice to whoever asked, acted on after the answer has been said. In an ordinary
-        # session nobody is waiting on an answer, so there is nothing to advise.
+        # advice to whoever asked; in an ordinary session nobody is waiting on an answer
         if (request := ctx.request) is not None:
             request.set_directive("end_session", reason="caller_done")
         return "nothing outstanding"

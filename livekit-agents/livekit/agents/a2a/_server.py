@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from ..log import logger
-from ..utils import shortuuid
+from ..utils import aio, shortuuid
 from ._codec import from_a2a_request, to_a2a_events
-from ._extension import EXTENSION_URI, REASON, agent_card, as_dict, pb, struct
+from ._extension import EXTENSION_URI, REASON, agent_card, pb, struct
 from ._runner import RequestRun, SessionRunner
 from ._types import TaskUpdate
 
@@ -45,19 +46,20 @@ AGENT_CARD_PATH = "/.well-known/agent-card.json"
 VERSION_PREFIX = "/v1"
 """Where the binding's methods live under the endpoint, and what the card's URL points at."""
 
+IDLE_TIMEOUT = 30 * 60
+"""How long a conversation nobody has come back to is kept before it is dropped."""
+
 
 class TextSessionContext:
     """What a text session handler is given: one conversation, and where to put its session.
 
-    The handler runs once per conversation. Build the session, start it, and hand it over::
+    The handler runs once per conversation — build the session, start it, hand it over::
 
         @server.text_session(endpoint="fare-desk", description="Answers fare questions.")
         async def fare_desk(ctx: TextSessionContext) -> None:
             session = AgentSession(llm="openai/gpt-4.1")
             await session.start(agent=FareDesk())
             ctx.attach(session)
-
-    Nothing about the handler changes when the conversation moves into a job process later.
     """
 
     def __init__(self, context_id: str) -> None:
@@ -83,16 +85,22 @@ TextSessionHandler = Callable[[TextSessionContext], Coroutine[Any, Any, None]]
 class _Conversation:
     """One context id: the handler run that owns its session, and the requests in flight.
 
-    Held for the life of the process. TODO(v1): once there is a session store, an idle
-    conversation should persist what it holds and close, and the next request on that context
-    should rehydrate it — which is also what moves it into a job process.
+    Held until the caller says goodbye or it goes idle.
     """
+
+    # TODO(v1): with a session store, an idle conversation persists what it holds and the
+    # next request on that context rehydrates it, which is what moves it into a job process
 
     def __init__(self, context_id: str, handler: TextSessionHandler) -> None:
         self._ctx = TextSessionContext(context_id)
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
         self.runs: dict[str, RequestRun] = {}
+        self.touched_at = time.monotonic()
+
+    @property
+    def idle_for(self) -> float:
+        return 0.0 if self.runs else time.monotonic() - self.touched_at
 
     async def runner(self) -> SessionRunner:
         if self._ready is None:
@@ -122,15 +130,38 @@ class _SessionExecutor(AgentExecutor):
     One conversation is one handler run, found or created by ``context_id``.
     """
 
-    def __init__(self, handler: TextSessionHandler) -> None:
+    def __init__(self, handler: TextSessionHandler, *, idle_timeout: float) -> None:
         self._handler = handler
         self._conversations: dict[str, _Conversation] = {}
         self._by_task: dict[str, RequestRun] = {}
+        self._idle_timeout = idle_timeout
+        self._sweeper: asyncio.Task[None] | None = None
+        self._binding: DefaultRequestHandler | None = None
 
     def _conversation(self, context_id: str) -> _Conversation:
         if context_id not in self._conversations:
             self._conversations[context_id] = _Conversation(context_id, self._handler)
-        return self._conversations[context_id]
+        if self._sweeper is None:
+            self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
+        conversation = self._conversations[context_id]
+        conversation.touched_at = time.monotonic()
+        return conversation
+
+    async def _sweep(self) -> None:
+        """Drop conversations nobody came back to.
+
+        The backstop behind ``lk/kind = close``: a caller that crashes says goodbye to
+        nobody, and the session it leaves behind holds a model connection open.
+        """
+        while True:
+            await asyncio.sleep(self._idle_timeout / 4)
+            for context_id, conversation in list(self._conversations.items()):
+                if conversation.idle_for < self._idle_timeout:
+                    continue
+                logger.debug("dropping an idle conversation", extra={"context_id": context_id})
+                self._conversations.pop(context_id, None)
+                with contextlib.suppress(Exception):
+                    await conversation.aclose()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         context_id = context.context_id or shortuuid("ctx-")
@@ -177,16 +208,23 @@ class _SessionExecutor(AgentExecutor):
         finally:
             conversation.runs.pop(task_id, None)
             self._by_task.pop(task_id, None)
+            conversation.touched_at = time.monotonic()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        run = self._by_task.get(context.task_id or "")
+        task_id = context.task_id or ""
+        run = self._by_task.get(task_id)
         if run is None:
             return
-        reason = as_dict(context.metadata).get(REASON, "") if context.metadata else ""
-        logger.debug("cancelling a task", extra={"task_id": context.task_id, "reason": reason})
-        # best-effort by contract: work can finish between the decision and the stop, and the
-        # run reports what it did either way
-        await run.aclose()
+        # the binding builds this context without the cancel request's params, so the reason
+        # the caller sent arrives empty until it carries them
+        reason = context.metadata.get(REASON, "")
+        logger.debug("cancelling a task", extra={"task_id": task_id, "reason": reason})
+        # the binding stops whatever was streaming this task before it asks us, so the end
+        # the caller is owed goes out from here rather than from that stream
+        ended = await run.cancel()
+        await self._emit(event_queue, ended, task_id, context.context_id or "")
+        with contextlib.suppress(Exception):
+            await run.aclose()
 
     async def _emit(
         self, event_queue: EventQueue, update: TaskUpdate, task_id: str, context_id: str
@@ -195,9 +233,16 @@ class _SessionExecutor(AgentExecutor):
             await event_queue.enqueue_event(event)
 
     async def aclose(self) -> None:
+        if self._sweeper is not None:
+            await aio.cancel_and_wait(self._sweeper)
+            self._sweeper = None
         for conversation in list(self._conversations.values()):
             await conversation.aclose()
         self._conversations.clear()
+        if self._binding is not None:
+            # the binding runs a producer and a consumer per task, and expects to be drained
+            await self._binding.aclose()
+            self._binding = None
 
 
 def mount(
@@ -207,13 +252,14 @@ def mount(
     handler: TextSessionHandler,
     description: str,
     name: str | None = None,
+    idle_timeout: float = IDLE_TIMEOUT,
 ) -> _SessionExecutor:
     """Register one A2A endpoint on ``app``, under ``/<endpoint>``.
 
     The card route goes on before the binding's own routes: the SDK mounts a catch-all that
     would otherwise shadow the well-known path.
     """
-    executor = _SessionExecutor(handler)
+    executor = _SessionExecutor(handler, idle_timeout=idle_timeout)
     card_name = name or endpoint
     prefix = f"/{endpoint}"
 
@@ -234,6 +280,7 @@ def mount(
     request_handler = DefaultRequestHandler(
         agent_executor=executor, task_store=InMemoryTaskStore(), agent_card=handler_card
     )
+    executor._binding = request_handler
     add_a2a_routes_to_fastapi(
         app,
         rest_routes=create_rest_routes(request_handler, path_prefix=f"{prefix}{VERSION_PREFIX}"),
@@ -245,4 +292,10 @@ def mount(
     return executor
 
 
-__all__ = ["AGENT_CARD_PATH", "TextSessionContext", "TextSessionHandler", "mount"]
+__all__ = [
+    "AGENT_CARD_PATH",
+    "IDLE_TIMEOUT",
+    "TextSessionContext",
+    "TextSessionHandler",
+    "mount",
+]

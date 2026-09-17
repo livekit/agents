@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import Coroutine
+from collections.abc import Container, Coroutine
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
@@ -39,11 +39,14 @@ REQUEST_ID_KEY = "request_id"
 
 _DELTA_PREAMBLE = "What the caller and the agent said since the last request:"
 
+_RESULT_ENTRY = "_final"
+"""What the executor suffixes a released tool's return entry with, to tell it from a report."""
+
 
 class RequestRun:
     """One request in flight: the updates it produces, until it declares a terminal state.
 
-    Read it under ``async with``; closing it early stops the work where it can be stopped.
+    Read it under ``async with``; closing it early stops the work that can be stopped.
     """
 
     def __init__(self, runner: SessionRunner, task_input: TaskInput, request_id: str) -> None:
@@ -53,21 +56,22 @@ class RequestRun:
         self._served = ServedRequest(metadata=dict(task_input.metadata))
         self._ch = aio.Chan[TaskUpdate]()
         self._finished: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._terminal: TaskUpdate | None = None
         self._ended = False
 
         self.speeches: dict[str, SpeechHandle] = {}
         self.open_calls: dict[str, str] = {}
         """call id -> tool name, for calls of this turn that started and have not ended."""
         self.awaiting_reply: set[str] = set()
-        """calls whose return reached the coalescer, or whose reply was scheduled, and not yet
-        the other: the two events land in either order."""
+        """result entries whose return reached the coalescer, or whose reply was scheduled,
+        and not yet the other: the two events land in either order and cancel out."""
         self.pending_replies: set[str] = set()
         """speech ids of deferred replies scheduled and not yet done."""
         self.last_word = ""
         self.concluded_at = 0.0
         self.cancelled: list[str] = []
         self.cancelled_at = 0.0
-        self._abandoned = False
+        self._stopping = False
 
         self._task = asyncio.create_task(self._run(), name="RequestRun._run")
         self._task.add_done_callback(lambda _: self._ch.close())
@@ -92,15 +96,24 @@ class RequestRun:
             return
         await self._finished
 
-    async def _abandon(self) -> None:
-        """The caller stopped listening: stop the work where it can be stopped.
+    async def cancel(self) -> TaskUpdate:
+        """Stop what can be stopped and say how the request ended.
 
-        Run before the reading task is cancelled, not from inside its cancellation: stopping
-        a call is itself awaitable, and a cancelling task cannot wait for it.
+        Best-effort: work that finished first is reported as finished, and a tool that does
+        not allow cancellation runs on unheard.
         """
-        self._abandoned = True
-        if not self._finished.done():
-            self._finished.set_result(None)
+        self.cancelled_at = time.monotonic()
+        await self._stop_work()
+        self.maybe_finish()
+        return self._terminal or TaskUpdate(state="canceled", text=self.last_word)
+
+    async def _stop_work(self) -> None:
+        """Interrupt this request's speeches and stop the calls that allow it.
+
+        Awaited from a caller rather than from inside a cancellation, since stopping a call
+        is itself awaitable.
+        """
+        self._stopping = True
         for handle in self.speeches.values():
             if not handle.done():
                 handle.interrupt()
@@ -118,6 +131,7 @@ class RequestRun:
             update.directive = self._served.directive
         self._ch.send_nowait(update)
         if update.state != "working":
+            self._terminal = update
             self._finished.set_result(None)
 
     # -- lineage
@@ -140,13 +154,11 @@ class RequestRun:
             item.extra.setdefault(REQUEST_ID_KEY, self._request_id)
             self._runner._by_call[item.call_id] = self
             self.open_calls[item.call_id] = item.name
-            if self._abandoned:
-                # the turn recorded this call before the executor dispatched it, so the
-                # abandon that already ran could not reach it
-                self._runner._spawn(self._stop_call(item.call_id))
-                return
             # a call is structure with nothing to say, so it travels without relayed text
             self._push(TaskUpdate(item=item))
+            if self._stopping:
+                # a stop that already ran could not reach a call the turn had not made yet
+                self._runner._spawn(self._stop_call(item.call_id))
             return
 
         if item.type != "message" or item.role != "assistant":
@@ -184,20 +196,26 @@ class RequestRun:
         if update.status == "cancelled":
             self.cancelled.append(name)
             self.cancelled_at = time.monotonic()
-        elif update.id.endswith("_final") and update.message is not None:
+        elif update.id.endswith(_RESULT_ENTRY) and update.message is not None:
             # a released tool's return, or its error, goes to the coalescer for a reply; a
             # None return after an update files none
-            self.awaiting_reply ^= {update.call_id}
+            self.awaiting_reply ^= {update.id}
             output = FunctionCallOutput(
                 call_id=update.id, name=name, output=update.message, is_error=False
             )
             self._push(TaskUpdate(item=output))
         self.maybe_finish()
 
-    def on_result_delivered(self, call_id: str) -> None:
-        """This call's result reached the coalescer's reply, whoever ends up saying it."""
-        self.awaiting_reply ^= {call_id}
-        self.maybe_finish()
+    def on_result_delivered(self, call_id: str, covered: Container[str]) -> None:
+        """A reply covers this call's result, whoever ends up saying it.
+
+        Keyed on the result entry, not the call: a reply to one of the same call's progress
+        reports names the call too and is not a result.
+        """
+        entry = f"{call_id}{_RESULT_ENTRY}"
+        if entry in covered:
+            self.awaiting_reply ^= {entry}
+            self.maybe_finish()
 
     def on_reply_scheduled(self, update: ToolReplyUpdated, handle: SpeechHandle | None) -> None:
         self.pending_replies.add(update.speech_id)
@@ -218,9 +236,10 @@ class RequestRun:
             return
         if any(not handle.done() for handle in self.speeches.values()) or self.open_work():
             return
-        if self.cancelled and self.concluded_at < self.cancelled_at:
+        if self.cancelled_at and self.concluded_at < self.cancelled_at:
             # work of this turn was stopped and nothing was concluded after it
-            what = self.last_word or f"{', '.join(self.cancelled)} was cancelled before it finished"
+            stopped = ", ".join(self.cancelled) or "the work"
+            what = self.last_word or f"{stopped} was cancelled before it finished"
             self._push(TaskUpdate(state="canceled", text=what))
         else:
             self._push(TaskUpdate(state="completed", text=self.last_word))
@@ -228,7 +247,10 @@ class RequestRun:
     # -- reading
 
     async def aclose(self) -> None:
-        await self._abandon()
+        """The caller stopped listening: stop the work and drop the request."""
+        if not self._finished.done():
+            self._finished.set_result(None)
+        await self._stop_work()
         await aio.cancel_and_wait(self._task)
         self._ch.close()
         self._runner._forget(self)
@@ -262,12 +284,10 @@ class RequestRun:
 
 
 class SessionRunner:
-    """One conversation's session, and the requests fed through it.
+    """One conversation's session, and the requests fed through it as turns.
 
-    The session is started by whoever owns it and handed over here, so the handler decides
-    what the agent is and this decides nothing about it. Requests are turns of that one
-    session, taken in the order they arrive; the activity's scheduler serializes generation
-    and playout, so there is no queue here.
+    The activity's scheduler serializes generation and playout, so requests are taken in
+    arrival order with no queue here.
     """
 
     def __init__(self, session: AgentSession) -> None:
@@ -281,6 +301,11 @@ class SessionRunner:
         self._setup = asyncio.Lock()
         self._attached = False
         self._chores: set[asyncio.Task[None]] = set()
+        self._listeners: list[tuple[str, Any]] = [
+            ("speech_created", self._on_speech_created),
+            ("tool_execution_updated", self._on_tool_execution_updated),
+            ("error", self._on_error),
+        ]
 
     @property
     def session(self) -> AgentSession:
@@ -299,9 +324,8 @@ class SessionRunner:
         self._attached = True
         # the expert relays a tool's report as written; a model round would restate it
         self._session._reply_to_tool_updates = False
-        self._session.on("speech_created", self._on_speech_created)
-        self._session.on("tool_execution_updated", self._on_tool_execution_updated)
-        self._session.on("error", self._on_error)
+        for event, listener in self._listeners:
+            self._session.on(event, listener)  # type: ignore[arg-type]
 
     def submit(self, task_input: TaskInput, *, request_id: str) -> RequestRun:
         run = RequestRun(self, task_input, request_id)
@@ -362,7 +386,13 @@ class SessionRunner:
     def _on_tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
         update = ev.update
         if update.type == "tool_call_started":
-            return  # the call reached us through its speech
+            # the call itself reached us through its speech; this says the executor has it
+            # now, which is the first moment a stop asked for earlier can land
+            call_id = update.function_call.call_id
+            owner = self._by_call.get(call_id)
+            if owner is not None and owner._stopping and call_id in owner.open_calls:
+                self._spawn(owner._stop_call(call_id))
+            return
         if update.type == "tool_reply_updated":
             owners = [(c, self._by_call[c]) for c in update.call_ids if c in self._by_call]
             if not owners:
@@ -375,8 +405,9 @@ class SessionRunner:
                 # the reply is registered before the results are cleared, or the request
                 # carrying it would see no work left and finish without it
                 newest.on_reply_scheduled(update, self._orphans.get(update.speech_id))
+                covered = set(update.update_ids)
                 for call_id, reply_owner in owners:
-                    reply_owner.on_result_delivered(call_id)
+                    reply_owner.on_result_delivered(call_id, covered)
             else:
                 newest.on_reply_done(update)
             return
@@ -392,6 +423,10 @@ class SessionRunner:
             run._push(TaskUpdate(state="failed", text=str(ev.error)))
 
     async def aclose(self) -> None:
+        if self._attached:
+            self._attached = False
+            for event, listener in self._listeners:
+                self._session.off(event, listener)  # type: ignore[arg-type]
         for run in list(self._live):
             run._push(TaskUpdate(state="failed", text="the session was closed"))
             await run.aclose()
