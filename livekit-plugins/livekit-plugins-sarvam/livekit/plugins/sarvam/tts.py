@@ -1708,12 +1708,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         error_code = _error_status_code(error_data)
         raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
 
+        # The provider decides what goes in these fields, so they are tagged for
+        # redaction and kept out of the log body, which collectors cannot redact.
         logger.error(
-            f"TTS API error: {error_msg}",
+            "TTS API error",
             extra={
                 **self._build_log_context(),
                 "error_code": error_code,
-                "error_message": error_msg,
+                "lk.pii.error_message": error_msg,
                 "lk.pii.raw_message": resp,
             },
         )

@@ -257,6 +257,23 @@ async def test_error_frame_status_code_drives_retryability(
     assert json.dumps(frame, ensure_ascii=False, separators=(",", ":")) in exc.value.message
 
 
+async def test_error_frame_keeps_provider_text_in_redactable_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    speech = "my card number is 4111 1111 1111 1111"
+    resp = {"type": "error", "data": {"code": 422, "message": f"cannot synthesize: {speech}"}}
+
+    with caplog.at_level("ERROR", logger=sarvam_tts.logger.name):
+        with pytest.raises(APIStatusError):
+            await _error_stream()._handle_error_message(resp)
+
+    record = next(r for r in caplog.records if r.name == sarvam_tts.logger.name)
+    # provider text reaches the log only under lk.pii.* keys, which collectors redact
+    assert speech not in record.getMessage()
+    assert speech in record.__dict__["lk.pii.error_message"]
+    assert "error_message" not in record.__dict__
+
+
 async def test_error_frame_forwards_request_id() -> None:
     with pytest.raises(APIStatusError) as exc:
         await _error_stream()._handle_error_message(
