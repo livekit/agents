@@ -1363,10 +1363,14 @@ class AudioRecognition:
 
         elif ev.type == stt.SpeechEventType.START_OF_SPEECH and self._turn_detection_mode == "stt":
             # If the plugin provided a server onset timestamp, use it;
-            # otherwise fall back to message arrival time.
+            # otherwise fall back to message arrival time. Clamped like the other
+            # anchors: a provider clock running ahead would otherwise start the turn in
+            # the future, while every end anchor is clamped to `now`, so the spans built
+            # from it would end before they began.
+            speech_start_time = min(ev.speech_start_time, now) if ev.speech_start_time else now
             if self._speech_start_time is None:
-                self._speech_start_time = ev.speech_start_time or time.time()
-            self._end_eou_wait_span("user_resumed", end_time=ev.speech_start_time or now)
+                self._speech_start_time = speech_start_time
+            self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
 
             with tracer.use_span(self._ensure_user_turn_span(start_time=self._speech_start_time)):
                 self._hooks.on_start_of_speech(None, speech_start_time=self._speech_start_time)
