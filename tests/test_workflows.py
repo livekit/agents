@@ -1,3 +1,4 @@
+import os
 from typing import Literal
 from unittest.mock import patch
 
@@ -8,7 +9,13 @@ from livekit.agents.llm.tool_context import ToolError
 from livekit.agents.voice.run_result import RunResult
 from livekit.rtc import Room
 
-pytestmark = pytest.mark.evals
+pytestmark = [
+    pytest.mark.evals,
+    pytest.mark.skipif(
+        not (os.getenv("LIVEKIT_INFERENCE_API_KEY") or os.getenv("LIVEKIT_API_KEY")),
+        reason="requires LiveKit inference gateway credentials (LIVEKIT_API_KEY)",
+    ),
+]
 
 
 def _llm_model() -> llm.LLM:
