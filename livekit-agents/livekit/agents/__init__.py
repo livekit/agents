@@ -86,9 +86,12 @@ from .voice import (
     AgentStateChangedEvent,
     AgentTask,
     AudioRecognition,
+    ClientDelegation,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
+    DelegationContext,
+    DelegationRequest,
     ErrorEvent,
     ExpressiveOptions,
     FunctionToolsExecutedEvent,
@@ -167,6 +170,9 @@ def __getattr__(name: str) -> typing.Any:
 
 
 __all__ = [
+    "ClientDelegation",
+    "DelegationContext",
+    "DelegationRequest",
     "__version__",
     "AgentServer",
     "WorkerOptions",

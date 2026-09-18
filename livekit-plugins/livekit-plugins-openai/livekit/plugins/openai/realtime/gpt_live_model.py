@@ -6,7 +6,7 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
@@ -24,6 +24,12 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.delegation import (
+    DELEGATE_TOOL_NAME,
+    ClientDelegation,
+    DelegationRequest,
+    _find_client_delegation,
+)
 from openai.types.responses import ResponseTextConfigParam
 from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
@@ -109,6 +115,12 @@ class GPTLiveDelegation:
     id: str
     pending_transcript: str
     """The caller's current turn, not yet in the chat context when the model delegates."""
+
+
+@dataclass
+class _DelegationAppend:
+    event: types.ThinkingAppendEvent | types.CommentaryAppendEvent
+    is_current: Callable[[], bool]
 
 
 @dataclass
@@ -384,7 +396,9 @@ class GPTLiveSession(
         self._tools = llm.ToolContext.empty()
         # the agent's instructions, set by _update_session before session.start and immutable after
         self._instructions: str | None = None
-        self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
+        self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any] | _DelegationAppend]()
+        self._client_delegation: ClientDelegation | None = None
+        self._delegation_connection = utils.shortuuid("connection_")
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
 
@@ -514,6 +528,7 @@ class GPTLiveSession(
                     finally:
                         # what arrives now is history for the next connection, not an append
                         self._session_start_sent = False
+                        self._delegation_connection = utils.shortuuid("connection_")
                 except APIError as e:
                     if max_retries == 0 or not e.retryable:
                         self._emit_error(e, recoverable=False)
@@ -547,6 +562,7 @@ class GPTLiveSession(
         # a new connection is a new session, reseeded from the history; the rest of what the
         # dropped one was carrying never arrives
         self._bstream.clear()
+        self._delegation_connection = utils.shortuuid("connection_")
         self._input_resampler = None
         self._session_started_fut = asyncio.Future()
         self._session_closed_fut = asyncio.Future()
@@ -619,6 +635,10 @@ class GPTLiveSession(
                 # the protocol asks for session.started before any audio or command goes out
                 if not self._session_started_fut.done():
                     await self._session_started_fut
+                if isinstance(msg, _DelegationAppend):
+                    if not msg.is_current():
+                        continue
+                    msg = msg.event
                 await self._ws_send(ws_conn, msg)
 
             await _close_ws()
@@ -828,12 +848,55 @@ class GPTLiveSession(
             logger.warning("gpt-live delegation has no id; nothing can answer it")
         elif delegation.target == "client":
             speech = self._speech.get("user")
+            if self._client_delegation is not None:
+                owner = self._client_delegation
+                connection_id = self._delegation_connection
+                request = DelegationRequest(
+                    id=delegation.id,
+                    connection_id=connection_id,
+                    chat_ctx=self._history.copy(),
+                    pending_transcript=speech.text if speech else "",
+                )
+                call = owner._dispatch(
+                    request,
+                    connected=lambda: (
+                        not self._closing
+                        and self._client_delegation is owner
+                        and self._delegation_connection == connection_id
+                    ),
+                    send=lambda text, silent, current: self._append_delegated(
+                        request.id, text, silent=silent, is_current=current
+                    ),
+                )
+                if call is not None:
+                    self.emit("function_call", call)
+                return
             self.emit(
                 "delegation_created",
                 GPTLiveDelegation(
                     id=delegation.id, pending_transcript=speech.text if speech else ""
                 ),
             )
+
+    def _append_delegated(
+        self, delegation_id: str, text: str, *, silent: bool, is_current: Callable[[], bool]
+    ) -> bool:
+        if not is_current() or self._closing or self._msg_ch.closed:
+            return False
+        # A conservative byte bound stays below the service's 500-token append limit
+        # without introducing a tokenizer dependency. Backends stream coherent chunks.
+        if len(text.encode("utf-8")) > 500:
+            raise ValueError("managed delegation chunks must not exceed 500 UTF-8 bytes")
+        event_cls = types.ThinkingAppendEvent if silent else types.CommentaryAppendEvent
+        self._msg_ch.send_nowait(
+            _DelegationAppend(
+                event=event_cls(
+                    event_id=utils.shortuuid("append_"), delegation_id=delegation_id, content=text
+                ),
+                is_current=is_current,
+            )
+        )
+        return True
 
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
         # the inner event carries no response id, so a delegation's responses are followed in
@@ -1104,20 +1167,41 @@ class GPTLiveSession(
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
         if self._opts.delegation == "client":
-            if tools:
+            self._client_delegation = _find_client_delegation(tools)
+            managed_names = {
+                DELEGATE_TOOL_NAME,
+                "lk_agents_cancel_task",
+                "lk_agents_get_running_tasks",
+            }
+            if tools and (
+                self._client_delegation is None
+                or any(tool.id not in managed_names for tool in tools)
+            ):
                 # dropping them silently leaves an agent whose tools simply never run
                 raise llm.RealtimeError(
                     "gpt-live client delegation has no tool channel, so the model can never call "
                     f"{sorted(tool.id for tool in self._tools.flatten())}. Leave the agent's tools "
-                    "empty and answer delegation_created with append_commentary, or pass "
+                    "on ClientDelegation, or leave them empty and answer delegation_created "
+                    "with append_commentary, or pass "
                     'delegation="responses" to run tools on the backend model.'
                 )
             return
+        if _find_client_delegation(tools) is not None:
+            raise llm.RealtimeError("ClientDelegation requires GPTLiveModel(delegation='client')")
         self._send_delegation_update(
             types.ResponsesConfig(tools=_build_delegation_tools(self._tools.flatten()))
         )
 
     async def _append_items(self, items: list[llm.ChatItem]) -> None:
+        if self._client_delegation is not None:
+            items = [
+                item
+                for item in items
+                if not (
+                    isinstance(item, (llm.FunctionCall, llm.FunctionCallOutput))
+                    and item.name == DELEGATE_TOOL_NAME
+                )
+            ]
         self._history.insert(items)
         if not self._session_start_sent:
             return  # startup history, rendered into session.start
@@ -1165,9 +1249,8 @@ class GPTLiveSession(
             self._backend_response_pending = True
             self._maybe_continue_response()
 
-        # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
-        # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
-        # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
+        # Managed client results use the executor's correlated reply handler. Replaying the
+        # synthetic tool return here would duplicate it and lose revision/connection guards.
 
     def _generate_reply(
         self,

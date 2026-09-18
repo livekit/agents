@@ -347,6 +347,8 @@ class _ToolExecutor:
         # derives the call's single terminal entry from how the task ended
         async def _execute_tool() -> Any:
             try:
+                if run_ctx._is_relevant is not None and not run_ctx._is_relevant():
+                    raise ToolError("delegation was superseded before tool execution")
                 fnc_args, fnc_kwargs = prepare_function_arguments(
                     fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
                 )
@@ -356,13 +358,29 @@ class _ToolExecutor:
                     output = await _run_mock(mock, *fnc_args, **fnc_kwargs)
                 else:
                     output = await tool(*fnc_args, **fnc_kwargs)
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as error:
                 logger.debug("tool cancelled", extra={"call_id": call_id, "function": fnc_name})
+                if run_ctx._reply_handler is not None:
+                    await run_ctx._reply_handler(error, True, True)
                 if not first_update_fut.done():
-                    first_update_fut.set_result(None)
+                    if run_ctx._hold_result:
+                        first_update_fut.set_exception(error)
+                    else:
+                        first_update_fut.set_result(None)
                 raise  # _on_done emits the cancelled terminal
             except Exception as e:
                 output = e
+
+            if run_ctx._reply_handler is not None:
+                # Keep actual outcomes, including a cancellation-resistant return, even when
+                # the transport or task revision no longer permits speaking the result.
+                await run_ctx._reply_handler(output, True, False)
+                if not first_update_fut.done():
+                    if run_ctx._hold_result and isinstance(output, BaseException):
+                        first_update_fut.set_exception(output)
+                    else:
+                        first_update_fut.set_result(output if run_ctx._hold_result else None)
+                return output
 
             if not first_update_fut.done():
                 # tool returned without ctx.update() — surface the result to dispatch
