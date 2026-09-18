@@ -1198,8 +1198,9 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
-    # a tool with nothing to say, such as a bare handoff, expects no reply
-    base_result.fnc_call_out.reply_required = fnc_out is not None
+    if not isinstance(fnc_out, llm.ToolResult):
+        # a tool with nothing to say, such as a bare handoff, expects no reply
+        base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),

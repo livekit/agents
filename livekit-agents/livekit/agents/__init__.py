@@ -56,6 +56,7 @@ from .llm.tool_context import (
     StopResponse,
     ToolContext,
     ToolError,
+    ToolResult,
     function_tool,
 )
 from .plugin import Plugin
@@ -218,6 +219,7 @@ __all__ = [
     "StopResponse",
     "ToolContext",
     "ToolError",
+    "ToolResult",
     "RunContext",
     "Plugin",
     "Scenario",
