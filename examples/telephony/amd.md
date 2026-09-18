@@ -24,6 +24,16 @@ The example gives the agent an `end_call` tool for completed conversations and
 delivered voicemails. It lets the final speech finish, then shuts down the job.
 The example's shutdown callback deletes the room and disconnects the SIP participant.
 
+The example uses `krisp.voice_isolation_telephony()` to reduce background voices
+and noise before audio reaches session STT and AMD STT. Install
+`livekit-plugins-krisp` and connect through LiveKit Cloud for the default filter
+authentication. Keep SIP `krisp_enabled` off to avoid filtering the same audio twice.
+
+Voice isolation does not provide acoustic echo cancellation (AEC). It may reduce
+echoed speech, but echo removal must be verified on a call. This example has no
+AEC processor with the agent's playback audio as a reference. The session's
+`aec_warmup_duration` only suppresses input briefly while client AEC starts.
+
 ## Migrate speech timestamps
 
 `UserStateChangedEvent.created_at` now records event-creation time. Older

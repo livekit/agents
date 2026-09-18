@@ -16,8 +16,10 @@ from livekit.agents import (
     JobContext,
     cli,
     inference,
+    room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
+from livekit.plugins import krisp
 
 logger = logging.getLogger("amd-example")
 load_dotenv()
@@ -62,6 +64,11 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(
         agent=MyAgent(),
         room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=krisp.voice_isolation_telephony(),
+            ),
+        ),
     )
 
     async def hangup():
