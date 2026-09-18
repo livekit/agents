@@ -522,6 +522,13 @@ class ChatContext:
                     continue
 
         valid_tools = set(get_tool_names(tools)) if tools else set()
+        # FunctionCallOutput.name is optional, so an output that has none is paired with its
+        # call by call_id instead
+        valid_call_ids = {
+            item.call_id
+            for item in self.items
+            if item.type == "function_call" and item.name in valid_tools
+        }
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -545,12 +552,16 @@ class ChatContext:
             if exclude_config_update and item.type == "agent_config_update":
                 continue
 
-            if (
-                is_given(tools)
-                and (item.type == "function_call" or item.type == "function_call_output")
-                and item.name not in valid_tools
-            ):
-                continue
+            if is_given(tools):
+                if item.type == "function_call" and item.name not in valid_tools:
+                    continue
+
+                if item.type == "function_call_output" and (
+                    item.name not in valid_tools
+                    if item.name
+                    else item.call_id not in valid_call_ids
+                ):
+                    continue
 
             items.append(item)
 
