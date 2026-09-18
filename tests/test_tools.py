@@ -2381,6 +2381,77 @@ class TestToolCallEvents:
         assert completed.status == "completed"
         assert completed.update_ids == ["c5_update_1", "c5_final"]
 
+    @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
+    async def test_deferred_tool_results_honor_reply_required(
+        self, reply_flags: tuple[bool, ...]
+    ) -> None:
+        import asyncio
+
+        from livekit.agents.llm import ChatContext
+        from livekit.agents.voice.events import RunContext, ToolReplyUpdated
+        from livekit.agents.voice.tool_executor import _ToolExecutor
+
+        @function_tool
+        async def send_dtmf(ctx: RunContext, reply_required: bool) -> ToolResult:
+            """Send DTMF events."""
+            await ctx.update("Sending digits")
+            return ToolResult("Sent", reply_required=reply_required)
+
+        session = _make_reply_session(_make_fake_speech())
+        agent = Agent(instructions="test", tools=[send_dtmf])
+        session.current_agent = agent
+        session.history = ChatContext.empty()
+        activity = session.wait_for_idle.return_value
+        activity.agent = agent
+        idle = asyncio.Event()
+
+        async def wait_for_idle():
+            await idle.wait()
+            return activity
+
+        session.wait_for_idle = wait_for_idle
+        executor = _ToolExecutor()
+        try:
+            for index, reply_required in enumerate(reply_flags):
+                ctx = _make_run_context_with_session(session, call_id=str(index), name="send_dtmf")
+                first = await executor.execute(
+                    tool=send_dtmf, run_ctx=ctx, raw_arguments={"reply_required": reply_required}
+                )
+                assert "Sending digits" in first
+
+            await _drain_executor(executor)
+            idle.set()
+            if executor._reply_task is not None:
+                await executor._reply_task
+
+            for chat_ctx in (agent.chat_ctx, session.history):
+                calls = [item.call_id for item in chat_ctx.items if item.type == "function_call"]
+                assert set(calls) == {f"{index}_final" for index in range(len(reply_flags))}
+                outputs = {
+                    item.call_id: (item.output, item.reply_required)
+                    for item in chat_ctx.items
+                    if item.type == "function_call_output"
+                }
+                assert outputs == {
+                    f"{index}_final": ("Sent", flag) for index, flag in enumerate(reply_flags)
+                }
+
+            replies = [
+                item for item in _emitted_items(session) if isinstance(item, ToolReplyUpdated)
+            ]
+            if any(reply_flags):
+                session.generate_reply.assert_called_once()
+                assert len(replies) == 1
+                assert replies[0].status == "scheduled"
+                assert set(replies[0].update_ids) == {
+                    f"{index}_final" for index, flag in enumerate(reply_flags) if flag
+                }
+            else:
+                session.generate_reply.assert_not_called()
+                assert not replies
+        finally:
+            await executor.aclose()
+
     @pytest.mark.asyncio
     async def test_interrupted_and_skipped_reply_outcomes(self):
         from livekit.agents.voice.events import RunContext, ToolReplyUpdated
