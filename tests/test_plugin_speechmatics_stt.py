@@ -34,6 +34,7 @@ from speechmatics.agent_stt import (
     TurnDetectionMode as AgentTurnDetectionMode,
 )
 
+from livekit import rtc
 from livekit.agents import APIError, stt
 from livekit.agents.utils.aio.channel import ChanEmpty
 from livekit.plugins.speechmatics import stt as speechmatics_stt
@@ -43,6 +44,8 @@ from livekit.plugins.speechmatics.stt import (
     SpeechStream,
     TurnDetectionMode,
 )
+
+from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.plugin("speechmatics")
 
@@ -293,7 +296,9 @@ def test_bare_external_loads_a_vad() -> None:
     """
     pytest.importorskip("livekit.plugins.silero")
 
-    assert _stt()._vad is not None
+    instance = _stt()
+    assert instance._vad is not None
+    assert not instance.capabilities.manual_flush
 
 
 def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
@@ -305,16 +310,16 @@ def test_a_missing_silero_still_constructs(monkeypatch, caplog) -> None:
         instance = _stt()
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
 
 
 def test_explicit_none_vad_opts_out(caplog) -> None:
-    """`vad=None` is the advanced path: that caller drives `finalize()` by hand."""
+    """`vad=None` delegates turn boundaries to the session or caller."""
     with caplog.at_level("WARNING"):
         instance = _stt(vad=None)
 
     assert instance._vad is None
-    assert "EXTERNAL turn-detection mode with no `vad`" in caplog.text
+    assert instance.capabilities.manual_flush
 
 
 async def test_finalize_and_vad_only_act_in_external() -> None:
@@ -335,6 +340,47 @@ async def test_finalize_and_vad_only_act_in_external() -> None:
     assert service_side._stt._vad is None  # nothing is auto-loaded outside EXTERNAL
     service_side._stt.finalize()
     assert service_side._client.finalize_calls == 0
+
+
+@pytest.mark.parametrize("mode", ["session_vad", "plugin_vad", "service_vad"])
+async def test_flush_sends_buffered_audio_before_external_finalize(mode: str) -> None:
+    class Client:
+        is_ready_for_audio = True
+
+        def __init__(self) -> None:
+            self.sent: list[bytes | str] = []
+
+        async def send_audio(self, audio: bytes) -> None:
+            self.sent.append(audio)
+
+        def finalize(self) -> None:
+            self.sent.append("finalize")
+
+    stream = _stream(
+        vad=FakeVAD() if mode == "plugin_vad" else None,
+        turn_detection_mode=(
+            TurnDetectionMode.VAD if mode == "service_vad" else TurnDetectionMode.EXTERNAL
+        ),
+    )
+    client = Client()
+    stream._client = client
+    if stream._vad is not None:
+        stream._vad_stream = stream._vad.stream()
+    first, second = b"\x01\x00" * 480, b"\x02\x00" * 480
+    for audio in (first, second):
+        stream.push_frame(rtc.AudioFrame(audio, 16000, 1, 480))
+        stream.flush()
+    stream._input_ch.close()
+    try:
+        await stream._process_audio()
+        assert stream._stt.capabilities.manual_flush == (mode == "session_vad")
+        if mode == "session_vad":
+            assert client.sent == [first, "finalize", second, "finalize"]
+        else:
+            assert client.sent == [first, second]
+    finally:
+        stream._client = None
+        await stream.aclose()
 
 
 # --- Config down-translation ---------------------------------------------------------
