@@ -12,6 +12,7 @@ from livekit.agents.llm import (
     ToolContext,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
@@ -1075,6 +1076,56 @@ class TestEmptySchemaStripping:
             assert len(any_of) != 1, (
                 f"single-element anyOf should be unwrapped: {json.dumps(pref, indent=2)}"
             )
+
+
+class TestExecuteFunctionCallToolResult:
+    @pytest.mark.parametrize("reply_required", [True, False])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("ok", "ok"), ({"sent": "1"}, "{'sent': '1'}"), (None, "")],
+    )
+    async def test_tool_result_preserves_output_and_reply_required(
+        self, output: Any, expected_output: str, reply_required: bool
+    ) -> None:
+        from livekit.agents.llm import FunctionToolCall, execute_function_call
+
+        tool_result = ToolResult(output, reply_required=reply_required)
+
+        @function_tool
+        async def send_dtmf() -> ToolResult:
+            """Send DTMF events."""
+            return tool_result
+
+        result = await execute_function_call(
+            FunctionToolCall(name="send_dtmf", arguments="{}", call_id="dtmf-1"),
+            ToolContext([send_dtmf]),
+        )
+
+        assert result.fnc_call_out.call_id == "dtmf-1"
+        assert result.fnc_call_out.output == expected_output
+        assert result.fnc_call_out.reply_required is reply_required
+        assert not result.fnc_call_out.is_error
+        assert result.raw_output is tool_result
+        assert result.raw_exception is None
+
+    async def test_invalid_wrapped_output_still_reports_an_error(self) -> None:
+        from livekit.agents.llm import FunctionToolCall, execute_function_call
+
+        tool_result = ToolResult(object(), reply_required=False)
+
+        @function_tool
+        async def invalid_output() -> ToolResult:
+            """Return an invalid output."""
+            return tool_result
+
+        result = await execute_function_call(
+            FunctionToolCall(name="invalid_output", arguments="{}", call_id="invalid-1"),
+            ToolContext([invalid_output]),
+        )
+
+        assert result.fnc_call_out.is_error
+        assert result.fnc_call_out.output == "the tool returned an invalid output"
+        assert result.raw_output is tool_result
 
 
 class TestExecuteFunctionCallValidationErrors:
