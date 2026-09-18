@@ -1,6 +1,6 @@
 # Camb.ai Plugin for LiveKit Agents
 
-Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS technology.
+Text-to-Speech and realtime speech-to-speech translation for [Camb.ai](https://camb.ai), powered by MARS technology.
 
 ## Features
 
@@ -10,6 +10,7 @@ Text-to-Speech plugin for [Camb.ai](https://camb.ai) TTS API, powered by MARS te
 - Support for 140+ languages
 - Real-time HTTP streaming
 - Pre-built voice library
+- Realtime speech-to-speech translation: speech in one language, speech in another, in the speaker's voice
 
 ## Installation
 
@@ -233,6 +234,104 @@ Coming soon:
 - [Camb.ai Documentation](https://docs.camb.ai/)
 - [LiveKit Agents Documentation](https://docs.livekit.io/agents/)
 - [GitHub Repository](https://github.com/livekit/agents)
+
+## Realtime speech-to-speech translation
+
+`cambai.experimental.realtime.RealtimeModel` translates speech to speech: the participant speaks one
+language and the model returns the same utterance spoken in another, along with a
+transcript of what was said and the translated text. It replaces the usual
+STT + LLM + TTS chain with a single connection.
+
+Drop it into an `AgentSession` like any other realtime model:
+
+```python
+from livekit.agents import AgentSession
+from livekit.plugins import cambai
+
+session = AgentSession(
+    llm=cambai.experimental.realtime.RealtimeModel(
+        source_language="en-US",
+        target_language="fr-FR",
+    ),
+)
+```
+
+No VAD is needed: the endpoint segments utterances itself, so the model reports
+server-side turn detection and the session does not run its own barge-in detection. That
+matters for translation, where the speaker never stops talking and would otherwise be
+treated as interrupting the agent.
+
+To publish a translated track per speaker instead, drive the session directly — see
+`examples/other/translation/camb_realtime_translator.py`:
+
+```python
+from livekit import rtc
+from livekit.plugins import cambai
+
+model = cambai.experimental.realtime.RealtimeModel(
+    source_language="en-US",   # what the speaker says
+    target_language="fr-FR",   # what the room hears
+    mode="fast",
+)
+session = model.session()
+
+translated = rtc.AudioSource(24000, 1)
+await ctx.room.local_participant.publish_track(
+    rtc.LocalAudioTrack.create_audio_track("translated-fr-FR", translated),
+    rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+)
+
+
+async def forward(track: rtc.Track) -> None:
+    async for ev in rtc.AudioStream(track):
+        session.push_audio(ev.frame)
+
+
+@session.on("input_audio_transcription_completed")
+def _on_transcript(ev) -> None:
+    print("source:", ev.transcript)
+
+
+@session.on("generation_created")
+def _on_generation(ev) -> None:
+    async def play() -> None:
+        async for msg in ev.message_stream:
+            async for frame in msg.audio_stream:
+                await translated.capture_frame(frame)
+
+    asyncio.create_task(play())
+```
+
+Each generation also carries `msg.text_stream`, the translated text, which pairs with the
+source transcript above for captions.
+
+Audio is 24 kHz mono PCM16 in both directions; frames at any other rate are resampled for
+you. `voice_id` synthesizes the translation with one of your cloned voices instead of a
+built-in one, and `base_url` points the session at a non-production deployment.
+
+### Choosing a mode
+
+`mode="fast"` starts speaking sooner; `mode="slow"` covers a longer language list. Both
+translate every complete utterance they are given — measured against `realtime.camb.ai`
+on English recordings from 3.9s to 12s, neither mode dropped a finished sentence, and
+translation quality was comparable in both.
+
+What both modes ignore is an *incomplete* utterance. Feeding audio that stops mid-sentence
+leaves that fragment untranslated, which is correct but surprising if you are replaying a
+file you cut at an arbitrary offset: cut on pauses, or accept that the trailing fragment
+goes nowhere. A live microphone raises this only at the very end of a call.
+
+### Turn taking
+
+The endpoint segments utterances itself and streams translations continuously; it emits no
+speech-start or speech-stop events, so `capabilities.turn_detection` is `False`. Nothing
+needs committing and no reply needs requesting — `commit_audio`, `clear_audio` and
+`interrupt` are inert, and `generate_reply` hands back the translation the next utterance
+produces.
+
+Note that a conversational orchestrator is a poor fit for a translator: the speaker never
+stops talking, so anything that treats incoming speech as an interruption will cancel the
+translation mid-playback. Drive the session directly, as above.
 
 ## License
 

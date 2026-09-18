@@ -59,3 +59,15 @@ DEFAULT_LANGUAGE = "en-us"
 DEFAULT_MODEL: SpeechModel = "mars-flash"
 DEFAULT_OUTPUT_FORMAT: OutputFormat = "pcm_s16le"
 NUM_CHANNELS = 1
+
+# Which realtime pipeline a session runs on. "fast" starts speaking sooner; "slow" covers
+# a longer language list. Measured on English recordings from 3.9s to 12s, both translated
+# every complete utterance and their translation quality was comparable, so "fast" is the
+# default on latency alone.
+RealtimeMode = Literal["fast", "slow"]
+
+DEFAULT_REALTIME_MODE: RealtimeMode = "fast"
+
+# The realtime endpoint speaks 24kHz mono PCM16 in both directions, unlike the TTS models
+# above, whose rate varies per model.
+REALTIME_SAMPLE_RATE = 24000
