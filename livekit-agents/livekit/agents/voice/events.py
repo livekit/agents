@@ -311,12 +311,21 @@ AgentState = Literal["initializing", "idle", "listening", "thinking", "speaking"
 
 
 class UserStateChangedEvent(BaseModel):
+    """A user state transition.
+
+    Migration: older releases used the speech-boundary time for ``created_at``
+    when available. ``created_at`` now records event creation time, including
+    sessions without AMD. For speech timing or latency measurements, use
+    ``speech_timestamp`` when it is not None, otherwise ``created_at``.
+    """
+
     type: Literal["user_state_changed"] = "user_state_changed"
     old_state: UserState
     new_state: UserState
     speech_timestamp: float | None = None
     """Unix time of user speech start or end, often backdated, when known."""
     created_at: float = Field(default_factory=time.time)
+    """Unix time when this event was created, not the speech-boundary time."""
 
 
 class AgentStateChangedEvent(BaseModel):

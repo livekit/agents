@@ -20,6 +20,32 @@ This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
 not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each prediction.
 The application still decides whether to continue or end the call.
 
+## Migrate speech timestamps
+
+`UserStateChangedEvent.created_at` now records event-creation time. Older
+releases used the speech-boundary time when it was available. This change
+applies to all Python session listeners, including sessions without AMD.
+
+If a listener uses `created_at` to measure speech timing or response latency,
+use `speech_timestamp` instead. Fall back to `created_at` when the speech
+boundary is unknown:
+
+```python
+# Before
+speech_time = event.created_at
+
+# After
+speech_time = (
+    event.speech_timestamp if event.speech_timestamp is not None else event.created_at
+)
+```
+
+Both fields use Unix time in seconds. A speech boundary can precede event
+creation because speech detection takes time. Keep `created_at` when you need
+the event-creation time. Remote session events retain their existing wire
+timestamp behavior: speech-boundary time when known, otherwise event-creation
+time.
+
 ## Start AMD
 
 Start AgentSession first. Enter AMD before creating the SIP participant.
