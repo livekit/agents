@@ -2093,8 +2093,6 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
 async def test_deprecated_preemptive_generation_kwarg(
     preemptive_generation: bool | dict, expected: dict
 ) -> None:
-    # the deprecated session kwarg used to wrap whatever it was given into {"enabled": value};
-    # a dict is truthy, so {"enabled": False} read as "on" and its other keys were dropped
     session = AgentSession(preemptive_generation=preemptive_generation)
     opts = session.options.preemptive_generation
     assert {k: opts[k] for k in expected} == expected
