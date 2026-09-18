@@ -1,7 +1,14 @@
-from enum import Enum
+from enum import Enum, auto
 from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
+
+
+class AMDLifecycle(Enum):
+    INITIALIZED = auto()
+    PENDING = auto()
+    ACTIVE = auto()
+    FINISHED = auto()
 
 
 class AMDCategory(str, Enum):
@@ -10,7 +17,8 @@ class AMDCategory(str, Enum):
     MACHINE_SCREENING = "machine-screening"
     MACHINE_VM = "machine-vm"
     MACHINE_UNAVAILABLE = "machine-unavailable"
-    UNCERTAIN = "uncertain"
+    WAIT = "wait"  # state remains, reply skipped
+    UNCERTAIN = "uncertain"  # state remains, reply allowed
 
 
 class AMDReason(str, Enum):
@@ -18,16 +26,8 @@ class AMDReason(str, Enum):
 
     PREDICTION = "prediction"
     """A model prediction was released normally."""
-    LATE_PREDICTION = "late_prediction"
-    """A model prediction was released after the turn's inference timeout.
-
-    It can update the stage without replacing the turn's saved prediction.
-    """
     REUSED = "reused"
-    """Internal prediction for an empty turn using the current stage without a new request.
-
-    Not emitted through ``amd_prediction``.
-    """
+    """An empty turn reused the latest prediction without a new request."""
     INFERENCE_TIMEOUT = "inference_timeout"
     """The turn's inference deadline passed, so the prediction uses the current stage.
 
@@ -59,19 +59,19 @@ class AMDPredictionEvent(BaseModel):
     type: Literal["amd_prediction"] = "amd_prediction"
     speech_duration: float
     category: AMDCategory
+    """Prediction for this turn. ``uncertain`` and ``wait`` keep the current stage."""
     reason: AMDReason
     transcript: str
     delay: float
     turn_id: int = 0
+    stage: AMDCategory = AMDCategory.UNCERTAIN
+    """Stage after this prediction. Never ``wait``."""
+    state_changed: bool = False
+    """Whether this prediction started a new stage."""
     prev_turn_category: AMDCategory | None = None
     prev_stage_category: AMDCategory | None = None
     inference_duration: float | None = None
     voicemail_message_played: bool = False
-
-    @computed_field  # type: ignore[prop-decorator]
-    @property
-    def state_changed(self) -> bool:
-        return self.category != (self.prev_turn_category or AMDCategory.UNCERTAIN)
 
     @property
     def is_human(self) -> bool:

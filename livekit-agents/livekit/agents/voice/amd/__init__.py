@@ -1,8 +1,8 @@
-from ._fsm import AMDLifecycle
 from .detector import AMD
 from .events import (
     AMDCategory,
     AMDCompletedEvent,
+    AMDLifecycle,
     AMDMenuObservedEvent,
     AMDPredictionEvent,
     AMDReason,

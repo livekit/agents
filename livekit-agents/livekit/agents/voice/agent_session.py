@@ -65,7 +65,7 @@ from ._turn_hooks import TurnHooks
 from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
-from .amd import AMD, AMDLifecycle, AMDPredictionEvent
+from .amd import AMD, AMDPredictionEvent
 from .events import (
     AgentEvent,
     AgentState,
@@ -750,11 +750,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def amd(self) -> AMD | None:
         """The Answering Machine Detection (AMD) instance, or ``None`` if AMD is disabled."""
         return self._amd
-
-    @property
-    def _input_audio_allowed(self) -> bool:
-        # Gate session audio while AMD waits for the participant.
-        return self._amd is None or self._amd.lifecycle is not AMDLifecycle.PENDING
 
     def _on_amd_prediction(self, event: AMDPredictionEvent) -> None:
         if self._session_host is not None:

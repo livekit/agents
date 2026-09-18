@@ -11,7 +11,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents.types import APIConnectOptions
-from livekit.agents.voice.amd._transcription import AMDRacingSTT
+from livekit.agents.voice.amd._stt import AMDRacingSTT
 
 from .fake_stt import DrainingStream, DrainingSTT
 
@@ -56,6 +56,31 @@ async def test_first_transcript_selects_source_for_the_run(
     second = racing.end_turn("session next turn")
     assert second.source == winner
     assert second.transcript == f"{winner} next turn"
+
+
+async def test_dedicated_stt_uses_session_transcripts_only_after_failure() -> None:
+    model = DrainingSTT()
+    async with aclosing(
+        AMDRacingSTT(model, APIConnectOptions(max_retry=0), race_session=False)
+    ) as transcriber:
+        transcriber.push_audio(rtc.AudioFrame.create(16000, 1, 320))
+        transcriber.push_transcript("Session transcript.")
+        assert transcriber.amd_stt_active
+        assert transcriber.end_turn("Session transcript.").transcript == ""
+
+        model.streams[0].send_fake_transcript("AMD transcript.")
+        await wait_for_transcript(
+            lambda: transcriber._current.snapshot("amd").transcript == "AMD transcript."
+        )
+        turn = transcriber.end_turn("Session transcript.")
+        assert turn.source == "amd"
+        assert turn.transcript == "AMD transcript."
+
+        transcriber.push_transcript("Fallback transcript.")
+        transcriber.fail(RuntimeError("connection lost"))
+        turn = transcriber.end_turn("")
+        assert turn.source == "session"
+        assert turn.transcript == "Fallback transcript."
 
 
 @pytest.mark.asyncio

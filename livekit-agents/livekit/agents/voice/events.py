@@ -315,7 +315,7 @@ class UserStateChangedEvent(BaseModel):
     old_state: UserState
     new_state: UserState
     speech_timestamp: float | None = None
-    """Unix time of speech start or end, when known."""
+    """Unix time of user speech start or end, often backdated, when known."""
     created_at: float = Field(default_factory=time.time)
 
 

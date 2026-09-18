@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit import rtc
-from livekit.agents import AgentSession, AMDLifecycle
+from livekit.agents import AMD, AgentSession, AMDLifecycle
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -85,7 +85,7 @@ def _make_activity() -> AgentActivity:
     activity._started = True
     activity._session = AgentSession(vad=None)
     activity._session._agent_state = "listening"
-    activity._session._amd = MagicMock(lifecycle=AMDLifecycle.ACTIVE)
+    activity._session._amd = MagicMock(_blocks_session_audio=False)
     activity._session._turn_hooks = activity._session._amd._turn_hooks
     activity._current_speech = None
     activity._rt_session = MagicMock()
@@ -93,20 +93,30 @@ def _make_activity() -> AgentActivity:
     return activity
 
 
-def test_amd_pre_answer_gate_discards_audio_for_all_consumers() -> None:
+@pytest.mark.parametrize(
+    "lifecycle", [AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING, AMDLifecycle.ACTIVE]
+)
+def test_amd_pre_answer_gate_discards_audio_for_all_consumers(lifecycle: AMDLifecycle) -> None:
     activity = _make_activity()
-    activity._session.amd.lifecycle = AMDLifecycle.PENDING
-    activity.push_audio(_make_frame())
-    activity._session.amd.push_audio.assert_not_called()
-    activity._audio_recognition._push_audio.assert_not_called()
-    activity._rt_session.push_audio.assert_not_called()
-
-    activity._session.amd.lifecycle = AMDLifecycle.ACTIVE
+    amd = AMD(activity._session, llm=None, stt=None)
+    amd._lifecycle = lifecycle
+    amd._run = resources = MagicMock()
+    activity._session._amd = amd
+    activity._session._turn_hooks = amd._turn_hooks
     frame = _make_frame()
     activity.push_audio(frame)
-    activity._session.amd.push_audio.assert_called_once_with(frame)
-    activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=None)
-    activity._rt_session.push_audio.assert_called_once_with(frame)
+
+    if lifecycle is AMDLifecycle.ACTIVE:
+        resources.stt.push_audio.assert_called_once_with(frame)
+    else:
+        resources.stt.push_audio.assert_not_called()
+
+    if lifecycle in {AMDLifecycle.INITIALIZED, AMDLifecycle.PENDING}:
+        activity._audio_recognition._push_audio.assert_not_called()
+        activity._rt_session.push_audio.assert_not_called()
+    else:
+        activity._audio_recognition._push_audio.assert_called_once_with(frame, stt_frame=None)
+        activity._rt_session.push_audio.assert_called_once_with(frame)
 
 
 @pytest.mark.parametrize("guard", ["aec_warmup", "uninterruptible"])

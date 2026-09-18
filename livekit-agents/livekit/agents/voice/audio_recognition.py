@@ -1037,13 +1037,15 @@ class AudioRecognition:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
 
-        if not self._stt or self._closing.is_set():
+        # Turn hooks may use transcripts from a separate STT stream.
+        if (not self._stt and self._session._turn_hooks is None) or self._closing.is_set():
             fut.set_result("")
             return fut
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time is None or (
-                time.time() - self._last_final_transcript_time > 0.5
+            if self._stt and (
+                self._last_final_transcript_time is None
+                or time.time() - self._last_final_transcript_time > 0.5
             ):
                 # if the last final transcript is received more than 0.5s ago
                 # append a silence frame to the stt to flush the buffer

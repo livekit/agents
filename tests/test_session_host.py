@@ -370,7 +370,16 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_user_state_changed(self, transport: InMemoryTransport) -> None:
+    @pytest.mark.parametrize(
+        ("speech_timestamp", "expected_timestamp_ns"),
+        [(999.25, 999_250_000_000), (None, 1_000_000_000_000), (0.0, 0)],
+    )
+    async def test_user_state_changed(
+        self,
+        transport: InMemoryTransport,
+        speech_timestamp: float | None,
+        expected_timestamp_ns: int,
+    ) -> None:
         host = SessionHost(transport)
         await host.start()
 
@@ -378,17 +387,18 @@ class TestSessionHostEvents:
             type="user_state_changed",
             old_state="listening",
             new_state="speaking",
+            speech_timestamp=speech_timestamp,
             created_at=1000.0,
         )
         host._on_user_state_changed(event)
         await asyncio.sleep(0.1)
+        await host.aclose()
 
         assert len(transport.sent) == 1
         msg = transport.sent[0]
         assert msg.event.user_state_changed.old_state == agent_pb.US_LISTENING
         assert msg.event.user_state_changed.new_state == agent_pb.US_SPEAKING
-
-        await host.aclose()
+        assert msg.event.created_at.ToNanoseconds() == expected_timestamp_ns
 
     @pytest.mark.asyncio
     async def test_tool_execution_updated(self, transport: InMemoryTransport) -> None:
@@ -501,17 +511,24 @@ class TestSessionHostEvents:
         await host.aclose()
 
     @pytest.mark.asyncio
-    async def test_screening_prediction_uses_remote_unknown(
-        self, transport: InMemoryTransport
+    @pytest.mark.parametrize(
+        ("category", "transcript"),
+        [
+            (AMDCategory.MACHINE_SCREENING, "Please state your name."),
+            (AMDCategory.WAIT, "Please hold while I connect your call."),
+        ],
+    )
+    async def test_unsupported_amd_prediction_uses_remote_unknown(
+        self, transport: InMemoryTransport, category: AMDCategory, transcript: str
     ) -> None:
         host = SessionHost(transport)
         await host.start()
         try:
             host._on_amd_prediction(
                 AMDPredictionEvent(
-                    category=AMDCategory.MACHINE_SCREENING,
+                    category=category,
                     reason="prediction",
-                    transcript="Please state your name.",
+                    transcript=transcript,
                     speech_duration=1.0,
                     delay=0.1,
                 )
@@ -519,7 +536,7 @@ class TestSessionHostEvents:
             await asyncio.sleep(0.1)
             event = transport.sent[0].event.amd_prediction
             assert event.category == agent_pb.AMD_UNKNOWN
-            assert event.transcript == "Please state your name."
+            assert event.transcript == transcript
         finally:
             await host.aclose()
 

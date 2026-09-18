@@ -2,6 +2,7 @@ import asyncio
 
 from ... import function_tool
 from ...job import get_job_context
+from ...llm import ToolError
 from ...voice.events import RunContext
 from ..workflows.utils import DtmfEvent, dtmf_event_to_code
 
@@ -24,15 +25,12 @@ async def send_dtmf_events(
     except RuntimeError:
         room = get_job_context().room
 
-    amd = ctx.session.amd
     for event in events:
         try:
             code = dtmf_event_to_code(event)
             await room.local_participant.publish_dtmf(code=code, digit=event.value)
-            if amd and ctx.session.amd is amd:
-                amd.on_dtmf_event(event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
         except Exception as e:
-            return f"Failed to send DTMF event: {event.value}. Error: {str(e)}"
+            raise ToolError(f"Failed to send DTMF event: {event.value}. Error: {str(e)}") from e
 
     return f"Successfully sent DTMF events: {', '.join(events)}"

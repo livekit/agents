@@ -1645,7 +1645,8 @@ class AgentActivity(RecognitionHooks):
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
             return
-        if not self._session._input_audio_allowed:
+        amd = self._session._amd
+        if amd is not None and amd._blocks_session_audio:
             return
 
         aec_warmup_active: bool = (
@@ -1666,16 +1667,14 @@ class AgentActivity(RecognitionHooks):
 
         # When discarding, substitute silence on the paths that would otherwise
         # see contaminated/echoed audio (STT, realtime model) so the downstream
-        # stream stays continuous. VAD and the interruption detector keep
-        # receiving the real frame so they can still react to the user. AMD also
-        # receives the real frame: a human who talks over the agent's greeting is
-        # the signal AMD must not miss, so it never gets the substituted silence.
+        # stream stays continuous. VAD, AMD and the interruption detector keep
+        # receiving the real frame so they can still react to the user.
         stt_frame: rtc.AudioFrame | None = None
         if should_discard:
             stt_frame = utils.audio.silence_frame_like(frame)
 
-        if self._session._amd is not None:
-            self._session._amd.push_audio(frame)
+        if amd is not None:
+            amd.push_audio(frame)
 
         if self._rt_session is not None:
             self._rt_session.push_audio(stt_frame if stt_frame is not None else frame)
@@ -1815,6 +1814,8 @@ class AgentActivity(RecognitionHooks):
                         f"Available tools: {list(tool_ctx.function_tools.keys())}"
                     )
                 resolved_tools.append(tool)
+        elif all_tools != self.tools:
+            resolved_tools = all_tools
 
         handle = SpeechHandle.create(
             allow_interruptions=allow_interruptions
@@ -1875,7 +1876,7 @@ class AgentActivity(RecognitionHooks):
             self._preemptive_generation = None
 
     def _cancel_pending_speeches(self) -> None:
-        """Cancel preemptive, queued, and held speech; preserve active or paused playback."""
+        """cancel all pending speeches or generations, only preserve active or paused playback."""
         self._cancel_preemptive_generation()
         for _, _, speech in self._speech_q:
             speech._cancel()
@@ -1968,7 +1969,8 @@ class AgentActivity(RecognitionHooks):
     def commit_user_turn(
         self, *, transcript_timeout: float, stt_flush_duration: float, skip_reply: bool = False
     ) -> asyncio.Future[str]:
-        if self._rt_session is not None:
+        # Turn hooks gate realtime replies after EOT.
+        if self._rt_session is not None and (self._session._turn_hooks is None or skip_reply):
             # commit audio buffer and conditionally trigger response generation
             self._rt_session.commit_audio()
             if not skip_reply:
@@ -2663,8 +2665,10 @@ class AgentActivity(RecognitionHooks):
             return True
 
         # avoid interruption if the new_transcript is too short
+        # AMD classifies every turn, so short turns are committed while it runs
         if (
             self.stt is not None
+            and self._session._amd is None
             and self._turn_detection != "manual"
             and self._current_speech is not None
             and self._current_speech.allow_interruptions
@@ -2845,16 +2849,28 @@ class AgentActivity(RecognitionHooks):
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
 
+        if (
+            turn_hooks is not None
+            and info.new_transcript
+            and isinstance(self.llm, llm.RealtimeModel)
+            and not self.llm.capabilities.user_transcription
+        ):
+            self._agent._chat_ctx.insert(user_message)
+            self._session._conversation_item_added(user_message)
+
         if turn_hooks is not None and not await turn_hooks.should_reply(temp_mutable_chat_ctx):
             self._cancel_preemptive_generation()
-            if info.new_transcript:
+            if info.new_transcript and not isinstance(self.llm, llm.RealtimeModel):
                 self._agent._chat_ctx.insert(user_message)
                 self._session._conversation_item_added(user_message)
             return
 
+        reply_instructions: NotGivenOr[str] = NOT_GIVEN
         if isinstance(self.llm, llm.RealtimeModel):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
+            if turn_hooks is not None:
+                reply_instructions = turn_hooks.reply_instructions or NOT_GIVEN
         elif self.llm is None:
             return  # skip response if no llm is set
 
@@ -2910,6 +2926,7 @@ class AgentActivity(RecognitionHooks):
             speech_handle = self._generate_reply(
                 user_message=user_message,
                 chat_ctx=temp_mutable_chat_ctx,
+                instructions=reply_instructions,
                 input_details=InputDetails(modality="audio"),
             )
             # the invalidated preemptive attempt answered this same turn: one agent_turn
@@ -3112,8 +3129,8 @@ class AgentActivity(RecognitionHooks):
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
 
     @property
-    def _is_agent_active(self) -> bool:
-        """Whether turn handling, speech, playback, or interruption recovery is pending."""
+    def _is_agent_busy(self) -> bool:
+        """whether this is any work for turn handling, speech, playback, or interruption recovery."""
         audio_output = self._session.output.audio
         return (
             not self._no_pending_speech
@@ -4189,6 +4206,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                tools=tools,
             )
         finally:
             # reset tool_choice and tools
@@ -4212,6 +4230,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4225,6 +4244,7 @@ class AgentActivity(RecognitionHooks):
                     generation_ev=generation_ev,
                     model_settings=model_settings,
                     instructions=instructions,
+                    tools=tools,
                     inference_span=inference_span,
                 )
             finally:
@@ -4237,6 +4257,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        tools: list[llm.Tool | llm.Toolset] | None = None,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
@@ -4273,7 +4294,7 @@ class AgentActivity(RecognitionHooks):
         # the turn ends, in which case record_realtime_metrics opens its own child span
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = inference_span
-        tool_ctx = llm.ToolContext(self.tools)
+        tool_ctx = llm.ToolContext(tools if tools is not None else self.tools)
 
         tasks: list[asyncio.Task[Any]] = []
         tees: list[utils.aio.itertools.Tee[Any]] = []
@@ -4775,6 +4796,8 @@ class AgentActivity(RecognitionHooks):
                             if draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
+                        instructions=instructions,
+                        tools=tools,
                         tool_reply=True,
                     ),
                     speech_handle=speech_handle,

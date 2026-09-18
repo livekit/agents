@@ -304,11 +304,12 @@ _TOOL_REPLY_STATUS_MAP: dict[str, agent_pb.ToolReplyStatus] = {
 _AMD_CATEGORY_MAP: dict[AMDCategory, agent_pb.AmdCategory] = {
     AMDCategory.HUMAN: agent_pb.AmdCategory.AMD_HUMAN,
     AMDCategory.MACHINE_IVR: agent_pb.AmdCategory.AMD_MACHINE_IVR,
-    # TODO: @chenghao-mou The session-observability protocol does not yet represent screening.
+    # TODO: @chenghao-mou The session-observability protocol does not yet represent screening or wait.
     AMDCategory.MACHINE_SCREENING: agent_pb.AmdCategory.AMD_UNKNOWN,
     AMDCategory.MACHINE_VM: agent_pb.AmdCategory.AMD_MACHINE_VM,
     AMDCategory.MACHINE_UNAVAILABLE: agent_pb.AmdCategory.AMD_MACHINE_UNAVAILABLE,
     AMDCategory.UNCERTAIN: agent_pb.AmdCategory.AMD_UNCERTAIN,
+    AMDCategory.WAIT: agent_pb.AmdCategory.AMD_UNKNOWN,
 }
 
 
@@ -503,7 +504,11 @@ class SessionHost:
                     new_state=new_pb,
                 )
             ),
-            created_at=event.created_at,
+            # keep the wire timestamp backdated to the speech boundary; the session event
+            # used to set created_at to this value and now carries it in speech_timestamp
+            created_at=(
+                event.speech_timestamp if event.speech_timestamp is not None else event.created_at
+            ),
         )
 
     def _on_user_input_transcribed(self, event: UserInputTranscribedEvent) -> None:
