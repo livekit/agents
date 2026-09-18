@@ -234,6 +234,7 @@ def _extract_message_chunk(item: Any) -> BaseMessageChunk | str | None:
 def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
     message_id = utils.shortuuid("LC_")
     content: str | None = None
+    usage: llm.CompletionUsage | None = None
 
     if isinstance(msg, str):
         content = msg
@@ -241,6 +242,15 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         content = msg.text
         if getattr(msg, "id", None):
             message_id = msg.id  # type: ignore
+        if um := getattr(msg, "usage_metadata", None):
+            # Some providers only attach usage_metadata on a later, empty-content
+            # chunk (e.g. ChatOpenAI(stream_usage=True)). Keep those so voice
+            # generation can compute llm_node_tps.
+            usage = llm.CompletionUsage(
+                completion_tokens=um["output_tokens"],
+                prompt_tokens=um["input_tokens"],
+                total_tokens=um["total_tokens"],
+            )
     elif isinstance(msg, dict):
         raw = msg.get("content")
         if isinstance(raw, str):
@@ -250,7 +260,7 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         if isinstance(raw, str):
             content = raw
 
-    if not content:
+    if not content and usage is None:
         return None
 
     return llm.ChatChunk(
@@ -258,5 +268,8 @@ def _to_chat_chunk(msg: str | Any) -> llm.ChatChunk | None:
         delta=llm.ChoiceDelta(
             role="assistant",
             content=content,
-        ),
+        )
+        if content
+        else None,
+        usage=usage,
     )
