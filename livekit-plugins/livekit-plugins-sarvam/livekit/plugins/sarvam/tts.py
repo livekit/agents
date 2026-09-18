@@ -1109,52 +1109,41 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
-        """Update TTS options with validation."""
+        """Update TTS options with validation.
+
+        Changes land on a copy that is committed only after every model-dependent
+        limit validates against the resulting model. A rejected update therefore
+        leaves the live options untouched, and switching models cannot carry over
+        a speaker or a pitch/pace/loudness/temperature the new model refuses.
+        """
+        opts = replace(self._opts)
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            opts.target_language_code = LanguageCode(target_language_code)
 
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                        "all", []
-                    )
-                    raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers)}"
-                    )
+            opts.model = model
+
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
-                raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
-                )
-            self._opts.speaker = speaker
+            opts.speaker = speaker
 
         if pitch is not None:
-            self._opts.pitch = _clamp_pitch(self._opts.model, pitch)
+            opts.pitch = pitch
 
         if pace is not None:
-            _validate_param(self._opts.model, "pace", pace)
-            self._opts.pace = pace
+            opts.pace = pace
 
         if loudness is not None:
-            _validate_param(self._opts.model, "loudness", loudness)
-            self._opts.loudness = loudness
+            opts.loudness = loudness
 
         if temperature is not None:
-            _validate_param(self._opts.model, "temperature", temperature)
-            self._opts.temperature = temperature
+            opts.temperature = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -1162,29 +1151,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            opts.output_audio_bitrate = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            opts.min_buffer_size = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            opts.max_chunk_length = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            opts.enable_preprocessing = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            opts.dict_id = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            opts.enable_cached_responses = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            opts.send_completion_event = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -1192,7 +1181,34 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            opts.output_audio_codec = output_audio_codec
+
+        # Re-check every model-dependent limit against the resulting model, not just
+        # the arguments this call passed: the v4-flash speaker catalogue and bounds
+        # are disjoint from v3's, so a bare model switch can invalidate stored values.
+        if opts.speaker is not None and not validate_model_speaker_compatibility(
+            opts.model, opts.speaker
+        ):
+            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
+            raise ValueError(
+                f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
+                f"Compatible speakers: {', '.join(compatible_speakers)}"
+            )
+        _validate_param(opts.model, "pace", opts.pace)
+        _validate_param(opts.model, "loudness", opts.loudness)
+        _validate_param(opts.model, "temperature", opts.temperature)
+        opts.pitch = _clamp_pitch(opts.model, opts.pitch)
+
+        # model and send_completion_event are pinned in the handshake URL (and v4-flash
+        # is served on a different path), so a pooled socket would keep synthesising
+        # with the previous ones. Retire them; checked-out streams finish untouched.
+        reconnect = (opts.model, opts.send_completion_event) != (
+            self._opts.model,
+            self._opts.send_completion_event,
+        )
+        self._opts = opts
+        if reconnect:
+            self._pool.invalidate()
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -1408,7 +1424,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data["max_chunk_length"] = self._opts.max_chunk_length
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
-                    "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
+                    "Sending TTS config",
+                    # carries speaker and dict_id, so it is tagged for redaction
+                    extra={**self._build_log_context(), "lk.pii.config": config_msg},
                 )
                 await ws.send_str(json.dumps(config_msg))
                 input_sent_event.set()

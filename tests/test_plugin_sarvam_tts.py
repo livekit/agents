@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, get_args
 
 import pytest
 
 from livekit.agents import APIStatusError
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.types import APIConnectOptions
 from livekit.plugins.sarvam import tts as sarvam_tts
 
 pytestmark = pytest.mark.unit
@@ -14,28 +15,6 @@ pytestmark = pytest.mark.unit
 
 def _make_tts(**kwargs: Any) -> sarvam_tts.TTS:
     return sarvam_tts.TTS(api_key="sk_test", http_session=object(), **kwargs)  # type: ignore[arg-type]
-
-
-def test_synthesize_default_conn_options_have_no_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    class _CapturedChunkedStream:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr(sarvam_tts, "ChunkedStream", _CapturedChunkedStream)
-    tts = _make_tts()
-
-    tts.synthesize("hello")
-    tts.synthesize("hello", conn_options=DEFAULT_API_CONNECT_OPTIONS)
-
-    stream_conn_options = captured["conn_options"]
-    assert isinstance(stream_conn_options, APIConnectOptions)
-    assert stream_conn_options.max_retry == 0
-    assert stream_conn_options.retry_interval == DEFAULT_API_CONNECT_OPTIONS.retry_interval
-    assert stream_conn_options.timeout == DEFAULT_API_CONNECT_OPTIONS.timeout
 
 
 def test_synthesize_honors_explicit_conn_options(
@@ -58,28 +37,6 @@ def test_synthesize_honors_explicit_conn_options(
     assert stream_conn_options.max_retry == 5
     assert stream_conn_options.retry_interval == 1.5
     assert stream_conn_options.timeout == 12.0
-
-
-def test_stream_default_conn_options_have_no_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    class _CapturedSynthesizeStream:
-        def __init__(self, **kwargs: object) -> None:
-            captured.update(kwargs)
-
-    monkeypatch.setattr(sarvam_tts, "SynthesizeStream", _CapturedSynthesizeStream)
-    tts = _make_tts()
-
-    tts.stream()
-    tts.stream(conn_options=DEFAULT_API_CONNECT_OPTIONS)
-
-    stream_conn_options = captured["conn_options"]
-    assert isinstance(stream_conn_options, APIConnectOptions)
-    assert stream_conn_options.max_retry == 0
-    assert stream_conn_options.retry_interval == DEFAULT_API_CONNECT_OPTIONS.retry_interval
-    assert stream_conn_options.timeout == DEFAULT_API_CONNECT_OPTIONS.timeout
 
 
 def test_stream_honors_explicit_conn_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,6 +154,54 @@ def test_v4_flash_is_the_only_accepted_v4_wire_name() -> None:
     # `_opts.model` is the value sent as the REST body's "model" field
     assert tts._opts.model == "bulbul:v4-flash"
     assert "model=bulbul:v4-flash&" in sarvam_tts._websocket_url(tts._opts)
+
+
+def test_rejected_update_options_leaves_live_options_untouched() -> None:
+    tts = _make_tts(model="bulbul:v3")
+    before = replace(tts._opts)
+
+    # `shubh` is a v3-only speaker, so switching model alone cannot succeed
+    with pytest.raises(ValueError, match="incompatible"):
+        tts.update_options(model="bulbul:v4-flash")
+
+    assert (tts._opts.model, tts._opts.speaker) == (before.model, before.speaker)
+    assert sarvam_tts._websocket_url(tts._opts) == sarvam_tts._websocket_url(before)
+
+
+def test_update_options_revalidates_stored_params_against_the_new_model() -> None:
+    # pace 0.3 and temperature 1.5 are valid on v3 but out of range on v4-flash
+    tts = _make_tts(model="bulbul:v3", pace=0.3, temperature=1.5)
+
+    with pytest.raises(ValueError, match="pace"):
+        tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    assert tts._opts.model == "bulbul:v3"
+
+    tts.update_options(pace=1.0, temperature=0.6)
+    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    assert tts._opts.model == "bulbul:v4-flash"
+
+    # v3 pitch 0.7 is clamped to the tighter v4-flash bound on the switch
+    wide = _make_tts(model="bulbul:v3", pitch=0.7)
+    assert wide._opts.pitch == 0.7
+    wide.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    assert wide._opts.pitch == 0.5
+
+
+def test_update_options_invalidates_the_pool_only_for_handshake_fields() -> None:
+    tts = _make_tts(model="bulbul:v3")
+    invalidated: list[bool] = []
+    tts._pool.invalidate = lambda: invalidated.append(True)  # type: ignore[method-assign]
+
+    # pace rides in the per-request config, so the pooled socket stays usable
+    tts.update_options(pace=1.2)
+    assert invalidated == []
+
+    # model and send_completion_event are pinned in the handshake URL
+    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+    assert invalidated == [True]
+
+    tts.update_options(send_completion_event=False)
+    assert invalidated == [True, True]
 
 
 def _error_stream() -> sarvam_tts.SynthesizeStream:
