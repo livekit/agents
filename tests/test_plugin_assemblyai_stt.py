@@ -1678,3 +1678,81 @@ async def test_end_of_turn_confidence_absent_leaves_metadata_none():
     interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
     assert interim
     assert interim[0].alternatives[0].metadata is None
+
+
+# ---------------------------------------------------------------------------
+# language_confidence surfaced on SpeechData.metadata
+#
+# When `language_detection` is enabled (the plugin's default for U3 Pro and
+# multilingual models) Turn messages carry `language_code` alongside a
+# `language_confidence` between 0 and 1 scoring it. Both are populated only when
+# an utterance is complete or the turn is final, so a plain interim carries
+# neither. The plugin passes the score through on SpeechData.metadata untouched.
+# ---------------------------------------------------------------------------
+
+
+async def test_language_confidence_surfaced_on_final_metadata():
+    """A final turn carries the detected language's confidence on its metadata."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hola", language_confidence=0.92)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"language_confidence": 0.92}
+
+
+async def test_language_confidence_surfaced_on_preflight_metadata():
+    """An utterance-carrying turn surfaces the confidence on its preflight event."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message(utterance="hola", language_confidence=0.81))
+
+    preflight = [e for e in _drain_events(stream) if e.type == SpeechEventType.PREFLIGHT_TRANSCRIPT]
+    assert preflight
+    assert preflight[0].alternatives[0].metadata == {"language_confidence": 0.81}
+
+
+async def test_language_confidence_absent_on_plain_interim():
+    """The server omits language_confidence on a plain partial, so metadata stays
+    unset rather than carrying a fabricated score."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(_turn_message())  # no language_confidence key
+
+    interim = [e for e in _drain_events(stream) if e.type == SpeechEventType.INTERIM_TRANSCRIPT]
+    assert interim
+    assert interim[0].alternatives[0].metadata is None
+
+
+async def test_language_confidence_zero_is_surfaced():
+    """0 is the bottom of the documented 0-to-1 range, so it is a real score
+    rather than an absent one and must not be dropped as falsy -- a truthiness
+    check here would silently discard the least confident detections."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(end_of_turn=True, transcript="hello", language_confidence=0.0)
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {"language_confidence": 0.0}
+
+
+async def test_language_confidence_coexists_with_end_of_turn_confidence():
+    """Both scores ride the same metadata dict when the turn carries both."""
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        _turn_message(
+            end_of_turn=True,
+            transcript="hola",
+            end_of_turn_confidence=1.0,
+            language_confidence=0.92,
+        )
+    )
+
+    final = [e for e in _drain_events(stream) if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert final
+    assert final[0].alternatives[0].metadata == {
+        "end_of_turn_confidence": 1.0,
+        "language_confidence": 0.92,
+    }
