@@ -21,6 +21,7 @@ import json
 import os
 import time
 import weakref
+from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import Any, Literal
@@ -64,6 +65,16 @@ from .log import logger
 
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
+# Client-side WebSocket ping interval. A socket that dies without a close frame
+# during a long silence is otherwise invisible to the idle reader, because a
+# read on it simply never returns. Transport level, not provider specific.
+_WS_HEARTBEAT_S = 20.0
+# After an interrupt the plugin sends `cancel` and waits this long for the
+# gateway to end the cancelled reply, then this much longer for the socket to
+# stay quiet. Anything else closes the socket, so no late audio from the
+# cancelled reply can reach the next one.
+_CANCEL_SETTLE_S = 0.3
+_CANCEL_QUIET_S = 0.1
 
 # Text frames sent to the gateway are cut by `text_chunking`. The default,
 # "sentence", relies on a sentence tokenizer and sends one whole sentence per
@@ -296,6 +307,26 @@ class _TTSOptions:
     phrase_max_chars: int
 
 
+class _StaleConnection(Exception):
+    """A reused socket turned out to be dead before this reply produced audio."""
+
+
+@dataclass
+class _HeldConnection:
+    """The one WebSocket a TTS instance keeps open across the replies of a call."""
+
+    ws: aiohttp.ClientWebSocketResponse
+    # Settings epoch the init was sent under; stale once the TTS epoch moves on.
+    epoch: int
+    opened_by: str
+    in_use: bool = False
+    reused: bool = False
+    served_segments: int = 0
+    idle_reader: asyncio.Task[None] | None = None
+    gateway_request_id: str | None = None
+    gateway_session_id: str | None = None
+
+
 @dataclass
 class _WsConnectionTiming:
     ws_connect_ms: float
@@ -518,6 +549,13 @@ class TTS(tts.TTS):
         # Retain fire-and-forget standby-close tasks so the event loop cannot
         # garbage-collect them mid-run before the socket is actually closed.
         self._standby_close_tasks: set[asyncio.Task[None]] = set()
+        # One connection per TTS instance, held across the replies of a call.
+        self._ws_lock = asyncio.Lock()
+        self._held: _HeldConnection | None = None
+        # Retained refs to release / cancel-drain / idle-reader tasks so the
+        # event loop cannot drop them mid-run.
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._closing = False
 
         if not _candidate:
             for fallback in raw_connections[1:]:
@@ -614,6 +652,7 @@ class TTS(tts.TTS):
             session.ws_connect(
                 model_endpoint,
                 headers=headers,
+                heartbeat=_WS_HEARTBEAT_S,
             ),
             timeout,
         )
@@ -659,6 +698,308 @@ class TTS(tts.TTS):
         )
 
         return ws
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        """Run connection bookkeeping in the background, retained and logged on failure."""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+
+        def _done(done: asyncio.Task[None]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                logger.warning(
+                    "[TTS] connection task failed",
+                    extra={"tts_model": self._opts.model},
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+        return task
+
+    async def _acquire_connection(self, *, timeout: float) -> _HeldConnection:
+        """Return the held connection if it is alive and current, else open one.
+
+        The returned connection is marked in-use; the caller hands it back with
+        ``_release_connection`` or ``_release_after_cancel``. If another reply
+        still owns the held socket (an interrupted reply draining, or a reply
+        generated while the previous one is still speaking), this opens a
+        private socket that is never installed and is closed on release.
+        """
+        stale: _HeldConnection | None = None
+        async with self._ws_lock:
+            held = self._held
+            if held is not None and not held.in_use:
+                await self._stop_idle_reader(held)
+                if held.epoch == self._standby_epoch and self._is_ws_usable(held.ws):
+                    held.in_use = True
+                    held.reused = True
+                    return held
+                self._held = None
+                stale = held
+        if stale is not None:
+            await _close_ws(stale.ws, context="acquire_stale")
+
+        epoch = self._standby_epoch
+        ws: aiohttp.ClientWebSocketResponse | None = None
+        opened_by = "standby"
+        if self.warm_standby_enabled:
+            ws, _standby_ready_ms, _miss_reason = await self._checkout_standby()
+        if ws is None:
+            ws = await self._connect_ws(timeout=timeout)
+            opened_by = "segment"
+        conn = _HeldConnection(ws=ws, epoch=epoch, opened_by=opened_by, in_use=True)
+        async with self._ws_lock:
+            if self._held is None and epoch == self._standby_epoch and not self._closing:
+                self._held = conn
+        return conn
+
+    async def _release_connection(self, conn: _HeldConnection, *, keep: bool) -> None:
+        """Hand a connection back after a reply. ``keep=False`` closes it."""
+        async with self._ws_lock:
+            conn.in_use = False
+            current = self._held is conn
+            if (
+                keep
+                and current
+                and conn.epoch == self._standby_epoch
+                and self._is_ws_usable(conn.ws)
+                and not self._closing
+            ):
+                self._start_idle_reader(conn)
+                return
+            if current:
+                self._held = None
+        await _close_ws(conn.ws, context="release_keep" if keep else "release_error")
+        if keep and current and not self._closing:
+            self._on_connection_lost(
+                conn,
+                reason="options_changed" if conn.epoch != self._standby_epoch else "reconnect",
+            )
+
+    def _release_after_cancel(
+        self, conn: _HeldConnection, *, in_flight: bool, tasks_done: bool
+    ) -> None:
+        """Interrupt path. Runs inside a CancelledError handler, so it cannot await.
+
+        ``in_flight``: text was sent and ``audio_end`` was not seen, so the
+        gateway has to be told to cancel. ``tasks_done``: the segment's send and
+        receive tasks have finished, so nobody else is inside ``ws.receive()``.
+        Nothing sent and nobody reading means the socket is clean and is kept;
+        any other combination leaves its state unknown, so it is closed.
+        """
+        if in_flight and tasks_done:
+            self._spawn(self._cancel_and_settle(conn))
+        else:
+            self._spawn(self._release_connection(conn, keep=not in_flight and tasks_done))
+
+    async def _cancel_and_settle(self, conn: _HeldConnection) -> None:
+        """Send cancel, then decide whether the socket is clean enough to keep."""
+        started_at = time.perf_counter()
+        audio_after_cancel = 0
+        outcome = "send_failed"
+        try:
+            await conn.ws.send_str(SynthesizeStream._CANCEL_MSG)
+            outcome, audio_after_cancel = await self._settle_cancel(
+                conn.ws, deadline=started_at + _CANCEL_SETTLE_S
+            )
+        except BaseException:
+            outcome = "drain_failed"
+            raise
+        finally:
+            async with self._ws_lock:
+                conn.in_use = False
+                keep = (
+                    outcome == "acknowledged"
+                    and self._held is conn
+                    and conn.epoch == self._standby_epoch
+                    and self._is_ws_usable(conn.ws)
+                    and not self._closing
+                )
+                if keep:
+                    self._start_idle_reader(conn)
+                elif self._held is conn:
+                    self._held = None
+            if not keep:
+                await _close_ws(conn.ws, context=f"cancel_{outcome}")
+                if not self._closing and conn.served_segments > 0:
+                    self._on_connection_lost(conn, reason="reconnect")
+            logger.info(
+                "[TTS] cancel settled",
+                extra={
+                    "tts_model": self._opts.model,
+                    "tts_provider": self.provider,
+                    "cancel_outcome": outcome,
+                    "settle_ms": _elapsed_ms(started_at),
+                    "audio_chunks_after_cancel": audio_after_cancel,
+                    "socket_kept": keep,
+                },
+            )
+            self._emit_plugin_event(
+                "tts.cancel",
+                outcome=outcome,
+                socket_kept=keep,
+                audio_chunks_after_cancel=audio_after_cancel,
+            )
+
+    async def _settle_cancel(
+        self, ws: aiohttp.ClientWebSocketResponse, *, deadline: float
+    ) -> tuple[str, int]:
+        """Read until the cancelled reply ends and the socket goes quiet, or give up.
+
+        Returns ``(outcome, audio_chunks_seen)``. Only "acknowledged" (a terminal
+        frame before the deadline, with nothing following it) means the socket
+        may be reused; every other outcome means it has to be closed.
+        """
+        audio = 0
+        terminal_seen = False
+        while True:
+            limit = deadline + _CANCEL_QUIET_S if terminal_seen else deadline
+            remaining = limit - time.perf_counter()
+            if remaining <= 0:
+                return ("acknowledged" if terminal_seen else "timeout"), audio
+            try:
+                msg = await ws.receive(timeout=max(remaining, 0.001))
+            except (TimeoutError, asyncio.TimeoutError):
+                return ("acknowledged" if terminal_seen else "timeout"), audio
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.ERROR,
+            ):
+                return "closed", audio
+            if msg.type == aiohttp.WSMsgType.BINARY:
+                audio += 1
+                if terminal_seen:
+                    return "audio_after_terminal", audio
+                continue
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            try:
+                resp = json.loads(msg.data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(resp, dict):
+                continue
+            if resp.get("type") == "cleared":
+                terminal_seen = True
+                continue
+            event = _parse_ws_event(resp)
+            if event.kind == "audio_end":
+                terminal_seen = True
+                continue
+            if event.kind == "error":
+                return "error", audio
+            if event.kind == "audio_chunk" or isinstance(resp.get("audio"), str):
+                audio += 1
+                if terminal_seen:
+                    return "audio_after_terminal", audio
+
+    def _start_idle_reader(self, conn: _HeldConnection) -> None:
+        if conn.idle_reader is not None and not conn.idle_reader.done():
+            return
+        conn.idle_reader = self._spawn(self._idle_read(conn))
+
+    async def _stop_idle_reader(self, conn: _HeldConnection) -> None:
+        task, conn.idle_reader = conn.idle_reader, None
+        if task is not None:
+            await utils.aio.gracefully_cancel(task)
+
+    async def _idle_read(self, conn: _HeldConnection) -> None:
+        """Own the socket between replies: notice closes, read `ready`, drop strays.
+
+        Cancellation (a reply taking the socket over) propagates out of
+        ``ws.receive()`` and ends the task before any bookkeeping, which is the
+        intended exit. Without this reader a gateway close would go unnoticed
+        until the next reply wrote to a dead socket, and any late frame from a
+        finished reply would be read by the next one.
+        """
+        discarded = 0
+        while True:
+            msg = await conn.ws.receive()
+            if msg.type in (
+                aiohttp.WSMsgType.CLOSE,
+                aiohttp.WSMsgType.CLOSED,
+                aiohttp.WSMsgType.CLOSING,
+                aiohttp.WSMsgType.ERROR,
+            ):
+                break
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                discarded += 1
+                continue
+            try:
+                resp = json.loads(msg.data)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(resp, dict):
+                continue
+            if resp.get("type") == "ready":
+                raw_request_id = resp.get("slng_request_id")
+                raw_session_id = resp.get("session_id")
+                conn.gateway_request_id = (
+                    raw_request_id if isinstance(raw_request_id, str) else None
+                )
+                conn.gateway_session_id = (
+                    raw_session_id if isinstance(raw_session_id, str) else None
+                )
+                self._emit_plugin_event(
+                    "gateway.session",
+                    gateway_request_id=conn.gateway_request_id,
+                    gateway_session_id=conn.gateway_session_id,
+                )
+                continue
+            if _parse_ws_event(resp).kind == "error":
+                logger.warning(
+                    "[TTS] error on idle connection",
+                    extra={"tts_model": self._opts.model, "error": _extract_error_message(resp)},
+                )
+                break
+            discarded += 1
+
+        if discarded:
+            logger.debug("[TTS] discarded %d frame(s) on idle connection", discarded)
+        async with self._ws_lock:
+            owned = self._held is conn and not conn.in_use
+            if owned:
+                self._held = None
+        if owned:
+            await _close_ws(conn.ws, context="idle_closed")
+            if not self._closing:
+                self._on_connection_lost(conn, reason="reconnect")
+
+    def _on_connection_lost(self, conn: _HeldConnection, *, reason: str) -> None:
+        """Hook for reopening the connection in the background (see prewarm)."""
+
+    async def _drop_connection(self, *, context: str) -> None:
+        """Close the held socket without reopening it (this candidate is not active)."""
+        async with self._ws_lock:
+            held = self._held
+            if held is None or held.in_use:
+                return
+            self._held = None
+            await self._stop_idle_reader(held)
+        await _close_ws(held.ws, context=context)
+
+    async def _drop_inactive_candidate_connections(self, active: TTS) -> None:
+        """Close every other candidate's held socket, so a call holds only one."""
+        for candidate in self._candidate_tts:
+            if candidate is not active:
+                await candidate._drop_connection(context="candidate_switch")
+
+    async def _invalidate_connection(self) -> None:
+        """Retire a held socket whose init predates the current options."""
+        async with self._ws_lock:
+            held = self._held
+            if held is None or held.in_use or held.epoch == self._standby_epoch:
+                return
+            self._held = None
+            await self._stop_idle_reader(held)
+        await _close_ws(held.ws, context="options_changed")
+        if not self._closing:
+            self._on_connection_lost(held, reason="options_changed")
 
     def _start_standby_replenish(self, *, timeout: float) -> bool:
         if not self.warm_standby_enabled:
@@ -781,12 +1122,17 @@ class TTS(tts.TTS):
             invalidate_pool = invalidate_pool or self._opts.speed != speed
             self._opts.speed = speed
 
-        # Warm-standby sockets were initialized with the old voice/language.
-        # Bump the epoch synchronously so any already-open standby is treated as
-        # stale on checkout immediately (no await here, so no checkout can
-        # interleave), then drop the socket in the background.
+        # The held socket (and any standby) was initialized with the old
+        # voice/language/speed. Bump the epoch synchronously so nothing hands it
+        # out again (no await here, so no acquire can interleave), then retire
+        # the socket in the background. An in-use socket is left alone: its
+        # release sees the stale epoch and closes it.
         if invalidate_pool:
             self._standby_epoch += 1
+            held = self._held
+            if held is not None and not held.in_use:
+                with contextlib.suppress(RuntimeError):
+                    self._spawn(self._invalidate_connection())
         if invalidate_pool and (self._standby is not None or self._standby_task is not None):
             with contextlib.suppress(RuntimeError):
                 close_task = asyncio.get_running_loop().create_task(self._close_standby())
@@ -860,6 +1206,7 @@ class TTS(tts.TTS):
         # after the final audio.
 
     async def aclose(self) -> None:
+        self._closing = True
         for stream in list(self._streams):
             await stream.aclose()
 
@@ -875,6 +1222,31 @@ class TTS(tts.TTS):
                 await asyncio.shield(close_task)
         self._standby_close_tasks.clear()
         await self._close_standby()
+
+        # Detach the held socket and stop its idle reader first: that reader
+        # blocks in receive() indefinitely and must not be waited on below.
+        async with self._ws_lock:
+            held, self._held = self._held, None
+            if held is not None:
+                await self._stop_idle_reader(held)
+        # Let every release and cancel drain finish; each checks _closing before
+        # installing or reopening anything. Bounded: a drain is at most the
+        # settle window plus one socket close.
+        pending = [task for task in self._background_tasks if not task.done()]
+        if pending:
+            _done, still_running = await asyncio.wait(
+                pending, timeout=WS_CLOSE_TIMEOUT_S + _CANCEL_SETTLE_S + _CANCEL_QUIET_S
+            )
+            for task in still_running:
+                await utils.aio.gracefully_cancel(task)
+        if held is not None:
+            if self._is_ws_usable(held.ws):
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(
+                        held.ws.send_str(SynthesizeStream._CLOSE_MSG), WS_CLOSE_TIMEOUT_S
+                    )
+            await _close_ws(held.ws, context="tts_aclose")
+
         if not self._is_candidate:
             for candidate in self._candidate_tts[1:]:
                 await candidate.aclose()
@@ -1114,8 +1486,18 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
         phrase_batching = self._opts.text_chunking in {"sentence", "phrase"}
-        # (text, flush) for every frame this reply put on the wire, in order.
+        # The sender's state lives at segment scope, not inside send_task, so a
+        # reconnect replays the whole reply: tokens are consumed from the
+        # tokenizer once and a new attempt cannot get them back.
+        # `sent_frames` is what reached the wire, `pending_frames` is what was
+        # framed but not written yet, and `batcher` holds tokens not yet framed.
         sent_frames: list[tuple[str, bool]] = []
+        pending_frames: list[tuple[str, bool]] = []
+        batcher = _FrameBatcher(
+            batch_phrases=phrase_batching, max_chars=self._opts.phrase_max_chars
+        )
+        # True once every frame of the reply has been produced (flush included).
+        frames_complete = False
         outcome = "completed"
         ws_connect_ms: float | None = None
         init_send_ms: float | None = None
@@ -1124,17 +1506,17 @@ class SynthesizeStream(tts.SynthesizeStream):
         first_text_send_ms: float | None = None
         first_audio_ms: float | None = None
         audio_end_ms: float | None = None
-        close_ms: float | None = None
-        close_timed_out = False
         gateway_request_id: str | None = None
         gateway_session_id: str | None = None
         audio_chunks_seen = 0
         standby_enabled = self._tts.warm_standby_enabled
-        standby_used = False
-        standby_ready_ms: float | None = None
-        standby_miss_reason: str | None = None
-        standby_replenish_started = False
-        standby_replenish_requested = False
+        # Where this segment's socket came from, and how many times a dead
+        # reused socket forced a reconnect-and-replay.
+        ws_source: str | None = None
+        ws_reconnects = 0
+        # Text is on the wire and audio_end has not arrived: an interrupt now
+        # has to tell the gateway to cancel.
+        in_flight = False
 
         def capture_ws_timing(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal ws_connect_ms, init_send_ms, connect_total_ms
@@ -1155,15 +1537,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             if first_audio_ms is None:
                 first_audio_ms = _elapsed_ms(segment_started_at)
 
-        def request_standby_replenish() -> None:
-            nonlocal standby_replenish_requested, standby_replenish_started
-            if not standby_enabled or standby_replenish_requested:
-                return
-            standby_replenish_requested = True
-            standby_replenish_started = self._tts._start_standby_replenish(
-                timeout=self._conn_options.timeout
-            )
-
         def log_segment_timing() -> None:
             logger.info(
                 "[TTS] segment timing",
@@ -1181,39 +1554,59 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "first_audio_ms": first_audio_ms,
                     "audio_end_ms": audio_end_ms,
                     "segment_total_ms": _elapsed_ms(segment_started_at),
-                    "close_ms": close_ms,
-                    "close_timed_out": close_timed_out,
                     "audio_chunks": audio_chunks_seen,
                     "gateway_request_id": gateway_request_id,
                     "gateway_session_id": gateway_session_id,
                     "standby_enabled": standby_enabled,
-                    "standby_used": standby_used,
-                    "standby_ready_ms": standby_ready_ms,
-                    "standby_miss_reason": standby_miss_reason,
-                    "standby_replenish_started": standby_replenish_started,
+                    "ws_source": ws_source,
+                    "ws_reconnects": ws_reconnects,
                 },
             )
 
-        async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            batcher = _FrameBatcher(
-                batch_phrases=phrase_batching, max_chars=self._opts.phrase_max_chars
-            )
+        async def guarded_send(conn: _HeldConnection, data: str) -> None:
+            nonlocal in_flight
+            try:
+                await conn.ws.send_str(data)
+            except Exception as exc:
+                # A reused socket that fails before this reply produced any audio
+                # was closed by the gateway (or died) while it sat idle. Reconnect
+                # and replay rather than failing the reply.
+                if conn.reused and audio_chunks_seen == 0:
+                    raise _StaleConnection() from exc
+                raise
+            in_flight = True
+            input_sent_event.set()
 
-            async def _send(frame: str, *, flush: bool) -> None:
+        async def write_pending(conn: _HeldConnection) -> None:
+            """Write queued frames, dropping each only once it is on the wire."""
+            while pending_frames:
+                frame, flush = pending_frames[0]
                 # SLNG: "text" type, with the reply's terminating flush inline on
                 # the last frame (the canonical Unmute form: one message, not two).
                 self._mark_started()
                 payload: dict[str, object] = {"type": "text", "text": frame}
                 if flush:
                     payload["flush"] = True
-                await ws.send_str(json.dumps(payload))
+                await guarded_send(conn, json.dumps(payload))
+                pending_frames.pop(0)
                 sent_frames.append((frame, flush))
                 mark_first_text_sent()
-                input_sent_event.set()
+
+        async def send_task(conn: _HeldConnection) -> None:
+            nonlocal frames_complete
+
+            # A reconnect starts a fresh turn on a new socket, so everything an
+            # earlier attempt wrote has to go out again, ahead of whatever it
+            # had framed but never managed to write.
+            if sent_frames:
+                pending_frames[:0] = sent_frames
+                sent_frames.clear()
+            await write_pending(conn)
+            if frames_complete:
+                return
 
             stream = segment.stream
             token_count = 0
-            flushed = False
             while True:
                 try:
                     token = (await stream.__anext__()).token
@@ -1225,9 +1618,10 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if not segment.input_ended:
                     # More text is still coming, so this token cannot close the
                     # reply: send its frame straight away without the flush.
-                    frame = batcher.push(token)
-                    if frame is not None:
-                        await _send(frame, flush=False)
+                    ready_frame = batcher.push(token)
+                    if ready_frame is not None:
+                        pending_frames.append((ready_frame, False))
+                        await write_pending(conn)
                     continue
 
                 # The reply's text is complete: every remaining token is already
@@ -1244,44 +1638,56 @@ class SynthesizeStream(tts.SynthesizeStream):
                 last = batcher.finish()
                 if last is not None:
                     frames.append(last)
-                for frame in frames[:-1]:
-                    await _send(frame, flush=False)
                 if frames:
-                    await _send(frames[-1], flush=True)
-                    flushed = True
+                    pending_frames.extend(
+                        (frame, index == len(frames) - 1) for index, frame in enumerate(frames)
+                    )
+                    frames_complete = True
+                await write_pending(conn)
                 break
 
-            if not flushed:
+            if not frames_complete:
                 # Only reachable when the stream ended without input_ended being
                 # observed (a tokenizer that emits eagerly), or when the tail
                 # carried no letter and was dropped.
                 last = batcher.finish()
                 if last is not None:
-                    await _send(last, flush=True)
+                    pending_frames.append((last, True))
+                    frames_complete = True
+                    await write_pending(conn)
                 elif sent_frames:
                     logger.debug("[TTS] tail produced no frame; sending standalone flush")
-                    await ws.send_str(self._FLUSH_MSG)
+                    await guarded_send(conn, self._FLUSH_MSG)
                     sent_frames[-1] = (sent_frames[-1][0], True)
+                    frames_complete = True
 
             logger.debug(f"[TTS] send_task: sent {len(sent_frames)} frames ({token_count} tokens)")
             input_sent_event.set()
 
-        async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+        async def recv_task(conn: _HeldConnection) -> None:
             nonlocal ready_ms, audio_end_ms, gateway_request_id, gateway_session_id
-            nonlocal audio_chunks_seen
+            nonlocal audio_chunks_seen, in_flight
+            ws = conn.ws
             await input_sent_event.wait()
-            if not sent_frames:
+            if not sent_frames and not pending_frames:
                 # A reply whose text carried no letters at all: nothing was sent,
                 # so no audio is coming. End the segment rather than waiting.
                 logger.debug("[TTS] recv_task: no frames were sent, ending segment")
                 output_emitter.end_segment()
                 return
             while True:
-                msg = await ws.receive(timeout=self._conn_options.timeout)
+                try:
+                    msg = await ws.receive(timeout=self._conn_options.timeout)
+                except (TimeoutError, asyncio.TimeoutError):
+                    # A reused socket that never answers died silently while idle.
+                    if conn.reused and audio_chunks_seen == 0:
+                        raise _StaleConnection() from None
+                    raise
                 if msg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
+                    aiohttp.WSMsgType.ERROR,
                 ):
                     if audio_chunks_seen > 0:
                         logger.info(
@@ -1290,8 +1696,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                             audio_chunks_seen,
                         )
                         audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
+                        in_flight = False
                         output_emitter.end_segment()
                         break
+                    if conn.reused:
+                        raise _StaleConnection()
                     raise APIStatusError("SLNG websocket connection closed unexpectedly")
 
                 # SLNG: Handle both binary (legacy) and JSON audio_chunk messages
@@ -1321,6 +1730,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                         raw_session_id = resp.get("session_id")
                         if isinstance(raw_session_id, str):
                             gateway_session_id = raw_session_id
+                        conn.gateway_request_id = gateway_request_id
+                        conn.gateway_session_id = gateway_session_id
                         self._tts._emit_plugin_event(
                             "gateway.session",
                             gateway_request_id=gateway_request_id,
@@ -1359,6 +1770,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                         if is_final:
                             audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
+                            in_flight = False
                             output_emitter.end_segment()
                             break
 
@@ -1387,6 +1799,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             output_emitter.push(event.audio)
                         logger.debug(f"[TTS] recv_task: audio_end after {audio_chunks_seen} chunks")
                         audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
+                        in_flight = False
                         output_emitter.end_segment()
                         break
 
@@ -1399,38 +1812,62 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.debug("[TTS] ignoring unknown message", extra={"lk.pii.data": resp})
 
+        conn: _HeldConnection | None = None
+        tasks: list[asyncio.Task[None]] = []
         try:
-            ws: aiohttp.ClientWebSocketResponse | None = None
-            if standby_enabled:
-                (
-                    ws,
-                    standby_ready_ms,
-                    standby_miss_reason,
-                ) = await self._tts._checkout_standby()
-                standby_used = ws is not None
-            if ws is None:
-                ws = await self._tts._connect_ws(timeout=self._conn_options.timeout)
-            capture_ws_timing(ws)
-            tasks = [
-                asyncio.create_task(send_task(ws)),
-                asyncio.create_task(recv_task(ws)),
-            ]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                input_sent_event.set()
-                await utils.aio.gracefully_cancel(*tasks)
-                close_started_at = time.perf_counter()
+            while True:
+                conn = await self._tts._acquire_connection(timeout=self._conn_options.timeout)
+                ws_source = "reused" if conn.reused else conn.opened_by
+                if not conn.reused:
+                    capture_ws_timing(conn.ws)
+                gateway_request_id = gateway_request_id or conn.gateway_request_id
+                gateway_session_id = gateway_session_id or conn.gateway_session_id
+                tasks = [
+                    asyncio.create_task(send_task(conn)),
+                    asyncio.create_task(recv_task(conn)),
+                ]
                 try:
-                    await _close_ws(ws, context="terminal_model_segment")
+                    await asyncio.gather(*tasks)
+                except _StaleConnection:
+                    await utils.aio.gracefully_cancel(*tasks)
+                    ws_reconnects += 1
+                    await self._tts._release_connection(conn, keep=False)
+                    conn = None
+                    in_flight = False
+                    if ws_reconnects > 1:
+                        raise APIConnectionError(
+                            "SLNG websocket closed before producing audio"
+                        ) from None
+                    logger.info(
+                        "[TTS] reused websocket was dead, reconnecting and replaying segment",
+                        extra={"tts_model": self._opts.model, "segment_id": segment_id},
+                    )
+                    input_sent_event.clear()
+                    continue
                 finally:
-                    close_ms = _elapsed_ms(close_started_at)
-                    close_timed_out = close_ms >= (WS_CLOSE_TIMEOUT_S * 1000)
+                    input_sent_event.set()
+                    await utils.aio.gracefully_cancel(*tasks)
+                break
+
+            conn.served_segments += 1
+            # The socket stays open for the next reply; only the segment ends here.
+            await self._tts._release_connection(conn, keep=True)
+            conn = None
         except asyncio.CancelledError:
             outcome = "cancelled"
+            if conn is not None:
+                # Only drain when nobody can still be inside ws.receive() on this
+                # socket: a second cancel can land while the inner finally awaits.
+                self._tts._release_after_cancel(
+                    conn,
+                    in_flight=in_flight,
+                    tasks_done=all(task.done() for task in tasks),
+                )
             raise
         except Exception:
             outcome = "error"
+            if conn is not None:
+                await self._tts._release_connection(conn, keep=False)
             raise
         finally:
             log_segment_timing()
@@ -1605,6 +2042,7 @@ class _FallbackSynthesizeStream(_FallbackStreamBase):
 
     async def _start_stream(self) -> None:
         candidate = self._parent._candidate_tts[self._index]
+        await self._parent._drop_inactive_candidate_connections(candidate)
         options = replace(self._conn_options, max_retry=0)
         self._stream = await candidate._stream_candidate(conn_options=options).__aenter__()
         for item in self._texts:
@@ -1639,6 +2077,7 @@ class _FallbackChunkedStream(_FallbackStreamBase):
 
     async def _start_stream(self) -> None:
         candidate = self._parent._candidate_tts[self._index]
+        await self._parent._drop_inactive_candidate_connections(candidate)
         options = replace(self._conn_options, max_retry=0)
         self._stream = await candidate._synthesize_candidate(
             self._text,
