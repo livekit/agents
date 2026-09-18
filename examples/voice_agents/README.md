@@ -16,7 +16,7 @@ session = AgentSession(
 )
 ```
 
-**Note:** Real-time voice-to-voice models (Amazon Nova Sonic, xAI Grok, etc.) are not supported by LiveKit Inference and must use the provider plugin directly.
+**Note:** OpenAI Realtime models are available through `inference.RealtimeModel`; use provider plugin classes for direct credentials. See the [Real-time Models](#real-time-models) examples below.
 
 ## Table of Contents
 
