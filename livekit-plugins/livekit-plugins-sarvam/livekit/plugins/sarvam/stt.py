@@ -903,6 +903,7 @@ class SpeechStream(stt.SpeechStream):
         self._should_flush = False  # Flag to trigger flush
 
         self._utterance_speech_start_wall: float | None = None
+        self._utterance_speech_end_wall: float | None = None
         self._pending_final_data: dict[str, Any] | None = None
         self._pending_eos = False
         self._eos_fallback_task: asyncio.Task[None] | None = None
@@ -977,6 +978,7 @@ class SpeechStream(stt.SpeechStream):
         self._pending_final_data = None
         self._pending_eos = False
         self._utterance_speech_start_wall = time.time()
+        self._utterance_speech_end_wall = None
         self._final_received_for_utterance = False
         self._eos_emitted_for_utterance = False
 
@@ -1033,11 +1035,14 @@ class SpeechStream(stt.SpeechStream):
         self._cancel_eos_fallback()
 
         # Bare END_OF_SPEECH (no alternatives), like other plugins' EOS events. The
-        # speech-end timing lives on the FINAL_TRANSCRIPT's end_time, not here.
+        # speech-end wall-clock anchor rides on speech_end_time: the voice pipeline
+        # uses it as the `_last_speaking_time` anchor, so transcription_delay
+        # measures Sarvam VAD speech end -> final transcript received.
         self._event_ch.send_nowait(
             stt.SpeechEvent(
                 type=stt.SpeechEventType.END_OF_SPEECH,
                 request_id=self._server_request_id or "",
+                speech_end_time=self._utterance_speech_end_wall,
             )
         )
         self._eos_emitted_for_utterance = True
@@ -1649,6 +1654,11 @@ class SpeechStream(stt.SpeechStream):
             elif signal_type == "END_SPEECH":
                 if self._speaking:
                     self._speaking = False
+                    # Wall-clock receipt of Sarvam's VAD speech-end signal. This is
+                    # the anchor the voice pipeline reads from END_OF_SPEECH's
+                    # speech_end_time, so transcription_delay measures
+                    # Sarvam VAD speech end -> final transcript received.
+                    self._utterance_speech_end_wall = time.time()
                     self._pending_eos = True
                     self._try_commit_utterance()
                     if not self._eos_emitted_for_utterance and self._pending_final_data is None:
