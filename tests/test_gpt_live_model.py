@@ -1425,3 +1425,467 @@ async def test_a_typed_message_rides_in_the_ask_while_it_is_the_newest_thing_sai
     finally:
         await session.aclose()
         await model.aclose()
+
+
+_PNG = "data:image/png;base64,aGVsbG8="
+
+
+async def test_a_pushed_frame_is_encoded_and_runs_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A frame is input waiting for the backend's next run; pushing one starts nothing."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.", tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        sent_before = len(ws.sent)
+
+        session.push_video(rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4)))
+        await asyncio.sleep(0.05)
+
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == ["response.item.create"]
+        assert new[0]["item"]["role"] == "user"
+        image = new[0]["item"]["content"][0]
+        assert image["type"] == "input_image"
+        assert image["image_url"].startswith("data:image/jpeg;base64,")
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_image_url_in_the_chat_context_is_passed_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A url the backend can fetch itself is not downloaded and re-encoded on the way."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        sent_before = len(ws.sent)
+
+        await session._append_items(
+            [
+                llm.ChatMessage(
+                    role="user",
+                    content=[
+                        llm.ImageContent(
+                            image="https://example.com/shot.png", inference_detail="high"
+                        )
+                    ],
+                    id="m_url",
+                )
+            ]
+        )
+        await asyncio.sleep(0.05)
+
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == ["response.item.create"]  # no words, so no thinking
+        assert new[0]["item"]["content"] == [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/shot.png",
+                "detail": "high",
+            }
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_image_in_the_chat_context_goes_where_it_can_be_seen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The voice model has no image channel, so the image is the backend's. Its words are both
+    models': the ask that follows is still the voice model's to answer."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        sent_before = len(ws.sent)
+
+        await session._append_items(
+            [
+                llm.ChatMessage(
+                    role="user",
+                    content=["what is on my screen?", llm.ImageContent(image=_PNG)],
+                    id="m_img",
+                )
+            ]
+        )
+        await asyncio.sleep(0.05)
+
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == ["response.item.create", "session.thinking.append"]
+        assert new[0]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+            {"type": "input_text", "text": "what is on my screen?"},
+        ]
+        assert new[1]["content"] == "user: what is on my screen?"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_client_delegation_has_nothing_to_look_at_an_image_with(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Video arrives on its own, so a session that cannot look at it says so once and carries on
+    rather than breaking its own forwarding."""
+    ws = _connect_hook(monkeypatch)
+    caplog.set_level(logging.WARNING, logger=gpt_live_model.logger.name)
+
+    model = GPTLiveModel(api_key="sk-test", delegation="client")
+    session = model.session()
+    try:
+        await session._update_session(tools=[])
+        await asyncio.sleep(0.05)
+        sent_before = len(ws.sent)
+
+        frame = rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4))
+        session.push_video(frame)
+        session.push_video(frame)
+
+        # an image in the context is dropped too, but its words still reach the voice model
+        await session._append_items(
+            [
+                llm.ChatMessage(
+                    role="user", content=["look", llm.ImageContent(image=_PNG)], id="m_img"
+                )
+            ]
+        )
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent[sent_before:]] == ["session.thinking.append"]
+        assert caplog.text.count("look at a video frame") == 1  # once a session, not once a frame
+        assert "look at an image" in caplog.text
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_backend_work_queued_for_a_session_that_ended_is_not_replayed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A backend item names a backend that dies with its connection; context does not."""
+    sockets = [_LifecycleWS(start=False), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    caplog.set_level(logging.WARNING, logger=gpt_live_model.logger.name)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        # the first command is held at the handshake this connection never finishes, so what
+        # follows it is still queued when the connection dies
+        session.append_thinking("held at the handshake")
+        session.push_video(rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4)))
+        session.append_thinking("The caller is a premium customer.")
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[0].sent] == ["session.start"]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "session.thinking.append"]
+        assert sockets[1].sent[-1]["content"] == "The caller is a premium customer."
+        assert "queued for a session that ended" in caplog.text
+
+        session.push_video(rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4)))
+        await asyncio.sleep(0.05)
+        assert sockets[1].sent[-1]["type"] == "response.item.create"
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_image_in_the_startup_history_still_reaches_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """session.start carries the words of the conversation so far but has no image part, so an
+    image already in the chat context is queued behind it instead of being lost."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=["What is shown?", llm.ImageContent(image=_PNG)], id="m1")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.", chat_ctx=ctx, tools=[])
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == ["session.start", "response.item.create"]
+        assert ws.sent[0]["session"]["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "What is shown?"}],
+            }
+        ]
+        # startup history is the voice model's; the backend reads its own queue, so the words
+        # ride with the image there too rather than being left behind
+        assert ws.sent[1]["item"] == {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+                {"type": "input_text", "text": "What is shown?"},
+            ],
+        }
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_startup_image_is_composed_again_for_the_next_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The image is queued per connection, so the session that replaces a dropped one gets it too
+    rather than inheriting a queued copy stamped for the session that died."""
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=["What is shown?", llm.ImageContent(image=_PNG)], id="m1")
+
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[0].sent] == ["session.start", "response.item.create"]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "response.item.create"]
+        assert [c["type"] for c in sockets[1].sent[1]["item"]["content"]] == [
+            "input_image",
+            "input_text",
+        ]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_delegation_scoped_append_does_not_cross_connections(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A delegation belongs to the session that created it, so an answer queued for one cannot be
+    replayed into its replacement; an unscoped append is context any session can hear."""
+    sockets = [_LifecycleWS(start=False), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    caplog.set_level(logging.WARNING, logger=gpt_live_model.logger.name)
+    model = GPTLiveModel(
+        api_key="sk-test",
+        delegation="client",
+        conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
+    )
+    session = model.session()
+    try:
+        await session._update_session(tools=[])
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        # the first is held at the handshake this connection never finishes; the rest stay queued
+        session.append_thinking("held at the handshake")
+        session.append_commentary("done", delegation_id="item_123")
+        session.append_thinking("The caller is a premium customer.")
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[0].sent] == ["session.start"]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # item_123 was never created on this session, so its answer is dropped, not replayed
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "session.thinking.append"]
+        assert sockets[1].sent[-1]["content"] == "The caller is a premium customer."
+        assert "queued for a session that ended" in caplog.text
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_wordless_startup_image_is_not_lost_with_its_empty_history_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A message carrying only an image renders to no startup history at all, so the image has to
+    be collected before that item is skipped rather than after it is kept."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="user", content=[llm.ImageContent(image=_PNG)], id="m_bare")
+    ctx.add_message(role="user", content=["and this one?", llm.ImageContent(image=_PNG)], id="m2")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == [
+            "session.start",
+            "response.item.create",
+            "response.item.create",
+        ]
+        # only the captioned message has words for the history
+        assert ws.sent[0]["session"]["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "and this one?"}],
+            }
+        ]
+        # both images go, oldest first, and only the captioned one carries words
+        assert ws.sent[1]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"}
+        ]
+        assert ws.sent[2]["item"]["content"] == [
+            {"type": "input_image", "image_url": _PNG, "detail": "auto"},
+            {"type": "input_text", "text": "and this one?"},
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_image_keeps_the_role_that_carried_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Responses input item takes user, system and developer, so a standing reference image on
+    a system message reaches the backend as one. An assistant turn is output and has no way in."""
+    ws = _connect_hook(monkeypatch)
+
+    ctx = llm.ChatContext.empty()
+    ctx.add_message(role="assistant", content=["here", llm.ImageContent(image=_PNG)], id="a1")
+    ctx.add_message(
+        role="system", content=["the floor plan", llm.ImageContent(image=_PNG)], id="s1"
+    )
+    ctx.add_message(role="user", content=["mine", llm.ImageContent(image=_PNG)], id="u1")
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(chat_ctx=ctx)
+        await asyncio.sleep(0.05)
+
+        # the system and user images, oldest first; the assistant's has nowhere to go
+        assert [e["type"] for e in ws.sent] == [
+            "session.start",
+            "response.item.create",
+            "response.item.create",
+        ]
+        assert [e["item"]["role"] for e in ws.sent[1:]] == ["system", "user"]
+
+        sent_before = len(ws.sent)
+        await session._append_items(
+            [
+                llm.ChatMessage(
+                    role="developer", content=["and this", llm.ImageContent(image=_PNG)], id="d1"
+                ),
+                llm.ChatMessage(
+                    role="assistant", content=["also", llm.ImageContent(image=_PNG)], id="a2"
+                ),
+            ]
+        )
+        await asyncio.sleep(0.05)
+
+        # the append path agrees with startup: developer goes as itself, assistant is narrated
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == [
+            "response.item.create",
+            "session.instructions.append",
+            "session.thinking.append",
+        ]
+        assert new[0]["item"]["role"] == "developer"
+        assert new[2]["content"] == "assistant: also"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_frame_pushed_while_reconnecting_reaches_the_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Between a connection ending and its replacement opening there is no session, so what is
+    queued in the gap was written for whatever comes next and must not be dropped with the dead
+    one — it is the newest view the backend has."""
+    sockets: list[_LifecycleWS] = []
+    gate = asyncio.Event()
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        if sockets:  # hold the replacement open so the push lands with nothing connected
+            await gate.wait()
+        sockets.append(ws := _LifecycleWS())
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.sleep(0.05)
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+
+        await sockets[0].close()
+        await asyncio.sleep(0.05)  # the first is gone and the second is held at the gate
+        assert len(sockets) == 1
+
+        session.push_video(rtc.VideoFrame(4, 4, rtc.VideoBufferType.RGBA, bytes(4 * 4 * 4)))
+        gate.set()
+        await asyncio.sleep(0.05)  # let the replacement be created
+
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+        assert [e["type"] for e in sockets[1].sent] == ["session.start", "response.item.create"]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
