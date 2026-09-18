@@ -465,6 +465,7 @@ class AgentActivity(RecognitionHooks):
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
+        self._realtime_user_stopped_speaking_at: float | None = None
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
@@ -2228,6 +2229,7 @@ class AgentActivity(RecognitionHooks):
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
+        self._realtime_user_stopped_speaking_at = time.time()
         if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_speech(
@@ -2294,6 +2296,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=handle,
                 generation_ev=ev,
                 model_settings=ModelSettings(),
+                user_stopped_speaking_at=self._realtime_user_stopped_speaking_at,
             ),
             speech_handle=handle,
             name="AgentActivity.realtime_generation",
@@ -2763,6 +2766,7 @@ class AgentActivity(RecognitionHooks):
                         self._agent._chat_ctx.items.append(user_message)
                         self._session._conversation_item_added(user_message)
                     return
+                self._realtime_user_stopped_speaking_at = info.metrics.stopped_speaking_at
                 self._rt_session.commit_audio()
 
         if info.skip_reply:
@@ -3692,6 +3696,9 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
+                self._session._evaluate_latency_budget(
+                    latency=early_metrics["e2e_latency"], speech_id=speech_handle.id
+                )
             self._session._early_assistant_metrics = early_metrics
 
             self._session._update_agent_state(
@@ -4171,6 +4178,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        user_stopped_speaking_at: float | None = None,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4184,6 +4192,7 @@ class AgentActivity(RecognitionHooks):
                     generation_ev=generation_ev,
                     model_settings=model_settings,
                     instructions=instructions,
+                    user_stopped_speaking_at=user_stopped_speaking_at,
                     inference_span=inference_span,
                 )
             finally:
@@ -4196,6 +4205,7 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        user_stopped_speaking_at: float | None = None,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
@@ -4315,6 +4325,16 @@ class AgentActivity(RecognitionHooks):
                 )
             except BaseException:
                 return
+
+            if (
+                user_stopped_speaking_at is not None
+                and self._realtime_user_stopped_speaking_at == user_stopped_speaking_at
+            ):
+                self._session._evaluate_latency_budget(
+                    latency=started_speaking_at - user_stopped_speaking_at,
+                    speech_id=speech_handle.id,
+                )
+                self._realtime_user_stopped_speaking_at = None
 
             self._session._update_agent_state(
                 "speaking",
