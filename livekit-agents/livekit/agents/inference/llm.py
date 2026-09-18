@@ -27,6 +27,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from ._realtime_models import is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
@@ -588,3 +589,19 @@ class LLMStream(llm.LLMStream):
                 extra=delta_extra,
             ),
         )
+
+
+def llm_from_model_string(model: str) -> llm.LLM | llm.RealtimeModel:
+    """Create the inference model a ``llm=`` string names.
+
+    Realtime (speech-to-speech) model strings resolve to
+    :class:`livekit.agents.inference.RealtimeModel`, every other string to
+    :class:`livekit.agents.inference.LLM`.
+    """
+    if is_realtime_model(model):
+        # imported lazily: the realtime package imports this module
+        from .realtime import RealtimeModel
+
+        return RealtimeModel.from_model_string(model)
+
+    return LLM.from_model_string(model)

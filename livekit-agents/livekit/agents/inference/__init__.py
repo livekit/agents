@@ -1,5 +1,11 @@
 from typing import TYPE_CHECKING, Any
 
+from ._realtime_models import (
+    OpenAIRealtimeModels,
+    RealtimeModels,
+    XAIRealtimeModels,
+    is_realtime_model,
+)
 from ._utils import InferenceClass
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
@@ -8,7 +14,7 @@ from .interruption import (
     InterruptionDetectionError,
     OverlappingSpeechEvent,
 )
-from .llm import LLM, LLMModels, LLMStream
+from .llm import LLM, LLMModels, LLMStream, llm_from_model_string
 from .stt import STT, STTModels
 from .tts import TTS, TTSModels
 from .vad import VAD, VADModels
@@ -57,4 +63,9 @@ __all__ = [
     "TurnDetectorVersions",
     "RealtimeModel",
     "RealtimeSession",
+    "RealtimeModels",
+    "OpenAIRealtimeModels",
+    "XAIRealtimeModels",
+    "is_realtime_model",
+    "llm_from_model_string",
 ]
