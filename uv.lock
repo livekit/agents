@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12.0, <3.15"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -59,6 +59,7 @@ members = [
     "livekit-plugins-lemonslice",
     "livekit-plugins-liveavatar",
     "livekit-plugins-lmnt",
+    "livekit-plugins-lokutor",
     "livekit-plugins-meta",
     "livekit-plugins-minimal",
     "livekit-plugins-minimax-ai",
@@ -3112,6 +3113,16 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 [[package]]
 name = "livekit-plugins-lmnt"
 source = { editable = "livekit-plugins/livekit-plugins-lmnt" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
+
+[[package]]
+name = "livekit-plugins-lokutor"
+source = { editable = "livekit-plugins/livekit-plugins-lokutor" }
 dependencies = [
     { name = "livekit-agents" },
 ]
