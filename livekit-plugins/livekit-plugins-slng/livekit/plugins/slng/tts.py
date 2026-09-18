@@ -65,10 +65,13 @@ from .log import logger
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
 
-# ElevenLabs generates one audio fragment per incoming text frame when
-# auto_mode is enabled, so single-word frames produce fragmented (choppy,
-# slow-to-complete) audio. Batch words into phrases before sending: flush on
-# clause/sentence punctuation or once the buffer reaches this many characters.
+# Text frames sent to the gateway are cut by `text_chunking`. The default,
+# "sentence", relies on a sentence tokenizer and sends one whole sentence per
+# frame, which sounds right whether the provider voices each frame as it
+# arrives (Rime segment="immediate", ElevenLabs auto_mode) or buffers to the
+# sentence itself. "phrase" is the previous behaviour: words re-batched at the
+# punctuation below or once the buffer reaches `phrase_max_chars`. "word"
+# sends every word.
 _PHRASE_FLUSH_SUFFIXES = (".", "!", "?", ",", ";", ":")
 
 
@@ -211,13 +214,13 @@ class _TTSOptions:
     sample_rate: int
     encoding: Literal["linear16"]
     speed: float
-    word_tokenizer: tokenize.WordTokenizer
+    word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     api_key: str
     model_options: dict[str, object]
     extra_headers: dict[str, str]
     runtime_init: dict[str, Any] | None
     warm_standby_enabled: bool
-    text_chunking: Literal["auto", "word", "phrase"]
+    text_chunking: Literal["sentence", "word", "phrase"]
     phrase_max_chars: int
 
 
@@ -265,14 +268,14 @@ class TTS(tts.TTS):
         language: str = "en",
         sample_rate: int = 24000,
         speed: float = 1.0,
-        word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
+        word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_headers: dict[str, str] | None = None,
         # Advanced / optional. Used by integrations that drive the session
         # themselves; a typical client can ignore these.
         runtime_init: dict[str, Any] | None = None,
         warm_standby_enabled: bool = False,
-        text_chunking: Literal["auto", "word", "phrase"] = "auto",
+        text_chunking: Literal["auto", "sentence", "word", "phrase"] = "auto",
         phrase_max_chars: int = 60,
         first_audio_timeout_s: float | None = None,
         fallback_recovery_cooldown_s: float = 60.0,
@@ -304,7 +307,13 @@ class TTS(tts.TTS):
             voice: Required voice identifier.
             language (str): Language code. Defaults to "en".
             sample_rate (int): Sample rate of audio. Defaults to 24000.
-            word_tokenizer: Optional tokenizer for processing text.
+            word_tokenizer: Optional tokenizer for processing text. Defaults to
+                ``tokenize.blingfire.SentenceTokenizer()`` in sentence mode and
+                ``tokenize.basic.WordTokenizer(ignore_punctuation=False)`` otherwise.
+            text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
+                (the default; ``"auto"`` resolves to it) sends one frame per
+                sentence. ``"phrase"`` re-batches words at clause punctuation or
+                every ``phrase_max_chars``. ``"word"`` sends one frame per word.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
         """
         if model_endpoint is not None:
@@ -319,8 +328,8 @@ class TTS(tts.TTS):
 
         if not voice.strip():
             raise ValueError("voice is required")
-        if text_chunking not in {"auto", "word", "phrase"}:
-            raise ValueError("text_chunking must be 'auto', 'word', or 'phrase'")
+        if text_chunking not in {"auto", "sentence", "word", "phrase"}:
+            raise ValueError("text_chunking must be 'auto', 'sentence', 'word', or 'phrase'")
         if phrase_max_chars <= 0:
             raise ValueError("phrase_max_chars must be positive")
         if model is not None and connections:
@@ -379,8 +388,15 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
+        resolved_chunking: Literal["sentence", "word", "phrase"] = (
+            "sentence" if text_chunking == "auto" else text_chunking
+        )
         if not is_given(word_tokenizer):
-            word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            word_tokenizer = (
+                tokenize.blingfire.SentenceTokenizer()
+                if resolved_chunking == "sentence"
+                else tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            )
 
         self._opts = _TTSOptions(
             model_endpoint=resolved_model_endpoint,
@@ -403,7 +419,7 @@ class TTS(tts.TTS):
                 else None
             ),
             warm_standby_enabled=warm_standby_enabled,
-            text_chunking=text_chunking,
+            text_chunking=resolved_chunking,
             phrase_max_chars=phrase_max_chars,
         )
         self._session = http_session
@@ -459,7 +475,7 @@ class TTS(tts.TTS):
                     extra_headers=extra_headers,
                     runtime_init=runtime_init,
                     warm_standby_enabled=warm_standby_enabled,
-                    text_chunking=text_chunking,
+                    text_chunking=resolved_chunking,
                     phrase_max_chars=phrase_max_chars,
                     first_audio_timeout_s=first_audio_timeout_s,
                     fallback_recovery_cooldown_s=fallback_recovery_cooldown_s,
@@ -941,7 +957,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream]()
+        self._segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         logger.debug(f"[TTS] _run starting: request_id={request_id}")
         output_emitter.initialize(
@@ -1008,14 +1024,16 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
 
     async def _run_ws(
-        self, word_stream: tokenize.WordStream, output_emitter: tts.AudioEmitter
+        self,
+        word_stream: tokenize.WordStream | tokenize.SentenceStream,
+        output_emitter: tts.AudioEmitter,
     ) -> None:
         segment_id = utils.shortuuid()
         logger.debug(f"[TTS] _run_ws starting: segment_id={segment_id}")
         segment_started_at = time.perf_counter()
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
-        phrase_batching = self._opts.text_chunking in {"auto", "phrase"}
+        phrase_batching = self._opts.text_chunking in {"sentence", "phrase"}
         outcome = "completed"
         ws_connect_ms: float | None = None
         init_send_ms: float | None = None
