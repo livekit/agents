@@ -16,9 +16,10 @@ Provider docs:
 
 from __future__ import annotations
 
+import html
 import json
 import re
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from ..types import ATTRIBUTE_TRANSCRIPTION_EXPRESSION, TimedString
 from ._mood import match_mood
@@ -1042,6 +1043,192 @@ def split_all_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
 def strip_all_markup(text: str) -> str:
     """:func:`split_all_markup` returning only the clean text (tags discarded)."""
     return split_all_markup(text)[0]
+
+
+_ATTR_PATTERN = r"(?:\"[^\"]*\"|'[^']*'|[^'\">])*"
+_SSML_BREAK_RE = re.compile(rf"<\s*/?\s*break\b{_ATTR_PATTERN}\/?>", re.IGNORECASE)
+_SSML_STRUCTURAL_RE = re.compile(
+    rf"<\s*(?P<tag>p|s)\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_TAG_PATTERN = r"phoneme|sub|say-as|prosody|emphasis|voice|lang|speak|w|audio"
+_SSML_NAMESPACED_TAG_PATTERN = r"[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9_-]+"
+_SSML_ALL_TAGS = rf"{_SSML_TAG_PATTERN}|{_SSML_NAMESPACED_TAG_PATTERN}"
+
+_SSML_WRAPPING_RE = re.compile(
+    rf"<\s*(?P<tag>{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_STANDALONE_RE = re.compile(
+    rf"<\s*/?\s*(?:speak|p|s|mark|{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}\/?>",
+    re.IGNORECASE,
+)
+_SSML_INCOMPLETE_RE = re.compile(
+    rf"<\s*(?:p|s|{_SSML_ALL_TAGS})\b{_ATTR_PATTERN}>",
+    re.IGNORECASE,
+)
+
+_SSML_NAMESPACED_WRAPPING_RE = re.compile(
+    rf"<\s*(?P<tag>{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_NAMESPACED_STANDALONE_RE = re.compile(
+    rf"<\s*/?\s*(?:{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}\/?>",
+    re.IGNORECASE,
+)
+_SSML_NAMESPACED_INCOMPLETE_RE = re.compile(
+    rf"<\s*(?:{_SSML_NAMESPACED_TAG_PATTERN})\b{_ATTR_PATTERN}>",
+    re.IGNORECASE,
+)
+
+
+_SSML_SUB_RE = re.compile(
+    rf"<\s*sub\b{_ATTR_PATTERN}\balias\s*=\s*(?:\"(?P<alias1>[^\"]*)\"|'(?P<alias2>[^']*)'){_ATTR_PATTERN}>(.*?)</\s*sub\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_ssml_enabled(text: str, tts: Any = None, ssml: bool | None = None) -> bool:
+    if ssml is not None:
+        return ssml
+    if re.search(r"<\s*speak(?=\s|/?>)", text, re.IGNORECASE):
+        return True
+    if tts is None:
+        return False
+
+    to_check = [tts]
+    visited: set[int] = set()
+    while to_check:
+        curr = to_check.pop(0)
+        curr_id = id(curr)
+        if curr_id in visited:
+            continue
+        visited.add(curr_id)
+
+        opts = getattr(curr, "_opts", None)
+        if opts is not None:
+            if getattr(opts, "text_type", None) == "ssml":
+                return True
+            if getattr(opts, "enable_ssml", False):
+                return True
+            if getattr(opts, "enable_ssml_parsing", False):
+                return True
+            if getattr(opts, "ssml", False):
+                return True
+        provider = getattr(curr, "provider", "")
+        if isinstance(provider, str):
+            p_lower = provider.lower().strip()
+            if p_lower in {"azure", "azure tts", "cartesia"}:
+                return True
+        mod = getattr(curr.__class__, "__module__", "").lower()
+        if any(
+            m in mod
+            for m in (
+                "livekit.plugins.azure",
+                "livekit.plugins.cartesia",
+                ".azure.",
+                ".cartesia.",
+            )
+        ):
+            return True
+        if getattr(getattr(curr, "capabilities", None), "ssml", False):
+            return True
+        if getattr(curr, "ssml_enabled", False) or getattr(curr, "enable_ssml", False):
+            return True
+
+        wrapped = getattr(curr, "_wrapped_tts", None)
+        if wrapped is not None:
+            to_check.append(wrapped)
+        direct_tts = getattr(curr, "_tts", None)
+        if direct_tts is not None:
+            if isinstance(direct_tts, (list, tuple)):
+                to_check.extend(direct_tts)
+            else:
+                to_check.append(direct_tts)
+        instances = getattr(curr, "_tts_instances", None)
+        if instances is not None and isinstance(instances, (list, tuple)):
+            to_check.extend(instances)
+        tts_list = getattr(curr, "_tts_list", None)
+        if tts_list is not None and isinstance(tts_list, (list, tuple)):
+            to_check.extend(tts_list)
+
+    return False
+
+
+def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -> str:
+    """Strip expressive markup and SSML tags before storing text in chat context.
+
+    Preserves word boundaries when removing <break> tags, unwraps common SSML tags
+    (such as <phoneme>, <prosody>, <say-as>, <emphasis>) while keeping their inner text,
+    and strips provider-specific expressive markup tags.
+    """
+    is_ssml = _is_ssml_enabled(text, tts=tts, ssml=ssml)
+    if "<" not in text:
+        if is_ssml:
+            return html.unescape(text.strip())
+        return text.strip()
+
+    # Replace break tags with a space to preserve word boundaries
+    text = _SSML_BREAK_RE.sub(" ", text)
+
+    # Provider-specific namespaced tags (e.g. Amazon Polly, Azure) are always speech markup
+    had_namespaced = False
+    while True:
+        unwrapped = _SSML_NAMESPACED_WRAPPING_RE.sub(r"\2", text)
+        if unwrapped == text:
+            break
+        had_namespaced = True
+        text = unwrapped
+    if _SSML_NAMESPACED_STANDALONE_RE.search(text):
+        had_namespaced = True
+        text = _SSML_NAMESPACED_STANDALONE_RE.sub(" ", text)
+    if _SSML_NAMESPACED_INCOMPLETE_RE.search(text):
+        had_namespaced = True
+        text = _SSML_NAMESPACED_INCOMPLETE_RE.sub("", text)
+
+    # Only process standard SSML tags (<p>, <s>, <sub>, <prosody>, etc.) when SSML is enabled
+    if is_ssml:
+        # Replace <sub alias="...">inner</sub> with the spoken alias
+        def _sub_alias_replace(m: re.Match[str]) -> str:
+            val = m.group("alias1") if m.group("alias1") is not None else m.group("alias2")
+            return val if val is not None else ""
+
+        while True:
+            replaced = _SSML_SUB_RE.sub(_sub_alias_replace, text)
+            if replaced == text:
+                break
+            text = replaced
+
+        # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+        while True:
+            replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
+            if replaced == text:
+                break
+            text = replaced
+
+        # Unwrap inline SSML wrapping tags to keep inner text
+        while True:
+            unwrapped = _SSML_WRAPPING_RE.sub(r"\2", text)
+            if unwrapped == text:
+                break
+            text = unwrapped
+
+        # Remove standalone / framing tags
+        text = _SSML_STANDALONE_RE.sub(" ", text)
+
+        # Strip incomplete (unmatched) opening SSML tags left by interruptions
+        text = _SSML_INCOMPLETE_RE.sub("", text)
+
+    # Strip provider-specific markup (Cartesia, Inworld, xAI, expr markers)
+    text = strip_all_markup(text)
+
+    # Decode XML character and numeric references in retained SSML text and aliases
+    if is_ssml or had_namespaced:
+        text = html.unescape(text)
+
+    # Collapse any introduced horizontal whitespace runs
+    text = re.sub(r"[^\S\r\n]+", " ", text)
+    return text.strip()
 
 
 def strip_expr_markup(text: str) -> str:
