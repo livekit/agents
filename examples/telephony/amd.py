@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterable
 
 from dotenv import load_dotenv
 
@@ -11,11 +12,15 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    AMDCategory,
     AMDMenuObservedEvent,
     AMDPredictionEvent,
+    FlushSentinel,
     JobContext,
+    ModelSettings,
     cli,
     inference,
+    llm,
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
@@ -33,18 +38,26 @@ class MyAgent(Agent):
                 "a dental appointment tomorrow at 10 AM. Keep replies brief. "
                 "If asked to leave a message, give the appointment details and "
                 "ask Sam to call the office to confirm. Do not invent a phone number. "
-                "Use end_call when the conversation is complete or after leaving the voicemail."
+                "After leaving a voicemail, wait for any follow-up prompts. "
+                "Use end_call when the conversation with a human is complete."
             ),
             tools=[
                 EndCallTool(
                     delete_room=False,  # The job shutdown callback deletes the room.
-                    extra_description=(
-                        "Also call after completing the appointment conversation or "
-                        "leaving the requested voicemail."
-                    ),
+                    extra_description="Call after completing the appointment conversation with a human.",
                 ),
             ],
         )
+
+    def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[llm.ChatChunk | str | FlushSentinel]:
+        if self.session.amd is not None:
+            tools[:] = [tool for tool in tools if tool.id != "end_call"]
+        return Agent.default.llm_node(self, chat_ctx, tools, model_settings)
 
 
 server = AgentServer()
@@ -93,6 +106,7 @@ async def entrypoint(ctx: JobContext) -> None:
     detector = AMD(
         session,
         participant_identity=participant_identity,
+        voicemail_idle_timeout=10.0,
     )
 
     @detector.on("amd_prediction")
@@ -129,7 +143,9 @@ async def entrypoint(ctx: JobContext) -> None:
 
         result = await detector.execute()
         logger.info("amd completed", extra={"lk.pii.amd.result": result.model_dump_json()})
-        # The application decides whether to continue or end the call.
+
+    if result.voicemail_message_played and result.category != AMDCategory.HUMAN:
+        ctx.shutdown("voicemail completed")
 
 
 if __name__ == "__main__":

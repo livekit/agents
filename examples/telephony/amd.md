@@ -20,9 +20,12 @@ This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
 not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each prediction.
 The application still decides whether to continue or end the call.
 
-The example gives the agent an `end_call` tool for completed conversations and
-delivered voicemails. It lets the final speech finish, then shuts down the job.
-The example's shutdown callback deletes the room and disconnects the SIP participant.
+The example hides `end_call` while AMD is active. After voicemail playback, it
+waits up to 10 seconds for another prompt (`voicemail_idle_timeout=10.0`). AMD
+handles any post-message menu before it completes. If the final result reports
+a played voicemail and no human, the application shuts down the job. Human
+conversations can use `end_call` after AMD finishes. The shutdown callback
+deletes the room and disconnects the SIP participant.
 
 The example uses ai-coustics Voice Focus (`QUAIL_VF_S`) to reduce background voices
 and noise before audio reaches session STT and AMD STT. Install
