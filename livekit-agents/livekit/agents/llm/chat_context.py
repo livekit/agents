@@ -380,7 +380,8 @@ class FunctionCallOutput(BaseModel):
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
-    Only realtime models read it, since they answer a result on their own.
+    AgentSession uses it to decide whether to generate a follow-up reply.
+    Realtime models can also use it to schedule their response.
     """
 
 
