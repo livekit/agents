@@ -5,7 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterable
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
 
@@ -127,6 +127,30 @@ def test_realtime_user_input_transcription_preserves_item_id() -> None:
     assert captured_events[0].transcript == "hello"
     assert captured_events[0].is_final is False
     assert captured_events[0].item_id == "item_123"
+
+
+def test_vad_reset_does_not_mark_stt_eos() -> None:
+    activity = object.__new__(AgentActivity)
+    activity._audio_recognition = MagicMock()
+    activity._session = MagicMock()
+    activity._session._user_speaking_span = MagicMock()
+    activity._session._update_user_state = MagicMock()
+    activity._interruption_detected = True
+    activity._interruption_detection_enabled = True
+    activity._user_silence_event = asyncio.Event()
+    activity._user_silence_event.clear()
+    activity._paused_speech = None
+    activity._stt_eos_received = False
+
+    activity.on_vad_reset()
+
+    assert activity._stt_eos_received is False
+    activity._audio_recognition._on_end_of_speech.assert_called_once()
+    activity._session._update_user_state.assert_called_once_with(
+        "listening",
+        last_speaking_time=ANY,
+    )
+    assert activity._user_silence_event.is_set()
 
 
 @pytest.mark.parametrize(
