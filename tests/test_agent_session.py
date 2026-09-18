@@ -2080,6 +2080,28 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
 
 
 @pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    # the deprecated session kwarg used to wrap whatever it was given into {"enabled": value};
+    # a dict is truthy, so {"enabled": False} read as "on" and its other keys were dropped
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
+
+
+@pytest.mark.parametrize(
     "session_preemptive, agent_preemptive, expected_latency",
     [
         # agent disables what the session enabled -> no preemptive generation (1.1s)
