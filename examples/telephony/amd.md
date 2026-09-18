@@ -270,6 +270,9 @@ session's transcripts or agent speech. Failed or canceled calls are omitted,
 including sequences that sent some digits before failing. The tool raises
 `ToolError` when a publish fails. Calls are matched by the name `send_dtmf_events`,
 including application overrides with that name. Tools with other names are ignored.
+The built-in tool returns `ToolResult(..., reply_required=False)` after a successful
+send, preserving the result without requesting a follow-up reply. Failed calls can
+still request a reply. Application overrides control their own reply behavior.
 DTMF completion alone neither triggers classification nor proves that a person answered.
 
 Menu extraction runs as separate best-effort work. It never holds a reply.

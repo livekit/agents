@@ -1557,6 +1557,7 @@ async def test_amd_collects_only_successful_dtmf_calls_from_its_run() -> None:
         dtmf_executed(session, "2", name="another_tool")
         dtmf_executed(session, "3", created_at=detector._started_at - 1)
         success = dtmf_executed(session, "4")
+        assert success.has_tool_reply
         commit_turn(detector, end_of_turn())
         request = await classifier.request()
         assert dtmf_calls(request.chat_ctx) == success.function_calls
@@ -1581,7 +1582,7 @@ async def test_dtmf_tool_works_without_amd() -> None:
     )
     result = await send_dtmf_events(SimpleNamespace(session=tool_session), [DtmfEvent.ONE])
     publisher.assert_awaited_once_with(code=1, digit="1")
-    assert result == "Successfully sent DTMF events: 1"
+    assert result == llm.ToolResult("Successfully sent DTMF events: 1", reply_required=False)
 
 
 @pytest.mark.asyncio
@@ -1624,6 +1625,8 @@ async def test_amd_observes_dtmf_tool_completion_from_session(
     async with running() as (detector, session, classifier, reply_model):
         executed = []
         session.on("function_tools_executed", executed.append)
+        handles: list[SpeechHandle] = []
+        session.once("speech_created", lambda ev: handles.append(ev.speech_handle))
         reply_model.fake_response_map[_DEFAULT_IVR_INSTRUCTIONS] = FakeLLMResponse(
             input=_DEFAULT_IVR_INSTRUCTIONS,
             content="",
@@ -1638,9 +1641,13 @@ async def test_amd_observes_dtmf_tool_completion_from_session(
         await commit(detector, session, classifier, reply=True)
         classifier.prediction(1, AMDCategory.MACHINE_IVR)
         await eventually(lambda: bool(executed))
+        await asyncio.wait_for(handles[0], 2)
         assert publisher.await_count == 2
         output = executed[0].function_call_outputs[0]
         assert output.is_error == (failure == "error")
+        assert output.reply_required == (failure == "error")
+        assert reply_model.calls.qsize() == (2 if failure == "error" else 1)
+        assert session.agent_state == "listening"
         if failure == "cancelled":
             assert not output.output
         if failure == "error":
@@ -1650,7 +1657,9 @@ async def test_amd_observes_dtmf_tool_completion_from_session(
         calls = dtmf_calls(request.chat_ctx)
         assert calls == ([] if failure else executed[0].function_calls)
         if not failure:
+            assert output.output == "Successfully sent DTMF events: 1, 2"
             assert output in request.chat_ctx.items
+            assert output in session.history.items
 
 
 @pytest.mark.asyncio

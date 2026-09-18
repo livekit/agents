@@ -546,10 +546,12 @@ async def test_amd_stt_supplies_transcripts_at_eot(
         await asyncio.wait_for(handles[0], 2)
 
 
-async def test_ivr_tool_executes_and_retains_instructions_for_its_reply(
+@pytest.mark.parametrize("publish_fails", [False, True])
+async def test_ivr_dtmf_only_generates_a_reply_on_failure(
     monkeypatch: pytest.MonkeyPatch,
+    publish_fails: bool,
 ) -> None:
-    publish_dtmf = AsyncMock()
+    publish_dtmf = AsyncMock(side_effect=RuntimeError("publish failed") if publish_fails else None)
     monkeypatch.setattr(
         "livekit.agents.beta.tools.send_dtmf.get_job_context",
         lambda: SimpleNamespace(
@@ -566,15 +568,19 @@ async def test_ivr_tool_executes_and_retains_instructions_for_its_reply(
                 call_id="dtmf-1", name="send_dtmf_events", arguments='{"events": ["1"]}'
             ),
         )
-        await eventually(lambda: rt.generate_reply_calls == 2)
+        if publish_fails:
+            await eventually(lambda: rt.generate_reply_calls == 2)
+            assert rt.reply_instructions == [_DEFAULT_IVR_INSTRUCTIONS, _DEFAULT_IVR_INSTRUCTIONS]
+            assert rt.reply_tools[1] == rt.reply_tools[0]
+            respond(rt)
+        await asyncio.wait_for(handle, 2)
         publish_dtmf.assert_awaited_once_with(code=1, digit="1")
-        assert rt.reply_instructions == [_DEFAULT_IVR_INSTRUCTIONS, _DEFAULT_IVR_INSTRUCTIONS]
-        assert rt.reply_tools[1] == rt.reply_tools[0]
+        assert rt.generate_reply_calls == (2 if publish_fails else 1)
         outputs = [i for i in rt.chat_ctx.items if i.type == "function_call_output"]
         assert len(outputs) == 1
-        assert not outputs[0].is_error
-        respond(rt)
-        await asyncio.wait_for(handle, 2)
+        assert outputs[0].is_error == publish_fails
+        assert outputs[0].reply_required == publish_fails
+        assert session.agent_state == "listening"
 
         human = await reply(session, classifier, rt, AMDCategory.HUMAN)
         assert rt.reply_tools[-1] is NOT_GIVEN
