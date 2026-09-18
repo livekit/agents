@@ -1,0 +1,25 @@
+tests/test_amd_detector.py
+  s_a55799479f59b9::t_bdaed11b7d9883 1336-1385,1432
+  s_a55799479f59b9::t_a768633dedfada 1335
+examples/telephony/amd.md
+  s_a55799479f59b9::t_bdaed11b7d9883 26-27,30-31,41-44,64-67
+  s_a55799479f59b9::t_6cbc16e03dfa7c 68
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_a55799479f59b9::t_64262644a671aa 50,417-426,449
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b11bd19ecc8cfac626ba01625c5f6c609696dd6b",
+  "prompts": {},
+  "sessions": {
+    "s_a55799479f59b9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abfd-bcaa-7371-b8ab-7bcfd804d2ea",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}

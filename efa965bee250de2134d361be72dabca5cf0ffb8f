@@ -1,0 +1,46 @@
+livekit-agents/livekit/agents/voice/_turn_hooks.py
+  s_50888f2a9c6027::t_7e1b30c58890ef 14
+  s_50888f2a9c6027::t_2eaa260e0b6250 10-11,13,15-16,20-23,25-27,33-35
+  s_50888f2a9c6027::t_621468a2d5cd71 19
+tests/test_amd_detector.py
+  s_50888f2a9c6027::t_b9e2f21428e50f 197,200-201,260,265,268,273,275-276,282,296,301,314,330,334,343,494,547,550,559,796,799,801,831,846,937-938,970,972,1034
+  s_50888f2a9c6027::t_7e1b30c58890ef 280,283-291,295,299-300,305,322-327,338,351-402
+  s_50888f2a9c6027::t_621468a2d5cd71 822-824
+  s_50888f2a9c6027::t_0336f9354c1e2d 27,196,258,292,304,764,826,838
+  s_50888f2a9c6027::t_0eeb8a84604d40 281,403-406
+tests/test_amd_silence.py
+  s_50888f2a9c6027::t_b9e2f21428e50f 97,114,166,345
+  s_50888f2a9c6027::t_539bc5554bd57d 99,117,178,284,295,346
+examples/telephony/amd.md
+  s_50888f2a9c6027::t_9aaa082f478aee 5,10-13,161-162
+tests/test_amd_local_inference.py
+  s_50888f2a9c6027::t_a7a256f79ddaa1 254
+  s_50888f2a9c6027::t_b9e2f21428e50f 467,469,542,564,566
+  s_50888f2a9c6027::t_0336f9354c1e2d 261
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_50888f2a9c6027::t_9aaa082f478aee 2263-2266
+  s_50888f2a9c6027::t_0336f9354c1e2d 64,747,756,2262
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_50888f2a9c6027::t_0336f9354c1e2d 32,80,90,95-96,189
+  s_50888f2a9c6027::t_621468a2d5cd71 84,87-89,545-546
+  s_50888f2a9c6027::t_9aaa082f478aee 85-86
+  s_50888f2a9c6027::t_677e12e316768c 397,399,411,547,555
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_50888f2a9c6027::t_0336f9354c1e2d 113,1803-1804,2700,2713,2724,2727,2735,2847,2924-2925
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "efa965bee250de2134d361be72dabca5cf0ffb8f",
+  "prompts": {},
+  "sessions": {
+    "s_50888f2a9c6027": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a746-aa29-7001-bc9f-3b00c74e12b2",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
