@@ -20,11 +20,13 @@ from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
 from livekit.agents import AgentSession, llm
 from livekit.agents._exceptions import APIError
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
 from livekit.agents.metrics import STTMetrics
 from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.report import SessionReport
+from livekit.plugins.openai.models import RealtimeModels as PluginRealtimeModels
 from livekit.plugins.openai.realtime.realtime_model import (
     RealtimeModel,
     RealtimeSession,
@@ -32,6 +34,13 @@ from livekit.plugins.openai.realtime.realtime_model import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_direct_model_preserves_public_label_and_model_types() -> None:
+    model = RealtimeModel(api_key="fake")
+
+    assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert PluginRealtimeModels is CoreRealtimeModels
 
 
 def test_update_options_only_propagates_given_turn_detection() -> None:

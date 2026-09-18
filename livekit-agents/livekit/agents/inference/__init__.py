@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any
 
+from ._utils import InferenceClass
 from .eot import TurnDetector, TurnDetectorModels, TurnDetectorVersions
 from .interruption import (
     AdaptiveInterruptionDetector,
@@ -14,6 +15,7 @@ from .vad import VAD, VADModels
 
 if TYPE_CHECKING:
     from .avatar import AvatarSession, LemonSliceOptions
+    from .realtime import RealtimeModel, RealtimeSession
 
 
 # AvatarSession subclasses voice.avatar.AvatarSession. Because this package is
@@ -26,6 +28,10 @@ def __getattr__(name: str) -> Any:
         from . import avatar
 
         return getattr(avatar, name)
+    if name in ("RealtimeModel", "RealtimeSession"):
+        from . import realtime
+
+        return getattr(realtime, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -40,6 +46,7 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "LLMModels",
+    "InferenceClass",
     "VADModels",
     "AdaptiveInterruptionDetector",
     "InterruptionDetectionError",
@@ -48,4 +55,6 @@ __all__ = [
     "TurnDetector",
     "TurnDetectorModels",
     "TurnDetectorVersions",
+    "RealtimeModel",
+    "RealtimeSession",
 ]
