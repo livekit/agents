@@ -135,6 +135,78 @@ def _contains_letter(text: str) -> bool:
     return any(ch.isalpha() for ch in text)
 
 
+@dataclass
+class _SegmentInput:
+    """One reply's tokenizer stream plus the flag that lets the sender spot the last frame."""
+
+    stream: tokenize.WordStream | tokenize.SentenceStream
+    # Set by _tokenize_input immediately before it calls stream.end_input().
+    # The tokenizer retains its last token until end_input(), so a token pulled
+    # while this is False is never the reply's last; once True, every remaining
+    # token is already queued in the closed channel and can be drained at once.
+    input_ended: bool = False
+
+
+class _FrameBatcher:
+    """Groups tokenizer tokens into the text frames sent to the gateway.
+
+    In phrase/sentence mode a frame is cut when the buffer ends with one of
+    ``_PHRASE_FLUSH_SUFFIXES`` or reaches ``max_chars``; with a sentence
+    tokenizer every token is already a whole sentence, so this yields one frame
+    per sentence. In word mode every spoken word is a frame. A frame is never
+    cut without a letter in it (see ``_contains_letter``): letterless tokens
+    stay attached to a neighbouring word, because some providers reject a text
+    frame that carries no allowed-language character.
+    """
+
+    def __init__(self, *, batch_phrases: bool, max_chars: int) -> None:
+        self._batch_phrases = batch_phrases
+        self._max_chars = max_chars
+        self._buf = ""
+        self._has_letter = False
+
+    def push(self, token: str) -> str | None:
+        """Add a token; return a completed frame when this token closes one."""
+        piece = f"{token} "
+        if self._batch_phrases:
+            self._buf += piece
+            self._has_letter = self._has_letter or _contains_letter(token)
+            stripped = self._buf.rstrip()
+            at_boundary = bool(stripped) and (
+                stripped.endswith(_PHRASE_FLUSH_SUFFIXES) or len(stripped) >= self._max_chars
+            )
+            return self._take() if at_boundary and self._has_letter else None
+        if not self._buf:
+            self._buf = piece
+            self._has_letter = _contains_letter(token)
+            return None
+        if _contains_letter(token):
+            # A new spoken word arrived. Emit the buffered word (with any
+            # letterless tokens that trailed it); if the buffer so far is only
+            # leading punctuation, prepend it to this word instead.
+            if self._has_letter:
+                frame = self._take()
+                self._buf = piece
+                self._has_letter = True
+                return frame
+            self._buf += piece
+            self._has_letter = True
+            return None
+        self._buf += piece
+        return None
+
+    def finish(self) -> str | None:
+        """Return the trailing buffer as a frame, or None if it is empty or letterless."""
+        if self._buf and self._has_letter:
+            return self._take()
+        self._buf, self._has_letter = "", False
+        return None
+
+    def _take(self) -> str:
+        frame, self._buf, self._has_letter = self._buf, "", False
+        return frame
+
+
 @dataclass(frozen=True)
 class _ReceivedWsEvent:
     kind: Literal["audio_chunk", "audio_end", "error", "ignore", "unknown"]
@@ -210,10 +282,10 @@ class _TTSOptions:
     model_endpoint: str
     model: str
     voice: str
-    language: str
+    language: NotGivenOr[str]
     sample_rate: int
     encoding: Literal["linear16"]
-    speed: float
+    speed: NotGivenOr[float]
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     api_key: str
     model_options: dict[str, object]
@@ -265,9 +337,9 @@ class TTS(tts.TTS):
         world_part_override: str | None = None,
         external_agent_id: str | None = None,
         external_session_id: str | None = None,
-        language: str = "en",
+        language: NotGivenOr[str] = NOT_GIVEN,
         sample_rate: int = 24000,
-        speed: float = 1.0,
+        speed: NotGivenOr[float] = NOT_GIVEN,
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer | tokenize.SentenceTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -305,7 +377,10 @@ class TTS(tts.TTS):
             external_session_id: Optional tracking ID attached to usage events as
                 the ``X-SLNG-Session-Id`` header (max 128 chars).
             voice: Required voice identifier.
-            language (str): Language code. Defaults to "en".
+            language: Optional language code. When omitted, the model's catalog
+                default applies.
+            speed: Optional speed multiplier. When omitted, the model's catalog
+                default applies.
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             word_tokenizer: Optional tokenizer for processing text. Defaults to
                 ``tokenize.blingfire.SentenceTokenizer()`` in sentence mode and
@@ -550,10 +625,10 @@ class TTS(tts.TTS):
             init_payload = build_tts_init_payload(
                 model=self._opts.model,
                 voice=self._opts.voice,
-                language=self._opts.language,
                 sample_rate=self._opts.sample_rate,
                 encoding=self._opts.encoding,
-                speed=self._opts.speed,
+                language=self._opts.language if is_given(self._opts.language) else None,
+                speed=self._opts.speed if is_given(self._opts.speed) else None,
                 model_options=self._opts.model_options,
             )
 
@@ -561,7 +636,7 @@ class TTS(tts.TTS):
             init_started_at = time.perf_counter()
             await ws.send_str(json.dumps(init_payload))
             init_send_ms = _elapsed_ms(init_started_at)
-        except Exception:
+        except BaseException:
             await _close_ws(ws, context="init_failure")
             raise
 
@@ -822,16 +897,18 @@ class ChunkedStream(tts.ChunkedStream):
             mime_type="audio/pcm",
         )
 
+        if not self._input_text:
+            output_emitter.flush()
+            return
+
         ws: aiohttp.ClientWebSocketResponse | None = None
         audio_received = False
 
         try:
-            # Chunked synthesis always uses a dedicated connection: terminal
-            # protocols close the socket after the final audio.
+            # Chunked synthesis always uses a dedicated connection: it is a
+            # one-shot call, not part of a call's reply stream.
             ws = await self._tts._connect_ws(timeout=self._conn_options.timeout)
-            if self._input_text:
-                await ws.send_str(json.dumps({"type": "text", "text": self._input_text}))
-            await ws.send_str(SynthesizeStream._FLUSH_MSG)
+            await ws.send_str(json.dumps({"type": "text", "text": self._input_text, "flush": True}))
 
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
@@ -957,7 +1034,7 @@ class SynthesizeStream(tts.SynthesizeStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
         # fresh channel (matching the Deepgram plugin pattern).
-        self._segments_ch = utils.aio.Chan[tokenize.WordStream | tokenize.SentenceStream]()
+        self._segments_ch = utils.aio.Chan[_SegmentInput]()
         request_id = utils.shortuuid()
         logger.debug(f"[TTS] _run starting: request_id={request_id}")
         output_emitter.initialize(
@@ -969,25 +1046,28 @@ class SynthesizeStream(tts.SynthesizeStream):
         )
 
         async def _tokenize_input() -> None:
-            # Converts incoming text into WordStreams and sends them into _segments_ch
+            # Converts incoming text into token streams and sends them into _segments_ch
             logger.debug("[TTS] _tokenize_input starting, waiting for input...")
-            word_stream = None
+            segment: _SegmentInput | None = None
             text_count = 0
             async for the_input in self._input_ch:
                 if isinstance(the_input, str):
                     text_count += 1
                     if text_count == 1:
                         logger.debug(f"[TTS] First text received: '{the_input[:50]}...'")
-                    if word_stream is None:
-                        word_stream = self._opts.word_tokenizer.stream()
-                        self._segments_ch.send_nowait(word_stream)
-                        logger.debug("[TTS] New word_stream created")
-                    word_stream.push_text(the_input)
+                    if segment is None:
+                        segment = _SegmentInput(stream=self._opts.word_tokenizer.stream())
+                        self._segments_ch.send_nowait(segment)
+                        logger.debug("[TTS] New token stream created")
+                    segment.stream.push_text(the_input)
                 elif isinstance(the_input, self._FlushSentinel):
                     logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
-                    if word_stream:
-                        word_stream.end_input()
-                    word_stream = None
+                    if segment is not None:
+                        # Mark before ending the input: the sender reads this to
+                        # know the next tokens it pulls are the reply's last.
+                        segment.input_ended = True
+                        segment.stream.end_input()
+                    segment = None
 
             logger.debug(f"[TTS] _tokenize_input done: {text_count} total texts")
             self._segments_ch.close()
@@ -995,10 +1075,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def _run_segments() -> None:
             logger.debug("[TTS] _run_segments starting, waiting for word_streams...")
             segment_count = 0
-            async for word_stream in self._segments_ch:
+            async for segment in self._segments_ch:
                 segment_count += 1
                 logger.debug(f"[TTS] Processing segment {segment_count}")
-                await self._run_ws(word_stream, output_emitter)
+                await self._run_ws(segment, output_emitter)
             logger.debug(f"[TTS] _run_segments done: {segment_count} segments")
 
         tasks = [
@@ -1025,7 +1105,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
     async def _run_ws(
         self,
-        word_stream: tokenize.WordStream | tokenize.SentenceStream,
+        segment: _SegmentInput,
         output_emitter: tts.AudioEmitter,
     ) -> None:
         segment_id = utils.shortuuid()
@@ -1034,6 +1114,8 @@ class SynthesizeStream(tts.SynthesizeStream):
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
         phrase_batching = self._opts.text_chunking in {"sentence", "phrase"}
+        # (text, flush) for every frame this reply put on the wire, in order.
+        sent_frames: list[tuple[str, bool]] = []
         outcome = "completed"
         ws_connect_ms: float | None = None
         init_send_ms: float | None = None
@@ -1113,77 +1195,87 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
-            word_count = 0
+            batcher = _FrameBatcher(
+                batch_phrases=phrase_batching, max_chars=self._opts.phrase_max_chars
+            )
 
-            async def _emit_text(text: str) -> None:
-                # SLNG: Use "text" type instead of "Speak"
+            async def _send(frame: str, *, flush: bool) -> None:
+                # SLNG: "text" type, with the reply's terminating flush inline on
+                # the last frame (the canonical Unmute form: one message, not two).
                 self._mark_started()
-                await ws.send_str(json.dumps({"type": "text", "text": text}))
+                payload: dict[str, object] = {"type": "text", "text": frame}
+                if flush:
+                    payload["flush"] = True
+                await ws.send_str(json.dumps(payload))
+                sent_frames.append((frame, flush))
                 mark_first_text_sent()
-                request_standby_replenish()
                 input_sent_event.set()
 
-            # Buffer one spoken word so that letterless tokens (dashes, bare
-            # numbers, stray punctuation) attach to a neighbouring word instead
-            # of being sent as their own frame. A provider like Sarvam Bulbul
-            # rejects a text frame with no allowed-language character, which
-            # otherwise hard-fails the whole segment.
-            text_buffer = ""
-            buffer_has_letter = False
-
-            async for word in word_stream:
-                word_count += 1
-                if word_count == 1:
-                    logger.debug(f"[TTS] send_task: first word '{word.token}'")
-                piece = f"{word.token} "
-                if phrase_batching:
-                    text_buffer += piece
-                    buffer_has_letter = buffer_has_letter or _contains_letter(word.token)
-                    stripped = text_buffer.rstrip()
-                    at_boundary = stripped and (
-                        stripped.endswith(_PHRASE_FLUSH_SUFFIXES)
-                        or len(stripped) >= self._opts.phrase_max_chars
-                    )
-                    if at_boundary and buffer_has_letter:
-                        await _emit_text(text_buffer)
-                        text_buffer = ""
-                        buffer_has_letter = False
-                    # A letterless buffer (bare numbers, punctuation) is kept at
-                    # a boundary so it joins the next phrase instead of being
-                    # dropped.
+            stream = segment.stream
+            token_count = 0
+            flushed = False
+            while True:
+                try:
+                    token = (await stream.__anext__()).token
+                except StopAsyncIteration:
+                    break
+                token_count += 1
+                if token_count == 1:
+                    logger.debug(f"[TTS] send_task: first token '{token}'")
+                if not segment.input_ended:
+                    # More text is still coming, so this token cannot close the
+                    # reply: send its frame straight away without the flush.
+                    frame = batcher.push(token)
+                    if frame is not None:
+                        await _send(frame, flush=False)
                     continue
 
-                if not text_buffer:
-                    text_buffer = piece
-                    buffer_has_letter = _contains_letter(word.token)
-                elif _contains_letter(word.token):
-                    # A new spoken word arrived. Flush the buffered word (with any
-                    # letterless tokens that trailed it); if the buffer so far is
-                    # only leading punctuation, prepend it to this word instead.
-                    if buffer_has_letter:
-                        await _emit_text(text_buffer)
-                        text_buffer = piece
-                    else:
-                        text_buffer += piece
-                    buffer_has_letter = True
-                else:
-                    # Letterless token: keep it with the buffered word.
-                    text_buffer += piece
+                # The reply's text is complete: every remaining token is already
+                # queued behind a closed channel, so draining never suspends.
+                # Batch the whole tail first so the flush lands on its last frame.
+                tail = [token]
+                while True:
+                    try:
+                        tail.append((await stream.__anext__()).token)
+                    except StopAsyncIteration:
+                        break
+                token_count += len(tail) - 1
+                frames = [frame for frame in (batcher.push(t) for t in tail) if frame is not None]
+                last = batcher.finish()
+                if last is not None:
+                    frames.append(last)
+                for frame in frames[:-1]:
+                    await _send(frame, flush=False)
+                if frames:
+                    await _send(frames[-1], flush=True)
+                    flushed = True
+                break
 
-            # Flush whatever remains. A buffer with no letter at all (a segment of
-            # pure punctuation, or trailing punctuation with no following word) is
-            # dropped — sending it alone would be rejected and carries no audio.
-            if text_buffer and buffer_has_letter:
-                await _emit_text(text_buffer)
+            if not flushed:
+                # Only reachable when the stream ended without input_ended being
+                # observed (a tokenizer that emits eagerly), or when the tail
+                # carried no letter and was dropped.
+                last = batcher.finish()
+                if last is not None:
+                    await _send(last, flush=True)
+                elif sent_frames:
+                    logger.debug("[TTS] tail produced no frame; sending standalone flush")
+                    await ws.send_str(self._FLUSH_MSG)
+                    sent_frames[-1] = (sent_frames[-1][0], True)
 
-            logger.debug(f"[TTS] send_task: sent {word_count} words, flushing")
-            await ws.send_str(self._FLUSH_MSG)
+            logger.debug(f"[TTS] send_task: sent {len(sent_frames)} frames ({token_count} tokens)")
             input_sent_event.set()
 
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal ready_ms, audio_end_ms, gateway_request_id, gateway_session_id
             nonlocal audio_chunks_seen
             await input_sent_event.wait()
+            if not sent_frames:
+                # A reply whose text carried no letters at all: nothing was sent,
+                # so no audio is coming. End the segment rather than waiting.
+                logger.debug("[TTS] recv_task: no frames were sent, ending segment")
+                output_emitter.end_segment()
+                return
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in (

@@ -68,26 +68,29 @@ def build_tts_init_payload(
     *,
     model: str,
     voice: str,
-    language: str,
     sample_rate: int,
     encoding: str,
-    speed: float,
+    language: str | None = None,
+    speed: float | None = None,
     model_options: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "language": language,
-        "encoding": encoding,
-        "sample_rate": sample_rate,
-        "speed": speed,
-        **dict(model_options or {}),
-    }
-    return {
-        "type": "init",
-        "model": model,
-        "voice": voice,
-        "language": language,
-        "config": config,
-    }
+    """Build the Unmute TTS ``init`` message.
+
+    ``encoding`` and ``sample_rate`` are always sent: the plugin needs them to
+    decode the audio it receives. ``language`` and ``speed`` are sent only when
+    the caller set them, so the model's catalog defaults apply otherwise.
+    ``model_options`` are passed through verbatim and win on conflict.
+    """
+    config: dict[str, Any] = {"encoding": encoding, "sample_rate": sample_rate}
+    if language is not None:
+        config["language"] = language
+    if speed is not None:
+        config["speed"] = speed
+    config.update(dict(model_options or {}))
+    payload: dict[str, Any] = {"type": "init", "model": model, "voice": voice, "config": config}
+    if language is not None:
+        payload["language"] = language
+    return payload
 
 
 def build_stt_init_payload(
