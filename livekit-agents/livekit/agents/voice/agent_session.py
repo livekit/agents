@@ -107,7 +107,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
 
@@ -390,7 +390,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str
         ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -446,7 +446,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 bundled silero VAD (``inference.VAD(model="silero")``) when
                 omitted. Pass ``vad=None`` to opt out, or pass an explicit
                 instance to customise options.
-            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
+            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel.
+                A model string resolves to a LiveKit Inference model: a realtime model
+                (e.g. ``"openai/gpt-realtime"``) for speech-to-speech, any other string
+                (e.g. ``"openai/gpt-4o"``) for the STT-LLM-TTS pipeline.
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
                 tools shared by every agent in the agent session.
@@ -613,7 +616,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
