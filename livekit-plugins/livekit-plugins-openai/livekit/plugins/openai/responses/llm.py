@@ -44,7 +44,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
-from ..models import _supports_reasoning_effort
+from ..models import _REASONING_EFFORT_NONE_MODELS, _supports_reasoning_effort
 from ..tools import OpenAITool
 
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
@@ -242,7 +242,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
+            if model in _REASONING_EFFORT_NONE_MODELS:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
