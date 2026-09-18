@@ -35,6 +35,9 @@ from .models import FluxTTSModels
 # https://developers.deepgram.com/docs/flux-tts/overview
 BASE_URL_V2 = "https://api.deepgram.com/v2/speak"
 NUM_CHANNELS = 1
+# Deepgram closes a Flux TTS session after 60s without a client message (NET-0004);
+# a WebSocket ping resets that timer, so ping at half the window.
+DEFAULT_KEEPALIVE_INTERVAL = 30.0
 
 # Encodings the LiveKit pipeline can decode, mapped to their mime type. Deepgram Flux
 # also offers mulaw/alaw, but those aren't playable through the pipeline yet, so they're
@@ -68,6 +71,7 @@ class _TTSOptionsV2:
     api_key: str
     mip_opt_out: bool = False
     bit_rate: int | None = None
+    keepalive_interval: float | None = DEFAULT_KEEPALIVE_INTERVAL
 
 
 class TTSv2(tts.TTS):
@@ -83,6 +87,7 @@ class TTSv2(tts.TTS):
         word_tokenizer: NotGivenOr[tokenize.WordTokenizer] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         mip_opt_out: bool = False,
+        keepalive_interval: float | None = DEFAULT_KEEPALIVE_INTERVAL,
     ) -> None:
         """
         Create a new instance of Deepgram Flux TTS (the /v2/speak endpoint).
@@ -105,6 +110,13 @@ class TTSv2(tts.TTS):
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
             mip_opt_out (bool): Opt out of the Deepgram Model Improvement Program. Defaults to
                 False (requests may be used to improve models). See https://dpgr.am/deepgram-mip
+            keepalive_interval (float | None): Seconds between WebSocket ping frames sent on an
+                idle streaming connection. Defaults to 30. Deepgram closes a Flux TTS session
+                that receives no client message for 60 seconds (error NET-0004), and the
+                streaming connection is pooled and reused across turns, so without pings a
+                pause longer than that (the user thinking, a long tool call) leaves the next
+                turn on a closed socket. A ping or pong resets Deepgram's timer. None disables
+                the pings.
 
         """  # noqa: E501
         super().__init__(
@@ -129,6 +141,7 @@ class TTSv2(tts.TTS):
             base_url=base_url,
             api_key=api_key,
             mip_opt_out=mip_opt_out,
+            keepalive_interval=keepalive_interval,
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SynthesizeStreamv2]()
@@ -162,6 +175,8 @@ class TTSv2(tts.TTS):
             session.ws_connect(
                 _to_deepgram_url(config, self._opts.base_url, websocket=True),
                 headers={"Authorization": f"Token {self._opts.api_key}"},
+                # keeps the pooled connection inside Deepgram's 60s inactivity window
+                heartbeat=self._opts.keepalive_interval,
             ),
             timeout,
         )

@@ -248,3 +248,49 @@ async def test_stream_run_rejects_non_linear16_encoding():
 
     with pytest.raises(ValueError, match="linear16"):
         await stream._run(_FakeEmitter())  # type: ignore[arg-type]
+
+
+# --- pooled connection keepalive -----------------------------------------------------
+
+
+class _FakeSession:
+    """Records the ws_connect call and hands back a socket with the headers the
+    connect path logs."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def ws_connect(self, url: str, **kwargs):  # noqa: ANN201
+        self.calls.append({"url": url, **kwargs})
+        return SimpleNamespace(_response=SimpleNamespace(headers={}))
+
+
+async def test_connect_ws_pings_the_pooled_connection_by_default():
+    # Deepgram closes a Flux session that gets no client message for 60s (NET-0004).
+    # The streaming connection is pooled across turns, so a ping keeps a pause longer
+    # than that from leaving the next turn on a closed socket.
+    from livekit.plugins.deepgram import TTSv2
+    from livekit.plugins.deepgram.tts_v2 import DEFAULT_KEEPALIVE_INTERVAL
+
+    tts = TTSv2(api_key="test-key")
+    session = _FakeSession()
+    tts._ensure_session = lambda: session  # type: ignore[method-assign]
+
+    await tts._connect_ws(timeout=5.0)
+
+    [call] = session.calls
+    assert call["heartbeat"] == DEFAULT_KEEPALIVE_INTERVAL
+    assert 0 < DEFAULT_KEEPALIVE_INTERVAL < 60
+
+
+async def test_keepalive_interval_none_disables_the_ping():
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(api_key="test-key", keepalive_interval=None)
+    session = _FakeSession()
+    tts._ensure_session = lambda: session  # type: ignore[method-assign]
+
+    await tts._connect_ws(timeout=5.0)
+
+    [call] = session.calls
+    assert call["heartbeat"] is None
