@@ -21,8 +21,6 @@ from livekit.agents.llm import function_tool
 
 # uncomment to enable Krisp voice isolation
 # from livekit.plugins import krisp
-# 
-from livekit.plugins import openai
 
 logger = logging.getLogger("basic-agent")
 
@@ -79,41 +77,39 @@ async def entrypoint(ctx: JobContext) -> None:
     session: AgentSession = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         # See all available models at https://docs.livekit.io/agents/models/stt/
-        # stt=inference.STT("deepgram/nova-3", language="multi"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
         # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
         # See all available models at https://docs.livekit.io/agents/models/llm/
-        # llm=inference.LLM("openai/gpt-4.1-mini"),
+        llm=inference.LLM("openai/gpt-4.1-mini"),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        # tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
-        # turn_handling=TurnHandlingOptions(
-        #     interruption={
-        #         # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-        #         # when it's detected, you may resume the agent's speech
-        #         "resume_false_interruption": True,
-        #         "false_interruption_timeout": 1.0,
-        #     },
-        #     # allow the LLM to generate a response while waiting for the end of turn
-        #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        #     preemptive_generation={"enabled": True, "max_retries": 3},
-        # ),
-        # # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
-        # aec_warmup_duration=3.0,
-        # tts_text_transforms=[
-        #     "filter_emoji",
-        #     "filter_markdown",
-        #     text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
-        # ],
-        # # automatically detect keyterms and apply them to the STT per user turn
-        # stt_context_options={
-        #     "keyterms": ["LiveKit"],
-        #     "keyterm_detection": {
-        #         "enabled": True,
-        #         "turn_interval": 1,  # increase to reduce LLM API calls
-        #     },
-        # },
-        vad=inference.VAD(),
-        llm=openai.realtime.GPTLiveModel(),
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+        turn_handling=TurnHandlingOptions(
+            interruption={
+                # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
+                # when it's detected, you may resume the agent's speech
+                "resume_false_interruption": True,
+                "false_interruption_timeout": 1.0,
+            },
+            # allow the LLM to generate a response while waiting for the end of turn
+            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+            preemptive_generation={"enabled": True, "max_retries": 3},
+        ),
+        # blocks interruptions for a few seconds after the agent starts speaking to allow client to calibrate AEC
+        aec_warmup_duration=3.0,
+        tts_text_transforms=[
+            "filter_emoji",
+            "filter_markdown",
+            text_transforms.replace({"LiveKit": "<<ˈ|l|aɪ|v|k|ɪ|t>>"}),
+        ],
+        # automatically detect keyterms and apply them to the STT per user turn
+        stt_context_options={
+            "keyterms": ["LiveKit"],
+            "keyterm_detection": {
+                "enabled": True,
+                "turn_interval": 1,  # increase to reduce LLM API calls
+            },
+        },
     )
 
     @session.on("metrics_collected")
