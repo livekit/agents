@@ -2062,7 +2062,8 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
     assert user_state_events[0].old_state == "listening"
     assert user_state_events[0].new_state == "speaking"
     assert user_state_events[1].new_state == "listening"
-    t_user_stop_speaking = user_state_events[1].created_at
+    t_user_stop_speaking = user_state_events[1].speech_timestamp
+    assert t_user_stop_speaking is not None
 
     assert len(agent_state_events) == 4
     assert agent_state_events[0].old_state == "initializing"
@@ -2113,7 +2114,8 @@ async def test_preemptive_generation_on_agent(
     session.on("user_state_changed", user_state_events.append)
 
     await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
-    t_user_stop_speaking = user_state_events[1].created_at
+    t_user_stop_speaking = user_state_events[1].speech_timestamp
+    assert t_user_stop_speaking is not None
     t_agent_start_speaking = agent_state_events[2].created_at
     check_timestamp(
         t_agent_start_speaking - t_user_stop_speaking,
@@ -2350,7 +2352,7 @@ class _TestRecognitionHooks:
     def on_vad_inference_done(self, ev: object) -> None:
         pass
 
-    def on_end_of_speech(self, ev: object) -> None:
+    def on_end_of_speech(self, ev: object, *, speech_end_time: float) -> None:
         pass
 
     def on_interim_transcript(self, ev: SpeechEvent, *, speaking: bool | None) -> None:
