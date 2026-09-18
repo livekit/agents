@@ -20,6 +20,7 @@ from .. import inference, llm, stt, tts, utils, vad
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
+    FunctionTool,
     StopResponse,
     ToolError,
     ToolFlag,
@@ -61,6 +62,7 @@ from .audio_recognition import (
 )
 from .endpointing import create_endpointing
 from .events import (
+    TURN_ENDED_KEY,
     AgentFalseInterruptionEvent,
     AgentState,
     AgentStateChangedEvent,
@@ -98,7 +100,12 @@ from .generation import (
     update_instructions,
 )
 from .speech_handle import DEFAULT_INPUT_DETAILS, InputDetails, InterruptionSource, SpeechHandle
-from .tool_executor import _resolve_async_tool_options, _RunningTasks, _ToolExecutor
+from .tool_executor import (
+    _reply_tool_choice,
+    _resolve_async_tool_options,
+    _RunningTasks,
+    _ToolExecutor,
+)
 from .turn import (
     EndpointingOptions,
     PreemptiveGenerationOptions,
@@ -109,6 +116,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from ..delegation import DelegationOptions
     from ..llm import mcp
     from .agent_session import AgentSession, ExpressiveOptions
 
@@ -382,6 +390,11 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        self._delegation: DelegationOptions = {
+            **self._session._opts.delegation,
+            **self._agent._delegation,
+        }
+        self.__delegate_tool: FunctionTool | None = None
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -702,6 +715,15 @@ class AgentActivity(RecognitionHooks):
         # schema stays stable across turns and the prompt cache stays warm
         if has_cancellable_tool(tools):
             tools = [*tools, cancel_task, get_running_tasks]
+
+        if self._delegation["delegate"] is not None:
+            if self.__delegate_tool is None:
+                # built once, so the schema the model sees keeps its identity across turns
+                from ..delegation import build_delegate_tool
+
+                self.__delegate_tool = build_delegate_tool(announce=self._delegation["announce"])
+            tools = [*tools, self.__delegate_tool]
+
         return tools
 
     @property
@@ -1642,6 +1664,12 @@ class AgentActivity(RecognitionHooks):
                 await asyncio.gather(
                     *(toolset.aclose() for toolset in toolsets), return_exceptions=True
                 )
+
+            # the agent's own delegate goes with it; the session's outlives the handoff
+            agent_delegate = self._agent.delegate
+            if is_given(agent_delegate) and agent_delegate is not None:
+                with contextlib.suppress(Exception):
+                    await agent_delegate.aclose()
 
             # final sweep: anything non-cancellable that survived drain dies here
             await self._tool_executor.aclose()
@@ -3339,6 +3367,7 @@ class AgentActivity(RecognitionHooks):
                 interrupted=speech_handle.interrupted,
                 created_at=started_speaking_at if started_speaking_at is not None else time.time(),
                 metrics=assistant_metrics,
+                extra={TURN_ENDED_KEY: True},
             )
             speech_handle._item_added([msg])
             self._session._conversation_item_added(msg)
@@ -3846,9 +3875,11 @@ class AgentActivity(RecognitionHooks):
             # forwarded_text carries the raw LLM output including any expressive markup
             # (the transcript forwarder strips it only for the room transcript), so the
             # markup lives directly on the stored assistant message.
-            extra_kwargs: dict = {}
-            if llm_gen_data.generated_extra:
-                extra_kwargs["extra"] = llm_gen_data.generated_extra
+            # the llm stream is drained by now, so this step's tool calls are known
+            extra: dict[str, Any] = dict(llm_gen_data.generated_extra)
+            if not llm_gen_data.generated_functions:
+                extra[TURN_ENDED_KEY] = True
+            extra_kwargs: dict = {"extra": extra}
             msg = chat_ctx.add_message(
                 role="assistant",
                 content=forwarded_text,
@@ -4009,7 +4040,10 @@ class AgentActivity(RecognitionHooks):
                             # a final text response instead of silently stopping.
                             tool_choice="none"
                             if max_steps_reached or draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice for out in tool_output.output
+                            )
+                            or "auto",
                         ),
                         # the tool reply answers whatever user turn is still unanswered: this
                         # one if the reply only generated tools, or the last turn of a
@@ -4503,6 +4537,7 @@ class AgentActivity(RecognitionHooks):
                 content=[forwarded_text],
                 id=message_id,
                 interrupted=interrupted,
+                extra={} if function_calls else {TURN_ENDED_KEY: True},
             )
             if started_speaking_at is not None:
                 msg.created_at = started_speaking_at
@@ -4731,7 +4766,10 @@ class AgentActivity(RecognitionHooks):
                             # passing tool response back to the LLM
                             tool_choice="none"
                             if draining or model_settings.tool_choice == "none"
-                            else "auto",
+                            else _reply_tool_choice(
+                                out.reply_tool_choice for out in tool_output.output
+                            )
+                            or "auto",
                         ),
                         tool_reply=True,
                     ),

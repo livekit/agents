@@ -31,6 +31,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
+from ..delegation.delegate import DelegationOptions, resolve_delegation_options
 from ..job import get_job_context
 from ..llm import (
     LLM,
@@ -107,6 +108,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
+    from ..delegation import Delegate
     from ..inference import LLMModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
@@ -312,6 +314,7 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     recording_options: RecordingOptions
+    delegation: DelegationOptions
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -399,6 +402,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         tools: NotGivenOr[list[llm.Tool | llm.Toolset]] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         max_tool_steps: int = 3,
+        # Delegation settings
+        delegate: NotGivenOr[Delegate | DelegationOptions | None] = NOT_GIVEN,
         # TTS settings
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
         tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
@@ -604,6 +609,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             recording_options=_RECORDING_ALL_OFF.copy(),
+            delegation=resolve_delegation_options(delegate if is_given(delegate) else None),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -650,6 +656,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 "and will be removed in a future version. Use `MCPToolset` instead."
             )
         self._tools = tools if is_given(tools) else []
+        self._delegate: Delegate | None = self._opts.delegation["delegate"]
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
         )
@@ -772,6 +779,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     @userdata.setter
     def userdata(self, value: Userdata_T) -> None:
         self._userdata = value
+
+    @property
+    def delegate(self) -> Delegate | None:
+        """The delegate reasoning and tool use is handed to, if any."""
+        return self._delegate
 
     @property
     def turn_detection(self) -> TurnDetectionMode | None:
@@ -1308,6 +1320,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.end()
                 # the rest of the teardown (close event, room io) is under agent_session
                 otel_context.detach(close_token)
+
+            # the agent's own delegate goes with its activity; this one is the session's
+            if self._delegate is not None:
+                with contextlib.suppress(Exception):
+                    await self._delegate.aclose()
 
             if self._session_span:
                 self._session_span.end()

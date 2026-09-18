@@ -46,8 +46,9 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.voice.events import TURN_ENDED_KEY, FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.served_request import Directive
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
 from .fake_session import FakeActions, create_session, run_session
@@ -396,6 +397,111 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+def test_a_speech_nobody_asked_for_answers_nobody() -> None:
+    """The accessor is also the check: no caller, no request to set a directive on."""
+    from livekit.agents.voice import SpeechHandle
+
+    assert SpeechHandle.create().request is None
+
+
+def test_a_directive_is_advice_carried_with_the_answer() -> None:
+    from livekit.agents import ServedRequest
+
+    request = ServedRequest(metadata={"customer_id": "c-42"})
+    assert request.directive is None
+
+    request.set_directive("escalate", reason="policy_exception")
+    assert request.directive == Directive("escalate", "policy_exception")
+    # the last call before the answer is the one that travels
+    request.set_directive("end_session", reason="user_request")
+    assert request.directive == Directive("end_session", "user_request")
+
+
+async def test_a_report_is_answered_with_speech_not_another_call() -> None:
+    """ctx.update() releases the turn, and the step that answers the report must not be
+    able to call the same tool again — that is how one request becomes two."""
+    calls: list[str] = []
+    choices: list[object] = []
+
+    @function_tool
+    async def look_it_up(ctx: RunContext) -> str:
+        """Slow work that reports before it returns."""
+        calls.append("call")
+        await ctx.update("looking it up")
+        await asyncio.sleep(0.5)
+        return "the answer is 42"
+
+    original = AgentActivity._pipeline_reply_task
+
+    async def _capture(self, *, speech_handle, chat_ctx, tools, model_settings, **kwargs):
+        choices.append(model_settings.tool_choice)
+        return await original(
+            self,
+            speech_handle=speech_handle,
+            chat_ctx=chat_ctx,
+            tools=tools,
+            model_settings=model_settings,
+            **kwargs,
+        )
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "look it up")
+    actions.add_llm(
+        content="",
+        tool_calls=[FunctionToolCall(name="look_it_up", arguments="{}", call_id="1")],
+    )
+    actions.add_tts(1.0)
+    actions.add_llm(content="One moment.", input="looking it up")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    with patch.object(AgentActivity, "_pipeline_reply_task", _capture):
+        await asyncio.wait_for(
+            run_session(session, Agent(instructions="assistant", tools=[look_it_up])),
+            timeout=SESSION_TIMEOUT,
+        )
+
+    assert calls == ["call"], "the tool was called again on its own progress report"
+    # the first step is the user's turn; the next answers the report, and may only speak
+    assert choices[1] == "none", choices
+
+
+async def test_assistant_messages_carry_their_source() -> None:
+    class SayOnEnterAgent(MyAgent):
+        async def on_enter(self) -> None:
+            self.session.say("Northwind Air, how can I help?")
+
+    actions = FakeActions()
+    actions.add_tts(1.0, input="Northwind Air, how can I help?")
+    actions.add_user_speech(1.5, 3.5, "What's the weather in Tokyo?")
+    actions.add_llm(
+        content="Let me check the weather for you.",
+        tool_calls=[
+            FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1")
+        ],
+    )
+    actions.add_tts(2.0)
+    actions.add_llm(content="Sunny today.", input="The weather in Tokyo is sunny today.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    agent = SayOnEnterAgent()
+
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assistant = [
+        item for item in agent.chat_ctx.items if item.type == "message" and item.role == "assistant"
+    ]
+    assert [item.text_content for item in assistant] == [
+        "Northwind Air, how can I help?",
+        "Let me check the weather for you.",
+        "Sunny today.",
+    ]
+    # a said line and a turn that called nothing are both ends; the line on the way to a
+    # tool call is not, and which of the two said it is on the speech, not the message
+    assert [item.extra.get(TURN_ENDED_KEY) for item in assistant] == [True, None, True]
 
 
 async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:

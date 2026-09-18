@@ -27,7 +27,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Generic, Literal, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
 if sys.version_info >= (3, 11):
@@ -37,14 +37,15 @@ else:
 
 import aiohttp
 import jwt
-from aiohttp import web
-from google.protobuf.json_format import MessageToDict, MessageToJson
+from fastapi import FastAPI
+from google.protobuf.json_format import MessageToDict
 
 from livekit import api, rtc
-from livekit.protocol import agent, agent_worker, models
+from livekit.protocol import agent, models
 
 from . import ipc, telemetry, utils
 from ._exceptions import APIStatusError, AssignmentTimeoutError
+from .http import _HttpRunner, _register_builtin_routes
 from .inference_runner import _InferenceRunner
 from .job import (
     JobAcceptArguments,
@@ -58,9 +59,13 @@ from .log import DEV_LEVEL, logger
 from .plugin import Plugin
 from .simulation import SimulationContext
 from .types import ATTRIBUTE_AGENT_NAME, NOT_GIVEN, NotGivenOr
-from .utils import http_context, http_server, is_given
+from .utils import http_context, is_given
 from .utils.hw import get_cpu_monitor
 from .version import __version__
+
+if TYPE_CHECKING:
+    from .a2a.server import A2ASessionHandler, _SessionExecutor
+
 
 ASSIGNMENT_TIMEOUT = 7.5
 UPDATE_STATUS_INTERVAL = 2.5
@@ -86,6 +91,11 @@ def _toml_agent_name(path: str) -> str:
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
     return
+
+
+async def _unreachable_entrypoint(ctx: JobContext) -> None:
+    """Stands in where no RTC session was registered; nothing can dispatch a job to it."""
+    raise RuntimeError("this agent server has no RTC session entrypoint")
 
 
 async def _default_request_fnc(ctx: JobRequest) -> None:
@@ -269,7 +279,8 @@ class ServerOptions:
     port: int | ServerEnvOption[int] = ServerEnvOption(dev_default=0, prod_default=8081)
     """Port for local HTTP server to listen on.
 
-    The HTTP server is used as a health check endpoint.
+    It serves the health check, the worker info endpoint, and any routes registered on
+    ``AgentServer.http``.
     """
 
     http_proxy: NotGivenOr[str | None] = NOT_GIVEN
@@ -399,15 +410,77 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         self._setup_fnc: Callable[[JobProcess], Any] | None = setup_fnc
         self._load_fnc: Callable[[AgentServer], float] | Callable[[], float] | None = load_fnc
 
+        self._close_future: asyncio.Future[None] | None = None
         self._closed, self._draining, self._connecting, self._connection_failed = (
             True,
             False,
             False,
             False,
         )
-        self._http_server: http_server.HttpServer | None = None
+        self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = None
+        self._worker_load: float = 0.0
+
+        self._http_server: _HttpRunner | None = None
+        # built here and not in run(): the @server.http decorators run at import time
+        self._http = FastAPI()
+        self._http.state.agent_server = self
+        self._a2a_sessions: list[_SessionExecutor] = []
 
         self._lock = asyncio.Lock()
+
+    @property
+    def http(self) -> FastAPI:
+        """HTTP routes served alongside the agent, as a FastAPI app::
+
+            @server.http.get("/token")
+            async def token() -> dict:
+                return {"ok": True}
+
+        ``GET /worker`` is reserved; ``GET /`` serves a default health check that a route
+        of your own replaces.
+        """
+        return self._http
+
+    def a2a_session(
+        self,
+        *,
+        endpoint: str,
+        description: str,
+        name: str | None = None,
+        idle_timeout: float | None = None,
+    ) -> Callable[[A2ASessionHandler], A2ASessionHandler]:
+        """Serve an ``AgentSession`` at ``/<endpoint>`` on :attr:`http`, speaking A2A.
+
+        The handler runs once per conversation. It builds the session, starts it, and hands
+        it over; the framework feeds each incoming request through it as a turn::
+
+            @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
+            async def fare_desk(ctx: A2ASessionContext) -> None:
+                session = AgentSession(llm="openai/gpt-4.1")
+                await session.start(agent=FareDesk())
+                ctx.attach(session)
+
+        Needs the ``a2a`` extra. The endpoint serves its card at
+        ``/<endpoint>/.well-known/agent-card.json`` and the binding's methods under
+        ``/<endpoint>/v1``.
+        """
+
+        def decorator(handler: A2ASessionHandler) -> A2ASessionHandler:
+            from .a2a.server import mount
+
+            self._a2a_sessions.append(
+                mount(
+                    self._http,
+                    endpoint=endpoint,
+                    handler=handler,
+                    description=description,
+                    name=name,
+                    idle_timeout=idle_timeout,
+                )
+            )
+            return handler
+
+        return decorator
 
     @property
     def log_level(self) -> str | ServerEnvOption[str]:
@@ -607,13 +680,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 raise Exception("worker is already running")
 
             if self._entrypoint_fnc is None:
-                raise RuntimeError(
-                    "No RTC session entrypoint has been registered.\n"
-                    "Define one using the @server.rtc_session() decorator, for example:\n"
-                    '    @server.rtc_session(agent_name="my_agent")\n'
-                    "    async def my_agent(ctx: JobContext):\n"
-                    "        ...\n"
-                )
+                if not self._a2a_sessions:
+                    raise RuntimeError(
+                        "No RTC session entrypoint has been registered.\n"
+                        "Define one using the @server.rtc_session() decorator, for example:\n"
+                        '    @server.rtc_session(agent_name="my_agent")\n'
+                        "    async def my_agent(ctx: JobContext):\n"
+                        "        ...\n"
+                        "Or serve A2A sessions alone with @server.a2a_session().\n"
+                    )
+                # nothing here answers a room, so no job can ever be dispatched: serve the
+                # HTTP app, stay out of the job dispatcher, and warm no processes for it
+                unregistered = True
+                self._entrypoint_fnc = _unreachable_entrypoint
+                self._num_idle_processes = 0
 
             if self._request_fnc is None:
                 self._request_fnc = _default_request_fnc
@@ -645,12 +725,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._devmode = devmode
             self._job_lifecycle_tasks = set[asyncio.Task[Any]]()
             self._pending_assignments: dict[str, asyncio.Future[agent.JobAssignment]] = {}
-            self._close_future: asyncio.Future[None] | None = None
+            self._close_future = None
             self._msg_chan = utils.aio.Chan[agent.WorkerMessage](128, loop=self._loop)
 
-            self._inference_executor: ipc.inference_proc_executor.InferenceProcExecutor | None = (
-                None
-            )
+            self._inference_executor = None
             if len(_InferenceRunner.registered_runners) > 0:
                 self._inference_executor = ipc.inference_proc_executor.InferenceProcExecutor(
                     runners=_InferenceRunner.registered_runners,
@@ -688,39 +766,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             self._api: api.LiveKitAPI | None = None
             self._http_session: aiohttp.ClientSession | None = None
-            self._worker_load: float = 0.0
+            self._worker_load = 0.0
             self._reserved_slots: int = 0  # jobs we said "available" to but not yet launched
 
             # simulations run ephemeral workers side by side; a health
             # endpoint on a fixed port would make concurrent runs collide
             if not self._simulation:
-                self._http_server = http_server.HttpServer(
-                    self._host, ServerEnvOption.getvalue(self._port, devmode)
+                _register_builtin_routes(self)
+                self._http_server = _HttpRunner(
+                    self._http,
+                    host=self._host,
+                    port=ServerEnvOption.getvalue(self._port, devmode),
                 )
-
-                async def health_check(_: Any) -> web.Response:
-                    if self._inference_executor and not self._inference_executor.is_alive():
-                        return web.Response(status=503, text="inference process not running")
-
-                    if self._connection_failed:
-                        return web.Response(status=503, text="failed to connect to livekit")
-
-                    return web.Response(text="OK")
-
-                async def worker(_: Any) -> web.Response:
-                    worker_info = agent_worker.WorkerInfo(
-                        worker_type=agent.JobType.Name(self._server_type.value),
-                        agent_name=self._agent_name,
-                        active_jobs=len(self.active_jobs),
-                        sdk_version=__version__,
-                        worker_load=self._worker_load,
-                        protocol_version=WORKER_PROTOCOL_VERSION,
-                    )
-                    body = MessageToJson(worker_info, preserving_proto_field_name=True)
-                    return web.Response(body=body, content_type="application/json")
-
-                self._http_server.app.add_routes([web.get("/", health_check)])
-                self._http_server.app.add_routes([web.get("/worker", worker)])
+            elif self._http.routes:
+                logger.warning("simulation mode does not serve server.http routes")
 
             self._conn_task: asyncio.Task[None] | None = None
             self._load_task: asyncio.Task[None] | None = None
@@ -1089,6 +1148,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             # let in-flight availability tasks finish launching their jobs
             # before closing the proc pool (they accepted before shutdown)
             await asyncio.gather(*self._job_lifecycle_tasks, return_exceptions=True)
+
+            for a2a_session in self._a2a_sessions:
+                with contextlib.suppress(Exception):
+                    await a2a_session.aclose()
 
             await self._proc_pool.aclose()
 
