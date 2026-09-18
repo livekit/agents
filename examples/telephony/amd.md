@@ -20,6 +20,10 @@ This replaces the one-shot AMD API. `execute()` now returns `AMDCompletedEvent`,
 not the first `AMDPredictionEvent`. Use `amd_prediction` to observe each prediction.
 The application still decides whether to continue or end the call.
 
+The example gives the agent an `end_call` tool for completed conversations and
+delivered voicemails. It lets the final speech finish, then shuts down the job.
+The example's shutdown callback deletes the room and disconnects the SIP participant.
+
 ## Migrate speech timestamps
 
 `UserStateChangedEvent.created_at` now records event-creation time. Older

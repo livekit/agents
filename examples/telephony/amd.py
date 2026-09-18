@@ -17,6 +17,7 @@ from livekit.agents import (
     cli,
     inference,
 )
+from livekit.agents.beta.tools import EndCallTool
 
 logger = logging.getLogger("amd-example")
 load_dotenv()
@@ -29,8 +30,18 @@ class MyAgent(Agent):
                 "You are Alex from Acme Dental. You are calling Sam to confirm "
                 "a dental appointment tomorrow at 10 AM. Keep replies brief. "
                 "If asked to leave a message, give the appointment details and "
-                "ask Sam to call the office to confirm. Do not invent a phone number."
+                "ask Sam to call the office to confirm. Do not invent a phone number. "
+                "Use end_call when the conversation is complete or after leaving the voicemail."
             ),
+            tools=[
+                EndCallTool(
+                    delete_room=False,  # The job shutdown callback deletes the room.
+                    extra_description=(
+                        "Also call after completing the appointment conversation or "
+                        "leaving the requested voicemail."
+                    ),
+                ),
+            ],
         )
 
 
