@@ -1402,20 +1402,28 @@ class SynthesizeStream(tts.SynthesizeStream):
             output_emitter.end_input()
 
     def _adopt_handshake_opts(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        """Align this stream's model-coupled options with the socket it was handed.
+        """Align this stream's model with the socket the pool handed it.
 
-        The pool builds sockets from the TTS's options at connect time, so a stream
-        constructed before ``update_options`` would otherwise send a config frame for
-        the old model over a socket handshaken for the new one. ``model`` and
-        ``send_completion_event`` are pinned in that handshake, and the speaker and
-        tuning bounds are only valid for that model, so all of them come from the
-        socket. The language, sample rate and codec ride in the config frame rather
-        than the handshake, and the output emitter was already initialized from them,
-        so those stay as this stream snapshotted them.
+        The pool builds sockets from the TTS's options at connect time while each
+        stream carries its own snapshot, so a stream constructed before a model
+        switch would otherwise send a config frame for the old model over a socket
+        handshaken for the new one -- and v4-flash is served on a different path.
+
+        Only ``model`` is carried by both the handshake and the config frame, so it
+        is the only field that has to agree. Everything else in the frame is sent
+        per segment and legitimately follows this stream's snapshot.
         """
         handshake = self._tts._ws_handshake_opts.get(id(ws))
-        if handshake is None:
+        if handshake is None or handshake.model == self._opts.model:
+            # The socket already speaks this stream's model, so its speaker and
+            # tuning are valid and must win. Taking the socket's instead would
+            # revert a config-only update_options for as long as it stays pooled.
             return
+
+        # A different model, so this stream's speaker and tuning bounds are not
+        # valid for it; take the whole model-coupled set from the socket. Language,
+        # sample rate and codec ride in the config frame and the output emitter is
+        # already initialized from them, so those stay snapshotted.
         self._opts = replace(
             handshake,
             target_language_code=self._opts.target_language_code,

@@ -230,6 +230,25 @@ def test_stream_config_follows_the_socket_it_was_handed() -> None:
     assert stream._opts == before
 
 
+def test_config_only_update_survives_a_reused_socket() -> None:
+    """Speaker and tuning ride in the config frame, so the socket must not revert them."""
+    tts = _make_tts(model="bulbul:v3", speaker="shubh", pace=1.0)
+
+    # a socket handshaken before the update; its model is unchanged, so the pool
+    # legitimately keeps reusing it
+    ws = object()
+    tts._ws_handshake_opts[id(ws)] = replace(tts._opts)
+
+    tts.update_options(speaker="ritu", pace=1.2)
+    stream = object.__new__(sarvam_tts.SynthesizeStream)
+    stream._tts = tts
+    stream._opts = replace(tts._opts)
+
+    stream._adopt_handshake_opts(ws)  # type: ignore[arg-type]
+
+    assert (stream._opts.speaker, stream._opts.pace) == ("ritu", 1.2)
+
+
 def _error_stream() -> sarvam_tts.SynthesizeStream:
     """A SynthesizeStream carrying only the attributes `_handle_error_message` reads.
 
