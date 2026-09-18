@@ -9,6 +9,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, utils
+from livekit.agents.types import USERDATA_AUDIO_PROCESSING, USERDATA_AUDIO_RAW
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -505,6 +506,50 @@ async def test_audio_input_closes_active_track_on_unsubscribe() -> None:
     assert audio_input._track is None
 
     await audio_input.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source_rate", [16000, 24000])
+async def test_pre_connect_audio_preserves_processing_metadata_at_input(source_rate: int) -> None:
+    class Processor(_MockFrameProcessor):
+        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+            assert frame.sample_rate == 24000
+            return rtc.AudioFrame(
+                frame.data,
+                frame.sample_rate,
+                frame.num_channels,
+                frame.samples_per_channel,
+                userdata={USERDATA_AUDIO_RAW: frame, USERDATA_AUDIO_PROCESSING: "isolated"},
+            )
+
+    frames = [rtc.AudioFrame.create(source_rate, 1, source_rate // 10)]
+    audio_input = _ParticipantAudioInputStream(
+        _FakeRoom(),
+        sample_rate=24000,
+        num_channels=1,
+        noise_cancellation=Processor(),
+        auto_gain_control=False,
+        pre_connect_audio_handler=SimpleNamespace(wait_for_data=AsyncMock(return_value=frames)),
+    )
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    publication.audio_features = [AudioTrackFeature.TF_PRECONNECT_BUFFER]
+    stream = _MockAudioStream()
+    try:
+        with patch("livekit.rtc.AudioStream.from_track", return_value=stream):
+            assert audio_input._on_track_available(track, publication, participant)
+            await asyncio.wait_for(stream.started.wait(), timeout=1)
+
+        output_frames = [await audio_input.__anext__() for _ in range(audio_input._data_ch.qsize())]
+        assert output_frames
+        assert sum(frame.duration for frame in output_frames) == pytest.approx(0.1, abs=0.001)
+        for frame in output_frames:
+            raw = frame.userdata[USERDATA_AUDIO_RAW]
+            assert frame.userdata[USERDATA_AUDIO_PROCESSING] == "isolated"
+            assert frame.sample_rate == raw.sample_rate == 24000
+            assert frame.samples_per_channel == raw.samples_per_channel
+    finally:
+        await audio_input.aclose()
 
 
 @pytest.mark.asyncio

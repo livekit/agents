@@ -28,6 +28,7 @@ from typing import Any, Literal
 import numpy as np
 
 from livekit import rtc
+from livekit.agents.types import USERDATA_AUDIO_PROCESSING, USERDATA_AUDIO_RAW
 
 from .log import logger
 
@@ -180,6 +181,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         # interrupted by injected silence.
         self._in_buf: np.ndarray = np.empty(0, dtype=np.int16)
         self._out_buf: np.ndarray = np.empty(0, dtype=np.int16)
+        self._raw_out_buf: np.ndarray = np.empty(0, dtype=np.int16)
 
         try:
             self._module = _KrispLicenseSDKManager.acquire(license_key)
@@ -241,6 +243,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             # The pending/processed buffers belong to the old rate; start fresh.
             self._in_buf = np.empty(0, dtype=np.int16)
             self._out_buf = np.empty(0, dtype=np.int16)
+            self._raw_out_buf = np.empty(0, dtype=np.int16)
             logger.info("Krisp session created successfully")
         except Exception as e:
             logger.error(f"Failed to create Krisp session: {e}")
@@ -278,6 +281,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             consumed = n_chunks * chunk
             pending = self._in_buf[:consumed]
             self._in_buf = self._in_buf[consumed:].copy()
+            self._raw_out_buf = np.concatenate((self._raw_out_buf, pending))
 
             processed: list[np.ndarray] = []
             for i in range(n_chunks):
@@ -306,12 +310,25 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
         k = min(n, len(self._out_buf))
         out = self._out_buf[:k]
         self._out_buf = self._out_buf[k:].copy()
+        raw = self._raw_out_buf[:k]
+        self._raw_out_buf = self._raw_out_buf[k:].copy()
+
+        userdata = frame.userdata.copy()
+        if k:
+            userdata[USERDATA_AUDIO_RAW] = rtc.AudioFrame(
+                data=raw.tobytes(),
+                sample_rate=frame.sample_rate,
+                num_channels=frame.num_channels,
+                samples_per_channel=k,
+            )
+            userdata[USERDATA_AUDIO_PROCESSING] = "denoised"
 
         return rtc.AudioFrame(
             data=out.tobytes(),
             sample_rate=frame.sample_rate,
             num_channels=frame.num_channels,
             samples_per_channel=len(out),
+            userdata=userdata,
         )
 
     @property
@@ -340,6 +357,7 @@ class _KrispLicenseFrameProcessor(rtc.FrameProcessor[rtc.AudioFrame]):
             self._session = None
         self._in_buf = np.empty(0, dtype=np.int16)
         self._out_buf = np.empty(0, dtype=np.int16)
+        self._raw_out_buf = np.empty(0, dtype=np.int16)
         logger.debug("Krisp frame processor session closed")
 
     def __del__(self) -> None:
