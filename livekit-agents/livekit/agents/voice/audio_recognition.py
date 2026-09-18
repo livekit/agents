@@ -2002,6 +2002,28 @@ class AudioRecognition:
 
         return self._user_turn_span
 
+    def _on_realtime_user_transcript(
+        self,
+        *,
+        transcript: str,
+        confidence: float | None,
+        turn_started_at: float | None,
+    ) -> None:
+        """Put a realtime model's own transcript on a ``user_turn`` span.
+
+        No VAD or STT event opens a span for a server-detected turn, so one opened here is
+        back-dated to ``turn_started_at`` and closed at once; one a VAD opened is left to it."""
+        already_open = self._user_turn_span is not None and self._user_turn_span.is_recording()
+        span = self._ensure_user_turn_span(start_time=turn_started_at)
+        span.set_attribute(trace_types.ATTR_USER_TRANSCRIPT, transcript)
+        if confidence is not None:
+            span.set_attribute(trace_types.ATTR_TRANSCRIPT_CONFIDENCE, confidence)
+        if turn_started_at is None:
+            # the provider gave no turn start, so the span's duration is not the speech duration
+            span.set_attribute(trace_types.ATTR_USER_TURN_START_ESTIMATED, True)
+        if not already_open:
+            self._end_user_turn_span()
+
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
         self._end_eou_wait_span("dropped")
