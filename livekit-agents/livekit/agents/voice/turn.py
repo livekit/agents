@@ -381,10 +381,11 @@ def _migrate_turn_handling(
     if is_given(turn_detection):
         result["turn_detection"] = turn_detection
 
-    if is_given(preemptive_generation):
-        if isinstance(preemptive_generation, bool):
-            result["preemptive_generation"] = {"enabled": preemptive_generation}
-        elif isinstance(preemptive_generation, dict):
-            result["preemptive_generation"] = PreemptiveGenerationOptions(**preemptive_generation)
+    # a mapping is already an options dict and must not be wrapped, or `enabled` ends up holding
+    # the (always truthy) dict itself; anything else given is the on/off flag, wrapped as before
+    if isinstance(preemptive_generation, dict):
+        result["preemptive_generation"] = PreemptiveGenerationOptions(**preemptive_generation)
+    elif is_given(preemptive_generation):
+        result["preemptive_generation"] = {"enabled": preemptive_generation}
 
     return result
