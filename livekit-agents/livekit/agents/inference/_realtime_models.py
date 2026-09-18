@@ -23,11 +23,8 @@ _REALTIME_MODEL_IDS: frozenset[str] = frozenset(
 def is_realtime_model(model: str) -> bool:
     """Whether a LiveKit Inference model string names a realtime (speech-to-speech) model.
 
-    Models released after this version aren't in ``RealtimeModels`` yet, so a name
-    containing ``realtime`` or ``voice`` (e.g. ``openai/gpt-realtime-3``) also counts.
+    Only the models listed in ``RealtimeModels`` count: a newly released realtime
+    model has to be added there before ``llm="..."`` resolves it to a
+    ``RealtimeModel``.
     """
-    if model in _REALTIME_MODEL_IDS:
-        return True
-
-    name = model.split("/")[-1]
-    return "realtime" in name or "voice" in name
+    return model in _REALTIME_MODEL_IDS

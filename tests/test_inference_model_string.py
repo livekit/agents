@@ -28,9 +28,6 @@ def inference_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         "openai/gpt-realtime-2.1-mini",
         "xai/grok-voice-latest",
         "xai/grok-voice-think-fast-2.0",
-        # not in RealtimeModels yet, but named like a realtime model
-        "openai/gpt-realtime-3",
-        "xai/grok-voice-5",
     ],
 )
 def test_realtime_model_strings(model: str) -> None:
@@ -41,7 +38,16 @@ def test_realtime_model_strings(model: str) -> None:
     assert resolved.model == model
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-4o", "google/gemini-2.5-flash", "zai/glm-5.1"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-4o",
+        "google/gemini-2.5-flash",
+        "zai/glm-5.1",
+        # a realtime model has to be listed in RealtimeModels to be recognized
+        "openai/gpt-realtime-not-released-yet",
+    ],
+)
 def test_llm_model_strings(model: str) -> None:
     assert not inference.is_realtime_model(model)
 
