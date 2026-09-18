@@ -29,11 +29,35 @@ stt = slng.STT(
 tts = slng.TTS(
     model="deepgram/aura:2",
     voice="aura-2-thalia-en",  # provider voice ID, required
-    language="en",
+    # language="en",           # optional; omit to use the model's catalog default
 )
 ```
 
 Additional keyword arguments are forwarded to the gateway and applied according to the selected model's contract. Failover across multiple models or endpoints is available via `connections=[...]`; see [docs.slng.ai](https://docs.slng.ai/) for details.
+
+## TTS init fields
+
+The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent, because the plugin needs them to decode the audio it receives. `language` and `speed` are sent only when you pass them, so the selected model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+
+## TTS text chunking
+
+`text_chunking` controls how LLM text is cut into frames for the gateway:
+
+- `"sentence"` (the default, and what `"auto"` resolves to): one frame per complete sentence, using `tokenize.blingfire.SentenceTokenizer`. Pass your own `word_tokenizer` to change the tokenizer.
+- `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60). This was the behaviour before sentence mode existed.
+- `"word"`: one frame per word.
+
+Because the plugin sends complete sentences, a provider may run in per-frame mode (`segment="immediate"` on Rime, `auto_mode=True` on ElevenLabs) or in its own buffering mode, and both sound the same. That setting no longer affects audio quality, only how the provider paces its work.
+
+First audio arrives once the first sentence is complete, on every provider. Keep the opening sentence of each reply short ("Got it." then the rest) so the first frame leaves early. This is standard voice-agent practice, and it is what keeps latency flat with sentence-sized frames.
+
+## TTS connections
+
+The plugin holds one WebSocket per call for each model in `connections=[...]`. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, waits for `audio_end`, and keeps the socket open for the next reply. If the gateway closes the socket after a reply, the plugin reconnects and carries on, so a gateway that ends the session after every reply still works.
+
+Use the regional `<region>.api.slng.ai` base URLs. They expect the `flush` flag on the final text frame, which is the form the bridge contract defines. The older `api.slng.ai` host honours that flag for some providers only, so on that host a reply can stall waiting for audio that never ends. Move to a regional base URL, which needs a new API key.
+
+`warm_standby_enabled` is on by default and means "connect at session start". `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background whenever the gateway closes it. That one connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead.
 
 ## End of turn finalization
 
@@ -96,3 +120,4 @@ Version 2.0 is a breaking change:
 - Language codes are no longer normalized client-side; send the value the model expects (for example BCP-47 `hi-IN` for Sarvam, not `hi`).
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
 - `api_token` still works on STT but is deprecated; use `api_key`.
+- TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.

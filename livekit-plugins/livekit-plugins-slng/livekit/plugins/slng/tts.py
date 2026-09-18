@@ -75,6 +75,10 @@ _WS_HEARTBEAT_S = 20.0
 # cancelled reply can reach the next one.
 _CANCEL_SETTLE_S = 0.3
 _CANCEL_QUIET_S = 0.1
+_PREWARM_CONNECT_TIMEOUT_S = 10.0
+# A gateway that accepts a connection and immediately closes it must not cause a
+# connect storm. Applies only to sockets that closed without serving a reply.
+_BACKGROUND_CONNECT_MIN_INTERVAL_S = 2.0
 
 # Text frames sent to the gateway are cut by `text_chunking`. The default,
 # "sentence", relies on a sentence tokenizer and sends one whole sentence per
@@ -319,6 +323,7 @@ class _HeldConnection:
     # Settings epoch the init was sent under; stale once the TTS epoch moves on.
     epoch: int
     opened_by: str
+    timing: _WsConnectionTiming
     in_use: bool = False
     reused: bool = False
     served_segments: int = 0
@@ -332,15 +337,6 @@ class _WsConnectionTiming:
     ws_connect_ms: float
     init_send_ms: float
     connect_total_ms: float
-
-
-@dataclass
-class _WarmStandbyConnection:
-    ws: aiohttp.ClientWebSocketResponse
-    standby_ready_ms: float
-    # Settings epoch the socket was opened under; a checkout whose epoch no
-    # longer matches the current one is stale (voice/language/speed changed).
-    epoch: int
 
 
 def _elapsed_ms(started_at: float) -> float:
@@ -377,7 +373,7 @@ class TTS(tts.TTS):
         # Advanced / optional. Used by integrations that drive the session
         # themselves; a typical client can ignore these.
         runtime_init: dict[str, Any] | None = None,
-        warm_standby_enabled: bool = False,
+        warm_standby_enabled: bool = True,
         text_chunking: Literal["auto", "sentence", "word", "phrase"] = "auto",
         phrase_max_chars: int = 60,
         first_audio_timeout_s: float | None = None,
@@ -416,6 +412,11 @@ class TTS(tts.TTS):
             word_tokenizer: Optional tokenizer for processing text. Defaults to
                 ``tokenize.blingfire.SentenceTokenizer()`` in sentence mode and
                 ``tokenize.basic.WordTokenizer(ignore_punctuation=False)`` otherwise.
+            warm_standby_enabled: Open the connection at session start
+                (``prewarm()``) and reopen it in the background if the gateway
+                closes it, so the first reply of a call is not cold. The same
+                connection is reused by every reply, and it counts as one
+                concurrent session for the whole call. Defaults to True.
             text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
                 (the default; ``"auto"`` resolves to it) sends one frame per
                 sentence. ``"phrase"`` re-batches words at clause punctuation or
@@ -540,21 +541,17 @@ class TTS(tts.TTS):
         # candidate.
         self._inherits_voice = False
         self._streams = weakref.WeakSet[SynthesizeStream]()
-        self._ws_connection_timings: dict[int, _WsConnectionTiming] = {}
-        self._standby_lock = asyncio.Lock()
-        self._standby: _WarmStandbyConnection | None = None
-        # Bumped on every option change; invalidates any standby opened earlier.
-        self._standby_epoch = 0
-        self._standby_task: asyncio.Task[None] | None = None
-        # Retain fire-and-forget standby-close tasks so the event loop cannot
-        # garbage-collect them mid-run before the socket is actually closed.
-        self._standby_close_tasks: set[asyncio.Task[None]] = set()
+        # Bumped on every option change; a held connection opened under an older
+        # epoch carries a stale init and is retired rather than reused.
+        self._ws_epoch = 0
         # One connection per TTS instance, held across the replies of a call.
         self._ws_lock = asyncio.Lock()
         self._held: _HeldConnection | None = None
         # Retained refs to release / cancel-drain / idle-reader tasks so the
         # event loop cannot drop them mid-run.
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._connect_task: asyncio.Task[None] | None = None
+        self._last_background_connect_at: float | None = None
         self._closing = False
 
         if not _candidate:
@@ -637,7 +634,9 @@ class TTS(tts.TTS):
     def _is_ws_usable(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         return not bool(getattr(ws, "closed", False))
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+    async def _connect_ws(
+        self, timeout: float
+    ) -> tuple[aiohttp.ClientWebSocketResponse, _WsConnectionTiming]:
         session = self._ensure_session()
 
         # Connect to WebSocket
@@ -684,7 +683,6 @@ class TTS(tts.TTS):
             init_send_ms=init_send_ms,
             connect_total_ms=_elapsed_ms(connect_started_at),
         )
-        self._ws_connection_timings[id(ws)] = timing
         logger.info(
             "[TTS] websocket connected",
             extra={
@@ -697,7 +695,7 @@ class TTS(tts.TTS):
             },
         )
 
-        return ws
+        return ws, timing
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """Run connection bookkeeping in the background, retained and logged on failure."""
@@ -728,12 +726,19 @@ class TTS(tts.TTS):
         generated while the previous one is still speaking), this opens a
         private socket that is never installed and is closed on release.
         """
+        # A background connect already in flight is a latency win: wait for it
+        # rather than opening a second socket alongside it.
+        pending_connect = self._connect_task
+        if pending_connect is not None and not pending_connect.done():
+            with contextlib.suppress(Exception):
+                await asyncio.shield(pending_connect)
+
         stale: _HeldConnection | None = None
         async with self._ws_lock:
             held = self._held
             if held is not None and not held.in_use:
                 await self._stop_idle_reader(held)
-                if held.epoch == self._standby_epoch and self._is_ws_usable(held.ws):
+                if held.epoch == self._ws_epoch and self._is_ws_usable(held.ws):
                     held.in_use = True
                     held.reused = True
                     return held
@@ -742,17 +747,11 @@ class TTS(tts.TTS):
         if stale is not None:
             await _close_ws(stale.ws, context="acquire_stale")
 
-        epoch = self._standby_epoch
-        ws: aiohttp.ClientWebSocketResponse | None = None
-        opened_by = "standby"
-        if self.warm_standby_enabled:
-            ws, _standby_ready_ms, _miss_reason = await self._checkout_standby()
-        if ws is None:
-            ws = await self._connect_ws(timeout=timeout)
-            opened_by = "segment"
-        conn = _HeldConnection(ws=ws, epoch=epoch, opened_by=opened_by, in_use=True)
+        epoch = self._ws_epoch
+        ws, timing = await self._connect_ws(timeout=timeout)
+        conn = _HeldConnection(ws=ws, epoch=epoch, opened_by="segment", timing=timing, in_use=True)
         async with self._ws_lock:
-            if self._held is None and epoch == self._standby_epoch and not self._closing:
+            if self._held is None and epoch == self._ws_epoch and not self._closing:
                 self._held = conn
         return conn
 
@@ -764,7 +763,7 @@ class TTS(tts.TTS):
             if (
                 keep
                 and current
-                and conn.epoch == self._standby_epoch
+                and conn.epoch == self._ws_epoch
                 and self._is_ws_usable(conn.ws)
                 and not self._closing
             ):
@@ -776,7 +775,7 @@ class TTS(tts.TTS):
         if keep and current and not self._closing:
             self._on_connection_lost(
                 conn,
-                reason="options_changed" if conn.epoch != self._standby_epoch else "reconnect",
+                reason="options_changed" if conn.epoch != self._ws_epoch else "reconnect",
             )
 
     def _release_after_cancel(
@@ -814,7 +813,7 @@ class TTS(tts.TTS):
                 keep = (
                     outcome == "acknowledged"
                     and self._held is conn
-                    and conn.epoch == self._standby_epoch
+                    and conn.epoch == self._ws_epoch
                     and self._is_ws_usable(conn.ws)
                     and not self._closing
                 )
@@ -971,10 +970,57 @@ class TTS(tts.TTS):
                 self._on_connection_lost(conn, reason="reconnect")
 
     def _on_connection_lost(self, conn: _HeldConnection, *, reason: str) -> None:
-        """Hook for reopening the connection in the background (see prewarm)."""
+        # A socket the gateway closed after serving a reply (which some gateways
+        # do every time) is reopened at once, so the next reply is still warm.
+        # One that never served anything is throttled: a gateway that accepts
+        # and immediately closes must not turn into a connect storm.
+        self._schedule_connect(reason=reason, throttle=conn.served_segments == 0)
+
+    def _schedule_connect(self, *, reason: str, throttle: bool = False) -> None:
+        """Open the held connection in the background so the next reply finds it warm."""
+        if not self.warm_standby_enabled or self._closing:
+            return
+        if self._connect_task is not None and not self._connect_task.done():
+            return
+        now = time.perf_counter()
+        last = self._last_background_connect_at
+        if throttle and last is not None and now - last < _BACKGROUND_CONNECT_MIN_INTERVAL_S:
+            logger.debug("[TTS] background connect skipped", extra={"reason": reason})
+            return
+        self._last_background_connect_at = now
+        with contextlib.suppress(RuntimeError):
+            self._connect_task = self._spawn(self._background_connect(reason))
+
+    async def _background_connect(self, reason: str) -> None:
+        epoch = self._ws_epoch
+        try:
+            ws, timing = await self._connect_ws(timeout=_PREWARM_CONNECT_TIMEOUT_S)
+        except Exception:
+            logger.warning(
+                "[TTS] background connect failed",
+                extra={"tts_model": self._opts.model, "reason": reason},
+                exc_info=True,
+            )
+            return
+        conn = _HeldConnection(ws=ws, epoch=epoch, opened_by=reason, timing=timing)
+        installed = False
+        try:
+            async with self._ws_lock:
+                if not self._closing and self._held is None and epoch == self._ws_epoch:
+                    self._held = conn
+                    self._start_idle_reader(conn)
+                    installed = True
+        finally:
+            if not installed:
+                await _close_ws(ws, context="background_connect_discarded")
+                if not self._closing and epoch != self._ws_epoch:
+                    self._schedule_connect(reason="options_changed")
 
     async def _drop_connection(self, *, context: str) -> None:
         """Close the held socket without reopening it (this candidate is not active)."""
+        connect_task, self._connect_task = self._connect_task, None
+        if connect_task is not None and not connect_task.done():
+            await utils.aio.gracefully_cancel(connect_task)
         async with self._ws_lock:
             held = self._held
             if held is None or held.in_use:
@@ -993,103 +1039,13 @@ class TTS(tts.TTS):
         """Retire a held socket whose init predates the current options."""
         async with self._ws_lock:
             held = self._held
-            if held is None or held.in_use or held.epoch == self._standby_epoch:
+            if held is None or held.in_use or held.epoch == self._ws_epoch:
                 return
             self._held = None
             await self._stop_idle_reader(held)
         await _close_ws(held.ws, context="options_changed")
         if not self._closing:
             self._on_connection_lost(held, reason="options_changed")
-
-    def _start_standby_replenish(self, *, timeout: float) -> bool:
-        if not self.warm_standby_enabled:
-            return False
-        if self._standby is not None and self._is_ws_usable(self._standby.ws):
-            return False
-        if self._standby_task is not None and not self._standby_task.done():
-            return False
-
-        async def _open_standby() -> None:
-            async with self._standby_lock:
-                if self._standby is not None and self._is_ws_usable(self._standby.ws):
-                    return
-                epoch = self._standby_epoch
-                standby_started_at = time.perf_counter()
-                ws: aiohttp.ClientWebSocketResponse | None = None
-                try:
-                    ws = await self._connect_ws(timeout=timeout)
-                    if epoch != self._standby_epoch:
-                        # Options changed while connecting; this socket carries
-                        # the old init payload, so discard it rather than
-                        # installing a stale standby.
-                        return
-                    self._standby = _WarmStandbyConnection(
-                        ws=ws,
-                        standby_ready_ms=_elapsed_ms(standby_started_at),
-                        epoch=epoch,
-                    )
-                    ws = None
-                finally:
-                    if ws is not None:
-                        self._ws_connection_timings.pop(id(ws), None)
-                        await _close_ws(ws, context="warm_standby_replenish_cancelled")
-
-        task = asyncio.create_task(_open_standby())
-        self._standby_task = task
-
-        def _log_standby_failure(done: asyncio.Task[None]) -> None:
-            if done.cancelled():
-                return
-            exc = done.exception()
-            if exc is None:
-                return
-            logger.warning(
-                "[TTS] warm standby replenish failed",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
-
-        task.add_done_callback(_log_standby_failure)
-        return True
-
-    async def _checkout_standby(
-        self,
-    ) -> tuple[aiohttp.ClientWebSocketResponse | None, float | None, str | None]:
-        if not self.warm_standby_enabled:
-            return None, None, "disabled"
-
-        if self._standby_task is not None and self._standby_task.done():
-            with contextlib.suppress(Exception):
-                self._standby_task.result()
-            self._standby_task = None
-
-        async with self._standby_lock:
-            standby = self._standby
-            if standby is None:
-                if self._standby_task is not None and not self._standby_task.done():
-                    return None, None, "standby_pending"
-                return None, None, "standby_empty"
-            if standby.epoch != self._standby_epoch:
-                # Opened before an option change: never hand it out. Leave it
-                # for the scheduled _close_standby and open a fresh connection.
-                return None, None, "standby_stale"
-            self._standby = None
-            if not self._is_ws_usable(standby.ws):
-                return None, None, "standby_closed"
-            return standby.ws, standby.standby_ready_ms, None
-
-    async def _close_standby(self) -> None:
-        # Cancel the opener first (outside the lock, since it holds the lock
-        # while connecting) so it cannot install a socket after we clear state.
-        task = self._standby_task
-        self._standby_task = None
-        if task is not None:
-            await utils.aio.gracefully_cancel(task)
-        async with self._standby_lock:
-            standby = self._standby
-            self._standby = None
-        if standby is not None:
-            self._ws_connection_timings.pop(id(standby.ws), None)
-            await _close_ws(standby.ws, context="warm_standby_close")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -1109,36 +1065,30 @@ class TTS(tts.TTS):
             language (str): Language code.
             speed (float): Playback speed multiplier.
         """
-        invalidate_pool = False
+        invalidate_connection = False
         if is_given(voice):
             if not voice.strip():
                 raise ValueError("voice is required")
-            invalidate_pool = invalidate_pool or self._opts.voice != voice
+            invalidate_connection = invalidate_connection or self._opts.voice != voice
             self._opts.voice = voice
         if is_given(language):
-            invalidate_pool = invalidate_pool or self._opts.language != language
+            invalidate_connection = invalidate_connection or self._opts.language != language
             self._opts.language = language
         if is_given(speed):
-            invalidate_pool = invalidate_pool or self._opts.speed != speed
+            invalidate_connection = invalidate_connection or self._opts.speed != speed
             self._opts.speed = speed
 
-        # The held socket (and any standby) was initialized with the old
-        # voice/language/speed. Bump the epoch synchronously so nothing hands it
-        # out again (no await here, so no acquire can interleave), then retire
-        # the socket in the background. An in-use socket is left alone: its
-        # release sees the stale epoch and closes it.
-        if invalidate_pool:
-            self._standby_epoch += 1
+        # The held socket was initialized with the old voice/language/speed.
+        # Bump the epoch synchronously so nothing hands it out again (no await
+        # here, so no acquire can interleave), then retire the socket in the
+        # background. An in-use socket is left alone: its release sees the stale
+        # epoch and closes it.
+        if invalidate_connection:
+            self._ws_epoch += 1
             held = self._held
             if held is not None and not held.in_use:
                 with contextlib.suppress(RuntimeError):
                     self._spawn(self._invalidate_connection())
-        if invalidate_pool and (self._standby is not None or self._standby_task is not None):
-            with contextlib.suppress(RuntimeError):
-                close_task = asyncio.get_running_loop().create_task(self._close_standby())
-                self._standby_close_tasks.add(close_task)
-                close_task.add_done_callback(self._standby_close_tasks.discard)
-
         # Keep fallback candidates consistent with the primary so a later
         # failover does not synthesize with construction-time settings. A
         # candidate with an explicit per-candidate voice keeps it.
@@ -1199,11 +1149,11 @@ class TTS(tts.TTS):
             if active is not self:
                 active.prewarm()
                 return
-        if self.warm_standby_enabled:
-            self._start_standby_replenish(timeout=10.0)
-        # Without warm standby there is nothing to prewarm: every segment uses
-        # a dedicated connection because terminal protocols close the socket
-        # after the final audio.
+        # Open the one connection this instance reuses for the whole call, so
+        # the first reply does not pay connect and init. Every later reply
+        # reuses it; there is never a second socket in steady state. With
+        # warm_standby_enabled=False the first reply opens it instead.
+        self._schedule_connect(reason="prewarm")
 
     async def aclose(self) -> None:
         self._closing = True
@@ -1211,17 +1161,14 @@ class TTS(tts.TTS):
             await stream.aclose()
 
         self._streams.clear()
-        # Let any in-flight standby cleanup finish: _close_standby detaches
-        # self._standby before awaiting the socket close, so interrupting it
-        # mid-close would strand that already-detached socket open. shield keeps
-        # the close running even if aclose() itself is cancelled (a bare
-        # `await close_task` would propagate that cancel into the close). The
-        # close is bounded by WS_CLOSE_TIMEOUT_S.
-        for close_task in list(self._standby_close_tasks):
-            with contextlib.suppress(Exception):
-                await asyncio.shield(close_task)
-        self._standby_close_tasks.clear()
-        await self._close_standby()
+
+        # Settle a background connect first, so it cannot install a socket after
+        # the held one is detached below. Its own cleanup closes what it opened.
+        connect_task, self._connect_task = self._connect_task, None
+        if connect_task is not None and not connect_task.done():
+            _done, still_running = await asyncio.wait({connect_task}, timeout=WS_CLOSE_TIMEOUT_S)
+            if still_running:
+                await utils.aio.gracefully_cancel(connect_task)
 
         # Detach the held socket and stop its idle reader first: that reader
         # blocks in receive() indefinitely and must not be waited on below.
@@ -1279,7 +1226,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             # Chunked synthesis always uses a dedicated connection: it is a
             # one-shot call, not part of a call's reply stream.
-            ws = await self._tts._connect_ws(timeout=self._conn_options.timeout)
+            ws, _timing = await self._tts._connect_ws(timeout=self._conn_options.timeout)
             await ws.send_str(json.dumps({"type": "text", "text": self._input_text, "flush": True}))
 
             while True:
@@ -1386,7 +1333,6 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError() from e
         finally:
             if ws is not None:
-                self._tts._ws_connection_timings.pop(id(ws), None)
                 await _close_ws(ws, context="chunked_synthesis")
 
 
@@ -1518,14 +1464,13 @@ class SynthesizeStream(tts.SynthesizeStream):
         # has to tell the gateway to cancel.
         in_flight = False
 
-        def capture_ws_timing(ws: aiohttp.ClientWebSocketResponse) -> None:
+        def capture_ws_timing(conn: _HeldConnection) -> None:
+            # Only meaningful when this segment opened the socket: a reused one
+            # was paid for by an earlier reply or by prewarm.
             nonlocal ws_connect_ms, init_send_ms, connect_total_ms
-            timing = self._tts._ws_connection_timings.pop(id(ws), None)
-            if timing is None:
-                return
-            ws_connect_ms = timing.ws_connect_ms
-            init_send_ms = timing.init_send_ms
-            connect_total_ms = timing.connect_total_ms
+            ws_connect_ms = conn.timing.ws_connect_ms
+            init_send_ms = conn.timing.init_send_ms
+            connect_total_ms = conn.timing.connect_total_ms
 
         def mark_first_text_sent() -> None:
             nonlocal first_text_send_ms
@@ -1819,7 +1764,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 conn = await self._tts._acquire_connection(timeout=self._conn_options.timeout)
                 ws_source = "reused" if conn.reused else conn.opened_by
                 if not conn.reused:
-                    capture_ws_timing(conn.ws)
+                    capture_ws_timing(conn)
                 gateway_request_id = gateway_request_id or conn.gateway_request_id
                 gateway_session_id = gateway_session_id or conn.gateway_session_id
                 tasks = [
