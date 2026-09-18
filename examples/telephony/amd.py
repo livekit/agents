@@ -19,7 +19,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.beta.tools import EndCallTool
-from livekit.plugins import krisp
+from livekit.plugins import ai_coustics
 
 logger = logging.getLogger("amd-example")
 load_dotenv()
@@ -66,7 +66,9 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                noise_cancellation=krisp.voice_isolation_telephony(),
+                noise_cancellation=ai_coustics.audio_enhancement(
+                    model=ai_coustics.EnhancerModel.QUAIL_VF_S,
+                ),
             ),
         ),
     )
