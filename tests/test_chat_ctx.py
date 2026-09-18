@@ -998,3 +998,20 @@ def test_copy_keeps_a_call_that_has_no_output_yet():
 
     copied = ctx.copy(tools=["get_weather"])
     assert [item.type for item in copied.items] == ["function_call"]
+
+
+def test_copy_keeps_a_named_tool_output_whose_call_is_not_in_the_context():
+    """A realtime provider holds the call, so the output keeps its own name as the test."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCallOutput(call_id="c1", name="get_weather", output="ok", is_error=False))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == ["function_call_output"]
+
+
+def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
+    """With no call and no name there is nothing that proves the output eligible."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCallOutput(call_id="c1", output="ok", is_error=False))
+
+    assert ctx.copy(tools=["get_weather"]).items == []
