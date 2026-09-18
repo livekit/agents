@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/voice/events.py
+  s_7089ab350a6181::t_fbae3372990c04 314-321,328
+examples/telephony/amd.md
+  s_7089ab350a6181::t_fbae3372990c04 23-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3a28eb7b0a4be379c7d95a0cfbcf18aedd8d18c9",
+  "prompts": {},
+  "sessions": {
+    "s_7089ab350a6181": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0b3e3-1597-75f0-9e7e-4becbdaae52f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
