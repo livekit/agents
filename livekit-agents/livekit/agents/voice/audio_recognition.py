@@ -52,6 +52,13 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession
 
 MIN_LANGUAGE_DETECTION_LENGTH = 5
+
+_WITHHELD_TRANSCRIPT_MARGIN = 1.0
+"""How far a reported turn start may sit before an open ``user_turn`` and still be it.
+
+A turn start and the VAD onset for one turn differ by the detectors' disagreement, well
+under a second; a withheld transcript from an earlier turn sits whole turns behind."""
+
 _NON_SPECIFIC_LANGUAGE_CODES = frozenset({"auto", "multi"})
 # Mirrors turn_detector.base.MAX_HISTORY_TURNS for tracing
 _EOU_MAX_HISTORY_TURNS = 6
@@ -2013,15 +2020,41 @@ class AudioRecognition:
 
         No VAD or STT event opens a span for a server-detected turn, so one opened here is
         back-dated to ``turn_started_at`` and closed at once; one a VAD opened is left to it."""
-        already_open = self._user_turn_span is not None and self._user_turn_span.is_recording()
-        span = self._ensure_user_turn_span(start_time=turn_started_at)
+        open_span = (
+            self._user_turn_span
+            if self._user_turn_span is not None and self._user_turn_span.is_recording()
+            else None
+        )
+        # a provider can withhold a final transcript until its reply has finished, by which time
+        # a VAD may have opened the next turn; this transcript belongs to neither that turn nor
+        # any turn still open, so it gets a span of its own
+        detached = (
+            open_span is not None
+            and turn_started_at is not None
+            and self._user_turn_start is not None
+            and self._user_turn_start - turn_started_at > _WITHHELD_TRANSCRIPT_MARGIN
+        )
+        if detached and turn_started_at is not None:
+            span = tracer.start_span(
+                "user_turn",
+                context=self._session._root_span_context,
+                start_time=int(turn_started_at * 1_000_000_000),
+            )
+            if (room_io := self._session._room_io) and room_io.linked_participant:
+                _set_participant_attributes(span, room_io.linked_participant)
+        else:
+            span = self._ensure_user_turn_span(start_time=turn_started_at)
+
         span.set_attribute(trace_types.ATTR_USER_TRANSCRIPT, transcript)
         if confidence is not None:
             span.set_attribute(trace_types.ATTR_TRANSCRIPT_CONFIDENCE, confidence)
         if turn_started_at is None:
             # the provider gave no turn start, so the span's duration is not the speech duration
             span.set_attribute(trace_types.ATTR_USER_TURN_START_ESTIMATED, True)
-        if not already_open:
+
+        if detached:
+            span.end()
+        elif open_span is None:
             self._end_user_turn_span()
 
     def _end_user_turn_span(self) -> None:

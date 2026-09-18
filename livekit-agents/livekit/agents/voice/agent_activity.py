@@ -4248,14 +4248,21 @@ class AgentActivity(RecognitionHooks):
         if self._realtime_spans is not None and generation_ev.response_id:
             self._realtime_spans[generation_ev.response_id] = inference_span
         tool_ctx = llm.ToolContext(self.tools)
-        if inference_span.is_recording() and gen_ai_telemetry.capture_content_enabled():
-            chat_ctx = self._agent._chat_ctx
+        # enabling capture later must not emit a response with no request beside it
+        record_content = (
+            inference_span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+        )
+        if record_content:
+            system_instructions = gen_ai_telemetry.to_system_instructions(
+                self._render_realtime_instructions(self._agent.instructions)
+            )
+            if instructions:
+                # this turn's own instructions reached the provider with the response request
+                system_instructions += gen_ai_telemetry.to_system_instructions(instructions)
             gen_ai_telemetry.set_content_attributes(
                 inference_span,
-                system_instructions=gen_ai_telemetry.to_system_instructions(
-                    self._render_realtime_instructions(self._agent.instructions)
-                ),
-                input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+                system_instructions=system_instructions,
+                input_messages=gen_ai_telemetry.to_input_messages(self._agent._chat_ctx),
                 tool_definitions=gen_ai_telemetry.to_tool_definitions(tool_ctx.flatten()),
             )
 
@@ -4582,7 +4589,7 @@ class AgentActivity(RecognitionHooks):
 
         if trace_text_parts:
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, "\n".join(trace_text_parts))
-        if inference_span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+        if record_content:
             gen_ai_telemetry.set_content_attributes(
                 inference_span,
                 output_messages=gen_ai_telemetry.to_output_messages(

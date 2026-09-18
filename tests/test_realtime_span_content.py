@@ -20,6 +20,7 @@ from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel
+from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -101,7 +102,8 @@ async def test_realtime_turn_records_the_conversation(span_exporter: InMemorySpa
     inference = _span(span_exporter, "realtime_inference")
     assert inference.attributes is not None
     system = json.loads(inference.attributes[trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS])
-    assert "be concise" in json.dumps(system)
+    # both what the session was given and what this one response asked for
+    assert [p["content"] for p in system] == ["be concise", "answer in one line"]
     inputs = json.loads(inference.attributes[trace_types.ATTR_GEN_AI_INPUT_MESSAGES])
     assert [m["role"] for m in inputs], "the history the model was given is empty"
     outputs = json.loads(inference.attributes[trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES])
@@ -159,3 +161,44 @@ async def test_user_turn_start_is_marked_when_the_provider_gives_none(
     turn = _span(span_exporter, "user_turn")
     assert turn.attributes is not None
     assert turn.attributes[trace_types.ATTR_USER_TURN_START_ESTIMATED] is True
+
+
+async def test_withheld_transcript_does_not_land_on_the_next_turn(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    # a provider that holds a final transcript until its reply finished can deliver it after a
+    # VAD opened the next turn; the late transcript must not be written onto that turn
+    model = FakeRealtimeModel()
+    async with AgentSession(
+        llm=model, vad=FakeVAD(fake_user_speeches=[]), aec_warmup_duration=None
+    ) as session:
+        await session.start(Agent(instructions="be concise"))
+        recognition = session._activity._audio_recognition
+        assert recognition is not None
+
+        open_span = recognition._ensure_user_turn_span(start_time=time.time())
+        open_span.set_attribute(trace_types.ATTR_USER_TRANSCRIPT, "the later turn")
+
+        model.active_session.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id="item-1",
+                transcript="account balance",
+                is_final=True,
+                turn_started_at=time.time() - 12.0,
+            ),
+        )
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        assert open_span.attributes is not None
+        assert open_span.attributes[trace_types.ATTR_USER_TRANSCRIPT] == "the later turn"
+
+    late = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name == "user_turn"
+        and s.attributes
+        and s.attributes.get(trace_types.ATTR_USER_TRANSCRIPT) == "account balance"
+    ]
+    assert len(late) == 1, "the withheld transcript got no span of its own"
