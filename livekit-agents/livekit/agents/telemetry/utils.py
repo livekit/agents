@@ -132,6 +132,10 @@ def record_realtime_metrics(span: trace.Span, ev: RealtimeModelMetrics) -> None:
     }
     if ev.request_id:
         attrs[trace_types.ATTR_GEN_AI_RESPONSE_ID] = ev.request_id
+    if ev.reasoning_tokens is not None:
+        attrs[trace_types.ATTR_GEN_AI_USAGE_REASONING_OUTPUT_TOKENS] = ev.reasoning_tokens
+        # unofficial spelling recognised by Langfuse, kept alongside the standard one
+        attrs[trace_types.ATTR_GEN_AI_USAGE_REASONING_TOKENS] = ev.reasoning_tokens
     if cached := ev.input_token_details.cached_tokens_details:
         attrs[trace_types.ATTR_GEN_AI_USAGE_TEXT_CACHE_READ_INPUT_TOKENS] = cached.text_tokens
         attrs[trace_types.ATTR_GEN_AI_USAGE_AUDIO_CACHE_READ_INPUT_TOKENS] = cached.audio_tokens
