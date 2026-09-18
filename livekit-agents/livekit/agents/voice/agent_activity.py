@@ -3948,7 +3948,8 @@ class AgentActivity(RecognitionHooks):
                     ignore_task_switch = True
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -4651,7 +4652,8 @@ class AgentActivity(RecognitionHooks):
                     )
                     ignore_task_switch = True
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
