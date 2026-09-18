@@ -253,9 +253,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._session = session
         self._turn_hooks = _AMDTurnHooks(self)
         self._owns_llm = isinstance(llm, str)
-        self._llm = inference.LLM.from_model_string(llm) if isinstance(llm, str) else llm
+        self._llm_model = llm if isinstance(llm, str) else None
+        self._llm = None if isinstance(llm, str) else llm
         self._owns_stt = isinstance(stt, str)
-        self._stt = inference.STT.from_model_string(stt) if isinstance(stt, str) else stt
+        self._stt_model = stt if isinstance(stt, str) else None
+        self._stt = None if isinstance(stt, str) else stt
         if self._stt is not None and not self._stt.capabilities.streaming:
             raise ValueError("amd requires a streaming STT")
         self._participant_identity = participant_identity
@@ -345,7 +347,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     "amd requires a realtime model with per-response tools and "
                     "client-controlled tool replies"
                 )
-            if activity.stt is None and self._stt is None:
+            if activity.stt is None and self._stt is None and self._stt_model is None:
                 raise ValueError("amd requires session STT or AMD STT with realtime models")
         if self._session.amd:
             raise RuntimeError("amd is already active")
@@ -353,25 +355,39 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             raise ValueError("please disable session-level ivr_detection when using AMD")
 
         model = self._llm or activity.llm
-        if not isinstance(model, llm.LLM):
+        if self._llm_model is None and not isinstance(model, llm.LLM):
             raise ValueError("amd requires an LLM for classification")
 
         if self.lifecycle is not AMDLifecycle.INITIALIZED:
             raise RuntimeError("use a new AMD instance for each run")
 
+        try:
+            if self._llm_model is not None:
+                self._llm = inference.LLM.from_model_string(self._llm_model)
+            if self._stt_model is not None:
+                self._stt = inference.STT.from_model_string(self._stt_model)
+            if self._stt is not None and not self._stt.capabilities.streaming:
+                raise ValueError("amd requires a streaming STT")
+            model = self._llm or activity.llm
+            assert isinstance(model, llm.LLM)
+            self._run = _AMDResources(
+                agent=activity.agent,
+                llm=model,
+                completion=asyncio.get_running_loop().create_future(),
+                stt=AMDRacingSTT(
+                    self._stt,
+                    self._session.conn_options.stt_conn_options,
+                    race_session=activity.stt is not None,
+                ),
+                session_allow_interruptions=self._session.options.interruption["enabled"],
+                agent_allow_interruptions=activity.agent.allow_interruptions,
+            )
+        except BaseException:
+            self._lifecycle = AMDLifecycle.FINISHED
+            await self._close_resources()
+            raise
+
         self._lifecycle = AMDLifecycle.PENDING
-        self._run = _AMDResources(
-            agent=activity.agent,
-            llm=model,
-            completion=asyncio.get_running_loop().create_future(),
-            stt=AMDRacingSTT(
-                self._stt,
-                self._session.conn_options.stt_conn_options,
-                race_session=activity.stt is not None,
-            ),
-            session_allow_interruptions=self._session.options.interruption["enabled"],
-            agent_allow_interruptions=activity.agent.allow_interruptions,
-        )
         try:
             self._started_at = time.time()
             self._session._amd = self
@@ -677,8 +693,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
             for released in events:
                 _release_prediction(released.model_copy())
-        except Exception:
-            logger.exception("amd prediction handler failed")
+        except Exception as exc:
+            logger.error("amd prediction handler failed", extra={"error_type": type(exc).__name__})
             self._finish(AMDReason.INTERNAL_ERROR)
 
     async def _classify(self, turn: Turn, request: AMDRequest) -> None:
@@ -1069,19 +1085,22 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             voicemail_message_played=self._voicemail_message_played,
         )
 
+    async def _close_resources(self) -> None:
+        close_tasks = [self._run.stt.aclose()] if self._run is not None else []
+        if self._owns_stt and self._stt is not None:
+            close_tasks.append(self._stt.aclose())
+        if self._owns_llm and self._llm is not None:
+            close_tasks.append(self._llm.aclose())
+        for error in await asyncio.gather(*close_tasks, return_exceptions=True):
+            if isinstance(error, BaseException):
+                logger.warning(
+                    "amd resource cleanup failed", extra={"error_type": type(error).__name__}
+                )
+
     async def _cleanup(self) -> None:
         try:
             await aio.cancel_and_wait(*self._tasks)
-            close_tasks = [self._resources.stt.aclose()]
-            if self._owns_stt and self._stt is not None:
-                close_tasks.append(self._stt.aclose())
-            if self._owns_llm and self._llm is not None:
-                close_tasks.append(self._llm.aclose())
-            for error in await asyncio.gather(*close_tasks, return_exceptions=True):
-                if isinstance(error, BaseException):
-                    logger.warning(
-                        "amd resource cleanup failed", extra={"error_type": type(error).__name__}
-                    )
+            await self._close_resources()
         finally:
             result = self._completion()
             self._resources.completion.set_result(result)
@@ -1105,7 +1124,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     def _on_task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
-            logger.error("amd task failed", exc_info=error)
+            logger.error("amd task failed", extra={"error_type": type(error).__name__})
             self._finish(AMDReason.INTERNAL_ERROR)
 
     # endregion

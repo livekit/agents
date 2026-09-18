@@ -30,7 +30,7 @@ async def send_dtmf_events(
             code = dtmf_event_to_code(event)
             await room.local_participant.publish_dtmf(code=code, digit=event.value)
             await asyncio.sleep(DEFAULT_DTMF_PUBLISH_DELAY)
-        except Exception as e:
-            raise ToolError(f"Failed to send DTMF event: {event.value}. Error: {str(e)}") from e
+        except Exception:
+            raise ToolError("Failed to send DTMF events.") from None
 
     return f"Successfully sent DTMF events: {', '.join(events)}"

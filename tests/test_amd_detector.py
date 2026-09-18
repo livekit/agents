@@ -1585,6 +1585,27 @@ async def test_dtmf_tool_works_without_amd() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dtmf_publish_failure_does_not_expose_provider_error() -> None:
+    import traceback
+
+    from livekit.agents.beta.tools.send_dtmf import send_dtmf_events
+    from livekit.agents.beta.workflows.utils import DtmfEvent
+
+    error = RuntimeError("private provider payload")
+    publisher = AsyncMock(side_effect=error)
+    tool_session = SimpleNamespace(
+        room_io=SimpleNamespace(
+            room=SimpleNamespace(local_participant=SimpleNamespace(publish_dtmf=publisher))
+        ),
+    )
+    with pytest.raises(llm.ToolError, match="^Failed to send DTMF events\\.$") as caught:
+        await send_dtmf_events(SimpleNamespace(session=tool_session), [DtmfEvent.ONE])
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__
+    assert "private provider payload" not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [None, "error", "cancelled"])
 async def test_amd_observes_dtmf_tool_completion_from_session(
     monkeypatch: pytest.MonkeyPatch, failure: str | None
@@ -1623,7 +1644,7 @@ async def test_amd_observes_dtmf_tool_completion_from_session(
         if failure == "cancelled":
             assert not output.output
         if failure == "error":
-            assert "Failed to send DTMF event: 2." in output.output
+            assert output.output == "Failed to send DTMF events."
         commit_turn(detector, end_of_turn("Connecting you."))
         request = await classifier.request()
         calls = dtmf_calls(request.chat_ctx)
@@ -2019,19 +2040,31 @@ async def test_prediction_deadline_does_not_wait_for_llm_retries(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source", ["classification", "prediction"])
+@pytest.mark.parametrize("source", ["classification", "prediction", "listener"])
 async def test_unexpected_inference_errors_finish_with_internal_error(
-    monkeypatch: pytest.MonkeyPatch, source: str
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, source: str
 ) -> None:
+    error_type = TypeError if source == "listener" else RuntimeError
+    error = error_type("private customer content")
+    error.__cause__ = ValueError("private provider payload")
     async with running() as (detector, session, classifier, _):
         if source == "classification":
-            monkeypatch.setattr(_inference, "classify", AsyncMock(side_effect=RuntimeError("bug")))
+            monkeypatch.setattr(_inference, "classify", AsyncMock(side_effect=error))
             commit_turn(detector, end_of_turn())
         else:
-            monkeypatch.setattr(_fsm, "transition", Mock(side_effect=ValueError("bug")))
+            if source == "prediction":
+                monkeypatch.setattr(_fsm, "transition", Mock(side_effect=error))
+            else:
+                detector.on("amd_prediction", Mock(side_effect=error))
             await commit(detector, session, classifier)
             classifier.prediction(1, AMDCategory.MACHINE_IVR)
         assert (await asyncio.wait_for(detector.execute(), 2)).reason == "internal_error"
+        failures = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert failures
+        assert all(record.exc_info is None for record in failures)
+        assert all(record.error_type == error_type.__name__ for record in failures)
+        assert "private customer content" not in caplog.text
+        assert "private provider payload" not in caplog.text
 
 
 @pytest.mark.asyncio

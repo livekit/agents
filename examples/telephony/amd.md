@@ -82,8 +82,9 @@ The detection `timeout` starts when listening begins.
   A model instance or string selects an STT for AMD only.
 - Model strings use LiveKit Inference. Provider plugins can use the caller's
   own provider credentials.
-- AMD closes models it creates from strings. It does not close supplied model
-  instances. It closes its requests and STT streams in either case.
+- AMD creates models from strings on context entry, after validating the session.
+  It closes these models on completion or partial setup failure. It does not close
+  supplied model instances. It closes its requests and STT streams in either case.
 
 Auto-selection requires a LiveKit Cloud `LIVEKIT_URL` and an API key and secret.
 AMD checks `LIVEKIT_INFERENCE_API_KEY` and `LIVEKIT_INFERENCE_API_SECRET`, with

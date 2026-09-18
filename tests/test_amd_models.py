@@ -148,43 +148,58 @@ async def test_none_always_inherits_the_active_agent_models(
         await session.aclose()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("inherited", ["llm", "stt"])
-def test_model_selection_is_independent_for_each_model(
+async def test_model_selection_is_independent_for_each_model(
     cloud_credentials: None, model_factories: tuple[Mock, Mock], inherited: str
 ) -> None:
-    detector = AMD(AgentSession(), **{inherited: None})
     llm_factory, stt_factory = model_factories
-    if inherited == "llm":
-        llm_factory.assert_not_called()
-        stt_factory.assert_called_once_with("cartesia/ink-whisper")
-        assert detector._llm is None
-    else:
-        llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
-        stt_factory.assert_not_called()
-        assert detector._stt is None
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    try:
+        async with AMD(session, **{inherited: None}) as detector:
+            if inherited == "llm":
+                llm_factory.assert_not_called()
+                stt_factory.assert_called_once_with("cartesia/ink-whisper")
+                assert detector._llm is None
+            else:
+                llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
+                stt_factory.assert_not_called()
+                assert detector._stt is None
+    finally:
+        await session.aclose()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("as_strings", [False, True])
-def test_explicit_models_override_auto_selection(
+async def test_explicit_models_override_auto_selection(
     cloud_credentials: None, model_factories: tuple[Mock, Mock], as_strings: bool
 ) -> None:
     llm_factory, stt_factory = model_factories
     model, stt = llm_factory.return_value, stt_factory.return_value
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
     detector = AMD(
-        AgentSession(),
+        session,
         llm="google/gemma-4-31b-it" if as_strings else model,
         stt="cartesia/ink-2" if as_strings else stt,
     )
-    assert detector._llm is model
-    assert detector._stt is stt
-    assert detector._owns_llm == as_strings
-    assert detector._owns_stt == as_strings
-    if as_strings:
-        llm_factory.assert_called_once_with("google/gemma-4-31b-it")
-        stt_factory.assert_called_once_with("cartesia/ink-2")
-    else:
-        llm_factory.assert_not_called()
-        stt_factory.assert_not_called()
+    for factory in model_factories:
+        factory.assert_not_called()
+    try:
+        async with detector:
+            assert detector._llm is model
+            assert detector._stt is stt
+            assert detector._owns_llm == as_strings
+            assert detector._owns_stt == as_strings
+            if as_strings:
+                llm_factory.assert_called_once_with("google/gemma-4-31b-it")
+                stt_factory.assert_called_once_with("cartesia/ink-2")
+            else:
+                llm_factory.assert_not_called()
+                stt_factory.assert_not_called()
+    finally:
+        await session.aclose()
 
 
 @pytest.mark.asyncio
@@ -262,6 +277,57 @@ async def test_missing_llm_does_not_install_turn_hooks() -> None:
     try:
         with pytest.raises(ValueError, match="requires an LLM"):
             await AMD(session, llm=None, stt=None).__aenter__()
+        assert session.amd is None
+        assert session._turn_hooks is None
+        assert session._activity._authorization_allowed.is_set()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+async def test_rejected_entry_does_not_create_owned_models(
+    model_factories: tuple[Mock, Mock], started: bool
+) -> None:
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    if started:
+        await session.start(Agent(instructions="Call about an appointment."))
+        session.options.ivr_detection = True
+    detector = AMD(session, llm="google/gemini-3.1-flash-lite", stt="cartesia/ink-whisper")
+    try:
+        with pytest.raises((ValueError, RuntimeError)):
+            await detector.__aenter__()
+        for factory in model_factories:
+            factory.assert_not_called()
+        assert session.amd is None
+        assert session._turn_hooks is None
+    finally:
+        await detector.aclose()
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["factory", "nonstreaming"])
+async def test_partial_model_setup_closes_owned_models(
+    model_factories: tuple[Mock, Mock], failure: str
+) -> None:
+    llm_factory, stt_factory = model_factories
+    if failure == "factory":
+        stt_factory.side_effect = ValueError("STT setup failed")
+    else:
+        stt_factory.return_value._capabilities.streaming = False
+    session = AgentSession(llm=FakeLLM(), turn_handling={"turn_detection": "manual"})
+    await session.start(Agent(instructions="Call about an appointment."))
+    detector = AMD(session, llm="google/gemini-3.1-flash-lite", stt="cartesia/ink-whisper")
+    try:
+        with pytest.raises(ValueError):
+            await detector.__aenter__()
+        await detector.aclose()
+        llm_factory.return_value.aclose.assert_awaited_once()
+        if failure == "nonstreaming":
+            stt_factory.return_value.aclose.assert_awaited_once()
+        else:
+            stt_factory.return_value.aclose.assert_not_awaited()
         assert session.amd is None
         assert session._turn_hooks is None
         assert session._activity._authorization_allowed.is_set()
