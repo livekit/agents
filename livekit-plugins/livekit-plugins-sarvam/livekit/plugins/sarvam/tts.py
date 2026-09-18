@@ -746,7 +746,7 @@ def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
 
 def _websocket_url(opts: SarvamTTSOptions) -> str:
     """Build the TTS websocket URL, validating the stream-only limits of bulbul:v4-flash."""
-    
+
     url = opts.ws_url
     if opts.model == "bulbul:v4-flash":
         allowed = (
