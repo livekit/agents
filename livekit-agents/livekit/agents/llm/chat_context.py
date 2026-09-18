@@ -522,6 +522,13 @@ class ChatContext:
                     continue
 
         valid_tools = set(get_tool_names(tools)) if tools else set()
+        # FunctionCallOutput.name is optional, so an output is paired with its call by call_id,
+        # the pairing key used everywhere else
+        valid_call_ids = {
+            item.call_id
+            for item in self.items
+            if item.type == "function_call" and item.name in valid_tools
+        }
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -548,7 +555,7 @@ class ChatContext:
             if (
                 is_given(tools)
                 and (item.type == "function_call" or item.type == "function_call_output")
-                and item.name not in valid_tools
+                and item.call_id not in valid_call_ids
             ):
                 continue
 

@@ -964,3 +964,37 @@ def test_to_provider_format_non_object_tool_arguments(fmt: str, arguments: str):
 
     messages, _ = ctx.to_provider_format(format=fmt)
     assert _tool_call_input(fmt, messages) == {}
+
+
+def test_copy_keeps_a_tool_output_with_no_name():
+    """`FunctionCallOutput.name` is optional, so a name-less output is paired by `call_id`."""
+    ctx = ChatContext.empty()
+    ctx.insert(ChatMessage(role="user", content=["what's the weather in Paris?"]))
+    ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments='{"location":"Paris"}'))
+    ctx.insert(FunctionCallOutput(call_id="c1", output="sunny, 22C", is_error=False))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == [
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+
+
+def test_copy_drops_a_tool_output_whose_call_is_dropped():
+    """An output goes with its call, so the filter never leaves an orphan behind."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="removed_tool", arguments="{}"))
+    ctx.insert(FunctionCallOutput(call_id="c1", name="removed_tool", output="ok", is_error=False))
+    ctx.insert(FunctionCallOutput(call_id="c2", name="removed_tool", output="ok", is_error=False))
+
+    assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_copy_keeps_a_call_that_has_no_output_yet():
+    """A call whose reply is still in flight survives the filter."""
+    ctx = ChatContext.empty()
+    ctx.insert(FunctionCall(call_id="c1", name="get_weather", arguments="{}"))
+
+    copied = ctx.copy(tools=["get_weather"])
+    assert [item.type for item in copied.items] == ["function_call"]
