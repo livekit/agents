@@ -28,7 +28,7 @@ async def test_realtime_tool_call_created_at_is_stamped_at_execution_start() -> 
     async with AgentSession(llm=model) as session:
         await session.start(ToolAgent())
 
-        session.generate_reply()
+        speech_handle = session.generate_reply()
         while not model.active_session._reply_futs:
             await asyncio.sleep(0)
 
@@ -69,8 +69,12 @@ async def test_realtime_tool_call_created_at_is_stamped_at_execution_start() -> 
         )
 
         await asyncio.wait_for(executed.wait(), timeout=5)
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+        history = session.history
 
     assert fnc_call.created_at >= authorized_at
+    # the call is recorded when it starts and again with its output, so it must not double up
+    assert [item.call_id for item in history.items if item.type == "function_call"] == ["call_1"]
 
 
 async def test_realtime_records_the_call_of_a_tool_that_never_ran() -> None:
@@ -133,12 +137,14 @@ async def test_realtime_records_the_call_of_a_tool_that_never_ran() -> None:
 
         await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
         chat_ctx = session.current_agent.chat_ctx
+        history = session.history
 
-    calls = [item for item in chat_ctx.items if item.type == "function_call"]
-    outputs = [item for item in chat_ctx.items if item.type == "function_call_output"]
-    assert [item.call_id for item in calls] == ["call_1"]
-    assert [item.call_id for item in outputs] == ["call_1"]
-    assert outputs[0].is_error
+    for ctx in (chat_ctx, history):
+        calls = [item for item in ctx.items if item.type == "function_call"]
+        outputs = [item for item in ctx.items if item.type == "function_call_output"]
+        assert [item.call_id for item in calls] == ["call_1"]
+        assert [item.call_id for item in outputs] == ["call_1"]
+        assert outputs[0].is_error
 
     # the pair survives the filter the agent applies to its own history
     copied = chat_ctx.copy(tools=session.current_agent.tools)

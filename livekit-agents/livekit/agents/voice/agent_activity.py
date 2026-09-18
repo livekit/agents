@@ -4641,11 +4641,13 @@ class AgentActivity(RecognitionHooks):
 
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # add the call and its output to the chat context, as the pipeline task does. a
-                # call rejected before execution never reached the started callback
+                # record the call with its output, as the pipeline task does. a call rejected
+                # before execution never reached the started callback
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call)
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                self._session._tool_items_added([sanitized_out.fnc_call_out])
+                self._session._tool_items_added(
+                    [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
+                )
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(

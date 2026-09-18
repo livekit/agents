@@ -2260,7 +2260,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
-        self._chat_ctx.insert(items)
+        for item in items:
+            # a call recorded when its execution started must not be inserted a second time
+            self._chat_ctx._upsert_item(item)
 
     def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
         if (
