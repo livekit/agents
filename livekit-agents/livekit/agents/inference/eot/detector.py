@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Any
 
@@ -20,6 +21,7 @@ from ...utils import is_given
 from .._utils import get_default_inference_url
 from .base import (
     DEFAULT_SAMPLE_RATE,
+    MIN_SILENCE_DURATION_MS,
     TurnDetectorOptions,
     _BaseStreamingTurnDetector,
     _BaseStreamingTurnDetectorStream,
@@ -45,6 +47,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
         local_fallback: bool = True,
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        min_silence_duration: float = MIN_SILENCE_DURATION_MS / 1000,
     ) -> None:
         """
         Args:
@@ -108,11 +111,15 @@ class TurnDetector(_BaseStreamingTurnDetector):
                     conn_options=conn_options,
                 )
 
+        if not (math.isfinite(min_silence_duration) and min_silence_duration > 0):
+            raise ValueError("min_silence_duration must be positive")
+
         opts = TurnDetectorOptions(
             sample_rate=sample_rate,
             thresholds=ThresholdOptions(resolved_model, unlikely_threshold, backchannel_threshold),
+            min_silence_duration=min_silence_duration,
         )
-        super().__init__(opts=opts)
+        super().__init__(opts=opts, min_silence_duration=min_silence_duration)
 
         self._model: TurnDetectorModels = resolved_model
         self._cloud_opts = cloud_opts
@@ -140,6 +147,7 @@ class TurnDetector(_BaseStreamingTurnDetector):
             "provider": self.provider,
             "sample_rate": self._opts.sample_rate,
             "local_fallback": self._local_fallback,
+            "min_silence_duration": self.min_silence_duration,
         }
         thresholds = self._opts.thresholds
         if is_given(thresholds.overrides):
