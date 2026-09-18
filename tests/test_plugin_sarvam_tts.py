@@ -204,6 +204,32 @@ def test_update_options_invalidates_the_pool_only_for_handshake_fields() -> None
     assert invalidated == [True, True]
 
 
+def test_stream_config_follows_the_socket_it_was_handed() -> None:
+    """A stream created before update_options must not send its old model's config."""
+    tts = _make_tts(model="bulbul:v3", speaker="shubh", temperature=1.5)
+
+    stream = object.__new__(sarvam_tts.SynthesizeStream)
+    stream._tts = tts
+    stream._opts = replace(tts._opts)
+
+    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical", temperature=0.6)
+
+    # stand in for the socket the pool would hand over after the switch
+    ws = object()
+    tts._ws_handshake_opts[id(ws)] = replace(tts._opts)
+    stream._adopt_handshake_opts(ws)  # type: ignore[arg-type]
+
+    assert (stream._opts.model, stream._opts.speaker) == ("bulbul:v4-flash", "ritu_hi_medical")
+    # the emitter was already initialized from these, so they stay snapshotted
+    assert stream._opts.speech_sample_rate == tts._opts.speech_sample_rate
+    assert stream._opts.output_audio_codec == tts._opts.output_audio_codec
+
+    # an untracked socket leaves the snapshot alone rather than guessing
+    before = replace(stream._opts)
+    stream._adopt_handshake_opts(object())  # type: ignore[arg-type]
+    assert stream._opts == before
+
+
 def _error_stream() -> sarvam_tts.SynthesizeStream:
     """A SynthesizeStream carrying only the attributes `_handle_error_message` reads.
 

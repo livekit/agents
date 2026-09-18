@@ -933,6 +933,11 @@ class TTS(tts.TTS):
         # the connection sits idle in the pool. Sarvam closes idle connections
         # after 60 s; pinging every 30 s keeps them alive for reuse.
         self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
+        # Maps id(ws) -> the options that socket was handshaken with. The pool
+        # builds sockets from whatever options this TTS holds at connect time,
+        # while each stream carries its own snapshot, so a stream reads these
+        # to keep its config frame from contradicting the socket it was handed.
+        self._ws_handshake_opts: dict[int, SarvamTTSOptions] = {}
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -978,10 +983,12 @@ class TTS(tts.TTS):
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
         self._start_keepalive(ws)
+        self._ws_handshake_opts[id(ws)] = replace(self._opts)
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._stop_keepalive(ws)
+        self._ws_handshake_opts.pop(id(ws), None)
         await ws.close()
 
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -1394,6 +1401,28 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
             output_emitter.end_input()
 
+    def _adopt_handshake_opts(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Align this stream's model-coupled options with the socket it was handed.
+
+        The pool builds sockets from the TTS's options at connect time, so a stream
+        constructed before ``update_options`` would otherwise send a config frame for
+        the old model over a socket handshaken for the new one. ``model`` and
+        ``send_completion_event`` are pinned in that handshake, and the speaker and
+        tuning bounds are only valid for that model, so all of them come from the
+        socket. The language, sample rate and codec ride in the config frame rather
+        than the handshake, and the output emitter was already initialized from them,
+        so those stay as this stream snapshotted them.
+        """
+        handshake = self._tts._ws_handshake_opts.get(id(ws))
+        if handshake is None:
+            return
+        self._opts = replace(
+            handshake,
+            target_language_code=self._opts.target_language_code,
+            speech_sample_rate=self._opts.speech_sample_rate,
+            output_audio_codec=self._opts.output_audio_codec,
+        )
+
     async def _run_ws(
         self, word_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
     ) -> None:
@@ -1569,6 +1598,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # that returned this connection to the pool.
                 await self._tts._stop_keepalive(ws)
                 keepalive_should_resume = False
+                self._adopt_handshake_opts(ws)
 
                 try:
                     self._acquire_time = self._tts._pool.last_acquire_time
