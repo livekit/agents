@@ -14,9 +14,14 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, TurnHandlingOptions
+from livekit.agents import Agent, AgentSession, LanguageCode, TurnHandlingOptions
 from livekit.agents.inference import OverlappingSpeechEvent
-from livekit.agents.voice.agent_activity import AgentActivity, _PausedSpeechInfo
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
+from livekit.agents.voice.agent_activity import (
+    _FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR,
+    AgentActivity,
+    _PausedSpeechInfo,
+)
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _EndOfTurnInfo,
@@ -393,3 +398,260 @@ async def test_resume_is_immediate_when_no_turn_decision_is_open(
 
     assert [name for name, _ in events] == ["resume"]
     assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+def _stt_style_session() -> AgentSession:
+    """Realtime LLM with user_transcription off so STT interim hooks run (VAD present)."""
+    return AgentSession(
+        llm=FakeRealtimeModel(
+            capabilities=fake_capabilities(turn_detection=False, user_transcription=False)
+        ),
+        vad=FakeVAD(fake_user_speeches=[]),
+        turn_handling=TurnHandlingOptions(
+            turn_detection="vad",
+            interruption={"mode": "adaptive"},
+        ),
+    )
+
+
+def _interim_event(text: str = "hello there") -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode("en"))],
+    )
+
+
+def _preflight_event(text: str = "hello there") -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode("en"))],
+    )
+
+
+async def test_interim_transcript_does_not_clear_timer_while_speaking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Noise produces interims too, so an interim must never cancel the resume outright.
+    # While VAD reports speech the timer is already cancelled by START_OF_SPEECH.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    activity.on_end_of_speech(None)
+    t0 = time.time()
+    assert activity._false_interruption_timer is not None
+
+    activity.on_interim_transcript(_interim_event(), speaking=True)
+    assert activity._false_interruption_timer is not None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_interim_transcript_rearms_timer_when_vad_reports_no_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The #7198 window: no VAD speech at all, but STT is still producing the turn's text.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    activity.on_end_of_speech(None)
+    t0 = time.time()
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(), speaking=False)
+    assert activity._false_interruption_timer is not None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    # Re-armed from the interim, so the resume lands later than the original timeout.
+    assert events[0][1] - t0 > FALSE_INTERRUPTION_TIMEOUT * 0.9
+
+
+async def test_preflight_transcript_rearms_timer_when_vad_reports_no_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # AudioRecognition routes PREFLIGHT_TRANSCRIPT through on_interim_transcript.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    activity.on_end_of_speech(None)
+    t0 = time.time()
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_preflight_event(), speaking=False)
+    assert activity._false_interruption_timer is not None
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    assert events[0][1] - t0 > FALSE_INTERRUPTION_TIMEOUT * 0.9
+
+
+async def test_empty_interim_does_not_rearm_timer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    activity.on_end_of_speech(None)
+    t0 = time.time()
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(text=""), speaking=False)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    # Blank text is not evidence of a live turn, so the original deadline stands.
+    assert events[0][1] - t0 == pytest.approx(FALSE_INTERRUPTION_TIMEOUT, abs=0.1)
+
+
+async def test_interim_transcript_rearm_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stalled STT can emit interims for a whole call without ever sending an end of turn
+    # (Deepgram Flux, see pipecat-ai/pipecat#5735). Re-arming on interims has to stop
+    # somewhere, otherwise the pause stays open until the caller hangs up.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+
+    cap = FALSE_INTERRUPTION_TIMEOUT * _FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR
+    # keep feeding interims well past the cap; an unbounded re-arm would never resume
+    for _ in range(60):
+        await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+        if activity._paused_speech is None:
+            break
+        activity.on_interim_transcript(_interim_event(), speaking=False)
+
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    resumed_at = events[0][1] - t0
+    # it did defer, but never past the cap
+    assert resumed_at > FALSE_INTERRUPTION_TIMEOUT
+    assert resumed_at <= FALSE_INTERRUPTION_TIMEOUT + cap + 0.1
+
+
+async def test_clustered_interims_do_not_burn_the_deferral_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An STT revises one transcript in bursts, so several interims can land on the same
+    # deadline. Charging a whole timeout for each would spend the budget while barely moving
+    # the resume, and a later interim would be ignored mid-turn.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, _ = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    t0 = time.time()
+    activity.on_end_of_speech(None)
+
+    for _ in range(5):
+        activity.on_interim_transcript(_interim_event(), speaking=False)
+    assert activity._false_interruption_deferred == pytest.approx(0.0)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(), speaking=False)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume"]
+    # the later interim still had budget left, so the resume slipped past the plain timeout
+    assert events[0][1] - t0 > FALSE_INTERRUPTION_TIMEOUT * 1.1
+
+
+async def test_deferral_budget_resets_for_the_next_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cap is per pause: a pause that spent its budget must not leave the next one unable
+    # to defer at all.
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+
+    session = _stt_style_session()
+    session.options.interruption["resume_false_interruption"] = True
+    session.options.interruption["false_interruption_timeout"] = FALSE_INTERRUPTION_TIMEOUT
+    activity, handle = _paused_activity(session)
+
+    events: list[tuple[str, float]] = []
+    session.on("agent_false_interruption", lambda _: events.append(("resume", time.time())))
+
+    cap = FALSE_INTERRUPTION_TIMEOUT * _FALSE_INTERRUPTION_MAX_DEFERRAL_FACTOR
+    activity.on_end_of_speech(None)
+    # spend the whole budget on the first pause
+    for _ in range(10):
+        if activity._false_interruption_deferred >= cap:
+            break
+        await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+        activity.on_interim_transcript(_interim_event(), speaking=False)
+    assert activity._false_interruption_deferred == pytest.approx(cap)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    assert activity._paused_speech is None
+
+    # second pause, same activity
+    activity._current_speech = handle
+    activity._paused_speech = _PausedSpeechInfo(
+        handle=handle, agent_state="speaking", timeout=FALSE_INTERRUPTION_TIMEOUT
+    )
+    t1 = time.time()
+    activity.on_end_of_speech(None)
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT * 0.5)
+    activity.on_interim_transcript(_interim_event(), speaking=False)
+
+    await asyncio.sleep(FALSE_INTERRUPTION_TIMEOUT + 0.2)
+    await session.aclose()
+
+    assert [name for name, _ in events] == ["resume", "resume"]
+    # the fresh pause got a fresh budget, so the interim still pushed the resume out
+    assert events[1][1] - t1 > FALSE_INTERRUPTION_TIMEOUT * 0.9
