@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 import httpx
@@ -21,7 +23,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given, shortuuid
 from mistralai.client import Mistral
-from mistralai.client.errors import HTTPValidationError, SDKError
+from mistralai.client.errors import HTTPValidationError, MistralError, SDKError
 from mistralai.client.models import (
     CompletionArgs,
     ConversationEvents,
@@ -35,6 +37,7 @@ from mistralai.client.models import (
     ToolExecutionDoneEvent,
     ToolExecutionStartedEvent,
 )
+from mistralai.client.types import UNSET
 
 from .log import logger
 from .models import ChatModels
@@ -43,9 +46,26 @@ from .tools import MistralTool
 DEFAULT_MODEL: ChatModels = "ministral-8b-latest"
 
 
+class ApiMode(str, Enum):
+    """Selects which Mistral API to use for chat requests.
+
+    ``CONVERSATIONS`` uses the Conversations API (``/v1/conversations``),
+    which supports both function tools and provider tools (web search,
+    document library, code interpreter, connectors).
+
+    ``CHAT_COMPLETIONS`` uses the Chat Completions API
+    (``/v1/chat/completions``), which only supports function tools but
+    has lower latency.
+    """
+
+    CONVERSATIONS = "conversations"
+    CHAT_COMPLETIONS = "chat_completions"
+
+
 @dataclass
 class _LLMOptions:
     model: ChatModels | str
+    api_mode: ApiMode
     max_completion_tokens: int | None
     temperature: float | None
     top_p: float | None
@@ -72,6 +92,7 @@ class LLM(llm.LLM):
         client: Mistral | None = None,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
@@ -80,27 +101,35 @@ class LLM(llm.LLM):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
     ) -> None:
-        """
-        Create a new instance of MistralAI LLM.
-
-        Uses the Mistral Conversations API, which supports both function tools
-        and provider tools (web search, document library, code interpreter).
+        """Create a new instance of MistralAI LLM.
 
         Args:
             client: Optional pre-configured MistralAI client instance.
-            api_key: Your Mistral AI API key. If not provided, will use the MISTRAL_API_KEY environment variable.
-            model: The Mistral AI model to use, default is "ministral-8b-latest".
+            api_key: Your Mistral AI API key.  If not provided, will use
+                the ``MISTRAL_API_KEY`` environment variable.
+            model: The Mistral AI model to use, default is
+                ``"ministral-8b-latest"``.
+            api_mode: Which Mistral API to use.
+                ``ApiMode.CONVERSATIONS`` (default) uses the Conversations
+                API and supports both function tools and provider tools.
+                ``ApiMode.CHAT_COMPLETIONS`` uses the Chat Completions API
+                which only supports function tools but has lower latency.
             temperature: The temperature to use the LLM with.
             top_p: Nucleus sampling parameter.
-            presence_penalty: Penalize new tokens based on their presence in the text so far.
-            frequency_penalty: Penalize new tokens based on their frequency in the text so far.
+            presence_penalty: Penalize new tokens based on their presence
+                in the text so far.
+            frequency_penalty: Penalize new tokens based on their
+                frequency in the text so far.
             random_seed: Random seed for reproducibility.
-            tool_choice: Default tool choice strategy ("auto", "required", "none").
-            max_completion_tokens: The max. number of tokens the LLM can output.
+            tool_choice: Default tool choice strategy
+                (``"auto"``, ``"required"``, ``"none"``).
+            max_completion_tokens: The max. number of tokens the LLM can
+                output.
         """
         super().__init__()
         self._opts = _LLMOptions(
             model=model if is_given(model) else DEFAULT_MODEL,
+            api_mode=api_mode if is_given(api_mode) else ApiMode.CONVERSATIONS,
             temperature=temperature if is_given(temperature) else None,
             top_p=top_p if is_given(top_p) else None,
             presence_penalty=presence_penalty if is_given(presence_penalty) else None,
@@ -132,6 +161,7 @@ class LLM(llm.LLM):
         self,
         *,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -142,6 +172,8 @@ class LLM(llm.LLM):
     ) -> None:
         if is_given(model):
             self._opts.model = model
+        if is_given(api_mode):
+            self._opts.api_mode = api_mode
         if is_given(max_completion_tokens):
             self._opts.max_completion_tokens = max_completion_tokens
         if is_given(temperature):
@@ -198,6 +230,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
+            api_mode=self._opts.api_mode,
             client=self._client,
             chat_ctx=chat_ctx,
             tools=tools or [],
@@ -212,6 +245,7 @@ class LLMStream(llm.LLMStream):
         llm_v: LLM,
         *,
         model: str | ChatModels,
+        api_mode: ApiMode,
         client: Mistral,
         chat_ctx: ChatContext,
         tools: list[llm.Tool],
@@ -220,6 +254,7 @@ class LLMStream(llm.LLMStream):
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
+        self._api_mode = api_mode
         self._client = client
         self._extra_kwargs = extra_kwargs
         self._tool_ctx = llm.ToolContext(tools)
@@ -227,6 +262,12 @@ class LLMStream(llm.LLMStream):
         self._provider_tool_args: dict[str, str] = {}
 
     async def _run(self) -> None:
+        if self._api_mode == ApiMode.CHAT_COMPLETIONS:
+            await self._run_chat_completions()
+        else:
+            await self._run_conversations()
+
+    async def _run_conversations(self) -> None:
         self._emitted_tool_calls = set()
         self._provider_tool_args = {}
         retryable = True
@@ -281,6 +322,103 @@ class LLMStream(llm.LLMStream):
                 request_id=e.headers.get("x-request-id"),
                 body=e.body,
                 retryable=retryable,
+            ) from e
+        except Exception as e:
+            raise APIConnectionError(retryable=retryable) from e
+
+    async def _run_chat_completions(self) -> None:
+        if any(isinstance(t, MistralTool) for t in self._tool_ctx.provider_tools):
+            raise ValueError(
+                "Provider tools (WebSearch, DocumentLibrary, CodeInterpreter, "
+                "Connector) are not supported with api_mode='chat_completions'. "
+                "Use api_mode='conversations' or remove provider tools."
+            )
+
+        retryable = True
+
+        try:
+            messages, _ = self._chat_ctx.to_provider_format(format="openai")
+            tools_list = self._tool_ctx.parse_function_tools("openai", strict=True)
+
+            extra_kwargs = dict(self._extra_kwargs)
+            completion_args = extra_kwargs.pop("completion_args", None)
+
+            call_kwargs: dict[str, Any] = {}
+            if completion_args is not None:
+                for field in (
+                    "max_tokens",
+                    "temperature",
+                    "top_p",
+                    "presence_penalty",
+                    "frequency_penalty",
+                    "random_seed",
+                    "tool_choice",
+                ):
+                    val = getattr(completion_args, field, None)
+                    if val is not None:
+                        call_kwargs[field] = val
+
+            if tools_list:
+                call_kwargs["tools"] = tools_list
+
+            call_kwargs.update(extra_kwargs)
+
+            async_response = await self._client.chat.stream_async(
+                model=self._model,
+                messages=messages,
+                timeout_ms=int(self._conn_options.timeout * 1000),
+                **call_kwargs,
+            )
+
+            pending_fnc_calls: dict[int, _PendingFunctionCall] = {}
+
+            async for ev in async_response:
+                chunk = ev.data
+                for choice in chunk.choices:
+                    chat_chunks = _parse_completion_delta(
+                        chunk_id=chunk.id,
+                        delta=choice.delta,
+                        finish_reason=choice.finish_reason,
+                        pending_fnc_calls=pending_fnc_calls,
+                    )
+                    for cc in chat_chunks:
+                        retryable = False
+                        self._event_ch.send_nowait(cc)
+
+                if chunk.usage is not None:
+                    self._event_ch.send_nowait(
+                        ChatChunk(
+                            id=chunk.id,
+                            usage=llm.CompletionUsage(
+                                completion_tokens=chunk.usage.completion_tokens or 0,
+                                prompt_tokens=chunk.usage.prompt_tokens or 0,
+                                total_tokens=chunk.usage.total_tokens or 0,
+                            ),
+                        )
+                    )
+
+            for cc in _flush_pending_by_index(pending_fnc_calls):
+                self._event_ch.send_nowait(cc)
+
+        except APITimeoutError:
+            raise APITimeoutError(retryable=retryable) from None
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError(retryable=retryable) from e
+        except APIStatusError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.request_id,
+                body=e.body,
+                retryable=retryable,
+            ) from None
+        except MistralError as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=None,
+                body=e.body,
+                retryable=retryable and e.status_code >= 500,
             ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
@@ -385,3 +523,77 @@ class LLMStream(llm.LLMStream):
             )
 
         return chunks
+
+
+def _parse_completion_delta(
+    *,
+    chunk_id: str,
+    delta: Any,
+    finish_reason: str | None,
+    pending_fnc_calls: dict[int, _PendingFunctionCall],
+) -> list[ChatChunk]:
+    chunks: list[ChatChunk] = []
+
+    content = delta.content
+    if content is not UNSET and content is not None:
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "".join(c.text for c in content if isinstance(c, TextChunk))
+        else:
+            text = ""
+        if text:
+            chunks.append(
+                ChatChunk(
+                    id=chunk_id,
+                    delta=llm.ChoiceDelta(content=text, role="assistant"),
+                )
+            )
+
+    tool_calls = delta.tool_calls
+    if tool_calls is not UNSET and tool_calls is not None:
+        for tc in tool_calls:
+            if tc.index is not None:
+                call_index = tc.index
+            else:
+                call_index = max(pending_fnc_calls.keys(), default=-1) + 1
+            call_id = tc.id if tc.id not in (None, "null") else ""
+            name = tc.function.name if tc.function else ""
+            args = tc.function.arguments if tc.function else ""
+            if isinstance(args, dict):
+                args = json.dumps(args)
+
+            if call_index not in pending_fnc_calls:
+                pending_fnc_calls[call_index] = _PendingFunctionCall(
+                    id=chunk_id,
+                    name=name,
+                    tool_call_id=call_id,
+                    arguments=args,
+                )
+            else:
+                if name:
+                    pending_fnc_calls[call_index].name = name
+                pending_fnc_calls[call_index].arguments += args
+
+    if finish_reason == "tool_calls":
+        chunks.extend(_flush_pending_by_index(pending_fnc_calls))
+
+    return chunks
+
+
+def _flush_pending_by_index(
+    pending: dict[int, _PendingFunctionCall],
+) -> list[ChatChunk]:
+    chunks: list[ChatChunk] = []
+    for fnc in pending.values():
+        delta = llm.ChoiceDelta(role="assistant")
+        delta.tool_calls.append(
+            llm.FunctionToolCall(
+                name=fnc.name,
+                arguments=fnc.arguments,
+                call_id=fnc.tool_call_id,
+            )
+        )
+        chunks.append(ChatChunk(id=fnc.id, delta=delta))
+    pending.clear()
+    return chunks
