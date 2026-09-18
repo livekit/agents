@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from typing import Any, get_args
 
@@ -297,9 +296,9 @@ async def test_error_frame_status_code_drives_retryability(
 
     assert exc.value.status_code == status_code
     assert exc.value.retryable is retryable
-    # the raw Sarvam frame is preserved verbatim for debugging
-    assert exc.value.body == resp
-    assert json.dumps(frame, ensure_ascii=False, separators=(",", ":")) in exc.value.message
+    # __str__ renders message and body, and the framework logs it with %s when it
+    # retries, so no provider-written text may be reachable through it
+    assert frame["message"] not in str(exc.value)
 
 
 async def test_error_frame_keeps_provider_text_in_redactable_fields(
@@ -309,7 +308,7 @@ async def test_error_frame_keeps_provider_text_in_redactable_fields(
     resp = {"type": "error", "data": {"code": 422, "message": f"cannot synthesize: {speech}"}}
 
     with caplog.at_level("ERROR", logger=sarvam_tts.logger.name):
-        with pytest.raises(APIStatusError):
+        with pytest.raises(APIStatusError) as exc:
             await _error_stream()._handle_error_message(resp)
 
     record = next(r for r in caplog.records if r.name == sarvam_tts.logger.name)
@@ -317,6 +316,10 @@ async def test_error_frame_keeps_provider_text_in_redactable_fields(
     assert speech not in record.getMessage()
     assert speech in record.__dict__["lk.pii.error_message"]
     assert "error_message" not in record.__dict__
+    # this record is the only place the frame survives in full, so it has to
+    assert record.__dict__["lk.pii.raw_message"] == resp
+    # the exception the framework logs with %s carries none of it
+    assert speech not in str(exc.value)
 
 
 async def test_error_frame_forwards_request_id() -> None:

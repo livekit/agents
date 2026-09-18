@@ -1744,10 +1744,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         error_data = resp.get("data", {})
         error_msg = error_data.get("message", "Unknown error")
         error_code = _error_status_code(error_data)
-        raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
 
         # The provider decides what goes in these fields, so they are tagged for
         # redaction and kept out of the log body, which collectors cannot redact.
+        # This is the one place the frame is recorded in full.
         logger.error(
             "TTS API error",
             extra={
@@ -1761,11 +1761,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         # APIStatusError derives retryability from the status code (4xx permanent
         # except 408/429/499, 5xx transient), so forwarding Sarvam's own code is
         # all that is needed -- an unrecognized frame stays retryable via -1.
+        #
+        # Nothing provider-written goes on the exception: its __str__ renders both
+        # message and body, and the framework logs that with %s when it retries,
+        # where no collector can redact it. status_code and request_id carry the
+        # non-PII identifiers a caller needs to correlate against Sarvam's logs.
         raise APIStatusError(
-            message=f"TTS API error from Sarvam: {raw_error_message}",
+            message=f"TTS API error from Sarvam (status {error_code})",
             status_code=error_code,
             request_id=error_data.get("request_id") if isinstance(error_data, dict) else None,
-            body=resp,
         )
 
     async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
