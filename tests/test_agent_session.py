@@ -176,6 +176,40 @@ async def test_latency_budget_uses_hook_speech_first_output(
         assert events[0].latency == pytest.approx(0.6, abs=0.01)
 
 
+@pytest.mark.parametrize(("budget", "expected_events"), [(0.7, 1), (1.2, 0)])
+async def test_latency_budget_uses_hook_generated_reply_first_output(
+    budget: float, expected_events: int
+) -> None:
+    class HookReplyAgent(MyAgent):
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.generate_reply(instructions="instructions:answer immediately")
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    actions.add_llm("Hook reply", input="instructions:answer immediately", ttft=0.1)
+    actions.add_tts(0.5, ttfb=0.2)
+    actions.add_llm("Automatic reply", input="Hello", ttft=0.1)
+    actions.add_tts(0.5, ttfb=0.2)
+
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": budget})
+    events: list[LatencyBudgetEvent] = []
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("latency_budget", events.append)
+    session.on("speech_created", speeches.append)
+
+    agent = HookReplyAgent(turn_handling={"preemptive_generation": {"enabled": False}})
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    hook_speech = next(ev for ev in speeches if ev.user_initiated)
+    assert len(events) == expected_events
+    if expected_events:
+        assert events[0].speech_id == hook_speech.speech_handle.id
+        assert events[0].latency == pytest.approx(1.0, abs=0.01)
+
+
 def test_realtime_user_input_transcription_preserves_item_id() -> None:
     captured_events: list[UserInputTranscribedEvent] = []
 

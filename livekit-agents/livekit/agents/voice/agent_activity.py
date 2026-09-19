@@ -1840,6 +1840,9 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="generate_reply"),
         )
         user_metrics = self._take_on_enter_user_metrics()
+        if (completed_data := _UserTurnCompletedContextVar.get(None)) is not None:
+            if completed_data.activity is self:
+                user_metrics = completed_data.metrics
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._create_speech_task(
