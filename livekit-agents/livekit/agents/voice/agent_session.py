@@ -1295,7 +1295,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
-            # teardown as one bar under agent_session; drain and on_exit nest inside it
+            # the whole close as one bar under agent_session: activity teardown, the close
+            # event's handlers, and room io. What any of it emits (a handler's spans, a stall
+            # in a plugin's teardown) nests here, and agent_session ends only after all of it
             close_span = tracer.start_span(
                 "session_close",
                 attributes={
@@ -1308,45 +1310,45 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
                 await self._teardown_activity(reason=reason, drain=drain)
+
+                self._started = False
+
+                self.emit("close", CloseEvent(error=error, reason=reason))
+
+                if self._session_host:
+                    await self._session_host.aclose()
+                    self._session_host = None
+
+                # close room io after close event is emitted
+                if self._room_io:
+                    await self._room_io.aclose()
+                    self._room_io = None
             finally:
+                # the session is closed whatever the teardown raised
+                self._started = False
+                self._cancel_user_away_timer()
+                self._user_state = "listening"
+                self._agent_state = "initializing"
+                self._stt_error_counts = 0
+                self._llm_error_counts = 0
+                self._tts_error_counts = 0
+
+                if self._global_run_state and not self._global_run_state.done():
+                    self._global_run_state._done_fut.set_exception(
+                        RuntimeError(f"session closed: {error}" if error else "session closed")
+                    )
+
                 close_span.end()
-                # the rest of the teardown (close event, room io) is under agent_session
                 otel_context.detach(close_token)
-
-            if self._session_span:
-                self._session_span.end()
-                self._session_span = None
-
-            self._started = False
-
-            self.emit("close", CloseEvent(error=error, reason=reason))
-
-            self._cancel_user_away_timer()
-            self._user_state = "listening"
-            self._agent_state = "initializing"
-            self._stt_error_counts = 0
-            self._llm_error_counts = 0
-            self._tts_error_counts = 0
-            self._root_span_context = None
-
-            if self._global_run_state and not self._global_run_state.done():
-                self._global_run_state._done_fut.set_exception(
-                    RuntimeError(f"session closed: {error}" if error else "session closed")
-                )
-
-            if self._session_host:
-                await self._session_host.aclose()
-                self._session_host = None
-
-            # close room io after close event is emitted
-            if self._room_io:
-                await self._room_io.aclose()
-                self._room_io = None
+                if self._session_span:
+                    self._session_span.end()
+                    self._session_span = None
+                self._root_span_context = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
     async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
-        """The part of closing that runs under the ``session_close`` span."""
+        """Stop the activity and the models; the first step of closing."""
         self._closing = True
         self._cancel_user_away_timer()
         self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
