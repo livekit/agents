@@ -408,6 +408,9 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        # every call_id dispatched on this connection: the service can redeliver a completed call
+        # after its result has already been sent
+        self._backend_dispatched_calls: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -555,6 +558,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._backend_dispatched_calls.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -869,8 +873,9 @@ class GPTLiveSession(
                     extra={"call_id": item.call_id, "function": item.name, "delegation_id": d_id},
                 )
                 calls = self._backend_open_calls
-            if item.call_id in calls:
+            if item.call_id in self._backend_dispatched_calls:
                 return
+            self._backend_dispatched_calls.add(item.call_id)
             calls.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
