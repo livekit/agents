@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections import deque
 from typing import Any, Literal
 
 import aiohttp
@@ -158,7 +159,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._speaking_active: bool = False
         self._speaking_until: float = 0.0
         self._echo_gate_threshold: float = realtime_model._echo_gate_threshold
+        self._pending_response_create_ids: deque[str] = deque()
         self.on("openai_server_event_received", self._on_stepfun_server_event)
+        self.on("session_reconnected", lambda _: self._pending_response_create_ids.clear())
+
+    async def aclose(self) -> None:
+        self._pending_response_create_ids.clear()
+        await super().aclose()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         """Create WebSocket connection using standard Authorization Bearer header for StepFun."""
@@ -205,7 +212,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             # Pre-emptively anchor untracked item to tail to avoid noisy warning
             event.previous_item_id = self._remote_chat_ctx.tail_id
 
-        if event.item.id and event.item.id not in self._item_create_future and self._item_create_future:
+        if (
+            event.item.id
+            and event.item.id not in self._item_create_future
+            and self._item_create_future
+        ):
             # StepFun assigns server UUIDs instead of preserving client item.id; map earliest pending future
             earliest_key = next(iter(self._item_create_future.keys()))
             self._item_create_future[event.item.id] = self._item_create_future.pop(earliest_key)
@@ -263,47 +274,76 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self, chat_ctx: llm.ChatContext
     ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
         """Create chat context update events, excluding client-created function calls and normalizing root."""
-        events = super()._create_update_chat_ctx_events(chat_ctx)
+        remote_ctx = self._remote_chat_ctx.to_chat_ctx()
+        remote_ids = {item.id for item in remote_ctx.items}
+
+        # Filter out client-side function_call items not already on the server before computing diff
+        # so that subsequent items anchor to their valid predecessors.
+        sanitized_items = [
+            item
+            for item in chat_ctx.items
+            if not (item.type == "function_call" and item.id not in remote_ids)
+        ]
+        sanitized_chat_ctx = llm.ChatContext(sanitized_items)
+
+        events = super()._create_update_chat_ctx_events(sanitized_chat_ctx)
         filtered_events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
+        id_remap: dict[str, str | None] = {}
+
         for ev in events:
             if isinstance(ev, ConversationItemCreateEvent):
+                item_type = getattr(ev.item, "type", None)
+                item_id = getattr(ev.item, "id", None)
                 # StepFun rejects client-created function_call items (item.type must be message or function_call_output).
-                # Exclude them before futures are registered in update_chat_ctx to avoid 5s timeout.
-                if getattr(ev.item, "type", None) == "function_call":
+                if item_type == "function_call":
+                    if item_id:
+                        id_remap[item_id] = ev.previous_item_id
                     continue
+
+                # Re-anchor if previous_item_id was skipped or remapped
+                prev_id = ev.previous_item_id
+                visited: set[str] = set()
+                while prev_id in id_remap and prev_id not in visited:
+                    visited.add(prev_id)
+                    prev_id = id_remap[prev_id]
+                ev.previous_item_id = prev_id
+
                 # StepFun rejects 'previous_item_id: root'; omit it when item is at root
                 if ev.previous_item_id == "root":
                     ev.previous_item_id = None
+
             filtered_events.append(ev)
         return filtered_events
 
     def send_event(self, event: Any) -> None:
+        # Track response.create event IDs in FIFO queue so late response.created without metadata
+        # can be correlated back to its client_event_id for proper cancellation / discard handling.
+        event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
+        if event_type == "response.create":
+            event_id = (
+                event.get("event_id")
+                if isinstance(event, dict)
+                else getattr(event, "event_id", None)
+            )
+            if event_id:
+                self._pending_response_create_ids.append(event_id)
+
         # StepFun API rejects client conversation.item.create with type="function_call"
         # (item.type must be message or function_call_output).
-        if isinstance(event, dict):
-            if event.get("type") == "conversation.item.create":
-                item = event.get("item", {})
-                if item.get("type") == "function_call":
-                    return
-        elif getattr(event, "type", None) == "conversation.item.create":
-            item = getattr(event, "item", None)
-            if getattr(item, "type", None) == "function_call":
+        if event_type == "conversation.item.create":
+            item = (
+                event.get("item", {}) if isinstance(event, dict) else getattr(event, "item", None)
+            )
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type == "function_call":
                 return
+
         super().send_event(event)
 
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
     ) -> SessionUpdateEvent | dict[str, Any]:
         """Flatten session config for StepFun Realtime API, preserving omission semantics for partial updates."""
-        td = (
-            session.audio.input.turn_detection
-            if isinstance(session.audio, RealtimeAudioConfig)
-            and isinstance(session.audio.input, RealtimeAudioConfigInput)
-            else getattr(session, "turn_detection", None)
-        )
-        if td is None and event_id.startswith("session_update_") and self._opts.turn_detection is not None:
-            td = self._opts.turn_detection
-
         flat_session: dict[str, Any] = {}
 
         # Instructions
@@ -348,27 +388,31 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     if "function" in t:
                         step_tools.append(t)
                     elif t.get("type") == "function" and "name" in t:
-                        step_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": t.get("name"),
-                                "description": t.get("description", ""),
-                                "parameters": t.get("parameters", {}),
-                            },
-                        })
+                        step_tools.append(
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": t.get("name"),
+                                    "description": t.get("description", ""),
+                                    "parameters": t.get("parameters", {}),
+                                },
+                            }
+                        )
                     else:
                         step_tools.append(t)
                 elif hasattr(t, "model_dump"):
                     dumped = t.model_dump(exclude_unset=True)
                     if dumped.get("type") == "function" and "name" in dumped:
-                        step_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": dumped.get("name"),
-                                "description": dumped.get("description", ""),
-                                "parameters": dumped.get("parameters", {}),
-                            },
-                        })
+                        step_tools.append(
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": dumped.get("name"),
+                                    "description": dumped.get("description", ""),
+                                    "parameters": dumped.get("parameters", {}),
+                                },
+                            }
+                        )
                     else:
                         step_tools.append(dumped)
                 else:
@@ -396,12 +440,38 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             flat_session["max_response_output_tokens"] = session.max_output_tokens
 
         # Turn detection
-        if td is not None:
-            if getattr(td, "type", None) == "server_vad":
+        has_explicit_td = False
+        td = None
+        if isinstance(session.audio, RealtimeAudioConfig) and isinstance(
+            session.audio.input, RealtimeAudioConfigInput
+        ):
+            if "turn_detection" in session.audio.input.model_fields_set:
+                has_explicit_td = True
+                td = session.audio.input.turn_detection
+        elif hasattr(session, "turn_detection"):
+            if (
+                hasattr(session, "model_fields_set")
+                and "turn_detection" in session.model_fields_set
+            ):
+                has_explicit_td = True
+                td = session.turn_detection
+            elif session.turn_detection is not None:
+                has_explicit_td = True
+                td = session.turn_detection
+
+        if not has_explicit_td and event_id.startswith("session_update_"):
+            has_explicit_td = True
+            td = self._opts.turn_detection
+
+        if has_explicit_td:
+            if td is not None and getattr(td, "type", None) == "server_vad":
                 threshold_val = getattr(td, "threshold", None)
                 if threshold_val is not None:
                     energy_threshold = int(threshold_val * 5000)
-                elif hasattr(td, "energy_awakeness_threshold") and getattr(td, "energy_awakeness_threshold", None) is not None:
+                elif (
+                    hasattr(td, "energy_awakeness_threshold")
+                    and getattr(td, "energy_awakeness_threshold", None) is not None
+                ):
                     energy_threshold = td.energy_awakeness_threshold
                 elif isinstance(td, dict) and "energy_awakeness_threshold" in td:
                     energy_threshold = td["energy_awakeness_threshold"]
@@ -416,6 +486,79 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 }
             else:
                 flat_session["turn_detection"] = None
+
+        # Input audio transcription
+        has_explicit_transcription = False
+        transcription = None
+        if isinstance(session.audio, RealtimeAudioConfig) and isinstance(
+            session.audio.input, RealtimeAudioConfigInput
+        ):
+            if "transcription" in session.audio.input.model_fields_set:
+                has_explicit_transcription = True
+                transcription = session.audio.input.transcription
+        elif hasattr(session, "input_audio_transcription"):
+            if (
+                hasattr(session, "model_fields_set")
+                and "input_audio_transcription" in session.model_fields_set
+            ):
+                has_explicit_transcription = True
+                transcription = session.input_audio_transcription
+            elif session.input_audio_transcription is not None:
+                has_explicit_transcription = True
+                transcription = session.input_audio_transcription
+
+        if (
+            not has_explicit_transcription
+            and event_id.startswith("session_update_")
+            and self._opts.input_audio_transcription is not None
+        ):
+            has_explicit_transcription = True
+            transcription = self._opts.input_audio_transcription
+
+        if has_explicit_transcription:
+            if transcription is not None:
+                if hasattr(transcription, "model_dump"):
+                    flat_session["input_audio_transcription"] = transcription.model_dump(
+                        exclude_unset=True
+                    )
+                elif isinstance(transcription, dict):
+                    flat_session["input_audio_transcription"] = transcription
+                else:
+                    flat_session["input_audio_transcription"] = {
+                        "model": getattr(transcription, "model", "whisper-1")
+                    }
+            else:
+                flat_session["input_audio_transcription"] = None
+
+        # Reasoning
+        has_explicit_reasoning = False
+        reasoning = None
+        if hasattr(session, "reasoning"):
+            if hasattr(session, "model_fields_set") and "reasoning" in session.model_fields_set:
+                has_explicit_reasoning = True
+                reasoning = session.reasoning
+            elif session.reasoning is not None:
+                has_explicit_reasoning = True
+                reasoning = session.reasoning
+
+        if (
+            not has_explicit_reasoning
+            and event_id.startswith("session_update_")
+            and self._opts.reasoning is not None
+        ):
+            has_explicit_reasoning = True
+            reasoning = self._opts.reasoning
+
+        if has_explicit_reasoning:
+            if reasoning is not None:
+                if hasattr(reasoning, "model_dump"):
+                    flat_session["reasoning"] = reasoning.model_dump(exclude_unset=True)
+                elif isinstance(reasoning, dict):
+                    flat_session["reasoning"] = reasoning
+                else:
+                    flat_session["reasoning"] = {"effort": getattr(reasoning, "effort", "low")}
+            else:
+                flat_session["reasoning"] = None
 
         return {
             "type": "session.update",
@@ -455,13 +598,19 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Handle response.created from StepFun.
 
         StepFun does not echo back `metadata.client_event_id` in response.created.
-        If metadata is missing but there are pending response_created_futures, associate the earliest one
-        so generate_reply resolves immediately without timing out after 10 seconds.
+        If metadata is missing, associate the earliest pending response.create ID from the FIFO queue
+        (or pending futures), ensuring cancelled or timed out generations match _discarded_event_ids.
         """
         self._speaking_active = True
-        if not event.response.metadata and self._response_created_futures:
-            earliest_id = next(iter(self._response_created_futures.keys()))
-            event.response.metadata = {"client_event_id": earliest_id}
+        if not event.response.metadata:
+            client_event_id: str | None = None
+            if self._pending_response_create_ids:
+                client_event_id = self._pending_response_create_ids.popleft()
+            elif self._response_created_futures:
+                client_event_id = next(iter(self._response_created_futures.keys()))
+
+            if client_event_id:
+                event.response.metadata = {"client_event_id": client_event_id}
 
         super()._handle_response_created(event)
 
@@ -474,6 +623,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Filter out benign protocol divergence errors from StepFun."""
         # Settle correlated futures first so context updates or replies do not hang until timeout
         if event_id := event.error.event_id:
+            if event_id in self._pending_response_create_ids:
+                try:
+                    self._pending_response_create_ids.remove(event_id)
+                except ValueError:
+                    pass
             if fut := self._chat_ctx_event_futures.pop(event_id, None):
                 if not fut.done():
                     fut.set_result(None)
@@ -487,12 +641,17 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         # StepFun returns 'no ongoing response to cancel' when response.cancel arrives
         # while no active response is generating. OpenAI drops this silently, so we ignore it here.
         if "no ongoing response to cancel" in msg or "has no active response" in msg:
-            logger.debug("Ignored benign StepFun cancel error", extra={"lk.pii.error": error.message})
+            logger.debug(
+                "Ignored benign StepFun cancel error", extra={"lk.pii.error": error.message}
+            )
             return
 
         # Suppress chat template errors on empty context if any still leak through
         if "continue_final_message" in msg:
-            logger.warning("Suppressed StepFun template error on empty history", extra={"lk.pii.error": error.message})
+            logger.warning(
+                "Suppressed StepFun template error on empty history",
+                extra={"lk.pii.error": error.message},
+            )
             return
 
         # StepFun may reject 'previous_item_id: root'; ignore non-fatal item errors

@@ -474,6 +474,7 @@ async def test_interrupt_immediately_closes_current_generation(
 
         # Must be immediately closed and set to _DiscardedGeneration so trailing audio doesn't throw!
         from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
         assert isinstance(session._current_generation, _DiscardedGeneration)
         assert gen._done_fut.done() is True
 
@@ -518,17 +519,21 @@ async def test_client_send_event_filters_function_call_item(
         monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
 
         # Dict format function_call item
-        session.send_event({
-            "type": "conversation.item.create",
-            "item": {"type": "function_call", "name": "foo"},
-        })
+        session.send_event(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "function_call", "name": "foo"},
+            }
+        )
         assert len(sent_events) == 0
 
         # Normal message item should pass through
-        session.send_event({
-            "type": "conversation.item.create",
-            "item": {"type": "message", "role": "user"},
-        })
+        session.send_event(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": "user"},
+            }
+        )
         assert len(sent_events) == 1
     finally:
         await session.aclose()
@@ -544,6 +549,7 @@ async def test_server_uuid_item_create_future_mapping(
     session = model.session()
     try:
         import asyncio
+
         client_fut = asyncio.get_running_loop().create_future()
         client_item_id = "client_item_123"
         session._item_create_future[client_item_id] = client_fut
@@ -623,8 +629,7 @@ async def test_create_tools_update_event_includes_stepfun_tools(
         assert len(tool_list) == 2
         # One is function tool (nested under "function" or top-level name)
         assert any(
-            t.get("name") == "my_local_tool"
-            or t.get("function", {}).get("name") == "my_local_tool"
+            t.get("name") == "my_local_tool" or t.get("function", {}).get("name") == "my_local_tool"
             for t in tool_list
             if isinstance(t, dict)
         )
@@ -660,6 +665,7 @@ async def test_echo_gate_suppression_during_speech(
         session.push_audio(frame)
         assert len(sent_events) > 0
         import base64
+
         decoded = base64.b64decode(sent_events[-1].audio)
         assert decoded == low_rms_data
 
@@ -785,8 +791,184 @@ async def test_update_tools_retains_nested_function_tools(
         await session.aclose()
 
 
+@pytest.mark.asyncio
+async def test_turn_detection_disabled_emits_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure turn_detection_disabled=True or update_options(turn_detection=None) emits turn_detection=None to disable Server VAD."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+
+    # 1. Disabled at session creation
+    session = model.session(turn_detection_disabled=True)
+    try:
+        ev = session._create_session_update_event()
+        session_payload = ev["session"]
+        assert "turn_detection" in session_payload
+        assert session_payload["turn_detection"] is None
+    finally:
+        await session.aclose()
+
+    # 2. Disabled via update_options from normal session
+    session2 = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session2._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+        session2.update_options(turn_detection=None)
+        assert len(sent_events) == 1
+        assert sent_events[0]["session"]["turn_detection"] is None
+
+        # 3. Partial update preserves omission (does NOT include turn_detection)
+        sent_events.clear()
+        session2.update_options(speed=1.2)
+        assert len(sent_events) == 1
+        assert "turn_detection" not in sent_events[0]["session"]
+    finally:
+        await session2.aclose()
 
 
+@pytest.mark.asyncio
+async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure late response.created without metadata for a cancelled reply matches _discarded_event_ids and is discarded."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # 1. Start generate_reply
+        fut = session.generate_reply(instructions="测试回复")
+        assert len(session._pending_response_create_ids) == 1
+        event_id = list(session._pending_response_create_ids)[0]
+        assert event_id in session._response_created_futures
+
+        # 2. Cancel the future before response.created arrives
+        fut.cancel()
+        import asyncio
+
+        await asyncio.sleep(0)
+        assert event_id not in session._response_created_futures
+        assert event_id in session._discarded_event_ids
+        # ID remains in _pending_response_create_ids for StepFun correlation
+        assert len(session._pending_response_create_ids) == 1
+
+        # 3. StepFun sends response.created later WITHOUT metadata
+        resp_ev = ResponseCreatedEvent(
+            event_id="ev_resp_late",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_late_123",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,
+            ),
+        )
+        session._handle_response_created(resp_ev)
+
+        # Queue should have been consumed
+        assert len(session._pending_response_create_ids) == 0
+        # Generation must be marked as _DiscardedGeneration, not a live active generation
+        assert isinstance(session._current_generation, _DiscardedGeneration)
+        # response.cancel must have been sent
+        assert any(
+            getattr(ev, "type", None) == "response.cancel"
+            and getattr(ev, "response_id", None) == "resp_late_123"
+            for ev in sent_events
+        )
+    finally:
+        await session.aclose()
 
 
+@pytest.mark.asyncio
+async def test_create_update_chat_ctx_events_reanchors_dangling_predecessors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure excluded client-created function calls do not leave dangling previous_item_id anchors."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import ConversationItemCreateEvent
 
+    from livekit.agents import llm
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        user_msg = llm.ChatMessage(role="user", content=["hello"], id="user_msg_1")
+        fnc_call = llm.FunctionCall(
+            name="get_weather", arguments="{}", call_id="c1", id="fnc_call_1"
+        )
+        fnc_output = llm.FunctionCallOutput(
+            output="sunny", call_id="c1", is_error=False, id="fnc_out_1"
+        )
+        assistant_msg = llm.ChatMessage(
+            role="assistant", content=["The weather is sunny"], id="asst_msg_1"
+        )
+
+        # Assume user_msg is already remote, but fnc_call, fnc_output, and assistant_msg are local
+        session._remote_chat_ctx.insert(None, user_msg)
+
+        chat_ctx = llm.ChatContext([user_msg, fnc_call, fnc_output, assistant_msg])
+        events = session._create_update_chat_ctx_events(chat_ctx)
+
+        create_events = [ev for ev in events if isinstance(ev, ConversationItemCreateEvent)]
+        # fnc_call must NOT be in create_events
+        assert not any(getattr(ev.item, "type", None) == "function_call" for ev in create_events)
+
+        # fnc_output must be anchored to user_msg_1 (NOT dangling fnc_call_1)
+        fnc_out_ev = next(ev for ev in create_events if getattr(ev.item, "id", None) == "fnc_out_1")
+        assert fnc_out_ev.previous_item_id == "user_msg_1"
+
+        # assistant_msg must be anchored to fnc_out_1
+        asst_ev = next(ev for ev in create_events if getattr(ev.item, "id", None) == "asst_msg_1")
+        assert asst_ev.previous_item_id == "fnc_out_1"
+
+        # No item should have previous_item_id == "root"
+        assert not any(ev.previous_item_id == "root" for ev in create_events)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_configured_session_options_reasoning_and_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure reasoning and input_audio_transcription are preserved in session update."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import AudioTranscription, RealtimeReasoning
+
+    model = realtime.RealtimeModel(
+        input_audio_transcription=AudioTranscription(model="whisper-1"),
+        reasoning=RealtimeReasoning(effort="low"),
+    )
+    session = model.session()
+    try:
+        # Initial session update contains both
+        ev = session._create_session_update_event()
+        sess = ev["session"]
+        assert sess.get("reasoning") == {"effort": "low"}
+        assert sess.get("input_audio_transcription") == {"model": "whisper-1"}
+
+        # update_options changes reasoning
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+        session.update_options(reasoning=RealtimeReasoning(effort="high"))
+        assert len(sent_events) == 1
+        assert sent_events[0]["session"]["reasoning"] == {"effort": "high"}
+
+        # update_options clears reasoning to None
+        sent_events.clear()
+        session.update_options(reasoning=None)
+        assert len(sent_events) == 1
+        assert sent_events[0]["session"]["reasoning"] is None
+
+        # Partial update with instructions does NOT include reasoning or transcription
+        sent_events.clear()
+        await session.update_instructions("新指令")
+        assert len(sent_events) == 1
+        assert "reasoning" not in sent_events[0]["session"]
+        assert "input_audio_transcription" not in sent_events[0]["session"]
+    finally:
+        await session.aclose()
