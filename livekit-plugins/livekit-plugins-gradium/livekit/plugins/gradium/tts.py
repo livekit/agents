@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -343,10 +344,24 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             await ws.send_str(json.dumps(setup_msg))
 
+            break_tokens: list[str] = []
             async for word in word_stream:
-                text_msg = {"type": "text", "text": f"{word.token} "}
+                text = word.token
+                if break_tokens or re.match(r"<break(?:\s|$)", text):
+                    break_tokens.append(text)
+                    if "/>" not in text:
+                        continue
+
+                    text = f" {self._opts.word_tokenizer.format_words(break_tokens)}"
+                    break_tokens = []
+
+                text_msg = {"type": "text", "text": f"{text} "}
                 self._mark_started()
                 await ws.send_str(json.dumps(text_msg))
+
+            for text in break_tokens:
+                self._mark_started()
+                await ws.send_str(json.dumps({"type": "text", "text": f"{text} "}))
 
             flush_msg = {"type": "end_of_stream"}
             await ws.send_str(json.dumps(flush_msg))
