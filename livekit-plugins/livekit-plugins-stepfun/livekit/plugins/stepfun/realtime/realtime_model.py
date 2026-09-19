@@ -18,6 +18,7 @@ from openai.types.realtime import (
     ConversationItemInputAudioTranscriptionDeltaEvent,
     RealtimeAudioConfig,
     RealtimeAudioConfigInput,
+    RealtimeConversationItemFunctionCall,
     RealtimeErrorEvent,
     RealtimeReasoning,
     RealtimeSessionCreateRequest,
@@ -83,6 +84,48 @@ class _PendingClientItem:
     item_type: str | None
     role: str | None = None
     call_id: str | None = None
+
+
+def _normalize_tools_to_stepfun(tools: list[Any]) -> list[Any]:
+    """Convert flat tool declarations to StepFun nested function schemas."""
+    step_tools: list[Any] = []
+    for t in tools:
+        if isinstance(t, StepFunTool):
+            step_tools.append(t.to_dict())
+        elif isinstance(t, dict):
+            if "function" in t:
+                step_tools.append(t)
+            elif t.get("type") == "function" and "name" in t:
+                step_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name"),
+                            "description": t.get("description", ""),
+                            "parameters": t.get("parameters", {}),
+                        },
+                    }
+                )
+            else:
+                step_tools.append(t)
+        elif hasattr(t, "model_dump"):
+            dumped = t.model_dump(exclude_unset=True)
+            if dumped.get("type") == "function" and "name" in dumped:
+                step_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": dumped.get("name"),
+                            "description": dumped.get("description", ""),
+                            "parameters": dumped.get("parameters", {}),
+                        },
+                    }
+                )
+            else:
+                step_tools.append(dumped)
+        else:
+            step_tools.append(t)
+    return step_tools
 
 
 class RealtimeModel(openai.realtime.RealtimeModel):
@@ -157,6 +200,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         self._opts.is_azure = True
         self._capabilities.can_disable_turn_detection = can_disable_turn_detection
         self._capabilities.manual_function_calls = False
+        self._capabilities.per_response_tool_choice = False
 
         self._provider_label = "StepFun StepAudio Realtime API"
 
@@ -253,12 +297,14 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             None,
         ):
             return
-        # StepFun emits initial function_call without arguments before streaming deltas; skip initial empty item
+        # StepFun emits initial function_call without arguments (arguments=None).
+        # Provide an empty string placeholder so openai_item_to_livekit_item does not fail assertion
+        # and the item enters _remote_chat_ctx so its call_id is tracked for tool output synchronization.
         if (
-            getattr(event.item, "type", None) == "function_call"
-            and getattr(event.item, "arguments", None) is None
+            isinstance(event.item, RealtimeConversationItemFunctionCall)
+            and event.item.arguments is None
         ):
-            return
+            event.item.arguments = ""
         if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
             # Pre-emptively anchor untracked item to tail to avoid noisy warning
             event.previous_item_id = self._remote_chat_ctx.tail_id
@@ -428,6 +474,15 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             )
             if event_id:
                 self._pending_response_creates.append(_PendingResponseCreate(event_id=event_id))
+
+            # Turn-scoped tools: normalize flat OpenAI definitions to StepFun nested function format
+            resp_params = (
+                event.get("response")
+                if isinstance(event, dict)
+                else getattr(event, "response", None)
+            )
+            if resp_params and getattr(resp_params, "tools", None):
+                resp_params.tools = _normalize_tools_to_stepfun(resp_params.tools)
         elif event_type == "response.cancel":
             for pending_create in self._pending_response_creates:
                 if (
@@ -516,44 +571,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
         # Tools: omit when not provided in a partial update, so configured tools are not erased
         if session.tools is not None:
-            step_tools: list[Any] = []
-            for t in session.tools:
-                if isinstance(t, StepFunTool):
-                    step_tools.append(t.to_dict())
-                elif isinstance(t, dict):
-                    if "function" in t:
-                        step_tools.append(t)
-                    elif t.get("type") == "function" and "name" in t:
-                        step_tools.append(
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": t.get("name"),
-                                    "description": t.get("description", ""),
-                                    "parameters": t.get("parameters", {}),
-                                },
-                            }
-                        )
-                    else:
-                        step_tools.append(t)
-                elif hasattr(t, "model_dump"):
-                    dumped = t.model_dump(exclude_unset=True)
-                    if dumped.get("type") == "function" and "name" in dumped:
-                        step_tools.append(
-                            {
-                                "type": "function",
-                                "function": {
-                                    "name": dumped.get("name"),
-                                    "description": dumped.get("description", ""),
-                                    "parameters": dumped.get("parameters", {}),
-                                },
-                            }
-                        )
-                    else:
-                        step_tools.append(dumped)
-                else:
-                    step_tools.append(t)
-            flat_session["tools"] = step_tools
+            flat_session["tools"] = _normalize_tools_to_stepfun(session.tools)
         elif "tools" in session.model_fields_set:
             flat_session["tools"] = []
 
@@ -850,8 +868,26 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super()._handle_response_audio_done(event)
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if getattr(event.item, "type", None) == "function_call":
+            call_id = getattr(event.item, "call_id", None)
+            item_id = getattr(event.item, "id", None)
+            if item_id and call_id:
+                # Upsert the completed function call in _remote_chat_ctx so its arguments
+                # and call_id are registered before tool outputs are synchronized.
+                lk_fnc = llm.FunctionCall(
+                    id=item_id,
+                    call_id=call_id,
+                    name=getattr(event.item, "name", "") or "",
+                    arguments=getattr(event.item, "arguments", "") or "",
+                )
+                if remote_node := self._remote_chat_ctx.get(item_id):
+                    remote_node.item = lk_fnc
+                else:
+                    self._remote_chat_ctx.insert(self._remote_chat_ctx.tail_id, lk_fnc)
+
         if self._current_generation is None or isinstance(
             self._current_generation, _DiscardedGeneration
         ):
             return
+
         super()._handle_response_output_item_done(event)

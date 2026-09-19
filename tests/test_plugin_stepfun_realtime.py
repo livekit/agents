@@ -711,17 +711,21 @@ async def test_session_aclose_clean_shutdown(
 
 
 @pytest.mark.asyncio
-async def test_initial_empty_function_call_item_filtered(
+async def test_initial_empty_function_call_item_placeholder_and_upsert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ensure StepFun initial function_call item with arguments=None is filtered before streaming deltas."""
+    """Ensure StepFun initial function_call with arguments=None enters remote_ctx with placeholder and is upserted on done."""
     monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
-    from openai.types.realtime import ConversationItemAdded, RealtimeConversationItemFunctionCall
+    from openai.types.realtime import (
+        ConversationItemAdded,
+        RealtimeConversationItemFunctionCall,
+        ResponseOutputItemDoneEvent,
+    )
 
     model = realtime.RealtimeModel()
     session = model.session()
     try:
-        # Initial empty function_call packet where arguments is None (as constructed from StepFun raw event)
+        # Initial function_call packet where arguments is None (as constructed from StepFun raw event)
         empty_item = RealtimeConversationItemFunctionCall.model_construct(
             id="item_func_1",
             type="function_call",
@@ -734,11 +738,35 @@ async def test_initial_empty_function_call_item_filtered(
             type="conversation.item.added",
             item=empty_item,
         )
-        # Should return early without raising or inserting incomplete item into chat ctx
+        # Should populate placeholder without raising assertion error
         session._handle_conversion_item_added(ev)
-        assert session._remote_chat_ctx.get("item_func_1") is None
+        remote_node = session._remote_chat_ctx.get("item_func_1")
+        assert remote_node is not None
+        assert remote_node.item.call_id == "call_123"
+        assert remote_node.item.arguments == ""
+
+        # When response.output_item.done arrives with completed arguments:
+        done_item = RealtimeConversationItemFunctionCall(
+            id="item_func_1",
+            type="function_call",
+            call_id="call_123",
+            name="query_market_price",
+            arguments='{"symbol": "BTC"}',
+        )
+        done_ev = ResponseOutputItemDoneEvent.model_construct(
+            event_id="ev_done",
+            type="response.output_item.done",
+            response_id="resp_1",
+            output_index=0,
+            item=done_item,
+        )
+        session._handle_response_output_item_done(done_ev)
+        remote_node2 = session._remote_chat_ctx.get("item_func_1")
+        assert remote_node2 is not None
+        assert remote_node2.item.arguments == '{"symbol": "BTC"}'
     finally:
         await session.aclose()
+        await model.aclose()
 
 
 @pytest.mark.asyncio
@@ -764,6 +792,7 @@ async def test_wrap_session_update_preserves_omitted_tools_on_partial_update(
         assert "tools" not in session_dict
     finally:
         await session.aclose()
+        await model.aclose()
 
 
 @pytest.mark.asyncio
@@ -789,6 +818,7 @@ async def test_update_tools_retains_nested_function_tools(
         assert session._tools.get_function_tool("my_db_query") is not None
     finally:
         await session.aclose()
+        await model.aclose()
 
 
 @pytest.mark.asyncio
@@ -823,6 +853,7 @@ async def test_turn_detection_disabled_emits_none(monkeypatch: pytest.MonkeyPatc
         assert "turn_detection" not in sent_events[0]["session"]
     finally:
         await session2.aclose()
+        await model.aclose()
 
 
 @pytest.mark.asyncio
@@ -1210,6 +1241,133 @@ async def test_session_created_model_logged_with_pii_attribute(
         assert msg == "StepFun session created"
         assert extra == {"lk.pii.model": "stepaudio-3-realtime-preview"}
         assert "model" not in extra
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_full_function_call_to_output_synchronization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure server function call is tracked and its output is preserved during update_chat_ctx."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import (
+        ConversationItemAdded,
+        ConversationItemCreateEvent,
+        RealtimeConversationItemFunctionCall,
+        ResponseOutputItemDoneEvent,
+    )
+
+    from livekit.agents import llm
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        user_msg = llm.ChatMessage(role="user", content=["查一下小马智行"], id="usr_1")
+        session._remote_chat_ctx.insert(None, user_msg)
+
+        # 1. StepFun emits initial function call with arguments=None
+        init_fnc = RealtimeConversationItemFunctionCall.model_construct(
+            id="fnc_server_item_1",
+            type="function_call",
+            call_id="call_pony_123",
+            name="query_market_price",
+            arguments=None,
+        )
+        session._handle_conversion_item_added(
+            ConversationItemAdded(
+                event_id="ev_fnc_added",
+                type="conversation.item.added",
+                previous_item_id="usr_1",
+                item=init_fnc,
+            )
+        )
+        assert session._remote_chat_ctx.get("fnc_server_item_1") is not None
+
+        # 2. StepFun finishes arguments streaming and emits output_item.done
+        done_fnc = RealtimeConversationItemFunctionCall(
+            id="fnc_server_item_1",
+            type="function_call",
+            call_id="call_pony_123",
+            name="query_market_price",
+            arguments='{"symbol": "PONY"}',
+        )
+        session._handle_response_output_item_done(
+            ResponseOutputItemDoneEvent.model_construct(
+                event_id="ev_fnc_done",
+                type="response.output_item.done",
+                response_id="resp_1",
+                output_index=0,
+                item=done_fnc,
+            )
+        )
+
+        # 3. Python tool finishes and Agent updates chat context with function call + output
+        fnc_call_item = llm.FunctionCall(
+            id="fnc_server_item_1",
+            call_id="call_pony_123",
+            name="query_market_price",
+            arguments='{"symbol": "PONY"}',
+        )
+        fnc_out_item = llm.FunctionCallOutput(
+            id="fnc_out_1",
+            call_id="call_pony_123",
+            output='{"价格": "$15.00"}',
+            is_error=False,
+        )
+        chat_ctx = llm.ChatContext([user_msg, fnc_call_item, fnc_out_item])
+
+        events = session._create_update_chat_ctx_events(chat_ctx)
+        create_events = [ev for ev in events if isinstance(ev, ConversationItemCreateEvent)]
+
+        # fnc_server_item_1 is already remote, so it is NOT recreated
+        assert not any(getattr(ev.item, "type", None) == "function_call" for ev in create_events)
+
+        # fnc_out_1 MUST BE RETAINED and anchored to fnc_server_item_1!
+        out_ev = next(ev for ev in create_events if getattr(ev.item, "id", None) == "fnc_out_1")
+        assert out_ev.previous_item_id == "fnc_server_item_1"
+        assert getattr(out_ev.item, "call_id", None) == "call_pony_123"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_turn_scoped_tools_use_nested_schema_in_response_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure turn-scoped tools passed to generate_reply are normalized to StepFun nested format."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit.agents import function_tool
+
+    @function_tool
+    def search_database(query: str) -> str:
+        """Search DB"""
+        return "result"
+
+    model = realtime.RealtimeModel()
+    assert model.capabilities.per_response_tool_choice is False
+
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # Call generate_reply with turn-scoped tool
+        _ = session.generate_reply(instructions="查数据库", tools=[search_database])
+        assert len(sent_events) == 1
+        ev = sent_events[0]
+        assert getattr(ev, "type", None) == "response.create"
+        resp_params = getattr(ev, "response", None)
+        assert resp_params is not None
+        assert resp_params.tools is not None
+        assert len(resp_params.tools) == 1
+        tool_schema = resp_params.tools[0]
+        # Must be StepFun nested schema: {"type": "function", "function": {"name": ...}}
+        assert tool_schema["type"] == "function"
+        assert "function" in tool_schema
+        assert tool_schema["function"]["name"] == "search_database"
     finally:
         await session.aclose()
         await model.aclose()
