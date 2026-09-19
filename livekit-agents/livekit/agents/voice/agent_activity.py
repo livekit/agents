@@ -172,6 +172,17 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_
 
 
 @dataclass
+class _UserTurnCompletedData:
+    activity: AgentActivity
+    metrics: llm.MetricsReport
+
+
+_UserTurnCompletedContextVar = contextvars.ContextVar["_UserTurnCompletedData"](
+    "agents_activity_user_turn_completed"
+)
+
+
+@dataclass
 class _ReusableResources:
     stt_pipeline: _STTPipeline | None = None
     rt_session: llm.RealtimeSession | None = None
@@ -466,6 +477,7 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
         self._realtime_user_stopped_speaking_at: float | None = None
+        self._latency_budget_recorded_user_metrics: llm.MetricsReport | None = None
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
         """Whether a realtime model's server-side turn detection is on for this session.
@@ -1727,6 +1739,9 @@ class AgentActivity(RecognitionHooks):
             SpeechCreatedEvent(speech_handle=handle, user_initiated=True, source="say"),
         )
         user_metrics = self._take_on_enter_user_metrics()
+        if (completed_data := _UserTurnCompletedContextVar.get(None)) is not None:
+            if completed_data.activity is self:
+                user_metrics = completed_data.metrics
 
         if (
             self._rt_session is not None
@@ -1745,6 +1760,7 @@ class AgentActivity(RecognitionHooks):
                     speech_handle=handle,
                     text=text,
                     model_settings=ModelSettings(),
+                    user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.realtime_say",
@@ -1836,6 +1852,7 @@ class AgentActivity(RecognitionHooks):
                     else None,
                     tools=resolved_tools if is_given(resolved_tools) else None,
                     model_settings=ModelSettings(tool_choice=tool_choice),
+                    user_metrics=user_metrics,
                 ),
                 speech_handle=handle,
                 name="AgentActivity.realtime_reply",
@@ -2814,6 +2831,9 @@ class AgentActivity(RecognitionHooks):
             ),
             attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
         ) as hook_span:
+            hook_context = _UserTurnCompletedContextVar.set(
+                _UserTurnCompletedData(activity=self, metrics=metrics_report)
+            )
             try:
                 await self._agent.on_user_turn_completed(
                     temp_mutable_chat_ctx, new_message=user_message
@@ -2830,6 +2850,8 @@ class AgentActivity(RecognitionHooks):
                 )
                 logger.exception("error occurred during on_user_turn_completed")
                 return
+            finally:
+                _UserTurnCompletedContextVar.reset(hook_context)
 
         on_user_turn_completed_delay = time.perf_counter() - start_time
         metrics_report["on_user_turn_completed_delay"] = on_user_turn_completed_delay
@@ -3200,6 +3222,12 @@ class AgentActivity(RecognitionHooks):
             except BaseException:
                 return
 
+            self._evaluate_turn_latency_budget(
+                user_metrics=_previous_user_metrics,
+                started_speaking_at=started_speaking_at,
+                speech_id=speech_handle.id,
+            )
+
             self._session._update_agent_state(
                 "speaking",
                 start_time=started_speaking_at,
@@ -3386,6 +3414,23 @@ class AgentActivity(RecognitionHooks):
         metrics = self._session._unanswered_user_metrics
         self._session._unanswered_user_metrics = None
         return metrics
+
+    def _evaluate_turn_latency_budget(
+        self,
+        *,
+        user_metrics: llm.MetricsReport | None,
+        started_speaking_at: float,
+        speech_id: str,
+    ) -> None:
+        if user_metrics is None or "stopped_speaking_at" not in user_metrics:
+            return
+        if self._latency_budget_recorded_user_metrics is user_metrics:
+            return
+        self._latency_budget_recorded_user_metrics = user_metrics
+        self._session._evaluate_latency_budget(
+            latency=started_speaking_at - user_metrics["stopped_speaking_at"],
+            speech_id=speech_id,
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -3696,8 +3741,10 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
                 )
-                self._session._evaluate_latency_budget(
-                    latency=early_metrics["e2e_latency"], speech_id=speech_handle.id
+                self._evaluate_turn_latency_budget(
+                    user_metrics=user_metrics,
+                    started_speaking_at=started_speaking_at,
+                    speech_id=speech_handle.id,
                 )
             self._session._early_assistant_metrics = early_metrics
 
@@ -4046,6 +4093,7 @@ class AgentActivity(RecognitionHooks):
         instructions: str | None = None,
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
+        user_metrics: llm.MetricsReport | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
@@ -4073,6 +4121,7 @@ class AgentActivity(RecognitionHooks):
                 speech_handle=speech_handle,
                 generation_ev=generation_ev,
                 model_settings=model_settings,
+                user_metrics=user_metrics,
             )
             return
 
@@ -4155,6 +4204,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                user_metrics=user_metrics,
             )
         finally:
             # reset tool_choice and tools
@@ -4179,6 +4229,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
         user_stopped_speaking_at: float | None = None,
+        user_metrics: llm.MetricsReport | None = None,
     ) -> None:
         with _agent_turn(
             speech_handle,
@@ -4193,6 +4244,7 @@ class AgentActivity(RecognitionHooks):
                     model_settings=model_settings,
                     instructions=instructions,
                     user_stopped_speaking_at=user_stopped_speaking_at,
+                    user_metrics=user_metrics,
                     inference_span=inference_span,
                 )
             finally:
@@ -4206,6 +4258,7 @@ class AgentActivity(RecognitionHooks):
         model_settings: ModelSettings,
         instructions: str | None = None,
         user_stopped_speaking_at: float | None = None,
+        user_metrics: llm.MetricsReport | None = None,
         inference_span: trace.Span,
     ) -> None:
         current_span = trace.get_current_span(context=speech_handle._agent_turn_context)
@@ -4325,6 +4378,13 @@ class AgentActivity(RecognitionHooks):
                 )
             except BaseException:
                 return
+
+            if user_metrics is not None:
+                self._evaluate_turn_latency_budget(
+                    user_metrics=user_metrics,
+                    started_speaking_at=started_speaking_at,
+                    speech_id=speech_handle.id,
+                )
 
             if (
                 user_stopped_speaking_at is not None

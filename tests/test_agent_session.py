@@ -27,6 +27,7 @@ from livekit.agents import (
     ModelSettings,
     NotGivenOr,
     RunContext,
+    SpeechCreatedEvent,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -145,6 +146,34 @@ async def test_latency_budget_event_on_first_output(
     assert events[0].budget == latency_budget["budget"]
     assert events[0].latency == pytest.approx(0.7, abs=0.01)
     assert events[0].speech_id
+
+
+@pytest.mark.parametrize(("budget", "expected_events"), [(0.2, 1), (0.8, 0)])
+async def test_latency_budget_uses_hook_speech_first_output(
+    budget: float, expected_events: int
+) -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    actions.add_tts(0.5, ttfb=0.1, input="session.say from on_user_turn_completed")
+    actions.add_llm("Hi!", input="Hello", ttft=0.1, duration=0.3)
+    actions.add_tts(0.5, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": budget})
+    events: list[LatencyBudgetEvent] = []
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("latency_budget", events.append)
+    session.on("speech_created", speeches.append)
+
+    await asyncio.wait_for(
+        run_session(session, MyAgent(say_on_user_turn_completed=True)), timeout=SESSION_TIMEOUT
+    )
+
+    hook_speech = next(ev for ev in speeches if ev.source == "say")
+    assert len(events) == expected_events
+    if expected_events:
+        assert events[0].speech_id == hook_speech.speech_handle.id
+        assert events[0].latency == pytest.approx(0.6, abs=0.01)
 
 
 def test_realtime_user_input_transcription_preserves_item_id() -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 
@@ -11,6 +12,7 @@ from livekit.agents import (
     llm,
     utils,
 )
+from livekit.agents.voice.agent_activity import _UserTurnCompletedContextVar, _UserTurnCompletedData
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, _audio_frame
@@ -133,3 +135,61 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output() -> No
     assert events[0].level == "exceeded"
     assert events[0].latency >= 0.001
     assert events[0].speech_id
+
+
+async def test_realtime_hook_say_emits_latency_budget_on_first_output() -> None:
+    model = FakeRealtimeModel()
+    events: list[LatencyBudgetEvent] = []
+
+    async with AgentSession(llm=model, latency_budget={"budget": 0.001}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        await session.start(Agent(instructions="test"))
+
+        assert session._activity is not None
+        context = _UserTurnCompletedContextVar.set(
+            _UserTurnCompletedData(
+                activity=session._activity,
+                metrics={"stopped_speaking_at": time.time() - 0.01},
+            )
+        )
+        try:
+            speech = session.say("Hello")
+        finally:
+            _UserTurnCompletedContextVar.reset(context)
+
+        while not model.active_session.say_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        function_ch.close()
+        text_ch.send_nowait("Hello")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(0.01))
+        audio_ch.close()
+        model.active_session.say_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+            )
+        )
+        await asyncio.wait_for(speech.wait_for_playout(), timeout=5)
+
+    assert len(events) == 1
+    assert events[0].speech_id == speech.id
+    assert events[0].level == "exceeded"
