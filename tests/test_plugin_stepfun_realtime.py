@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from openai.types.realtime import (
     ConversationItemCreatedEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
     ConversationItemInputAudioTranscriptionDeltaEvent,
     RealtimeAudioConfig,
     RealtimeAudioConfigInput,
@@ -355,10 +356,10 @@ async def test_transcription_delta_deduplication(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_commit_audio_synthesizes_final_transcription(
+async def test_input_audio_transcription_completed_clears_accumulator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ensure commit_audio marks accumulated StepFun transcription as is_final=True."""
+    """Ensure completed transcription emits final event and atomically clears accumulator."""
     monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
     model = realtime.RealtimeModel()
     session = model.session()
@@ -378,12 +379,22 @@ async def test_commit_audio_synthesizes_final_transcription(
         )
         assert len(emitted_events) == 1
         assert emitted_events[-1].is_final is False
+        assert "item_vad" in session._input_transcript_accumulators
 
-        # 2. VAD triggers commit_audio() -> synthesized is_final=True
-        session.commit_audio()
+        # 2. StepFun native completed event arrives -> is_final=True & clears accumulator
+        session._handle_conversion_item_input_audio_transcription_completed(
+            ConversationItemInputAudioTranscriptionCompletedEvent.model_construct(
+                event_id="ev_comp",
+                type="conversation.item.input_audio_transcription.completed",
+                item_id="item_vad",
+                content_index=0,
+                transcript="你好，你在吗？",
+            )
+        )
         assert len(emitted_events) == 2
         assert emitted_events[-1].is_final is True
         assert emitted_events[-1].transcript == "你好，你在吗？"
+        assert "item_vad" not in session._input_transcript_accumulators
     finally:
         await session.aclose()
 
@@ -722,6 +733,57 @@ async def test_initial_empty_function_call_item_filtered(
         assert session._remote_chat_ctx.get("item_func_1") is None
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_wrap_session_update_preserves_omitted_tools_on_partial_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure partial session update (like update_instructions) does not wipe out configured tools."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        # Partial request with only instructions set
+        req = RealtimeSessionCreateRequest(
+            type="realtime",
+            instructions="新指令",
+        )
+        res = session._wrap_session_update("instructions_update_123", req)
+        flat = res if isinstance(res, dict) else res.model_dump()
+        session_dict = flat["session"]
+
+        assert session_dict["instructions"] == "新指令"
+        # "tools" must NOT be set to [] on partial update
+        assert "tools" not in session_dict
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_update_tools_retains_nested_function_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure update_tools extracts names from nested function objects and retains local tools in _tools."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit.agents import function_tool
+
+    @function_tool
+    def my_db_query(key: str) -> str:
+        """Query DB"""
+        return "val"
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        monkeypatch.setattr(session, "send_event", lambda ev: None)
+        await session.update_tools([my_db_query])
+
+        # _tools must retain my_db_query despite nested function schema!
+        assert session._tools.get_function_tool("my_db_query") is not None
+    finally:
+        await session.aclose()
+
 
 
 

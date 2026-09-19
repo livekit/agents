@@ -213,8 +213,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _on_stepfun_server_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "response.thinking.delta":
-            delta = event.get("delta") or ""
-            logger.debug("StepAudio thinking: %s", delta)
+            logger.debug("StepAudio thinking delta", extra={"lk.pii.thinking": event.get("delta")})
         elif event_type == "response.thinking.done":
             logger.debug("StepAudio thinking completed")
         elif event_type == "session.created":
@@ -231,6 +230,32 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         if step_provider_tools:
             event["session"]["tools"] = event["session"].get("tools", []) + step_provider_tools
         return event
+
+    async def update_tools(self, tools: list[llm.Tool]) -> None:
+        async with self._update_fnc_ctx_lock:
+            ev = self._create_tools_update_event(tools)
+            self.send_event(ev)
+
+            retained_tool_names: set[str] = set()
+            for t in ev["session"]["tools"]:
+                name = t.get("name") or (
+                    t.get("function", {}).get("name")
+                    if isinstance(t.get("function"), dict)
+                    else None
+                )
+                if name:
+                    retained_tool_names.add(name)
+
+            retained_tools = [
+                tool
+                for tool in tools
+                if (
+                    isinstance(tool, (llm.FunctionTool, llm.RawFunctionTool))
+                    and tool.info.name in retained_tool_names
+                )
+                or isinstance(tool, llm.ProviderTool)
+            ]
+            self._tools = llm.ToolContext(retained_tools)
 
     def send_event(self, event: Any) -> None:
         # StepFun API rejects client conversation.item.create with type="function_call"
@@ -249,76 +274,128 @@ class RealtimeSession(openai.realtime.RealtimeSession):
     def _wrap_session_update(
         self, event_id: str, session: RealtimeSessionCreateRequest
     ) -> SessionUpdateEvent | dict[str, Any]:
-        """Flatten session config for StepFun Realtime API (which uses flat fields, not nested audio)."""
+        """Flatten session config for StepFun Realtime API, preserving omission semantics for partial updates."""
         td = (
             session.audio.input.turn_detection
             if isinstance(session.audio, RealtimeAudioConfig)
             and isinstance(session.audio.input, RealtimeAudioConfigInput)
-            else None
+            else getattr(session, "turn_detection", None)
         )
-        if td is None and self._opts.turn_detection is not None:
+        if td is None and event_id.startswith("session_update_") and self._opts.turn_detection is not None:
             td = self._opts.turn_detection
 
-        step_tools: list[Any] = []
-        for t in session.tools or []:
-            if isinstance(t, StepFunTool):
-                step_tools.append(t.to_dict())
-            elif isinstance(t, dict):
-                if "function" in t:
-                    step_tools.append(t)
-                elif t.get("type") == "function" and "name" in t:
-                    step_tools.append({
-                        "type": "function",
-                        "function": {
-                            "name": t.get("name"),
-                            "description": t.get("description", ""),
-                            "parameters": t.get("parameters", {}),
-                        },
-                    })
+        flat_session: dict[str, Any] = {}
+
+        # Instructions
+        if session.instructions is not None:
+            flat_session["instructions"] = session.instructions
+        elif event_id.startswith("session_update_"):
+            flat_session["instructions"] = self._instructions or ""
+
+        # Voice
+        voice = None
+        if isinstance(session.audio, RealtimeAudioConfig) and session.audio.output:
+            voice = session.audio.output.voice
+        elif hasattr(session, "voice"):
+            voice = getattr(session, "voice", None)
+        if voice is not None:
+            flat_session["voice"] = voice
+        elif event_id.startswith("session_update_"):
+            flat_session["voice"] = self._opts.voice
+
+        # Modalities
+        if session.output_modalities is not None:
+            if "audio" in session.output_modalities:
+                flat_session["modalities"] = ["text", "audio"]
+            else:
+                flat_session["modalities"] = list(session.output_modalities)
+            flat_session["input_audio_format"] = "pcm16"
+            flat_session["output_audio_format"] = "pcm16"
+        elif hasattr(session, "modalities") and session.modalities is not None:
+            flat_session["modalities"] = session.modalities
+        elif event_id.startswith("session_update_") or session.audio is not None:
+            flat_session["modalities"] = self._opts.modalities or ["text", "audio"]
+            flat_session["input_audio_format"] = "pcm16"
+            flat_session["output_audio_format"] = "pcm16"
+
+        # Tools: omit when not provided in a partial update, so configured tools are not erased
+        if session.tools is not None:
+            step_tools: list[Any] = []
+            for t in session.tools:
+                if isinstance(t, StepFunTool):
+                    step_tools.append(t.to_dict())
+                elif isinstance(t, dict):
+                    if "function" in t:
+                        step_tools.append(t)
+                    elif t.get("type") == "function" and "name" in t:
+                        step_tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": t.get("name"),
+                                "description": t.get("description", ""),
+                                "parameters": t.get("parameters", {}),
+                            },
+                        })
+                    else:
+                        step_tools.append(t)
+                elif hasattr(t, "model_dump"):
+                    dumped = t.model_dump(exclude_unset=True)
+                    if dumped.get("type") == "function" and "name" in dumped:
+                        step_tools.append({
+                            "type": "function",
+                            "function": {
+                                "name": dumped.get("name"),
+                                "description": dumped.get("description", ""),
+                                "parameters": dumped.get("parameters", {}),
+                            },
+                        })
+                    else:
+                        step_tools.append(dumped)
                 else:
                     step_tools.append(t)
-            elif hasattr(t, "model_dump"):
-                dumped = t.model_dump(exclude_unset=True)
-                if dumped.get("type") == "function" and "name" in dumped:
-                    step_tools.append({
-                        "type": "function",
-                        "function": {
-                            "name": dumped.get("name"),
-                            "description": dumped.get("description", ""),
-                            "parameters": dumped.get("parameters", {}),
-                        },
-                    })
+            flat_session["tools"] = step_tools
+        elif "tools" in session.model_fields_set:
+            flat_session["tools"] = []
+
+        # Tool choice
+        if session.tool_choice is not None:
+            flat_session["tool_choice"] = session.tool_choice
+
+        # Speed
+        if (
+            isinstance(session.audio, RealtimeAudioConfig)
+            and session.audio.output
+            and session.audio.output.speed is not None
+        ):
+            flat_session["speed"] = session.audio.output.speed
+        elif hasattr(session, "speed") and session.speed is not None:
+            flat_session["speed"] = session.speed
+
+        # Max output tokens
+        if session.max_output_tokens is not None:
+            flat_session["max_response_output_tokens"] = session.max_output_tokens
+
+        # Turn detection
+        if td is not None:
+            if getattr(td, "type", None) == "server_vad":
+                threshold_val = getattr(td, "threshold", None)
+                if threshold_val is not None:
+                    energy_threshold = int(threshold_val * 5000)
+                elif hasattr(td, "energy_awakeness_threshold") and getattr(td, "energy_awakeness_threshold", None) is not None:
+                    energy_threshold = td.energy_awakeness_threshold
+                elif isinstance(td, dict) and "energy_awakeness_threshold" in td:
+                    energy_threshold = td["energy_awakeness_threshold"]
                 else:
-                    step_tools.append(dumped)
+                    energy_threshold = 4500
+
+                flat_session["turn_detection"] = {
+                    "type": "server_vad",
+                    "silence_duration_ms": getattr(td, "silence_duration_ms", 400) or 400,
+                    "prefix_padding_ms": getattr(td, "prefix_padding_ms", 300) or 300,
+                    "energy_awakeness_threshold": energy_threshold,
+                }
             else:
-                step_tools.append(t)
-
-        flat_session: dict[str, Any] = {
-            "modalities": ["text", "audio"],
-            "instructions": session.instructions or self._instructions or "",
-            "voice": self._opts.voice,
-            "tools": step_tools,
-        }
-
-        if td is not None and getattr(td, "type", None) == "server_vad":
-            threshold_val = getattr(td, "threshold", None)
-            if threshold_val is not None:
-                energy_threshold = int(threshold_val * 5000)
-            elif hasattr(td, "energy_awakeness_threshold") and getattr(td, "energy_awakeness_threshold", None) is not None:
-                energy_threshold = td.energy_awakeness_threshold
-            elif isinstance(td, dict) and "energy_awakeness_threshold" in td:
-                energy_threshold = td["energy_awakeness_threshold"]
-            else:
-                energy_threshold = 4500
-
-            flat_session["turn_detection"] = {
-                "type": "server_vad",
-                "silence_duration_ms": getattr(td, "silence_duration_ms", 400) or 400,
-                "prefix_padding_ms": getattr(td, "prefix_padding_ms", 300) or 300,
-                "energy_awakeness_threshold": energy_threshold,
-            }
-        else:
-            flat_session["turn_detection"] = None
+                flat_session["turn_detection"] = None
 
         return {
             "type": "session.update",
@@ -354,26 +431,6 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             ),
         )
 
-    def commit_audio(self) -> None:
-        """Commit audio and synthesize final transcription event.
-
-        StepFun's Realtime protocol does not emit `conversation.item.input_audio_transcription.completed`.
-        When audio is committed by VAD or user turn completion, emit final transcription event
-        with the latest recognized text.
-        """
-        super().commit_audio()
-        for item_id, by_index in list(self._input_transcript_accumulators.items()):
-            for _content_index, text in list(by_index.items()):
-                if text:
-                    self.emit(
-                        "input_audio_transcription_completed",
-                        llm.InputTranscriptionCompleted(
-                            item_id=item_id,
-                            transcript=text,
-                            is_final=True,
-                        ),
-                    )
-
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         """Handle response.created from StepFun.
 
@@ -389,16 +446,8 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         super()._handle_response_created(event)
 
     def _handle_response_done(self, event: ResponseDoneEvent) -> None:
-        """Handle response.done from StepFun.
-
-        StepFun may mark a normal complete response as 'incomplete' if it reached max tokens
-        or after audio output finishes. Normalize to 'completed' so _done_fut resolves successfully
-        and doesn't emit an unretrieved Future error.
-        """
         self._speaking_active = False
         self._speaking_until = time.time() + 0.8
-        if event.response.status == "incomplete":
-            event.response.status = "completed"
         super()._handle_response_done(event)
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
@@ -409,17 +458,17 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         # StepFun returns 'no ongoing response to cancel' when response.cancel arrives
         # while no active response is generating. OpenAI drops this silently, so we ignore it here.
         if "no ongoing response to cancel" in msg or "has no active response" in msg:
-            logger.debug("Ignored benign StepFun cancel error: %s", error.message)
+            logger.debug("Ignored benign StepFun cancel error", extra={"lk.pii.error": error.message})
             return
 
         # Suppress chat template errors on empty context if any still leak through
         if "continue_final_message" in msg:
-            logger.warning("Suppressed StepFun template error on empty history: %s", error.message)
+            logger.warning("Suppressed StepFun template error on empty history", extra={"lk.pii.error": error.message})
             return
 
         # StepFun may reject 'previous_item_id: root'; ignore non-fatal item errors
         if "cannot find previous item" in msg and "root" in msg:
-            logger.debug("Ignored StepFun root item error: %s", error.message)
+            logger.debug("Ignored StepFun root item error", extra={"lk.pii.error": error.message})
             return
 
         super()._handle_error(event)
