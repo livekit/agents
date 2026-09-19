@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
+from opentelemetry import context as otel_context
+
 from livekit import rtc
 from livekit.api import TwirpError
 
@@ -73,6 +75,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._wait_avatar_join_task: asyncio.Task[None] | None = None
         self._room: rtc.Room | None = None
         self._agent_session: AgentSession | None = None
+        self._start_context: otel_context.Context | None = None
 
     @property
     @abstractmethod
@@ -86,6 +89,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         return "unknown"
 
     async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
+        self._start_context = otel_context.get_current()
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
             job_ctx.add_shutdown_callback(self.aclose)
@@ -156,13 +160,16 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         if self._wait_avatar_join_task:
             await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
             self._wait_avatar_join_task = None
+        self._start_context = None
 
     async def _wait_avatar_join(self) -> None:
         assert self._room is not None
 
         started_time = time.time()
         with tracer.detached_span(
-            "avatar_join", attributes={trace_types.ATTR_AVATAR_PROVIDER: self.provider}
+            "avatar_join",
+            context=self._start_context,
+            attributes={trace_types.ATTR_AVATAR_PROVIDER: self.provider},
         ) as span:
             try:
                 await utils.wait_for_participant(

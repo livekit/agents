@@ -80,3 +80,26 @@ async def test_join_trace(exporter, monkeypatch, outcome):
     assert span.status.status_code == (
         StatusCode.ERROR if outcome == "failed" else StatusCode.UNSET
     )
+
+
+async def test_deferred_join_preserves_start_context(exporter, monkeypatch):
+    avatar = Avatar()
+    room = MagicMock()
+    room.isconnected.return_value = False
+    monkeypatch.setattr(_types, "get_job_context", lambda **kwargs: None)
+    monkeypatch.setattr(_types.utils, "wait_for_participant", AsyncMock())
+    monkeypatch.setattr(_types.utils, "wait_for_track_publication", AsyncMock())
+
+    with tracer.start_as_current_span("job_entrypoint") as parent:
+        await avatar.start(MagicMock(), room)
+    assert avatar._wait_avatar_join_task is None
+    callback = room.on.call_args.args[1]
+    with tracer.start_as_current_span("rtc_dispatch") as unrelated:
+        callback(_types.rtc.ConnectionState.CONN_CONNECTED)
+        await avatar.wait_for_join()
+
+    span = next(s for s in exporter.get_finished_spans() if s.name == "avatar_join")
+    assert span.parent.span_id == parent.get_span_context().span_id
+    assert span.context.trace_id == parent.get_span_context().trace_id
+    assert span.context.trace_id != unrelated.get_span_context().trace_id
+    await avatar.aclose()

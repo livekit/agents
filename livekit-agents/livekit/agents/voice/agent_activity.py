@@ -3189,9 +3189,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
                 started_forwarding_at = (
-                    audio_out.started_forwarding_at
-                    if audio_out and audio_out.started_forwarding_at is not None
-                    else started_speaking_at
+                    audio_out.started_forwarding_at if audio_out is not None else None
                 )
             except BaseException:
                 return
@@ -3676,9 +3674,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
                 started_forwarding_at = (
-                    audio_out.started_forwarding_at
-                    if audio_out and audio_out.started_forwarding_at is not None
-                    else started_speaking_at
+                    audio_out.started_forwarding_at if audio_out is not None else None
                 )
             except BaseException:
                 return
@@ -3690,7 +3686,8 @@ class AgentActivity(RecognitionHooks):
                 early_metrics["llm_node_ttft"] = llm_gen_data.ttft
             if first_tts_gen_data and first_tts_gen_data.ttfb is not None:
                 early_metrics["tts_node_ttfb"] = first_tts_gen_data.ttfb
-            early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
+            if started_forwarding_at is not None:
+                early_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 early_metrics["e2e_latency"] = (
                     started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -4315,9 +4312,7 @@ class AgentActivity(RecognitionHooks):
             try:
                 started_speaking_at = fut.result() or time.time()
                 started_forwarding_at = (
-                    audio_out.started_forwarding_at
-                    if audio_out and audio_out.started_forwarding_at is not None
-                    else started_speaking_at
+                    audio_out.started_forwarding_at if audio_out is not None else None
                 )
             except BaseException:
                 return
