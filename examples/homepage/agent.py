@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from behaviors.frontend_attributes import publish_frontend_attributes
+from behaviors.scripted_callers import disconnect_scripted_callers
 from behaviors.user_away import check_in_when_user_away
 from dotenv import load_dotenv
 from filters.pronunciation import pronounce_livekit
@@ -83,6 +84,7 @@ async def homepage_agent(ctx: JobContext):
     )
 
     check_in_when_user_away(session)
+    disconnect_scripted_callers(session)
     publish_frontend_attributes(tts_voice=CONFIG.tts_voice_label)
 
     await session.start(
