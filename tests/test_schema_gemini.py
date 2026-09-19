@@ -282,3 +282,46 @@ async def test_create_tools_config_emits_parameters_json_schema():
     assert decl.parameters_json_schema["properties"]["fields"]["additionalProperties"] == {
         "type": "string"
     }
+
+
+# #7349: JSON Schema annotation keywords that a real MCP server emits are legal input
+# but reach types.FunctionDeclaration, whose Schema model is declared extra="forbid".
+
+
+async def test_unknown_schema_keywords_are_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "enum": ["THREAD_VIEW_UNSPECIFIED", "THREAD_VIEW_MINIMAL"],
+                "x-google-enum-descriptions": ["a", "b"],
+            },
+            "limit": {"type": "integer", "readOnly": True, "deprecated": True},
+        },
+        "required": ["view"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert "x-google-enum-descriptions" not in params["properties"]["view"]
+    types.FunctionDeclaration.model_validate(
+        {"name": "search_threads", "description": "", "parameters": params}
+    )
+
+
+async def test_unknown_keyword_inside_ref_definition_is_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "attachments": {"type": "array", "items": {"$ref": "#/$defs/Attachment"}},
+        },
+        "$defs": {
+            "Attachment": {
+                "type": "object",
+                "properties": {"id": {"type": "string", "readOnly": True}},
+            }
+        },
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    types.FunctionDeclaration.model_validate(
+        {"name": "create_draft", "description": "", "parameters": params}
+    )
