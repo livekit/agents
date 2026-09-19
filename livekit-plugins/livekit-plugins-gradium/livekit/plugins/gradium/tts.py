@@ -347,7 +347,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             break_tokens: list[str] = []
             async for word in word_stream:
                 text = word.token
-                if break_tokens or re.match(r"<break(?:\s|$)", text):
+                if break_tokens or re.match(r"\s*<break(?:\s|$)", text):
                     break_tokens.append(text)
                     if "/>" not in text:
                         continue

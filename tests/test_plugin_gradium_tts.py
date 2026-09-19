@@ -117,6 +117,7 @@ async def _stream_text(
     return ws.texts
 
 
+@pytest.mark.parametrize("retain_format", [False, True])
 @pytest.mark.parametrize(
     "chunks",
     [
@@ -126,8 +127,15 @@ async def _stream_text(
         pytest.param(["Hello. ", _BREAK, " Next."], id="whole-tag"),
     ],
 )
-async def test_break_is_sent_in_one_message(chunks: list[str]) -> None:
-    assert await _stream_text(chunks) == ["Hello. ", f" {_BREAK} ", "Next. "]
+async def test_break_is_sent_in_one_message(chunks: list[str], retain_format: bool) -> None:
+    word_tokenizer = tokenize.basic.WordTokenizer(
+        ignore_punctuation=False, retain_format=retain_format
+    )
+    expected = ["Hello. ", f" {_BREAK} ", "Next. "]
+    if retain_format:
+        expected = ["Hello. ", '  <break  time="1.5s"  /> ', " Next. "]
+
+    assert await _stream_text(chunks, word_tokenizer=word_tokenizer) == expected
 
 
 @pytest.mark.parametrize(
