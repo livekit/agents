@@ -20,6 +20,7 @@ class WebSearch(StepFunTool):
 
     top_k: int = 5
     timeout_seconds: int = 3
+    description: str = "Search the web for up-to-date information and real-time news."
 
     def __post_init__(self) -> None:
         super().__init__(id="stepfun_web_search")
@@ -28,7 +29,7 @@ class WebSearch(StepFunTool):
         return {
             "type": "web_search",
             "function": {
-                "description": "网络搜索工具",
+                "description": self.description,
                 "options": {
                     "top_k": self.top_k,
                     "timeout_seconds": self.timeout_seconds,
@@ -42,7 +43,7 @@ class Retrieval(StepFunTool):
     """Enable StepFun native server-side vector store retrieval tool."""
 
     vector_store_id: str
-    description: str = "知识库检索工具"
+    description: str = "Search and retrieve relevant context from the knowledge base."
     prompt_template: str | None = None
 
     def __post_init__(self) -> None:

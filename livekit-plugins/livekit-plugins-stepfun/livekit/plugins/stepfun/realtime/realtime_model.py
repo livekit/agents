@@ -73,12 +73,6 @@ def _normalize_voice(voice: str, base_url: str) -> str:
 
 
 @dataclass
-class _PendingResponseCreate:
-    event_id: str
-    cancelled: bool = False
-
-
-@dataclass
 class _PendingClientItem:
     client_item_id: str
     item_type: str | None
@@ -238,7 +232,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._speaking_active: bool = False
         self._speaking_until: float = 0.0
         self._echo_gate_threshold: float = realtime_model._echo_gate_threshold
-        self._pending_response_creates: deque[_PendingResponseCreate] = deque()
+        self._pending_response_creates: deque[str] = deque()
         self._pending_client_items: list[_PendingClientItem] = []
         self.on("openai_server_event_received", self._on_stepfun_server_event)
         self.on("session_reconnected", self._on_session_reconnected)
@@ -473,7 +467,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 else getattr(event, "event_id", None)
             )
             if event_id:
-                self._pending_response_creates.append(_PendingResponseCreate(event_id=event_id))
+                self._pending_response_creates.append(event_id)
 
             # Turn-scoped tools: normalize flat OpenAI definitions to StepFun nested function format
             resp_params = (
@@ -483,13 +477,6 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             )
             if resp_params and getattr(resp_params, "tools", None):
                 resp_params.tools = _normalize_tools_to_stepfun(resp_params.tools)
-        elif event_type == "response.cancel":
-            for pending_create in self._pending_response_creates:
-                if (
-                    pending_create.event_id in self._discarded_event_ids
-                    or not pending_create.cancelled
-                ):
-                    pending_create.cancelled = True
 
         # StepFun API rejects client conversation.item.create with type="function_call"
         # (item.type must be message or function_call_output).
@@ -759,10 +746,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         if not event.response.metadata:
             client_event_id: str | None = None
             if self._pending_response_creates:
-                pending = self._pending_response_creates.popleft()
-                client_event_id = pending.event_id
-                if pending.cancelled:
-                    self._discarded_event_ids.add(pending.event_id)
+                client_event_id = self._pending_response_creates.popleft()
             elif self._response_created_futures:
                 client_event_id = next(iter(self._response_created_futures.keys()))
 
@@ -780,10 +764,11 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Filter out benign protocol divergence errors from StepFun."""
         # Settle correlated futures first so context updates or replies do not hang until timeout
         if event_id := event.error.event_id:
-            for item in list(self._pending_response_creates):
-                if item.event_id == event_id:
-                    self._pending_response_creates.remove(item)
-                    break
+            if event_id in self._pending_response_creates:
+                try:
+                    self._pending_response_creates.remove(event_id)
+                except ValueError:
+                    pass
             self._pending_client_items = [
                 it for it in self._pending_client_items if it.client_item_id != event_id
             ]
@@ -799,12 +784,12 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
         # StepFun returns 'no ongoing response to cancel' when response.cancel arrives
         # while no active response is generating.
-        # StepFun confirmed no active response exists; purge any cancelled pending create so
-        # it doesn't poison subsequent replies.
+        # StepFun confirmed no active response exists; purge only the cancelled pending create
+        # (the one in _discarded_event_ids) so other queued replies are NOT discarded.
         if "no ongoing response to cancel" in msg or "has no active response" in msg:
-            for item in list(self._pending_response_creates):
-                if item.cancelled or item.event_id in self._discarded_event_ids:
-                    self._pending_response_creates.remove(item)
+            for eid in list(self._pending_response_creates):
+                if eid in self._discarded_event_ids:
+                    self._pending_response_creates.remove(eid)
                     break
             logger.debug(
                 "Ignored benign StepFun cancel error", extra={"lk.pii.error": error.message}

@@ -583,20 +583,20 @@ def test_stepfun_provider_tools_serialization() -> None:
     assert ws.to_dict() == {
         "type": "web_search",
         "function": {
-            "description": "网络搜索工具",
+            "description": "Search the web for up-to-date information and real-time news.",
             "options": {"top_k": 3, "timeout_seconds": 4},
         },
     }
 
     ret = tools.Retrieval(
         vector_store_id="vs_12345",
-        description="专业知识库",
+        description="Search and retrieve relevant context from the knowledge base.",
         prompt_template="找到{{knowledge}}回答{{query}}",
     )
     assert ret.to_dict() == {
         "type": "retrieval",
         "function": {
-            "description": "专业知识库",
+            "description": "Search and retrieve relevant context from the knowledge base.",
             "options": {
                 "vector_store_id": "vs_12345",
                 "prompt_template": "找到{{knowledge}}回答{{query}}",
@@ -873,7 +873,7 @@ async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
         # 1. Start generate_reply
         fut = session.generate_reply(instructions="测试回复")
         assert len(session._pending_response_creates) == 1
-        event_id = session._pending_response_creates[0].event_id
+        event_id = session._pending_response_creates[0]
         assert event_id in session._response_created_futures
 
         # 2. Cancel the future before response.created arrives
@@ -1027,7 +1027,7 @@ async def test_cancellation_confirmed_does_not_poison_subsequent_replies(
         # 1. Start Reply A
         fut_a = session.generate_reply(instructions="回复A")
         assert len(session._pending_response_creates) == 1
-        id_a = session._pending_response_creates[0].event_id
+        id_a = session._pending_response_creates[0]
 
         # 2. Cancel Reply A
         fut_a.cancel()
@@ -1056,7 +1056,7 @@ async def test_cancellation_confirmed_does_not_poison_subsequent_replies(
         # 4. Start Reply B
         fut_b = session.generate_reply(instructions="回复B")
         assert len(session._pending_response_creates) == 1
-        id_b = session._pending_response_creates[0].event_id
+        id_b = session._pending_response_creates[0]
         assert id_b != id_a
 
         # 5. StepFun sends response.created (without metadata) for Reply B
@@ -1368,6 +1368,79 @@ async def test_turn_scoped_tools_use_nested_schema_in_response_create(
         assert tool_schema["type"] == "function"
         assert "function" in tool_schema
         assert tool_schema["function"]["name"] == "search_database"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_pending_replies_only_one_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure when two replies are pending and only one is cancelled, the other is not discarded."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import (
+        RealtimeError,
+        RealtimeErrorEvent,
+        RealtimeResponse,
+        ResponseCreatedEvent,
+    )
+
+    from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # 1. Queue both Reply A and Reply B
+        fut_a = session.generate_reply(instructions="Reply A")
+        fut_b = session.generate_reply(instructions="Reply B")
+        assert len(session._pending_response_creates) == 2
+        id_a = session._pending_response_creates[0]
+        id_b = session._pending_response_creates[1]
+
+        # 2. Cancel ONLY Reply A
+        fut_a.cancel()
+        import asyncio
+
+        await asyncio.sleep(0)
+        assert id_a in session._discarded_event_ids
+        assert id_b not in session._discarded_event_ids
+        assert fut_b.done() is False
+
+        # 3. StepFun sends "no ongoing response to cancel" for A
+        session._handle_error(
+            RealtimeErrorEvent(
+                event_id="err_cancel",
+                type="error",
+                error=RealtimeError(
+                    type="invalid_request_error",
+                    message="no ongoing response to cancel",
+                ),
+            )
+        )
+        # Only A should be purged, B must remain in queue!
+        assert len(session._pending_response_creates) == 1
+        assert session._pending_response_creates[0] == id_b
+
+        # 4. StepFun acknowledges B
+        resp_ev_b = ResponseCreatedEvent(
+            event_id="ev_resp_b",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_b_456",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,
+            ),
+        )
+        session._handle_response_created(resp_ev_b)
+
+        # Reply B must be successfully resolved and not discarded!
+        assert fut_b.done() is True
+        assert not isinstance(session._current_generation, _DiscardedGeneration)
     finally:
         await session.aclose()
         await model.aclose()
