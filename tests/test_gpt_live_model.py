@@ -1193,6 +1193,38 @@ async def test_duplicate_backend_calls_do_not_repeat_dispatch_or_block_continuat
         await model.aclose()
 
 
+@pytest.mark.parametrize("after_completed", [False, True])
+async def test_a_call_redelivered_after_its_result_is_not_dispatched_again(
+    monkeypatch: pytest.MonkeyPatch, after_completed: bool
+) -> None:
+    """A fast tool answers before the redelivery, which must not run it a second time."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    calls: list[llm.FunctionCall] = []
+    session.on("function_call", calls.append)
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(_response_event("item_d1", {"type": "response.created"}))
+        session._handle_event(_response_event("item_d1", _function_call_done("call_a")))
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_a", output="one", is_error=False)]
+        )
+        if after_completed:
+            session._handle_event(_response_event("item_d1", _completed("resp_1")))
+        session._handle_event(_response_event("item_d1", _function_call_done("call_a")))
+        await asyncio.sleep(0.05)
+
+        assert [call.call_id for call in calls] == ["call_a"]
+        assert not session._backend_open_calls
+        if after_completed:
+            assert len([event for event in ws.sent if event["type"] == "response.create"]) == 1
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "reason",
     ["close_requested", "expired", "content", "remote_hangup", "connection_lost", None],
