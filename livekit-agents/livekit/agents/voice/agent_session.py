@@ -24,6 +24,7 @@ from typing import (
 from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
+from opentelemetry.sdk.trace import ReadableSpan
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -2206,7 +2207,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=last_speaking_time_ns)
+            end_time_ns = last_speaking_time_ns
+            if (
+                end_time_ns is not None
+                and isinstance(self._user_speaking_span, ReadableSpan)
+                and self._user_speaking_span.start_time is not None
+            ):
+                # a VAD end is backdated by the silence it waited on, so it can precede an
+                # STT-anchored start; never negative
+                end_time_ns = max(end_time_ns, self._user_speaking_span.start_time)
+
+            self._user_speaking_span.end(end_time=end_time_ns)
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
