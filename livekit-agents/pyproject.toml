@@ -134,6 +134,7 @@ gradium = ["livekit-plugins-gradium>=1.7.1"]
 xai = ["livekit-plugins-xai>=1.7.1"]
 phonic = ["livekit-plugins-phonic>=1.7.1"]
 did = ["livekit-plugins-did>=1.7.1"]
+stepfun = ["livekit-plugins-stepfun>=1.7.1"]
 
 
 [project.urls]

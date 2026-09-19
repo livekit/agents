@@ -1,0 +1,730 @@
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+from openai.types.realtime import (
+    ConversationItemCreatedEvent,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeAudioConfigOutput,
+    RealtimeConversationItemUserMessage,
+    RealtimeError,
+    RealtimeErrorEvent,
+    RealtimeResponse,
+    RealtimeSessionCreateRequest,
+    ResponseCreatedEvent,
+)
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
+
+from livekit.agents import APIError
+from livekit.plugins.openai.realtime.realtime_model import process_base_url
+from livekit.plugins.stepfun import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    realtime,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def test_model_initialization_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-stepfun-key")
+    model = realtime.RealtimeModel()
+
+    assert model.model == DEFAULT_MODEL
+    assert model.voice == DEFAULT_VOICE
+    assert model._opts.base_url == DEFAULT_BASE_URL
+    assert model._opts.api_key == "test-stepfun-key"
+    assert model._provider_label == "StepFun StepAudio Realtime API"
+    assert isinstance(model._opts.turn_detection, ServerVad)
+    assert model._opts.turn_detection.type == "server_vad"
+    assert model.capabilities.turn_detection is True
+
+
+def test_model_initialization_custom_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
+    custom_key = "custom-key"
+    custom_url = "wss://custom.stepfun.ai/v1/realtime"
+    custom_model = "stepaudio-2.5-realtime"
+    custom_voice = "清爽少年"
+
+    model = realtime.RealtimeModel(
+        model=custom_model,
+        voice=custom_voice,
+        api_key=custom_key,
+        base_url=custom_url,
+    )
+
+    assert model.model == custom_model
+    assert model.voice == custom_voice
+    assert model._opts.base_url == custom_url
+    assert model._opts.api_key == custom_key
+
+
+def test_missing_api_key_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("STEPFUN_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="STEPFUN_API_KEY"):
+        realtime.RealtimeModel()
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "stepaudio-3-realtime-preview",
+        "stepaudio-2.5-realtime",
+        "step-audio-2",
+    ],
+)
+def test_websocket_url_formatting(model_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel(model=model_name)
+
+    ws_url = process_base_url(model._opts.base_url, model._opts.model)
+    parsed = urlparse(ws_url)
+    assert parsed.scheme in ("ws", "wss")
+    assert parsed.netloc == "api.stepfun.ai"
+    assert parsed.path == "/v1/realtime"
+    assert parse_qs(parsed.query)["model"] == [model_name]
+
+
+@pytest.mark.asyncio
+async def test_session_update_normalizes_turn_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        request = RealtimeSessionCreateRequest(
+            type="realtime",
+            audio=RealtimeAudioConfig(
+                input=RealtimeAudioConfigInput(
+                    turn_detection=ServerVad(
+                        type="server_vad",
+                        threshold=0.6,
+                        silence_duration_ms=500,
+                        prefix_padding_ms=250,
+                    )
+                ),
+                output=RealtimeAudioConfigOutput(voice="闫雨婷"),
+            ),
+        )
+
+        wrapped = session._wrap_session_update("event_123", request)
+        assert isinstance(wrapped, dict)
+        assert wrapped["type"] == "session.update"
+        assert wrapped["event_id"] == "event_123"
+        s = wrapped["session"]
+        assert s["modalities"] == ["text", "audio"]
+        assert s["turn_detection"]["type"] == "server_vad"
+        assert s["turn_detection"]["silence_duration_ms"] == 500
+        assert s["turn_detection"]["prefix_padding_ms"] == 250
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_update_normalizes_tools_to_nested_function_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure flat OpenAI realtime tool definitions are converted to StepFun's nested format."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        from openai.types.realtime import RealtimeFunctionTool
+
+        request = RealtimeSessionCreateRequest(
+            type="realtime",
+            tools=[
+                RealtimeFunctionTool(
+                    type="function",
+                    name="get_current_weather",
+                    description="Get weather for a city",
+                    parameters={"type": "object", "properties": {"city": {"type": "string"}}},
+                )
+            ],
+        )
+
+        wrapped = session._wrap_session_update("event_tool_1", request)
+        assert isinstance(wrapped, dict)
+        tools = wrapped["session"]["tools"]
+        assert len(tools) == 1
+        # StepFun REQUIRES nested {"type": "function", "function": {"name": ...}}
+        assert "function" in tools[0]
+        assert tools[0]["function"]["name"] == "get_current_weather"
+        assert tools[0]["function"]["description"] == "Get weather for a city"
+        assert tools[0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+        }
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_handle_error_ignores_benign_cancel_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        mock_emit = MagicMock()
+        session.emit = mock_emit
+
+        # 1. 'no ongoing response to cancel' error from StepFun should be swallowed
+        cancel_err = RealtimeErrorEvent(
+            event_id="err_1",
+            type="error",
+            error=RealtimeError(
+                type="invalid_request_error",
+                message="no ongoing response to cancel",
+            ),
+        )
+        session._handle_error(cancel_err)
+        mock_emit.assert_not_called()
+
+        # 2. 'Conversation has no active response' should also be swallowed
+        cancel_err_2 = RealtimeErrorEvent(
+            event_id="err_2",
+            type="error",
+            error=RealtimeError(
+                type="invalid_request_error",
+                message="Conversation has no active response.",
+            ),
+        )
+        session._handle_error(cancel_err_2)
+        mock_emit.assert_not_called()
+
+        # 3. Root item missing should also be swallowed
+        root_err = RealtimeErrorEvent(
+            event_id="err_3",
+            type="error",
+            error=RealtimeError(
+                type="invalid_request_error",
+                message="Cannot find previous item with id: root",
+            ),
+        )
+        session._handle_error(root_err)
+        mock_emit.assert_not_called()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_handle_error_propagates_fatal_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        fatal_err = RealtimeErrorEvent(
+            event_id="err_fatal",
+            type="error",
+            error=RealtimeError(
+                type="invalid_api_key",
+                message="Incorrect API key provided",
+                code="invalid_api_key",
+            ),
+        )
+
+        with pytest.raises(APIError, match="StepFun StepAudio Realtime API returned an error"):
+            session._handle_error(fatal_err)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_thinking_events_are_processed_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        session._on_stepfun_server_event(
+            {
+                "type": "response.thinking.delta",
+                "delta": "用户问今天的天气，让我先分析一下...",
+            }
+        )
+        session._on_stepfun_server_event(
+            {
+                "type": "response.thinking.done",
+            }
+        )
+        session._on_stepfun_server_event(
+            {
+                "type": "session.created",
+                "session": {"model": "stepaudio-3-realtime-preview"},
+            }
+        )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transcription_delta_overwrites_accumulated_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure StepFun cumulative deltas do not get concatenated into duplicate strings."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        emitted_events = []
+        session.on("input_audio_transcription_completed", lambda ev: emitted_events.append(ev))
+
+        # Event 1: partial sentence
+        session._handle_conversion_item_input_audio_transcription_delta(
+            ConversationItemInputAudioTranscriptionDeltaEvent(
+                event_id="ev_1",
+                type="conversation.item.input_audio_transcription.delta",
+                item_id="item_1",
+                content_index=0,
+                delta="你好",
+            )
+        )
+        assert emitted_events[-1].transcript == "你好"
+
+        # Event 2: cumulative sentence (StepFun sends full sentence so far)
+        session._handle_conversion_item_input_audio_transcription_delta(
+            ConversationItemInputAudioTranscriptionDeltaEvent(
+                event_id="ev_2",
+                type="conversation.item.input_audio_transcription.delta",
+                item_id="item_1",
+                content_index=0,
+                delta="你好，能听到我说话吗？",
+            )
+        )
+        # MUST NOT be "你好你好，能听到我说话吗？"
+        assert emitted_events[-1].transcript == "你好，能听到我说话吗？"
+        assert session._input_transcript_accumulators["item_1"][0] == "你好，能听到我说话吗？"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_sends_response_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure generate_reply sends response.create."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events = []
+        session.send_event = lambda ev: sent_events.append(ev)  # type: ignore
+
+        session.generate_reply(instructions="热情打招呼")
+        assert len(sent_events) == 1
+        assert sent_events[0].type == "response.create"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transcription_delta_deduplication(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure duplicate delta frames from StepFun do not trigger duplicate events."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        emitted_events = []
+        session.on("input_audio_transcription_completed", lambda ev: emitted_events.append(ev))
+
+        # Push identical delta 5 times
+        for _ in range(5):
+            session._handle_conversion_item_input_audio_transcription_delta(
+                ConversationItemInputAudioTranscriptionDeltaEvent(
+                    event_id="ev_repeat",
+                    type="conversation.item.input_audio_transcription.delta",
+                    item_id="item_repeat",
+                    content_index=0,
+                    delta="Hello.",
+                )
+            )
+        # Should only emit once!
+        assert len(emitted_events) == 1
+        assert emitted_events[0].transcript == "Hello."
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_commit_audio_synthesizes_final_transcription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure commit_audio marks accumulated StepFun transcription as is_final=True."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        emitted_events = []
+        session.on("input_audio_transcription_completed", lambda ev: emitted_events.append(ev))
+
+        # 1. Delta arrives (is_final=False)
+        session._handle_conversion_item_input_audio_transcription_delta(
+            ConversationItemInputAudioTranscriptionDeltaEvent(
+                event_id="ev_1",
+                type="conversation.item.input_audio_transcription.delta",
+                item_id="item_vad",
+                content_index=0,
+                delta="你好，你在吗？",
+            )
+        )
+        assert len(emitted_events) == 1
+        assert emitted_events[-1].is_final is False
+
+        # 2. VAD triggers commit_audio() -> synthesized is_final=True
+        session.commit_audio()
+        assert len(emitted_events) == 2
+        assert emitted_events[-1].is_final is True
+        assert emitted_events[-1].transcript == "你好，你在吗？"
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_response_created_associates_missing_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure response.created resolves pending future even when StepFun drops client_event_id metadata."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        session.send_event = lambda ev: None  # type: ignore
+
+        # Trigger generate_reply which registers a pending future
+        fut = session.generate_reply(instructions="测试回复")
+        assert len(session._response_created_futures) == 1
+
+        # Simulate StepFun response.created WITHOUT metadata
+        resp_ev = ResponseCreatedEvent(
+            event_id="ev_resp",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_123",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,  # StepFun drops metadata!
+            ),
+        )
+
+        session._handle_response_created(resp_ev)
+
+        # Future must be resolved immediately, not timing out!
+        assert fut.done()
+        gen_ev = fut.result()
+        assert gen_ev.user_initiated is True
+        assert len(session._response_created_futures) == 0
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_immediately_closes_current_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure interrupt immediately closes active generation to prevent 5s speech timeout."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import RealtimeResponse, ResponseCreatedEvent
+
+    from livekit.plugins import stepfun
+
+    model = stepfun.realtime.RealtimeModel()
+    session = model.session()
+    try:
+        session.send_event = lambda ev: None  # type: ignore
+
+        # Trigger reply generation so a future is pending
+        _ = session.generate_reply(instructions="测试打断")
+        # Simulate response.created arriving so _current_generation is instantiated
+        resp_ev = ResponseCreatedEvent(
+            event_id="ev_resp",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_123",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,
+            ),
+        )
+        session._handle_response_created(resp_ev)
+        assert session._current_generation is not None
+        gen = session._current_generation
+
+        # Call interrupt
+        session.interrupt()
+
+        # Must be immediately closed and set to _DiscardedGeneration so trailing audio doesn't throw!
+        from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+        assert isinstance(session._current_generation, _DiscardedGeneration)
+        assert gen._done_fut.done() is True
+
+        # Simulate trailing audio arriving after interrupt (StepFun in-flight packet)
+        from openai.types.realtime import ResponseAudioDeltaEvent, ResponseAudioDoneEvent
+
+        session._handle_response_audio_delta(
+            ResponseAudioDeltaEvent.model_construct(
+                event_id="ev_delta",
+                type="response.output_audio.delta",
+                response_id="resp_123",
+                item_id="item_1",
+                output_index=0,
+                content_index=0,
+                delta="AAA=",
+            )
+        )
+        session._handle_response_audio_done(
+            ResponseAudioDoneEvent.model_construct(
+                event_id="ev_done",
+                type="response.output_audio.done",
+                response_id="resp_123",
+                item_id="item_1",
+                output_index=0,
+                content_index=0,
+            )
+        )
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_client_send_event_filters_function_call_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure StepFun client never sends conversation.item.create with type='function_call' (avoids 400)."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # Dict format function_call item
+        session.send_event({
+            "type": "conversation.item.create",
+            "item": {"type": "function_call", "name": "foo"},
+        })
+        assert len(sent_events) == 0
+
+        # Normal message item should pass through
+        session.send_event({
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user"},
+        })
+        assert len(sent_events) == 1
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_server_uuid_item_create_future_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure server UUID in conversation.item.created matches client's earliest pending future."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        import asyncio
+        client_fut = asyncio.get_running_loop().create_future()
+        client_item_id = "client_item_123"
+        session._item_create_future[client_item_id] = client_fut
+
+        server_uuid = "server_uuid_456"
+        event = ConversationItemCreatedEvent(
+            event_id="ev_1",
+            type="conversation.item.created",
+            previous_item_id=None,
+            item=RealtimeConversationItemUserMessage(
+                id=server_uuid,
+                type="message",
+                role="user",
+                status="completed",
+                content=[],
+            ),
+        )
+        session._handle_conversion_item_added(event)
+
+        assert client_fut.done() is True
+        assert client_fut.result() is None
+    finally:
+        await session.aclose()
+
+
+def test_stepfun_provider_tools_serialization() -> None:
+    """Verify StepFun server-side provider tools serialize to expected dictionaries."""
+    from livekit.plugins.stepfun import tools
+
+    ws = tools.WebSearch(top_k=3, timeout_seconds=4)
+    assert ws.to_dict() == {
+        "type": "web_search",
+        "function": {
+            "description": "网络搜索工具",
+            "options": {"top_k": 3, "timeout_seconds": 4},
+        },
+    }
+
+    ret = tools.Retrieval(
+        vector_store_id="vs_12345",
+        description="专业知识库",
+        prompt_template="找到{{knowledge}}回答{{query}}",
+    )
+    assert ret.to_dict() == {
+        "type": "retrieval",
+        "function": {
+            "description": "专业知识库",
+            "options": {
+                "vector_store_id": "vs_12345",
+                "prompt_template": "找到{{knowledge}}回答{{query}}",
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_tools_update_event_includes_stepfun_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure _create_tools_update_event merges StepFun server-side provider tools."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit.agents import function_tool
+    from livekit.plugins.stepfun import realtime, tools
+
+    @function_tool
+    def my_local_tool(city: str) -> str:
+        """查天气"""
+        return "晴"
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        combined_tools = [my_local_tool, tools.WebSearch(top_k=5)]
+        event = session._create_tools_update_event(combined_tools)
+
+        tool_list = event["session"]["tools"]
+        assert len(tool_list) == 2
+        # One is function tool (nested under "function" or top-level name)
+        assert any(
+            t.get("name") == "my_local_tool"
+            or t.get("function", {}).get("name") == "my_local_tool"
+            for t in tool_list
+            if isinstance(t, dict)
+        )
+        # One is web_search tool
+        assert any(isinstance(t, dict) and t.get("type") == "web_search" for t in tool_list)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_echo_gate_suppression_during_speech(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure acoustic echo gate zeroes out low-RMS speaker leakage during active speech."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit import rtc
+    from livekit.plugins.stepfun import realtime
+
+    model = realtime.RealtimeModel(echo_gate_threshold=2000.0)
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session, "send_event", lambda ev: sent_events.append(ev))
+
+        # 1. When NOT speaking: Low-RMS frame passes through untouched
+        low_rms_data = b"\x10\x00" * 2400
+        frame = rtc.AudioFrame(
+            data=low_rms_data,
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=2400,
+        )
+        session.push_audio(frame)
+        assert len(sent_events) > 0
+        import base64
+        decoded = base64.b64decode(sent_events[-1].audio)
+        assert decoded == low_rms_data
+
+        # 2. When speaking: Low-RMS frame is zeroed out
+        sent_events.clear()
+        session._speaking_active = True
+        session.push_audio(frame)
+        assert len(sent_events) > 0
+        decoded_zero = base64.b64decode(sent_events[-1].audio)
+        assert decoded_zero == b"\x00" * len(low_rms_data)
+
+        # 3. When speaking: Loud user speech (RMS > 2000) passes through to allow interruption
+        sent_events.clear()
+        loud_data = b"\x00\x40" * 2400  # sample = 16384, RMS ≈ 16384 > 2000
+        loud_frame = rtc.AudioFrame(
+            data=loud_data,
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=2400,
+        )
+        session.push_audio(loud_frame)
+        assert len(sent_events) > 0
+        decoded_loud = base64.b64decode(sent_events[-1].audio)
+        assert decoded_loud == loud_data
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_aclose_clean_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure session.aclose() terminates main task and closes event channels cleanly."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    assert session._closing is False
+    assert not session._main_atask.done()
+
+    await session.aclose()
+    assert session._closing is True
+    assert session._main_atask.done()
+
+
+@pytest.mark.asyncio
+async def test_initial_empty_function_call_item_filtered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure StepFun initial function_call item with arguments=None is filtered before streaming deltas."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import ConversationItemAdded, RealtimeConversationItemFunctionCall
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        # Initial empty function_call packet where arguments is None (as constructed from StepFun raw event)
+        empty_item = RealtimeConversationItemFunctionCall.model_construct(
+            id="item_func_1",
+            type="function_call",
+            call_id="call_123",
+            name="query_market_price",
+            arguments=None,
+        )
+        ev = ConversationItemAdded(
+            event_id="ev_fnc",
+            type="conversation.item.added",
+            item=empty_item,
+        )
+        # Should return early without raising or inserting incomplete item into chat ctx
+        session._handle_conversion_item_added(ev)
+        assert session._remote_chat_ctx.get("item_func_1") is None
+    finally:
+        await session.aclose()
+
+
+
+
+
+

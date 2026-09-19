@@ -1,0 +1,473 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from typing import Any, Literal
+
+import aiohttp
+import numpy as np
+from openai.types.beta.realtime.session import TurnDetection
+from openai.types.realtime import (
+    AudioTranscription,
+    ConversationItemAdded,
+    ConversationItemInputAudioTranscriptionDeltaEvent,
+    RealtimeAudioConfig,
+    RealtimeAudioConfigInput,
+    RealtimeErrorEvent,
+    RealtimeReasoning,
+    RealtimeSessionCreateRequest,
+    ResponseAudioDeltaEvent,
+    ResponseAudioDoneEvent,
+    ResponseCreatedEvent,
+    ResponseDoneEvent,
+    ResponseOutputItemDoneEvent,
+)
+from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
+from openai.types.realtime.session_update_event import SessionUpdateEvent
+
+from livekit import rtc
+from livekit.agents import APIConnectionError, llm
+from livekit.agents.types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGivenOr,
+)
+from livekit.agents.utils import is_given
+from livekit.plugins import openai
+from livekit.plugins.openai.realtime.realtime_model import (
+    _DiscardedGeneration,
+    process_base_url,
+)
+
+from ..log import logger
+from ..models import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_VOICE,
+    VOICE_MAPPING_TO_DOMESTIC,
+    VOICE_MAPPING_TO_OVERSEAS,
+    StepAudioRealtimeModels,
+)
+from ..tools import StepFunTool
+
+STEPFUN_DEFAULT_TURN_DETECTION = ServerVad(
+    type="server_vad",
+    threshold=0.9,
+    prefix_padding_ms=300,
+    silence_duration_ms=400,
+)
+
+
+class RealtimeModel(openai.realtime.RealtimeModel):
+    """StepFun (阶跃星辰) StepAudio Realtime Speech-to-Speech Model."""
+
+    def __init__(
+        self,
+        *,
+        model: StepAudioRealtimeModels | str = DEFAULT_MODEL,
+        voice: str = DEFAULT_VOICE,
+        modalities: NotGivenOr[list[Literal["text", "audio"]]] = NOT_GIVEN,
+        input_audio_transcription: NotGivenOr[AudioTranscription | None] = NOT_GIVEN,
+        turn_detection: NotGivenOr[TurnDetection | ServerVad | None] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        speed: NotGivenOr[float] = NOT_GIVEN,
+        reasoning: NotGivenOr[RealtimeReasoning | None] = NOT_GIVEN,
+        api_key: str | None = None,
+        base_url: NotGivenOr[str] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        echo_gate_threshold: float = 2000.0,
+        **kwargs: Any,
+    ) -> None:
+        self._echo_gate_threshold = echo_gate_threshold
+        resolved_api_key = api_key or os.environ.get("STEPFUN_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "The api_key option must be set either by passing api_key "
+                "or by setting the STEPFUN_API_KEY environment variable"
+            )
+
+        resolved_base_url = (
+            base_url if is_given(base_url) else os.environ.get("STEPFUN_BASE_URL", DEFAULT_BASE_URL)
+        )
+        resolved_model = model if is_given(model) else DEFAULT_MODEL
+        raw_voice = voice if is_given(voice) else DEFAULT_VOICE
+        if "stepfun.com" in resolved_base_url:
+            resolved_voice = VOICE_MAPPING_TO_DOMESTIC.get(raw_voice, raw_voice)
+        else:
+            resolved_voice = VOICE_MAPPING_TO_OVERSEAS.get(raw_voice, raw_voice)
+        resolved_turn_detection = (
+            turn_detection if is_given(turn_detection) else STEPFUN_DEFAULT_TURN_DETECTION
+        )
+
+        init_kwargs: dict[str, Any] = {
+            "base_url": resolved_base_url,
+            "model": resolved_model,
+            "voice": resolved_voice,
+            "api_key": resolved_api_key,
+            "modalities": modalities if is_given(modalities) else ["text", "audio"],
+            "turn_detection": resolved_turn_detection,
+            "http_session": http_session,
+            "conn_options": conn_options,
+        }
+
+        if is_given(input_audio_transcription):
+            init_kwargs["input_audio_transcription"] = input_audio_transcription
+        if is_given(tool_choice):
+            init_kwargs["tool_choice"] = tool_choice
+        if is_given(speed):
+            init_kwargs["speed"] = speed
+        if is_given(reasoning):
+            init_kwargs["reasoning"] = reasoning
+        if is_given(max_session_duration):
+            init_kwargs["max_session_duration"] = max_session_duration
+
+        super().__init__(**init_kwargs)
+        # StepFun uses the original OpenAI Beta event protocol names (e.g. response.audio.delta).
+        # Enable Azure normalization so LiveKit maps them to response.output_audio.*.
+        self._opts.is_azure = True
+
+        self._provider_label = "StepFun StepAudio Realtime API"
+
+    @property
+    def voice(self) -> str:
+        return self._opts.voice
+
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
+        self._sessions.add(sess)
+        return sess
+
+
+class RealtimeSession(openai.realtime.RealtimeSession):
+    """StepFun Realtime Session with dialect error suppression and thinking event support."""
+
+    def __init__(
+        self,
+        realtime_model: RealtimeModel,
+        *,
+        turn_detection_disabled: bool = False,
+    ) -> None:
+        super().__init__(realtime_model, turn_detection_disabled=turn_detection_disabled)
+        self._stepfun_model: RealtimeModel = realtime_model
+        self._speaking_active: bool = False
+        self._speaking_until: float = 0.0
+        self._echo_gate_threshold: float = realtime_model._echo_gate_threshold
+        self.on("openai_server_event_received", self._on_stepfun_server_event)
+
+    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+        """Create WebSocket connection using standard Authorization Bearer header for StepFun."""
+        headers = {
+            "User-Agent": "LiveKit Agents",
+            "Authorization": f"Bearer {self._opts.api_key}",
+        }
+        url = process_base_url(
+            self._opts.base_url,
+            self._opts.model,
+            is_azure=False,
+        )
+        t0 = time.perf_counter()
+        try:
+            ws = await asyncio.wait_for(
+                self._realtime_model._ensure_http_session().ws_connect(url=url, headers=headers),
+                self._opts.conn_options.timeout,
+            )
+            self._report_connection_acquired(time.perf_counter() - t0)
+            return ws
+        except aiohttp.ClientError as e:
+            raise APIConnectionError(
+                f"{self._realtime_model._provider_label} client connection error"
+            ) from e
+        except asyncio.TimeoutError as e:
+            raise APIConnectionError(
+                message=f"{self._realtime_model._provider_label} connection timed out",
+            ) from e
+
+    def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
+        """Filter out StepFun initial empty items and safely anchor untracked items to tail."""
+        if getattr(event.item, "content", None) is None and getattr(event.item, "type", None) in (
+            "message",
+            None,
+        ):
+            return
+        # StepFun emits initial function_call without arguments before streaming deltas; skip initial empty item
+        if (
+            getattr(event.item, "type", None) == "function_call"
+            and getattr(event.item, "arguments", None) is None
+        ):
+            return
+        if event.previous_item_id and not self._remote_chat_ctx.get(event.previous_item_id):
+            # Pre-emptively anchor untracked item to tail to avoid noisy warning
+            event.previous_item_id = self._remote_chat_ctx.tail_id
+
+        if event.item.id and event.item.id not in self._item_create_future and self._item_create_future:
+            # StepFun assigns server UUIDs instead of preserving client item.id; map earliest pending future
+            earliest_key = next(iter(self._item_create_future.keys()))
+            self._item_create_future[event.item.id] = self._item_create_future.pop(earliest_key)
+
+        super()._handle_conversion_item_added(event)
+
+    def _on_stepfun_server_event(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type == "response.thinking.delta":
+            delta = event.get("delta") or ""
+            logger.debug("StepAudio thinking: %s", delta)
+        elif event_type == "response.thinking.done":
+            logger.debug("StepAudio thinking completed")
+        elif event_type == "session.created":
+            if sess_obj := event.get("session"):
+                model_name = sess_obj.get("model")
+                logger.info("StepFun session created", extra={"model": model_name})
+
+    def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
+        event = super()._create_tools_update_event(tools)
+        step_provider_tools: list[dict[str, Any]] = []
+        for tool in tools:
+            if isinstance(tool, StepFunTool):
+                step_provider_tools.append(tool.to_dict())
+        if step_provider_tools:
+            event["session"]["tools"] = event["session"].get("tools", []) + step_provider_tools
+        return event
+
+    def send_event(self, event: Any) -> None:
+        # StepFun API rejects client conversation.item.create with type="function_call"
+        # (item.type must be message or function_call_output).
+        if isinstance(event, dict):
+            if event.get("type") == "conversation.item.create":
+                item = event.get("item", {})
+                if item.get("type") == "function_call":
+                    return
+        elif getattr(event, "type", None) == "conversation.item.create":
+            item = getattr(event, "item", None)
+            if getattr(item, "type", None) == "function_call":
+                return
+        super().send_event(event)
+
+    def _wrap_session_update(
+        self, event_id: str, session: RealtimeSessionCreateRequest
+    ) -> SessionUpdateEvent | dict[str, Any]:
+        """Flatten session config for StepFun Realtime API (which uses flat fields, not nested audio)."""
+        td = (
+            session.audio.input.turn_detection
+            if isinstance(session.audio, RealtimeAudioConfig)
+            and isinstance(session.audio.input, RealtimeAudioConfigInput)
+            else None
+        )
+        if td is None and self._opts.turn_detection is not None:
+            td = self._opts.turn_detection
+
+        step_tools: list[Any] = []
+        for t in session.tools or []:
+            if isinstance(t, StepFunTool):
+                step_tools.append(t.to_dict())
+            elif isinstance(t, dict):
+                if "function" in t:
+                    step_tools.append(t)
+                elif t.get("type") == "function" and "name" in t:
+                    step_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": t.get("name"),
+                            "description": t.get("description", ""),
+                            "parameters": t.get("parameters", {}),
+                        },
+                    })
+                else:
+                    step_tools.append(t)
+            elif hasattr(t, "model_dump"):
+                dumped = t.model_dump(exclude_unset=True)
+                if dumped.get("type") == "function" and "name" in dumped:
+                    step_tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": dumped.get("name"),
+                            "description": dumped.get("description", ""),
+                            "parameters": dumped.get("parameters", {}),
+                        },
+                    })
+                else:
+                    step_tools.append(dumped)
+            else:
+                step_tools.append(t)
+
+        flat_session: dict[str, Any] = {
+            "modalities": ["text", "audio"],
+            "instructions": session.instructions or self._instructions or "",
+            "voice": self._opts.voice,
+            "tools": step_tools,
+        }
+
+        if td is not None and getattr(td, "type", None) == "server_vad":
+            threshold_val = getattr(td, "threshold", None)
+            if threshold_val is not None:
+                energy_threshold = int(threshold_val * 5000)
+            elif hasattr(td, "energy_awakeness_threshold") and getattr(td, "energy_awakeness_threshold", None) is not None:
+                energy_threshold = td.energy_awakeness_threshold
+            elif isinstance(td, dict) and "energy_awakeness_threshold" in td:
+                energy_threshold = td["energy_awakeness_threshold"]
+            else:
+                energy_threshold = 4500
+
+            flat_session["turn_detection"] = {
+                "type": "server_vad",
+                "silence_duration_ms": getattr(td, "silence_duration_ms", 400) or 400,
+                "prefix_padding_ms": getattr(td, "prefix_padding_ms", 300) or 300,
+                "energy_awakeness_threshold": energy_threshold,
+            }
+        else:
+            flat_session["turn_detection"] = None
+
+        return {
+            "type": "session.update",
+            "event_id": event_id,
+            "session": flat_session,
+        }
+
+    def _handle_conversion_item_input_audio_transcription_delta(
+        self, event: ConversationItemInputAudioTranscriptionDeltaEvent
+    ) -> None:
+        """Handle input audio transcription delta.
+
+        StepFun transmits the cumulative full transcript recognized so far in each `event.delta`,
+        NOT incremental token deltas. Overwrite rather than accumulate, and dedup identical frames
+        to avoid redundant event flooding.
+        """
+        if not event.delta:
+            return
+
+        content_index = event.content_index or 0
+        by_index = self._input_transcript_accumulators.setdefault(event.item_id, {})
+        if by_index.get(content_index) == event.delta:
+            # Skip identical transcripts repeatedly pushed by StepFun ASR while audio streams
+            return
+        by_index[content_index] = event.delta
+
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=event.delta,
+                is_final=False,
+            ),
+        )
+
+    def commit_audio(self) -> None:
+        """Commit audio and synthesize final transcription event.
+
+        StepFun's Realtime protocol does not emit `conversation.item.input_audio_transcription.completed`.
+        When audio is committed by VAD or user turn completion, emit final transcription event
+        with the latest recognized text.
+        """
+        super().commit_audio()
+        for item_id, by_index in list(self._input_transcript_accumulators.items()):
+            for _content_index, text in list(by_index.items()):
+                if text:
+                    self.emit(
+                        "input_audio_transcription_completed",
+                        llm.InputTranscriptionCompleted(
+                            item_id=item_id,
+                            transcript=text,
+                            is_final=True,
+                        ),
+                    )
+
+    def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
+        """Handle response.created from StepFun.
+
+        StepFun does not echo back `metadata.client_event_id` in response.created.
+        If metadata is missing but there are pending response_created_futures, associate the earliest one
+        so generate_reply resolves immediately without timing out after 10 seconds.
+        """
+        self._speaking_active = True
+        if not event.response.metadata and self._response_created_futures:
+            earliest_id = next(iter(self._response_created_futures.keys()))
+            event.response.metadata = {"client_event_id": earliest_id}
+
+        super()._handle_response_created(event)
+
+    def _handle_response_done(self, event: ResponseDoneEvent) -> None:
+        """Handle response.done from StepFun.
+
+        StepFun may mark a normal complete response as 'incomplete' if it reached max tokens
+        or after audio output finishes. Normalize to 'completed' so _done_fut resolves successfully
+        and doesn't emit an unretrieved Future error.
+        """
+        self._speaking_active = False
+        self._speaking_until = time.time() + 0.8
+        if event.response.status == "incomplete":
+            event.response.status = "completed"
+        super()._handle_response_done(event)
+
+    def _handle_error(self, event: RealtimeErrorEvent) -> None:
+        """Filter out benign protocol divergence errors from StepFun."""
+        error = event.error
+        msg = (error.message or "").lower()
+
+        # StepFun returns 'no ongoing response to cancel' when response.cancel arrives
+        # while no active response is generating. OpenAI drops this silently, so we ignore it here.
+        if "no ongoing response to cancel" in msg or "has no active response" in msg:
+            logger.debug("Ignored benign StepFun cancel error: %s", error.message)
+            return
+
+        # Suppress chat template errors on empty context if any still leak through
+        if "continue_final_message" in msg:
+            logger.warning("Suppressed StepFun template error on empty history: %s", error.message)
+            return
+
+        # StepFun may reject 'previous_item_id: root'; ignore non-fatal item errors
+        if "cannot find previous item" in msg and "root" in msg:
+            logger.debug("Ignored StepFun root item error: %s", error.message)
+            return
+
+        super()._handle_error(event)
+
+    def interrupt(self) -> None:
+        """Interrupt active generation and mark it discarded so trailing packets don't throw AssertionError."""
+        self._speaking_active = False
+        self._speaking_until = 0.0
+        super().interrupt()
+        if self._current_generation is not None:
+            self._close_current_generation(reason="interruption")
+            self._current_generation = _DiscardedGeneration()
+
+    def _is_speaking_active(self) -> bool:
+        return self._speaking_active or (time.time() < self._speaking_until)
+
+    def push_audio(self, frame: rtc.AudioFrame) -> None:
+        if self._echo_gate_threshold > 0 and self._is_speaking_active():
+            in_data = np.frombuffer(frame.data, dtype=np.int16)
+            rms = float(np.sqrt(np.mean(in_data.astype(np.float32) ** 2)))
+            if rms < self._echo_gate_threshold:
+                # Gated: acoustic speaker echo or ambient hiss while AI is speaking
+                required_bytes = frame.samples_per_channel * frame.num_channels * 2
+                frame = rtc.AudioFrame(
+                    data=b"\x00" * required_bytes,
+                    sample_rate=frame.sample_rate,
+                    num_channels=frame.num_channels,
+                    samples_per_channel=frame.samples_per_channel,
+                )
+        super().push_audio(frame)
+
+    def _handle_response_audio_delta(self, event: ResponseAudioDeltaEvent) -> None:
+        if self._current_generation is None or isinstance(
+            self._current_generation, _DiscardedGeneration
+        ):
+            return
+        super()._handle_response_audio_delta(event)
+
+    def _handle_response_audio_done(self, event: ResponseAudioDoneEvent) -> None:
+        if self._current_generation is None or isinstance(
+            self._current_generation, _DiscardedGeneration
+        ):
+            return
+        super()._handle_response_audio_done(event)
+
+    def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        if self._current_generation is None or isinstance(
+            self._current_generation, _DiscardedGeneration
+        ):
+            return
+        super()._handle_response_output_item_done(event)
