@@ -11,6 +11,8 @@ from openai.types.beta.realtime.session import TurnDetection
 from openai.types.realtime import (
     AudioTranscription,
     ConversationItemAdded,
+    ConversationItemCreateEvent,
+    ConversationItemDeleteEvent,
     ConversationItemInputAudioTranscriptionDeltaEvent,
     RealtimeAudioConfig,
     RealtimeAudioConfigInput,
@@ -177,14 +179,14 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             )
             self._report_connection_acquired(time.perf_counter() - t0)
             return ws
-        except aiohttp.ClientError as e:
+        except aiohttp.ClientError:
             raise APIConnectionError(
                 f"{self._realtime_model._provider_label} client connection error"
-            ) from e
-        except asyncio.TimeoutError as e:
+            ) from None
+        except asyncio.TimeoutError:
             raise APIConnectionError(
                 message=f"{self._realtime_model._provider_label} connection timed out",
-            ) from e
+            ) from None
 
     def _handle_conversion_item_added(self, event: ConversationItemAdded) -> None:
         """Filter out StepFun initial empty items and safely anchor untracked items to tail."""
@@ -256,6 +258,24 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 or isinstance(tool, llm.ProviderTool)
             ]
             self._tools = llm.ToolContext(retained_tools)
+
+    def _create_update_chat_ctx_events(
+        self, chat_ctx: llm.ChatContext
+    ) -> list[ConversationItemCreateEvent | ConversationItemDeleteEvent]:
+        """Create chat context update events, excluding client-created function calls and normalizing root."""
+        events = super()._create_update_chat_ctx_events(chat_ctx)
+        filtered_events: list[ConversationItemCreateEvent | ConversationItemDeleteEvent] = []
+        for ev in events:
+            if isinstance(ev, ConversationItemCreateEvent):
+                # StepFun rejects client-created function_call items (item.type must be message or function_call_output).
+                # Exclude them before futures are registered in update_chat_ctx to avoid 5s timeout.
+                if getattr(ev.item, "type", None) == "function_call":
+                    continue
+                # StepFun rejects 'previous_item_id: root'; omit it when item is at root
+                if ev.previous_item_id == "root":
+                    ev.previous_item_id = None
+            filtered_events.append(ev)
+        return filtered_events
 
     def send_event(self, event: Any) -> None:
         # StepFun API rejects client conversation.item.create with type="function_call"
@@ -452,6 +472,15 @@ class RealtimeSession(openai.realtime.RealtimeSession):
 
     def _handle_error(self, event: RealtimeErrorEvent) -> None:
         """Filter out benign protocol divergence errors from StepFun."""
+        # Settle correlated futures first so context updates or replies do not hang until timeout
+        if event_id := event.error.event_id:
+            if fut := self._chat_ctx_event_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_result(None)
+            elif fut := self._response_created_futures.pop(event_id, None):
+                if not fut.done():
+                    fut.set_exception(llm.RealtimeError(event.error.message, code=event.error.code))
+
         error = event.error
         msg = (error.message or "").lower()
 
