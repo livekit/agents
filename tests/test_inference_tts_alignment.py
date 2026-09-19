@@ -4,7 +4,7 @@ import base64
 import json
 from collections import deque
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, get_args
 
 import aiohttp
 import pytest
@@ -12,10 +12,54 @@ import pytest
 import livekit.agents.inference.tts as inference_tts
 from livekit.agents import APIConnectOptions
 from livekit.agents.inference._utils import HEADER_SESSION_ID
-from livekit.agents.inference.tts import TTS
+from livekit.agents.inference.tts import TTS, CartesiaLanguage, CartesiaLocale
 from livekit.agents.types import USERDATA_TIMED_TRANSCRIPT
 
 pytestmark = pytest.mark.unit
+
+
+def test_cartesia_sonic_36_languages() -> None:
+    languages = set(get_args(CartesiaLanguage))
+    locales = set(get_args(get_args(CartesiaLocale)[1]))
+
+    assert len(languages) == 44
+    assert {"or", "ur"} <= languages
+    assert "hi-IN" in locales
+
+
+def test_cartesia_language_and_locale_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="either language or locale"):
+        TTS(
+            model="cartesia/sonic-3.6",
+            language="hi",
+            api_key="test-key",
+            api_secret="test-secret",
+            extra_kwargs={"locale": "hi-IN"},
+        )
+
+
+def test_cartesia_update_options_rejects_language_and_locale_atomically() -> None:
+    language_tts = TTS(
+        model="cartesia/sonic-3.6",
+        language="hi",
+        api_key="test-key",
+        api_secret="test-secret",
+    )
+    with pytest.raises(ValueError, match="either language or locale"):
+        language_tts.update_options(extra_kwargs={"locale": "hi-IN"})
+
+    assert "locale" not in language_tts._opts.extra_kwargs
+
+    locale_tts = TTS(
+        model="cartesia/sonic-3.6",
+        api_key="test-key",
+        api_secret="test-secret",
+        extra_kwargs={"locale": "hi-IN"},
+    )
+    with pytest.raises(ValueError, match="either language or locale"):
+        locale_tts.update_options(language="hi")
+
+    assert not isinstance(locale_tts._opts.language, str)
 
 
 class _FakeWebSocket:
@@ -133,3 +177,36 @@ async def test_connection_retains_header_session_id(monkeypatch: pytest.MonkeyPa
     assert http_session.headers[HEADER_SESSION_ID] == "inference_connection"
     assert connection.session_id == "inference_connection"
     assert connection.ws is websocket
+
+
+async def test_cartesia_sonic_36_session_configuration() -> None:
+    websocket = _FakeWebSocket([{"type": "session.created", "session_id": "session-1"}])
+
+    class _FakeHTTPSession:
+        async def ws_connect(self, url: str, *, headers: dict[str, str]) -> _FakeWebSocket:
+            assert url.endswith("/tts?model=cartesia/sonic-3.6")
+            return websocket
+
+    tts = TTS(
+        model="cartesia/sonic-3.6",
+        voice="voice-id",
+        api_key="test-key",
+        api_secret="test-secret",
+        base_url="https://example.livekit.cloud",
+        http_session=_FakeHTTPSession(),  # type: ignore[arg-type]
+        extra_kwargs={"locale": "en-GB", "normalization": "en-GB"},
+    )
+
+    await tts._connect_ws(timeout=1.0)
+
+    assert websocket.sent == [
+        {
+            "type": "session.create",
+            "sample_rate": "24000",
+            "encoding": "pcm_s16le",
+            "extra": {"locale": "en-GB", "normalization": "en-GB"},
+            "voice": "voice-id",
+            "model": "cartesia/sonic-3.6",
+            "connection": {"timeout": 10.0, "retries": 3},
+        }
+    ]
