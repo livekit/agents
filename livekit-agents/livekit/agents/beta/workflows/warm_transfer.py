@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -432,6 +433,36 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 # Twilio reports no-answer/failure only via async status webhooks (not consumed here),
 # so cap the wait to keep an unanswered transfer from hanging the caller
 _TWILIO_RINGING_TIMEOUT = 30.0
+_TWILIO_HTTP_TIMEOUT = 10.0
+_TWILIO_CLEANUP_TIMEOUT = 5.0
+# Strong ownership after a transfer stops waiting; late call SIDs still need cleanup.
+_twilio_cleanup_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _wait_for_twilio_cleanup(task: asyncio.Task[None]) -> None:
+    _twilio_cleanup_tasks.add(task)
+    task.add_done_callback(_twilio_cleanup_tasks.discard)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _TWILIO_CLEANUP_TIMEOUT
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning("Twilio cleanup deadline exceeded; continuing cleanup in background")
+            break
+        # asyncio.wait does not cancel the owned task on timeout or cancellation.
+        # Repeated cancellation must not reset the absolute teardown deadline.
+        try:
+            await asyncio.wait({task}, timeout=remaining)
+        except asyncio.CancelledError as error:
+            # Delay cancellation only for bounded cleanup; never turn shutdown into
+            # the original transfer failure when this helper returns.
+            if cancellation is None:
+                cancellation = error
+    if cancellation is not None:
+        raise cancellation
+    if task.done():
+        task.result()
 
 
 class TwilioConnectorWarmTransferTask(WarmTransferTask):
@@ -442,6 +473,8 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         twilio_from_number: str,
         twilio_account_sid: NotGivenOr[str] = NOT_GIVEN,
         twilio_auth_token: NotGivenOr[str] = NOT_GIVEN,
+        twilio_call_token: NotGivenOr[str] = NOT_GIVEN,
+        original_caller_number: NotGivenOr[str] = NOT_GIVEN,
         ringing_timeout: NotGivenOr[float | None] = NOT_GIVEN,
         hold_audio: NotGivenOr[AudioSource | AudioConfig | list[AudioConfig] | None] = NOT_GIVEN,
         instructions: NotGivenOr[WorkflowInstructions | Instructions | str] = NOT_GIVEN,
@@ -455,8 +488,36 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         extra_instructions: str = "",
     ) -> None:
+        """Dial a human agent using Twilio's Calls API and the LiveKit Twilio Connector.
+
+        Args:
+            phone_number: The human agent's phone number to dial.
+            twilio_from_number: Agent/business Twilio number or verified caller ID.
+                Used when no token is supplied and for the caller-ID rejection fallback.
+            twilio_account_sid: Twilio account SID. Defaults to ``TWILIO_ACCOUNT_SID``.
+            twilio_auth_token: Twilio auth token. Defaults to ``TWILIO_AUTH_TOKEN``.
+            original_caller_number: Original incoming call's ``From``. Used only
+                with a nonempty ``twilio_call_token``; otherwise the business number is used.
+            twilio_call_token: Nonempty ``CallToken`` from that incoming call's validated
+                webhook. Requires ``original_caller_number`` and ``twilio>=6.55.0``.
+                Keep it in server-side state for that call, outside prompts and participant
+                attributes. On HTTP 400 / Twilio error 21210 (unverified caller ID), retry
+                once using ``twilio_from_number`` without the token. Other failures are
+                propagated without retrying to avoid duplicate calls.
+
+        Cleanup waits at most five seconds before continuing in the background while
+        the worker is alive. Twilio HTTP requests use a ten-second socket timeout;
+        cleanup is best-effort if the provider fails or the worker exits.
+
+        Other arguments have the same meaning as in ``WarmTransferTask``.
+        """
         self._phone_number = phone_number
         self._twilio_from_number = twilio_from_number
+        self._twilio_call_token = twilio_call_token
+        self._original_caller_number = original_caller_number
+        if is_given(twilio_call_token) and twilio_call_token:
+            if not is_given(original_caller_number) or not original_caller_number:
+                raise ValueError("twilio_call_token requires original_caller_number")
         self._twilio_account_sid = (
             twilio_account_sid
             if is_given(twilio_account_sid)
@@ -496,12 +557,31 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
     ) -> None:
         # optional dep; keep SIP path import-free
         try:
+            from twilio.base.exceptions import TwilioRestException  # type: ignore
+            from twilio.http.http_client import TwilioHttpClient  # type: ignore
             from twilio.rest import Client  # type: ignore
         except ImportError as e:
             raise ImportError(
                 "The 'twilio' package is required for Twilio connector warm transfer "
                 "but is not installed. To fix this, run: pip install twilio"
             ) from e
+
+        client = Client(
+            self._twilio_account_sid,
+            self._twilio_auth_token,
+            http_client=TwilioHttpClient(timeout=_TWILIO_HTTP_TIMEOUT),
+        )
+        call_options: dict[str, str] = {}
+        from_number = self._twilio_from_number
+        if is_given(self._twilio_call_token) and self._twilio_call_token:
+            if "call_token" not in inspect.signature(client.calls.create).parameters:
+                raise RuntimeError(
+                    "Using twilio_call_token requires twilio>=6.55.0. "
+                    "To upgrade, run: pip install 'twilio>=6.55.0'"
+                )
+            call_options["call_token"] = self._twilio_call_token
+            assert is_given(self._original_caller_number)
+            from_number = self._original_caller_number
 
         job_ctx = get_job_context()
         resp = await job_ctx.api.connector.connect_twilio_call(
@@ -515,20 +595,49 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             f"<Response><Connect><Stream url={quoteattr(resp.connect_url)}/></Connect></Response>"
         )
 
-        client = Client(self._twilio_account_sid, self._twilio_auth_token)
-        call = await asyncio.to_thread(
-            client.calls.create,
-            to=self._phone_number,
-            from_=self._twilio_from_number,
-            twiml=twiml,
-        )
+        async def create_call(from_number: str, **options: str) -> str:
+            def create() -> str:
+                return str(
+                    client.calls.create(
+                        to=self._phone_number, from_=from_number, twiml=twiml, **options
+                    ).sid
+                )
+
+            pending = asyncio.create_task(asyncio.to_thread(create))
+            try:
+                return await asyncio.shield(pending)
+            except asyncio.CancelledError:
+
+                async def cleanup() -> None:
+                    # Cancelling an await cannot stop the synchronous HTTP request.
+                    # Retain its result and cancel any call it creates, even after
+                    # the transfer stops waiting for cleanup.
+                    with contextlib.suppress(Exception):
+                        sid = await pending
+                        await asyncio.to_thread(client.calls(sid).update, status="canceled")
+
+                await _wait_for_twilio_cleanup(asyncio.create_task(cleanup()))
+                raise
+
+        try:
+            call_sid = await create_call(from_number, **call_options)
+        except TwilioRestException as error:
+            # This explicit rejection means no call was created. Never retry ambiguous
+            # transport failures, or errors after a call has already been accepted.
+            if not call_options or error.status != 400 or error.code != 21210:
+                raise
+            logger.warning("Twilio rejected preserved caller ID; retrying with business caller ID")
+            call_sid = await create_call(self._twilio_from_number)
 
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
         except BaseException:
             # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(client.calls(call.sid).update, status="canceled")
+            async def cancel_call() -> None:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(client.calls(call_sid).update, status="canceled")
+
+            await _wait_for_twilio_cleanup(asyncio.create_task(cancel_call()))
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
