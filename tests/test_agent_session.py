@@ -140,15 +140,17 @@ async def test_latency_budget_event_on_first_output(
 
     await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
 
-    assert len(events) == 1
-    assert events[0].level == expected_level
-    assert events[0].threshold == expected_threshold
-    assert events[0].budget == latency_budget["budget"]
-    assert events[0].latency == pytest.approx(0.7, abs=0.01)
-    assert events[0].speech_id
+    assert events[-1].level == expected_level
+    assert events[-1].threshold == expected_threshold
+    assert all(ev.budget == latency_budget["budget"] for ev in events)
+    assert all(ev.latency >= ev.threshold for ev in events)
+    if expected_level == "exceeded":
+        assert [ev.level for ev in events] == ["warning", "exceeded"]
+    else:
+        assert len(events) == 1
 
 
-@pytest.mark.parametrize(("budget", "expected_events"), [(0.2, 1), (0.8, 0)])
+@pytest.mark.parametrize(("budget", "expected_events"), [(0.55, 1), (0.8, 0)])
 async def test_latency_budget_uses_hook_speech_first_output(
     budget: float, expected_events: int
 ) -> None:
@@ -173,7 +175,7 @@ async def test_latency_budget_uses_hook_speech_first_output(
     assert len(events) == expected_events
     if expected_events:
         assert events[0].speech_id == hook_speech.speech_handle.id
-        assert events[0].latency == pytest.approx(0.6, abs=0.01)
+        assert events[0].latency >= budget
 
 
 @pytest.mark.parametrize(("budget", "expected_events"), [(0.7, 1), (1.2, 0)])
@@ -207,7 +209,32 @@ async def test_latency_budget_uses_hook_generated_reply_first_output(
     assert len(events) == expected_events
     if expected_events:
         assert events[0].speech_id == hook_speech.speech_handle.id
-        assert events[0].latency == pytest.approx(1.0, abs=0.01)
+        assert events[0].latency >= budget
+
+
+async def test_pipeline_latency_budget_fires_while_hook_is_stalled() -> None:
+    class SlowHookAgent(MyAgent):
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            await asyncio.sleep(0.5)
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    actions.add_llm("Hi!", input="Hello", ttft=0.1)
+    actions.add_tts(0.5, ttfb=0.2)
+
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.2})
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    agent = SlowHookAgent(turn_handling={"preemptive_generation": {"enabled": False}})
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(events) == 1
+    assert events[0].level == "exceeded"
+    assert events[0].speech_id is None
 
 
 def test_realtime_user_input_transcription_preserves_item_id() -> None:

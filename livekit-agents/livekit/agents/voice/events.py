@@ -482,12 +482,13 @@ class LatencyBudgetEvent(BaseModel):
     type: Literal["latency_budget"] = "latency_budget"
     level: Literal["warning", "exceeded"]
     latency: float
-    """End of user speech to first agent output, in seconds."""
+    """Elapsed seconds since user speech stopped when the threshold was reached."""
     threshold: float
     """The threshold that selected ``level``."""
     budget: float
     """The configured maximum latency, in seconds."""
-    speech_id: str
+    speech_id: str | None
+    """Speech that owns the turn, or ``None`` if no reply exists yet."""
     created_at: float = Field(default_factory=time.time)
 
 

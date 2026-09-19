@@ -17,8 +17,13 @@ from collections.abc import Sequence
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, utils
-from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
+from livekit.agents import Agent, AgentSession, LatencyBudgetEvent, function_tool, utils
+from livekit.agents.llm import (
+    FunctionCall,
+    GenerationCreatedEvent,
+    InputSpeechStoppedEvent,
+    MessageGeneration,
+)
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -235,3 +240,63 @@ async def test_realtime_tool_reply_from_the_server_keeps_the_agent_thinking() ->
         await asyncio.sleep(4.0)  # longer than user_away_timeout
         assert session.agent_state == "thinking"
         assert "away" not in user_states
+
+
+async def test_manual_tool_reply_keeps_realtime_latency_budget_turn() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
+    tool_called = asyncio.Event()
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            tool_called.set()
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    speeches = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("speech_created", speeches.append)
+        await session.start(ToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(
+            FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+        )
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        await asyncio.wait_for(tool_called.wait(), timeout=5)
+        await asyncio.sleep(0.05)
+        for _ in range(500):
+            if rt_session._reply_futs:
+                break
+            await asyncio.sleep(0)
+        assert rt_session._reply_futs
+        rt_session._reply_futs[0].set_result(
+            _generation(response_id="manual-tool-reply", text="It is sunny", audio_duration=0.2)
+        )
+        assert speeches
+        await asyncio.wait_for(speeches[0].speech_handle.wait_for_playout(), timeout=5)
+
+    assert len(events) == 1
+    assert events[0].level == "exceeded"
+    assert events[0].speech_id is not None

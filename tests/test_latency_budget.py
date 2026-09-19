@@ -77,7 +77,48 @@ def test_latency_budget_does_not_emit_within_warning_threshold() -> None:
     assert events == []
 
 
-async def test_realtime_server_turn_emits_latency_budget_on_first_output() -> None:
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_realtime_stalled_turn_reaches_threshold_without_output(
+    interrupted: bool,
+) -> None:
+    model = FakeRealtimeModel()
+    events: list[LatencyBudgetEvent] = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.02}) as session:
+        session.on("latency_budget", events.append)
+        await session.start(Agent(instructions="test"))
+        model.active_session.emit(
+            "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        if interrupted:
+            model.active_session.emit("input_speech_started", llm.InputSpeechStartedEvent())
+        await asyncio.sleep(0.04)
+
+    assert len(events) == (0 if interrupted else 1)
+    if not interrupted:
+        assert events[0].level == "exceeded"
+        assert events[0].speech_id is None
+        assert events[0].latency >= 0.02
+
+
+async def test_stalled_turn_emits_warning_then_exceeded() -> None:
+    model = FakeRealtimeModel()
+    events: list[LatencyBudgetEvent] = []
+    async with AgentSession(llm=model, latency_budget={"warning": 0.01, "budget": 0.03}) as session:
+        session.on("latency_budget", events.append)
+        await session.start(Agent(instructions="test"))
+        model.active_session.emit(
+            "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.05)
+
+    assert [event.level for event in events] == ["warning", "exceeded"]
+    assert [event.speech_id for event in events] == [None, None]
+
+
+@pytest.mark.parametrize("provider_order", ["stop_first", "google", "ultravox"])
+async def test_realtime_server_turn_emits_latency_budget_on_first_output(
+    provider_order: str,
+) -> None:
     model = FakeRealtimeModel()
     events: list[LatencyBudgetEvent] = []
     event_received = asyncio.Event()
@@ -93,9 +134,11 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output() -> No
         await session.start(Agent(instructions="test"))
 
         rt_session = model.active_session
-        rt_session.emit(
-            "input_speech_stopped", llm.InputSpeechStoppedEvent(user_transcription_enabled=False)
-        )
+        if provider_order == "stop_first":
+            rt_session.emit(
+                "input_speech_stopped",
+                llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+            )
         await asyncio.sleep(0.01)
 
         message_ch = utils.aio.Chan[llm.MessageGeneration]()
@@ -129,15 +172,30 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output() -> No
             ),
         )
 
+        if provider_order == "ultravox":
+            rt_session.emit(
+                "input_speech_stopped",
+                llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+            )
+
         await asyncio.wait_for(event_received.wait(), timeout=5)
+        if provider_order == "google":
+            rt_session.emit(
+                "input_speech_stopped",
+                llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+            )
 
     assert len(events) == 1
     assert events[0].level == "exceeded"
     assert events[0].latency >= 0.001
-    assert events[0].speech_id
+    if provider_order != "stop_first":
+        assert events[0].speech_id
 
 
-async def test_realtime_hook_say_emits_latency_budget_on_first_output() -> None:
+@pytest.mark.parametrize("spawned_task", [False, True])
+async def test_realtime_hook_say_emits_latency_budget_on_first_output(
+    spawned_task: bool,
+) -> None:
     model = FakeRealtimeModel()
     events: list[LatencyBudgetEvent] = []
 
@@ -151,10 +209,18 @@ async def test_realtime_hook_say_emits_latency_budget_on_first_output() -> None:
             _UserTurnCompletedData(
                 activity=session._activity,
                 metrics={"stopped_speaking_at": time.time() - 0.01},
+                task=asyncio.current_task(),
             )
         )
         try:
-            speech = session.say("Hello")
+            if spawned_task:
+
+                async def _background_say():
+                    return session.say("Hello")
+
+                speech = await asyncio.create_task(_background_say())
+            else:
+                speech = session.say("Hello")
         finally:
             _UserTurnCompletedContextVar.reset(context)
 
@@ -190,6 +256,7 @@ async def test_realtime_hook_say_emits_latency_budget_on_first_output() -> None:
         )
         await asyncio.wait_for(speech.wait_for_playout(), timeout=5)
 
-    assert len(events) == 1
-    assert events[0].speech_id == speech.id
-    assert events[0].level == "exceeded"
+    assert len(events) == (0 if spawned_task else 1)
+    if not spawned_task:
+        assert events[0].speech_id == speech.id
+        assert events[0].level == "exceeded"

@@ -175,6 +175,7 @@ _OnEnterContextVar = contextvars.ContextVar["_OnEnterData"]("agents_activity_on_
 class _UserTurnCompletedData:
     activity: AgentActivity
     metrics: llm.MetricsReport
+    task: asyncio.Task[Any] | None
 
 
 _UserTurnCompletedContextVar = contextvars.ContextVar["_UserTurnCompletedData"](
@@ -477,6 +478,7 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
         self._realtime_user_stopped_speaking_at: float | None = None
+        self._realtime_late_input_speech_stop = False
         self._latency_budget_recorded_user_metrics: llm.MetricsReport | None = None
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
@@ -1740,8 +1742,12 @@ class AgentActivity(RecognitionHooks):
         )
         user_metrics = self._take_on_enter_user_metrics()
         if (completed_data := _UserTurnCompletedContextVar.get(None)) is not None:
-            if completed_data.activity is self:
+            if completed_data.activity is self and completed_data.task is asyncio.current_task():
                 user_metrics = completed_data.metrics
+        if user_metrics is not None and "stopped_speaking_at" in user_metrics:
+            self._session._bind_latency_budget_speech(
+                user_metrics["stopped_speaking_at"], handle.id
+            )
 
         if (
             self._rt_session is not None
@@ -1841,8 +1847,16 @@ class AgentActivity(RecognitionHooks):
         )
         user_metrics = self._take_on_enter_user_metrics()
         if (completed_data := _UserTurnCompletedContextVar.get(None)) is not None:
-            if completed_data.activity is self:
+            if completed_data.activity is self and completed_data.task is asyncio.current_task():
                 user_metrics = completed_data.metrics
+        if user_metrics is not None and "stopped_speaking_at" in user_metrics:
+            self._session._bind_latency_budget_speech(
+                user_metrics["stopped_speaking_at"], handle.id
+            )
+
+        if user_message is not None and user_message.metrics is not None:
+            stopped_at = user_message.metrics.get("stopped_speaking_at")
+            self._session._bind_latency_budget_speech(stopped_at, handle.id)
 
         if isinstance(self.llm, llm.RealtimeModel):
             self._create_speech_task(
@@ -2225,6 +2239,7 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detected = False
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
+        self._session._cancel_latency_budget_watch()
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2249,7 +2264,13 @@ class AgentActivity(RecognitionHooks):
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
-        self._realtime_user_stopped_speaking_at = time.time()
+        if self._realtime_late_input_speech_stop:
+            # Some server-side providers report the stop after creating the reply.
+            # Keep the generation's turn anchor rather than attributing a later turn.
+            self._realtime_late_input_speech_stop = False
+        else:
+            self._realtime_user_stopped_speaking_at = time.time()
+            self._session._start_latency_budget_watch(self._realtime_user_stopped_speaking_at)
         if self.vad is None or self.using_default_vad:
             if self._audio_recognition:
                 self._audio_recognition._on_end_of_speech(
@@ -2302,9 +2323,19 @@ class AgentActivity(RecognitionHooks):
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
+        if self._realtime_user_stopped_speaking_at is None:
+            # Generation creation is the first available end-of-turn signal for
+            # providers that emit input_speech_stopped only after output begins.
+            self._realtime_user_stopped_speaking_at = time.time()
+            self._realtime_late_input_speech_stop = True
+            self._session._start_latency_budget_watch(self._realtime_user_stopped_speaking_at)
+
         handle = SpeechHandle.create(
             allow_interruptions=self.allow_interruptions,
             input_details=InputDetails(modality="audio"),
+        )
+        self._session._bind_latency_budget_speech(
+            self._realtime_user_stopped_speaking_at, handle.id
         )
         self._session.emit(
             "speech_created",
@@ -2722,6 +2753,9 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
+        if info.metrics.stopped_speaking_at is not None:
+            self._session._start_latency_budget_watch(info.metrics.stopped_speaking_at)
+
         old_task = self._user_turn_completed_atask
         # the user turn ends after on_user_turn_completed (see _end_user_turn_span)
         info.user_turn_span_adopted = info.user_turn_span is not None
@@ -2787,6 +2821,10 @@ class AgentActivity(RecognitionHooks):
                         self._session._conversation_item_added(user_message)
                     return
                 self._realtime_user_stopped_speaking_at = info.metrics.stopped_speaking_at
+                if self._realtime_user_stopped_speaking_at is not None:
+                    self._session._start_latency_budget_watch(
+                        self._realtime_user_stopped_speaking_at
+                    )
                 self._rt_session.commit_audio()
 
         if info.skip_reply:
@@ -2835,7 +2873,9 @@ class AgentActivity(RecognitionHooks):
             attributes={trace_types.ATTR_AGENT_LABEL: self._agent.label},
         ) as hook_span:
             hook_context = _UserTurnCompletedContextVar.set(
-                _UserTurnCompletedData(activity=self, metrics=metrics_report)
+                _UserTurnCompletedData(
+                    activity=self, metrics=metrics_report, task=asyncio.current_task()
+                )
             )
             try:
                 await self._agent.on_user_turn_completed(
@@ -2889,6 +2929,10 @@ class AgentActivity(RecognitionHooks):
                 and preemptive.tool_choice == self._tool_choice
             ):
                 speech_handle = preemptive.speech_handle
+                if "stopped_speaking_at" in metrics_report:
+                    self._session._bind_latency_budget_speech(
+                        metrics_report["stopped_speaking_at"], speech_handle.id
+                    )
 
                 # The pipeline task retains the ChatMessage created for preemptive generation.
                 # Reconcile it with the finalized message before scheduling so conversation
@@ -3430,10 +3474,13 @@ class AgentActivity(RecognitionHooks):
         if self._latency_budget_recorded_user_metrics is user_metrics:
             return
         self._latency_budget_recorded_user_metrics = user_metrics
-        self._session._evaluate_latency_budget(
-            latency=started_speaking_at - user_metrics["stopped_speaking_at"],
-            speech_id=speech_id,
-        )
+        stopped_at = user_metrics["stopped_speaking_at"]
+        if not self._session._finish_latency_budget_watch(
+            stopped_at=stopped_at, started_at=started_speaking_at, speech_id=speech_id
+        ):
+            self._session._evaluate_latency_budget(
+                latency=started_speaking_at - stopped_at, speech_id=speech_id
+            )
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(
@@ -4097,6 +4144,7 @@ class AgentActivity(RecognitionHooks):
         tool_reply: bool = False,
         text: str | AsyncIterable[str] | None = None,
         user_metrics: llm.MetricsReport | None = None,
+        user_stopped_speaking_at: float | None = None,
     ) -> None:
         assert self._rt_session is not None, "rt_session is not available"
         # realtime_reply_task is called only when there's text input, native audio input is handled by _realtime_generation_task
@@ -4125,6 +4173,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 user_metrics=user_metrics,
+                user_stopped_speaking_at=user_stopped_speaking_at,
             )
             return
 
@@ -4208,6 +4257,7 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 instructions=instructions,
                 user_metrics=user_metrics,
+                user_stopped_speaking_at=user_stopped_speaking_at,
             )
         finally:
             # reset tool_choice and tools
@@ -4393,8 +4443,9 @@ class AgentActivity(RecognitionHooks):
                 user_stopped_speaking_at is not None
                 and self._realtime_user_stopped_speaking_at == user_stopped_speaking_at
             ):
-                self._session._evaluate_latency_budget(
-                    latency=started_speaking_at - user_stopped_speaking_at,
+                self._session._finish_latency_budget_watch(
+                    stopped_at=user_stopped_speaking_at,
+                    started_at=started_speaking_at,
                     speech_id=speech_handle.id,
                 )
                 self._realtime_user_stopped_speaking_at = None
@@ -4823,6 +4874,7 @@ class AgentActivity(RecognitionHooks):
                             else "auto",
                         ),
                         tool_reply=True,
+                        user_stopped_speaking_at=user_stopped_speaking_at,
                     ),
                     speech_handle=speech_handle,
                     name="AgentActivity.realtime_reply",
