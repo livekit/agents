@@ -176,6 +176,13 @@ ATTR_REALTIME_MODEL_METRICS = "lk.realtime_model_metrics"
 
 # latency span attributes
 ATTR_E2E_LATENCY = "lk.e2e_latency"
+ATTR_PLAYBACK_LATENCY = "lk.playback_latency"
+"""Seconds from forwarding audio to receiving the playback-start notification."""
+ATTR_AVATAR_JOIN_LATENCY = "lk.avatar.join_latency"
+"""Seconds waiting for the avatar participant and its video-track publication."""
+ATTR_AVATAR_PROVIDER = "lk.avatar.provider"
+ATTR_AVATAR_JOIN_OUTCOME = "lk.avatar.join_outcome"
+"""Whether the join wait completed, was cancelled, or failed."""
 
 # OpenTelemetry GenAI semantic conventions, mirroring the attribute registry of
 # https://github.com/open-telemetry/semantic-conventions-genai. Backends ingest these

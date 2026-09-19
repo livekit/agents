@@ -94,6 +94,11 @@ SAFE_KEYS = frozenset(
         "lk.tts_metrics",
         "lk.realtime_model_metrics",
         "lk.e2e_latency",
+        "lk.playback_latency",
+        # avatar timing / provider / lifecycle outcome (no user content)
+        "lk.avatar.join_latency",
+        "lk.avatar.provider",
+        "lk.avatar.join_outcome",
         # OTEL GenAI semconv (message content rides on event attributes
         # `content`/`tool_calls`, which the collector strips by name)
         "gen_ai.operation.name",
