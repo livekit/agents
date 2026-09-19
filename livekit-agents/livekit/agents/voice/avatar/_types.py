@@ -13,6 +13,7 @@ from ... import utils
 from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
+from ...telemetry import trace_types, tracer
 from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
 
 if TYPE_CHECKING:
@@ -160,16 +161,28 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         assert self._room is not None
 
         started_time = time.time()
-        await utils.wait_for_participant(
-            room=self._room, identity=self.avatar_identity, include_local=True
-        )
-        await utils.wait_for_track_publication(
-            room=self._room,
-            identity=self.avatar_identity,
-            kind=rtc.TrackKind.KIND_VIDEO,
-            include_local=True,
-        )
-        joined_time = time.time()
+        with tracer.detached_span(
+            "avatar_join", attributes={trace_types.ATTR_AVATAR_PROVIDER: self.provider}
+        ) as span:
+            try:
+                await utils.wait_for_participant(
+                    room=self._room, identity=self.avatar_identity, include_local=True
+                )
+                await utils.wait_for_track_publication(
+                    room=self._room,
+                    identity=self.avatar_identity,
+                    kind=rtc.TrackKind.KIND_VIDEO,
+                    include_local=True,
+                )
+            except asyncio.CancelledError:
+                span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "cancelled")
+                raise
+            except Exception:
+                span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "failed")
+                raise
+            joined_time = time.time()
+            span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "completed")
+            span.set_attribute(trace_types.ATTR_AVATAR_JOIN_LATENCY, joined_time - started_time)
         self._emit_metrics(
             AvatarMetrics(
                 timestamp=joined_time,

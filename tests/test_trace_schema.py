@@ -271,6 +271,9 @@ async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExpor
         run_session(session, Agent(instructions="t"), drain_delay=1.0), timeout=60
     )
     assert_trace_well_formed(span_exporter.get_finished_spans())
+    [turn] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_turn"]
+    assert "lk.playback_latency" in turn.attributes
+    assert turn.attributes["lk.playback_latency"] >= 0
 
 
 async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:

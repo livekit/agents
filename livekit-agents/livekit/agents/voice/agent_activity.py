@@ -3324,6 +3324,9 @@ class AgentActivity(RecognitionHooks):
 
             if started_forwarding_at is not None:
                 assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
+                current_span.set_attribute(
+                    trace_types.ATTR_PLAYBACK_LATENCY, assistant_metrics["playback_latency"]
+                )
 
             # the audio answers the user turn, stored message or not
             if _previous_user_metrics and "stopped_speaking_at" in _previous_user_metrics:
@@ -3812,6 +3815,9 @@ class AgentActivity(RecognitionHooks):
 
             if started_forwarding_at is not None:
                 assistant_metrics["playback_latency"] = started_speaking_at - started_forwarding_at
+                current_span.set_attribute(
+                    trace_types.ATTR_PLAYBACK_LATENCY, assistant_metrics["playback_latency"]
+                )
 
             if user_metrics and "stopped_speaking_at" in user_metrics:
                 e2e_latency = started_speaking_at - user_metrics["stopped_speaking_at"]
@@ -4481,6 +4487,11 @@ class AgentActivity(RecognitionHooks):
             )
 
         stopped_speaking_at = time.time()
+
+        if started_speaking_at is not None and started_forwarding_at is not None:
+            current_span.set_attribute(
+                trace_types.ATTR_PLAYBACK_LATENCY, started_speaking_at - started_forwarding_at
+            )
 
         def _create_assistant_message(
             message_id: str, forwarded_text: str, interrupted: bool
