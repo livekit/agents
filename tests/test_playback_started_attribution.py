@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import time
+import weakref
 from collections.abc import AsyncIterable
 
 import pytest
@@ -89,6 +91,38 @@ async def _drive_forwarding(
         tts_output=_source(),
         reconcile_playout_pause=lambda: None,
     )
+
+
+@pytest.mark.parametrize("output_sample_rate", [None, 16000])
+async def test_forwarding_result_does_not_retain_consumed_audio(
+    output_sample_rate: int | None,
+) -> None:
+    audio_output = FakeAudioOutput(sample_rate=output_sample_rate)
+    frames: weakref.WeakSet[rtc.AudioFrame] = weakref.WeakSet()
+
+    async def _source() -> AsyncIterable[rtc.AudioFrame]:
+        for _ in range(3000):
+            frame = rtc.AudioFrame.create(
+                sample_rate=48000, num_channels=1, samples_per_channel=960
+            )
+            frames.add(frame)
+            yield frame
+
+    task, out = perform_audio_forwarding(
+        audio_output=audio_output,
+        tts_output=_source(),
+        reconcile_playout_pause=lambda: None,
+    )
+    try:
+        await task
+        await asyncio.sleep(0)
+        gc.collect()
+
+        assert audio_output._pushed_duration == pytest.approx(60.0)
+        assert not frames
+        assert out.first_frame_fut.done()
+    finally:
+        audio_output.clear_buffer()
 
 
 async def test_own_playback_started_resolves_first_frame_fut() -> None:

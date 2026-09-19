@@ -62,6 +62,7 @@ AssemblyAIModels = Literal[
     "assemblyai/universal-streaming-multilingual",
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
+    "assemblyai/universal-3-6-pro",
 ]
 XaiModels = Literal["xai/stt-1",]
 SpeechmaticsModels = Literal[
@@ -257,6 +258,7 @@ def _keyterms_extra_for_model(
 _ASSEMBLYAI_CARRYOVER_MODELS = (
     "assemblyai/u3-rt-pro",
     "assemblyai/universal-3-5-pro",
+    "assemblyai/universal-3-6-pro",
 )
 
 _ASSEMBLYAI_MAX_AGENT_CONTEXT_CHARS = 1750
@@ -284,6 +286,7 @@ _WORD_ALIGNED_MODELS = frozenset(
         "assemblyai/universal-streaming-multilingual",
         "assemblyai/u3-rt-pro",
         "assemblyai/universal-3-5-pro",
+        "assemblyai/universal-3-6-pro",
         "xai/stt-1",
         "speechmatics/enhanced",
         "speechmatics/standard",

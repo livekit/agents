@@ -20,7 +20,7 @@ import inspect
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Flag, auto
 from typing import (
     TYPE_CHECKING,
@@ -117,6 +117,26 @@ class NamedToolChoice(TypedDict, total=False):
 
 
 ToolChoice = NamedToolChoice | Literal["auto", "required", "none"]
+
+
+@dataclass
+class ToolResult:
+    """A function tool's output and whether it requests a follow-up reply.
+
+    Args:
+        output: The value to return to the model, such as a string, dict, list,
+            or None. For a handoff, return ``(agent, ToolResult(...))``.
+        reply_required: Whether this result requests a reply. Defaults to True.
+            False keeps the output in chat history without requesting a reply.
+            Other tool results can still request a reply, and interruption or
+            ``cancel_tool_reply()`` can still prevent one.
+
+    Example:
+        return ToolResult("Successfully sent DTMF events: 1", reply_required=False)
+    """
+
+    output: Any
+    reply_required: bool = field(default=True, kw_only=True)
 
 
 class ToolError(Exception):
