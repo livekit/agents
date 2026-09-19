@@ -841,8 +841,8 @@ async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
 
         # 1. Start generate_reply
         fut = session.generate_reply(instructions="测试回复")
-        assert len(session._pending_response_create_ids) == 1
-        event_id = list(session._pending_response_create_ids)[0]
+        assert len(session._pending_response_creates) == 1
+        event_id = session._pending_response_creates[0].event_id
         assert event_id in session._response_created_futures
 
         # 2. Cancel the future before response.created arrives
@@ -852,8 +852,8 @@ async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
         await asyncio.sleep(0)
         assert event_id not in session._response_created_futures
         assert event_id in session._discarded_event_ids
-        # ID remains in _pending_response_create_ids for StepFun correlation
-        assert len(session._pending_response_create_ids) == 1
+        # ID remains in _pending_response_creates for StepFun correlation
+        assert len(session._pending_response_creates) == 1
 
         # 3. StepFun sends response.created later WITHOUT metadata
         resp_ev = ResponseCreatedEvent(
@@ -869,7 +869,7 @@ async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
         session._handle_response_created(resp_ev)
 
         # Queue should have been consumed
-        assert len(session._pending_response_create_ids) == 0
+        assert len(session._pending_response_creates) == 0
         # Generation must be marked as _DiscardedGeneration, not a live active generation
         assert isinstance(session._current_generation, _DiscardedGeneration)
         # response.cancel must have been sent
@@ -886,7 +886,7 @@ async def test_interrupted_or_cancelled_reply_discarded_via_fifo_queue(
 async def test_create_update_chat_ctx_events_reanchors_dangling_predecessors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ensure excluded client-created function calls do not leave dangling previous_item_id anchors."""
+    """Ensure excluded client-created function calls and orphan outputs do not leave dangling previous_item_id anchors."""
     monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
     from openai.types.realtime import ConversationItemCreateEvent
 
@@ -906,26 +906,31 @@ async def test_create_update_chat_ctx_events_reanchors_dangling_predecessors(
             role="assistant", content=["The weather is sunny"], id="asst_msg_1"
         )
 
-        # Assume user_msg is already remote, but fnc_call, fnc_output, and assistant_msg are local
+        # 1. When fnc_call is absent from remote_ctx:
+        # Both fnc_call and orphan fnc_output are excluded; assistant_msg anchors directly to user_msg_1
         session._remote_chat_ctx.insert(None, user_msg)
-
         chat_ctx = llm.ChatContext([user_msg, fnc_call, fnc_output, assistant_msg])
         events = session._create_update_chat_ctx_events(chat_ctx)
 
         create_events = [ev for ev in events if isinstance(ev, ConversationItemCreateEvent)]
-        # fnc_call must NOT be in create_events
         assert not any(getattr(ev.item, "type", None) == "function_call" for ev in create_events)
-
-        # fnc_output must be anchored to user_msg_1 (NOT dangling fnc_call_1)
-        fnc_out_ev = next(ev for ev in create_events if getattr(ev.item, "id", None) == "fnc_out_1")
-        assert fnc_out_ev.previous_item_id == "user_msg_1"
-
-        # assistant_msg must be anchored to fnc_out_1
+        assert not any(
+            getattr(ev.item, "type", None) == "function_call_output" for ev in create_events
+        )
         asst_ev = next(ev for ev in create_events if getattr(ev.item, "id", None) == "asst_msg_1")
-        assert asst_ev.previous_item_id == "fnc_out_1"
+        assert asst_ev.previous_item_id == "user_msg_1"
 
-        # No item should have previous_item_id == "root"
-        assert not any(ev.previous_item_id == "root" for ev in create_events)
+        # 2. When fnc_call is already remote (server-created):
+        # fnc_output is valid and anchors to fnc_call_1
+        session._remote_chat_ctx.insert(user_msg.id, fnc_call)
+        events2 = session._create_update_chat_ctx_events(chat_ctx)
+        create_events2 = [ev for ev in events2 if isinstance(ev, ConversationItemCreateEvent)]
+        fnc_out_ev = next(
+            ev for ev in create_events2 if getattr(ev.item, "id", None) == "fnc_out_1"
+        )
+        assert fnc_out_ev.previous_item_id == "fnc_call_1"
+        asst_ev2 = next(ev for ev in create_events2 if getattr(ev.item, "id", None) == "asst_msg_1")
+        assert asst_ev2.previous_item_id == "fnc_out_1"
     finally:
         await session.aclose()
         await model.aclose()
@@ -972,3 +977,239 @@ async def test_configured_session_options_reasoning_and_transcription(
         assert "input_audio_transcription" not in sent_events[0]["session"]
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_confirmed_does_not_poison_subsequent_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure cancelling reply A followed by StepFun 'no ongoing response to cancel' allows reply B to succeed."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # 1. Start Reply A
+        fut_a = session.generate_reply(instructions="回复A")
+        assert len(session._pending_response_creates) == 1
+        id_a = session._pending_response_creates[0].event_id
+
+        # 2. Cancel Reply A
+        fut_a.cancel()
+        import asyncio
+
+        await asyncio.sleep(0)
+        assert id_a in session._discarded_event_ids
+        assert len(session._pending_response_creates) == 1
+
+        # 3. StepFun returns 'no ongoing response to cancel' confirming response A was never created
+        from openai.types.realtime import RealtimeError, RealtimeErrorEvent
+
+        session._handle_error(
+            RealtimeErrorEvent(
+                event_id="err_cancel",
+                type="error",
+                error=RealtimeError(
+                    type="invalid_request_error",
+                    message="Conversation has no ongoing response to cancel",
+                ),
+            )
+        )
+        # Pending queue for A must be purged so it won't poison B
+        assert len(session._pending_response_creates) == 0
+
+        # 4. Start Reply B
+        fut_b = session.generate_reply(instructions="回复B")
+        assert len(session._pending_response_creates) == 1
+        id_b = session._pending_response_creates[0].event_id
+        assert id_b != id_a
+
+        # 5. StepFun sends response.created (without metadata) for Reply B
+        resp_ev_b = ResponseCreatedEvent(
+            event_id="ev_resp_b",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_b_123",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,
+            ),
+        )
+        session._handle_response_created(resp_ev_b)
+
+        # Reply B must succeed and NOT be discarded!
+        assert fut_b.done() is True
+        assert not isinstance(session._current_generation, _DiscardedGeneration)
+        assert id_b not in session._discarded_event_ids
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+def test_capabilities_can_disable_turn_detection_and_manual_function_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure can_disable_turn_detection reflects whether caller passed turn_detection, and manual_function_calls is False."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+
+    # When not given: can_disable_turn_detection is True so AgentActivity can disable server VAD for client VAD
+    model_default = realtime.RealtimeModel()
+    assert model_default.capabilities.can_disable_turn_detection is True
+    assert model_default.capabilities.manual_function_calls is False
+
+    # When explicitly given: can_disable_turn_detection is False
+    from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
+
+    model_custom = realtime.RealtimeModel(
+        turn_detection=ServerVad(type="server_vad", threshold=0.5)
+    )
+    assert model_custom.capabilities.can_disable_turn_detection is False
+    assert model_custom.capabilities.manual_function_calls is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_voice_normalization_for_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure update_options normalizes voice aliases at runtime for the cluster."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+
+    # Domestic endpoint (api.stepfun.com) maps 'vibrant-youth' -> 'yuanqinansheng'
+    model = realtime.RealtimeModel(
+        base_url="https://api.stepfun.com/v1/realtime", voice="vibrant-youth"
+    )
+    assert model.voice == "yuanqinansheng"
+
+    model.update_options(voice="lively-girl")
+    assert model.voice == "yuanqishaonv"
+
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+        session.update_options(voice="magnetic-voiced-male")
+        assert len(sent_events) == 1
+        assert sent_events[0]["session"]["voice"] == "cixingnansheng"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_server_generated_items_do_not_consume_client_futures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure concurrent server-initiated items do not settle client context update futures."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    import asyncio
+
+    from openai.types.realtime import (
+        ConversationItemCreatedEvent,
+        ConversationItemCreateEvent,
+        RealtimeConversationItemFunctionCall,
+        RealtimeConversationItemSystemMessage,
+        RealtimeConversationItemUserMessage,
+    )
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        client_fut = asyncio.get_running_loop().create_future()
+        client_msg_id = "client_sys_msg_1"
+        session._item_create_future[client_msg_id] = client_fut
+
+        # Client sends a system message
+        sys_item = RealtimeConversationItemSystemMessage(
+            id=client_msg_id,
+            type="message",
+            role="system",
+            content=[{"type": "input_text", "text": "system prompt"}],
+        )
+        session.send_event(
+            ConversationItemCreateEvent(
+                event_id="ev_client_create",
+                type="conversation.item.create",
+                item=sys_item,
+            )
+        )
+
+        # 1. Server emits a model function call item -> MUST NOT consume client_fut!
+        server_fnc = ConversationItemCreatedEvent(
+            event_id="ev_server_fnc",
+            type="conversation.item.created",
+            item=RealtimeConversationItemFunctionCall(
+                id="server_fnc_uuid",
+                type="function_call",
+                call_id="call_999",
+                name="web_search",
+                arguments="{}",
+            ),
+        )
+        session._handle_conversion_item_added(server_fnc)
+        assert client_fut.done() is False
+
+        # 2. Server emits a user speech item -> MUST NOT consume client_fut (role differs: user vs system)!
+        server_user = ConversationItemCreatedEvent(
+            event_id="ev_server_usr",
+            type="conversation.item.created",
+            item=RealtimeConversationItemUserMessage(
+                id="server_user_uuid",
+                type="message",
+                role="user",
+                status="completed",
+                content=[],
+            ),
+        )
+        session._handle_conversion_item_added(server_user)
+        assert client_fut.done() is False
+
+        # 3. Server emits the real system message created event with server UUID -> settles client_fut!
+        server_ack = ConversationItemCreatedEvent(
+            event_id="ev_server_ack",
+            type="conversation.item.created",
+            item=RealtimeConversationItemSystemMessage(
+                id="server_sys_uuid",
+                type="message",
+                role="system",
+                content=[{"type": "input_text", "text": "system prompt"}],
+            ),
+        )
+        session._handle_conversion_item_added(server_ack)
+        assert client_fut.done() is True
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_session_created_model_logged_with_pii_attribute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure provider model name is logged under lk.pii.model for log sanitization."""
+    from livekit.plugins.stepfun import realtime
+    from livekit.plugins.stepfun.realtime import realtime_model as rm_module
+
+    logged_extra: list[Any] = []
+    monkeypatch.setattr(
+        rm_module.logger, "info", lambda msg, extra=None: logged_extra.append((msg, extra))
+    )
+
+    model = realtime.RealtimeModel(api_key="test-key")
+    session = model.session()
+    try:
+        session._on_stepfun_server_event(
+            {
+                "type": "session.created",
+                "session": {"model": "stepaudio-3-realtime-preview"},
+            }
+        )
+        assert len(logged_extra) == 1
+        msg, extra = logged_extra[0]
+        assert msg == "StepFun session created"
+        assert extra == {"lk.pii.model": "stepaudio-3-realtime-preview"}
+        assert "model" not in extra
+    finally:
+        await session.aclose()
+        await model.aclose()

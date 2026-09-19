@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from collections import deque
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import aiohttp
@@ -63,6 +64,27 @@ STEPFUN_DEFAULT_TURN_DETECTION = ServerVad(
 )
 
 
+def _normalize_voice(voice: str, base_url: str) -> str:
+    """Map voice aliases to target cluster naming (api.stepfun.com vs api.stepfun.ai)."""
+    if "stepfun.com" in base_url:
+        return VOICE_MAPPING_TO_DOMESTIC.get(voice, voice)
+    return VOICE_MAPPING_TO_OVERSEAS.get(voice, voice)
+
+
+@dataclass
+class _PendingResponseCreate:
+    event_id: str
+    cancelled: bool = False
+
+
+@dataclass
+class _PendingClientItem:
+    client_item_id: str
+    item_type: str | None
+    role: str | None = None
+    call_id: str | None = None
+
+
 class RealtimeModel(openai.realtime.RealtimeModel):
     """StepFun (阶跃星辰) StepAudio Realtime Speech-to-Speech Model."""
 
@@ -98,10 +120,11 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         )
         resolved_model = model if is_given(model) else DEFAULT_MODEL
         raw_voice = voice if is_given(voice) else DEFAULT_VOICE
-        if "stepfun.com" in resolved_base_url:
-            resolved_voice = VOICE_MAPPING_TO_DOMESTIC.get(raw_voice, raw_voice)
-        else:
-            resolved_voice = VOICE_MAPPING_TO_OVERSEAS.get(raw_voice, raw_voice)
+        resolved_voice = _normalize_voice(raw_voice, resolved_base_url)
+
+        # Capture caller's turn detection intent before applying default ServerVad
+        # so AgentActivity can auto-disable server-side VAD when client VAD is requested
+        can_disable_turn_detection = not is_given(turn_detection)
         resolved_turn_detection = (
             turn_detection if is_given(turn_detection) else STEPFUN_DEFAULT_TURN_DETECTION
         )
@@ -132,12 +155,24 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         # StepFun uses the original OpenAI Beta event protocol names (e.g. response.audio.delta).
         # Enable Azure normalization so LiveKit maps them to response.output_audio.*.
         self._opts.is_azure = True
+        self._capabilities.can_disable_turn_detection = can_disable_turn_detection
+        self._capabilities.manual_function_calls = False
 
         self._provider_label = "StepFun StepAudio Realtime API"
 
     @property
     def voice(self) -> str:
         return self._opts.voice
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        **kwargs: Any,
+    ) -> None:
+        if is_given(voice):
+            voice = _normalize_voice(voice, self._opts.base_url)
+        super().update_options(voice=voice, **kwargs)
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
@@ -159,13 +194,29 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._speaking_active: bool = False
         self._speaking_until: float = 0.0
         self._echo_gate_threshold: float = realtime_model._echo_gate_threshold
-        self._pending_response_create_ids: deque[str] = deque()
+        self._pending_response_creates: deque[_PendingResponseCreate] = deque()
+        self._pending_client_items: list[_PendingClientItem] = []
         self.on("openai_server_event_received", self._on_stepfun_server_event)
-        self.on("session_reconnected", lambda _: self._pending_response_create_ids.clear())
+        self.on("session_reconnected", self._on_session_reconnected)
+
+    def _on_session_reconnected(self, _: Any) -> None:
+        self._pending_response_creates.clear()
+        self._pending_client_items.clear()
 
     async def aclose(self) -> None:
-        self._pending_response_create_ids.clear()
+        self._pending_response_creates.clear()
+        self._pending_client_items.clear()
         await super().aclose()
+
+    def update_options(
+        self,
+        *,
+        voice: NotGivenOr[str] = NOT_GIVEN,
+        **kwargs: Any,
+    ) -> None:
+        if is_given(voice):
+            voice = _normalize_voice(voice, self._opts.base_url)
+        super().update_options(voice=voice, **kwargs)
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
         """Create WebSocket connection using standard Authorization Bearer header for StepFun."""
@@ -217,9 +268,49 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             and event.item.id not in self._item_create_future
             and self._item_create_future
         ):
-            # StepFun assigns server UUIDs instead of preserving client item.id; map earliest pending future
-            earliest_key = next(iter(self._item_create_future.keys()))
-            self._item_create_future[event.item.id] = self._item_create_future.pop(earliest_key)
+            # StepFun assigns server UUIDs instead of preserving client item.id.
+            # Match against pending client-created items by type, role, and call_id to avoid
+            # mistakenly consuming futures on concurrent server-generated items (speech, assistant, fnc_call).
+            ev_type = getattr(event.item, "type", None)
+            ev_role = getattr(event.item, "role", None)
+            ev_call_id = getattr(event.item, "call_id", None)
+
+            matched_client_id: str | None = None
+            if self._pending_client_items:
+                matched_idx = -1
+                for idx, pending in enumerate(self._pending_client_items):
+                    if pending.client_item_id not in self._item_create_future:
+                        continue
+                    if pending.item_type != ev_type:
+                        continue
+                    if (
+                        ev_type == "message"
+                        and pending.role
+                        and ev_role
+                        and pending.role != ev_role
+                    ):
+                        continue
+                    if (
+                        ev_type == "function_call_output"
+                        and pending.call_id
+                        and ev_call_id
+                        and pending.call_id != ev_call_id
+                    ):
+                        continue
+                    matched_idx = idx
+                    break
+
+                if matched_idx >= 0:
+                    pending = self._pending_client_items.pop(matched_idx)
+                    matched_client_id = pending.client_item_id
+            else:
+                # Fallback when pending client items was not tracked (e.g. direct future insertion in tests)
+                matched_client_id = next(iter(self._item_create_future.keys()))
+
+            if matched_client_id and matched_client_id in self._item_create_future:
+                self._item_create_future[event.item.id] = self._item_create_future.pop(
+                    matched_client_id
+                )
 
         super()._handle_conversion_item_added(event)
 
@@ -232,7 +323,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         elif event_type == "session.created":
             if sess_obj := event.get("session"):
                 model_name = sess_obj.get("model")
-                logger.info("StepFun session created", extra={"model": model_name})
+                logger.info("StepFun session created", extra={"lk.pii.model": model_name})
 
     def _create_tools_update_event(self, tools: list[llm.Tool]) -> dict[str, Any]:
         event = super()._create_tools_update_event(tools)
@@ -276,13 +367,23 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Create chat context update events, excluding client-created function calls and normalizing root."""
         remote_ctx = self._remote_chat_ctx.to_chat_ctx()
         remote_ids = {item.id for item in remote_ctx.items}
+        remote_call_ids = {
+            getattr(item, "call_id", None)
+            for item in remote_ctx.items
+            if item.type == "function_call"
+        }
 
-        # Filter out client-side function_call items not already on the server before computing diff
-        # so that subsequent items anchor to their valid predecessors.
+        # Filter out client-side function_call items not already on the server before computing diff,
+        # and exclude orphan function_call_outputs whose function_call is absent from remote_ctx.
         sanitized_items = [
             item
             for item in chat_ctx.items
             if not (item.type == "function_call" and item.id not in remote_ids)
+            and not (
+                item.type == "function_call_output"
+                and item.id not in remote_ids
+                and getattr(item, "call_id", None) not in remote_call_ids
+            )
         ]
         sanitized_chat_ctx = llm.ChatContext(sanitized_items)
 
@@ -316,7 +417,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         return filtered_events
 
     def send_event(self, event: Any) -> None:
-        # Track response.create event IDs in FIFO queue so late response.created without metadata
+        # Track response.create event IDs in queue so late response.created without metadata
         # can be correlated back to its client_event_id for proper cancellation / discard handling.
         event_type = event.get("type") if isinstance(event, dict) else getattr(event, "type", None)
         if event_type == "response.create":
@@ -326,17 +427,52 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 else getattr(event, "event_id", None)
             )
             if event_id:
-                self._pending_response_create_ids.append(event_id)
+                self._pending_response_creates.append(_PendingResponseCreate(event_id=event_id))
+        elif event_type == "response.cancel":
+            for pending_create in self._pending_response_creates:
+                if (
+                    pending_create.event_id in self._discarded_event_ids
+                    or not pending_create.cancelled
+                ):
+                    pending_create.cancelled = True
 
         # StepFun API rejects client conversation.item.create with type="function_call"
         # (item.type must be message or function_call_output).
         if event_type == "conversation.item.create":
-            item = (
+            conv_item = (
                 event.get("item", {}) if isinstance(event, dict) else getattr(event, "item", None)
             )
-            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            item_type = (
+                conv_item.get("type")
+                if isinstance(conv_item, dict)
+                else getattr(conv_item, "type", None)
+            )
             if item_type == "function_call":
                 return
+            item_id = (
+                conv_item.get("id")
+                if isinstance(conv_item, dict)
+                else getattr(conv_item, "id", None)
+            )
+            if item_id:
+                item_role = (
+                    conv_item.get("role")
+                    if isinstance(conv_item, dict)
+                    else getattr(conv_item, "role", None)
+                )
+                call_id = (
+                    conv_item.get("call_id")
+                    if isinstance(conv_item, dict)
+                    else getattr(conv_item, "call_id", None)
+                )
+                self._pending_client_items.append(
+                    _PendingClientItem(
+                        client_item_id=item_id,
+                        item_type=item_type,
+                        role=item_role,
+                        call_id=call_id,
+                    )
+                )
 
         super().send_event(event)
 
@@ -359,9 +495,9 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         elif hasattr(session, "voice"):
             voice = getattr(session, "voice", None)
         if voice is not None:
-            flat_session["voice"] = voice
+            flat_session["voice"] = _normalize_voice(str(voice), self._opts.base_url)
         elif event_id.startswith("session_update_"):
-            flat_session["voice"] = self._opts.voice
+            flat_session["voice"] = _normalize_voice(str(self._opts.voice), self._opts.base_url)
 
         # Modalities
         if session.output_modalities is not None:
@@ -598,14 +734,17 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Handle response.created from StepFun.
 
         StepFun does not echo back `metadata.client_event_id` in response.created.
-        If metadata is missing, associate the earliest pending response.create ID from the FIFO queue
+        If metadata is missing, associate the earliest pending response.create ID from the queue
         (or pending futures), ensuring cancelled or timed out generations match _discarded_event_ids.
         """
         self._speaking_active = True
         if not event.response.metadata:
             client_event_id: str | None = None
-            if self._pending_response_create_ids:
-                client_event_id = self._pending_response_create_ids.popleft()
+            if self._pending_response_creates:
+                pending = self._pending_response_creates.popleft()
+                client_event_id = pending.event_id
+                if pending.cancelled:
+                    self._discarded_event_ids.add(pending.event_id)
             elif self._response_created_futures:
                 client_event_id = next(iter(self._response_created_futures.keys()))
 
@@ -623,11 +762,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         """Filter out benign protocol divergence errors from StepFun."""
         # Settle correlated futures first so context updates or replies do not hang until timeout
         if event_id := event.error.event_id:
-            if event_id in self._pending_response_create_ids:
-                try:
-                    self._pending_response_create_ids.remove(event_id)
-                except ValueError:
-                    pass
+            for item in list(self._pending_response_creates):
+                if item.event_id == event_id:
+                    self._pending_response_creates.remove(item)
+                    break
+            self._pending_client_items = [
+                it for it in self._pending_client_items if it.client_item_id != event_id
+            ]
             if fut := self._chat_ctx_event_futures.pop(event_id, None):
                 if not fut.done():
                     fut.set_result(None)
@@ -639,8 +780,14 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         msg = (error.message or "").lower()
 
         # StepFun returns 'no ongoing response to cancel' when response.cancel arrives
-        # while no active response is generating. OpenAI drops this silently, so we ignore it here.
+        # while no active response is generating.
+        # StepFun confirmed no active response exists; purge any cancelled pending create so
+        # it doesn't poison subsequent replies.
         if "no ongoing response to cancel" in msg or "has no active response" in msg:
+            for item in list(self._pending_response_creates):
+                if item.cancelled or item.event_id in self._discarded_event_ids:
+                    self._pending_response_creates.remove(item)
+                    break
             logger.debug(
                 "Ignored benign StepFun cancel error", extra={"lk.pii.error": error.message}
             )
