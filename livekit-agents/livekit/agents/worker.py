@@ -950,7 +950,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     for proc in procs:
                         await proc.join()
 
-            if timeout:
+            # 0 is a legal timeout; a truthiness check would send it into the unbounded branch.
+            if timeout is not None:
                 await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
             else:
                 await _drain()

@@ -137,6 +137,77 @@ class TestDrainTimeout:
             with pytest.raises(asyncio.TimeoutError):
                 asyncio.get_event_loop().run_until_complete(server.drain())
 
+    @staticmethod
+    def _stuck_server(drain_timeout: int) -> AgentServer:
+        """An AgentServer with one job process whose join() never completes."""
+        server = _make_server(drain_timeout=drain_timeout)
+
+        server._draining = False
+        server._lock = asyncio.Lock()
+        server._job_lifecycle_tasks = set[asyncio.Task[object]]()
+
+        stuck_future: asyncio.Future[None] = asyncio.Future()
+
+        class StuckProc:
+            running_job = True
+
+            async def join(self) -> None:
+                await stuck_future  # never resolves
+
+        class FakeProcPool:
+            processes = [StuckProc()]
+
+        server._proc_pool = FakeProcPool()  # type: ignore[assignment]
+        return server
+
+    def test_zero_drain_timeout_raises(self) -> None:
+        """drain_timeout=0 bounds the wait like any other value.
+
+        `if timeout:` treated 0 as "no timeout", so a stuck process turned an
+        operator-requested "don't wait" into an unbounded drain: the
+        TimeoutError that cli.py catches (and that lets aclose() kill the
+        children) never fired.
+        """
+        self._assert_drain_times_out(self._stuck_server(drain_timeout=0))
+
+    def test_explicit_zero_timeout_raises(self) -> None:
+        self._assert_drain_times_out(self._stuck_server(drain_timeout=3600), timeout=0)
+
+    @staticmethod
+    def _assert_drain_times_out(server: AgentServer, **kwargs: int | None) -> None:
+        """Drain a stuck server and require asyncio.TimeoutError, quickly.
+
+        Bounded on purpose: the regression this covers is an unbounded wait, so a
+        plain pytest.raises() would hang instead of failing.
+        """
+
+        async def _scenario() -> None:
+            task = asyncio.create_task(server.drain(**kwargs))
+            done, pending = await asyncio.wait({task}, timeout=2.0)
+            for t in pending:
+                t.cancel()
+            assert not pending, f"drain{kwargs} is still waiting; expected TimeoutError"
+            with pytest.raises(asyncio.TimeoutError):
+                task.result()
+
+        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(_scenario())
+
+    def test_none_timeout_keeps_waiting(self) -> None:
+        """None remains the documented off-switch: no TimeoutError, drain keeps waiting."""
+        server = self._stuck_server(drain_timeout=1)
+
+        async def _scenario() -> None:
+            task = asyncio.create_task(server.drain(timeout=None))
+            await asyncio.sleep(0.05)
+            assert not task.done()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(_scenario())
+
     def test_aclose_skipped_on_non_exitcli_non_timeout_exception(self) -> None:
         """Other exceptions from drain() still propagate (only TimeoutError
         is caught by the fix).
