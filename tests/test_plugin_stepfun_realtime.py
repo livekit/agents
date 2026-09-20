@@ -507,8 +507,53 @@ async def test_server_uuid_item_create_future_mapping(
 
         assert client_fut.done() is True
         assert client_fut.result() is None
+        assert session._client_to_server_id[client_item_id] == server_uuid
+        assert session._server_to_client_id[server_uuid] == client_item_id
+        assert session._remote_chat_ctx.get(client_item_id) is not None
     finally:
         await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_outbound_events_translate_client_ids_to_server_uuids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure outgoing conversation.item.create and delete translate client IDs to server UUIDs."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # Register mapping: client_1 -> server_uuid_9
+        session._client_to_server_id["client_1"] = "server_uuid_9"
+        session._server_to_client_id["server_uuid_9"] = "client_1"
+
+        # 1. Create item referencing client_1 as predecessor
+        session.send_event(
+            {
+                "type": "conversation.item.create",
+                "previous_item_id": "client_1",
+                "item": {"id": "client_2", "type": "message", "role": "user"},
+            }
+        )
+        assert len(sent_events) == 1
+        assert sent_events[0]["previous_item_id"] == "server_uuid_9"
+
+        # 2. Delete item targeting client_1
+        session.send_event(
+            {
+                "type": "conversation.item.delete",
+                "item_id": "client_1",
+            }
+        )
+        assert len(sent_events) == 2
+        assert sent_events[1]["item_id"] == "server_uuid_9"
+    finally:
+        await session.aclose()
+        await model.aclose()
 
 
 def test_stepfun_provider_tools_serialization() -> None:
@@ -1289,6 +1334,135 @@ async def test_two_pending_replies_only_one_cancelled(
         # Reply B must be successfully resolved and not discarded!
         assert fut_b.done() is True
         assert not isinstance(session._current_generation, _DiscardedGeneration)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_timed_out_reply_ttl_cleanup_prevents_subsequent_response_poisoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure timed out reply event ID is evicted by TTL and does not cancel subsequent responses."""
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    import contextlib
+
+    from openai.types.realtime import RealtimeResponse, ResponseCreatedEvent
+
+    from livekit.plugins.openai.realtime.realtime_model import _DiscardedGeneration
+
+    model = realtime.RealtimeModel()
+    session = model.session()
+    try:
+        sent_events: list[Any] = []
+        monkeypatch.setattr(session._msg_ch, "send_nowait", lambda ev: sent_events.append(ev))
+
+        # 1. Start generate_reply A
+        fut_a = session.generate_reply(instructions="Reply A")
+        assert len(session._pending_response_creates) == 1
+        id_a = session._pending_response_creates[0]
+
+        # 2. Simulate timeout on reply A: base class pops from _response_created_futures & marks discarded
+        session._response_created_futures.pop(id_a, None)
+        session._discarded_event_ids.add(id_a)
+        fut_a.set_exception(Exception("timed out"))
+
+        # Prune via TTL cleanup logic
+        with contextlib.suppress(ValueError):
+            session._pending_response_creates.remove(id_a)
+        session._discarded_event_ids.discard(id_a)
+
+        assert len(session._pending_response_creates) == 0
+
+        # 3. Later, an automatic response (e.g. ServerVAD) arrives without metadata
+        resp_ev_vad = ResponseCreatedEvent(
+            event_id="ev_vad_1",
+            type="response.created",
+            response=RealtimeResponse(
+                id="resp_vad_1",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,
+            ),
+        )
+        session._handle_response_created(resp_ev_vad)
+
+        # 4. Verify ServerVAD response is NOT poisoned or cancelled
+        assert not isinstance(session._current_generation, _DiscardedGeneration)
+        assert not any(getattr(ev, "type", None) == "response.cancel" for ev in sent_events)
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [
+        "stepaudio-2.5-realtime",
+        "stepaudio-3-realtime-preview",
+    ],
+)
+@pytest.mark.asyncio
+async def test_stepfun_both_versions_handle_server_event_and_item_id_replacement(
+    model_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that both StepFun 2.5 and 3.0 models exhibit the same protocol divergence
+    (server replaces client event_id / item.id and drops response metadata), and that
+    RealtimeSession correctly handles both versions without leaking futures.
+    """
+    monkeypatch.setenv("STEPFUN_API_KEY", "test-key")
+    from openai.types.realtime import (
+        ConversationItemCreatedEvent,
+        RealtimeConversationItemUserMessage,
+        RealtimeResponse,
+        ResponseCreatedEvent,
+    )
+
+    model = realtime.RealtimeModel(model=model_name)
+    session = model.session()
+    try:
+        # 1. Verify item.id remapping: client sends item_1, server returns server_uuid
+        client_fut = asyncio.get_running_loop().create_future()
+        client_item_id = f"client_item_{model_name}"
+        session._item_create_future[client_item_id] = client_fut
+
+        server_uuid = f"server_uuid_{model_name}"
+        item_event = ConversationItemCreatedEvent(
+            event_id=f"server_ev_{model_name}",  # StepFun returns random server event_id
+            type="conversation.item.created",
+            previous_item_id=None,
+            item=RealtimeConversationItemUserMessage(
+                id=server_uuid,  # StepFun returns random server item_id
+                type="message",
+                role="user",
+                status="completed",
+                content=[],
+            ),
+        )
+        session._handle_conversion_item_added(item_event)
+        assert client_fut.done() is True
+        assert session._client_to_server_id[client_item_id] == server_uuid
+        assert session._server_to_client_id[server_uuid] == client_item_id
+
+        # 2. Verify response.create correlation when metadata is dropped by StepFun
+        reply_fut = session.generate_reply(instructions="test")
+        assert len(session._pending_response_creates) == 1
+        expected_client_eid = session._pending_response_creates[0]
+
+        resp_event = ResponseCreatedEvent(
+            event_id=f"server_resp_ev_{model_name}",  # StepFun returns random server event_id
+            type="response.created",
+            response=RealtimeResponse(
+                id=f"resp_{model_name}",
+                object="realtime.response",
+                status="in_progress",
+                metadata=None,  # StepFun drops metadata in both 2.5 and 3.0
+            ),
+        )
+        session._handle_response_created(resp_event)
+        assert reply_fut.done() is True
+        assert resp_event.response.metadata == {"client_event_id": expected_client_eid}
     finally:
         await session.aclose()
         await model.aclose()

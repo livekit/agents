@@ -212,15 +212,21 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         self._stepfun_model: RealtimeModel = realtime_model
         self._pending_response_creates: deque[str] = deque()
         self._pending_client_items: list[_PendingClientItem] = []
+        self._client_to_server_id: dict[str, str] = {}
+        self._server_to_client_id: dict[str, str] = {}
         self.on("session_reconnected", self._on_session_reconnected)
 
     def _on_session_reconnected(self, _: Any) -> None:
         self._pending_response_creates.clear()
         self._pending_client_items.clear()
+        self._client_to_server_id.clear()
+        self._server_to_client_id.clear()
 
     async def aclose(self) -> None:
         self._pending_response_creates.clear()
         self._pending_client_items.clear()
+        self._client_to_server_id.clear()
+        self._server_to_client_id.clear()
         await super().aclose()
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
@@ -258,8 +264,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
         ):
             event.item.arguments = ""
 
-        # StepFun ignores client-assigned item IDs and replaces them with random server UUIDs,
-        # dropping correlation tracking for ACK futures. Remap by matching item features
+        if event.previous_item_id and (
+            client_prev := self._server_to_client_id.get(event.previous_item_id)
+        ):
+            event.previous_item_id = client_prev
+
+        # StepFun ignores client-assigned item IDs and replaces them with random server UUIDs.
+        # Remap to client ID to prevent duplicate items and identity split in chat context
         # (see https://github.com/stepfun-ai/Step-Realtime-Console/issues/13).
         if (
             event.item.id
@@ -297,7 +308,9 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             if matched:
                 self._pending_client_items.remove(matched)
             if matched_id and matched_id in self._item_create_future:
-                self._item_create_future[event.item.id] = self._item_create_future.pop(matched_id)
+                self._client_to_server_id[matched_id] = event.item.id
+                self._server_to_client_id[event.item.id] = matched_id
+                event.item.id = matched_id
 
         super()._handle_conversion_item_added(event)
 
@@ -365,6 +378,12 @@ class RealtimeSession(openai.realtime.RealtimeSession):
             if resp and getattr(resp, "tools", None):
                 resp.tools = _normalize_tools_to_stepfun(resp.tools)
         elif ev_type == "conversation.item.create":
+            prev_id = _get(event, "previous_item_id")
+            if prev_id and (server_prev := self._client_to_server_id.get(prev_id)):
+                if isinstance(event, dict):
+                    event["previous_item_id"] = server_prev
+                else:
+                    event.previous_item_id = server_prev
             item = _get(event, "item") or {}
             if iid := _get(item, "id"):
                 self._pending_client_items.append(
@@ -372,6 +391,13 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                         iid, _get(item, "type"), _get(item, "role"), _get(item, "call_id")
                     )
                 )
+        elif ev_type == "conversation.item.delete":
+            if iid := _get(event, "item_id"):
+                if server_id := self._client_to_server_id.get(iid):
+                    if isinstance(event, dict):
+                        event["item_id"] = server_id
+                    else:
+                        event.item_id = server_id
 
         super().send_event(event)
 
@@ -444,6 +470,32 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                 item_id=event.item_id, transcript=event.delta, is_final=False
             ),
         )
+
+    def generate_reply(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice] = NOT_GIVEN,
+        tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
+    ) -> asyncio.Future[llm.GenerationCreatedEvent]:
+        """Expire unacknowledged reply ID after timeout to prevent stale queue poisoning (xAI pattern)."""
+        fut = super().generate_reply(
+            instructions=instructions, tool_choice=tool_choice, tools=tools
+        )
+        event_id = next(
+            (eid for eid, f in self._response_created_futures.items() if f is fut),
+            None,
+        )
+        if event_id:
+
+            def _cleanup() -> None:
+                with contextlib.suppress(ValueError):
+                    self._pending_response_creates.remove(event_id)
+                self._discarded_event_ids.discard(event_id)
+
+            asyncio.get_event_loop().call_later(10.0, _cleanup)
+
+        return fut
 
     def _handle_response_created(self, event: ResponseCreatedEvent) -> None:
         """Handle response.created from StepFun, correlating metadata-free responses."""
