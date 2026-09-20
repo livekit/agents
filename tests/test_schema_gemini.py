@@ -325,3 +325,22 @@ async def test_unknown_keyword_inside_ref_definition_is_dropped():
     types.FunctionDeclaration.model_validate(
         {"name": "create_draft", "description": "", "parameters": params}
     )
+
+
+# `const` is not a types.Schema field either, but unlike the keywords above the
+# transformer itself consumes it: it converts a literal into the single-value `enum`
+# Gemini does support. Dropping it before that conversion would silently widen the
+# parameter to any value of its type.
+async def test_const_becomes_a_single_value_enum():
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "const": "only", "readOnly": True},
+        },
+        "required": ["mode"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert params["properties"]["mode"] == {"type": types.Type.STRING, "enum": ["only"]}
+    types.FunctionDeclaration.model_validate(
+        {"name": "run", "description": "", "parameters": params}
+    )

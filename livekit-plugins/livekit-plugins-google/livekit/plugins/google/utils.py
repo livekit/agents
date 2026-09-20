@@ -153,11 +153,12 @@ class _GeminiJsonSchema:
     # the JSON Schema keywords this transformer still has to read itself. types.Schema is
     # declared extra="forbid", so any other keyword -- readOnly, deprecated, $comment,
     # x-google-* and other vendor extensions -- survives simplify() only to fail
-    # validation later when the FunctionDeclaration is built.
+    # validation later when the FunctionDeclaration is built. `const` is kept because the
+    # conversion below turns it into the single-value `enum` Gemini does support.
     _ALLOWED_KEYS: ClassVar[frozenset[str]] = frozenset(
         set(types.Schema.model_fields)
         | {to_camel(name) for name in types.Schema.model_fields}
-        | {"anyOf", "$ref", "prefixItems"}
+        | {"anyOf", "$ref", "prefixItems", "const"}
     )
 
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
