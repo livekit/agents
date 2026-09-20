@@ -24,7 +24,7 @@ import weakref
 from collections.abc import Coroutine
 from dataclasses import dataclass, replace
 from types import TracebackType
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import aiohttp
 
@@ -81,12 +81,12 @@ _PREWARM_CONNECT_TIMEOUT_S = 10.0
 _BACKGROUND_CONNECT_MIN_INTERVAL_S = 2.0
 
 # Text frames sent to the gateway are cut by `text_chunking`. The default,
-# "sentence", relies on a sentence tokenizer and sends one whole sentence per
-# frame, which sounds right whether the provider voices each frame as it
-# arrives (Rime segment="immediate", ElevenLabs auto_mode) or buffers to the
-# sentence itself. "phrase" is the previous behaviour: words re-batched at the
-# punctuation below or once the buffer reaches `phrase_max_chars`. "word"
-# sends every word.
+# "sentence", sends each sentence the tokenizer produces as its own frame,
+# which sounds right whether the provider voices each frame as it arrives
+# (Rime segment="immediate", ElevenLabs auto_mode) or buffers to the sentence
+# itself. "phrase" is the previous behaviour: words re-batched at the
+# punctuation below or once the buffer reaches `phrase_max_chars`, which is
+# why that punctuation only applies to "phrase". "word" sends every word.
 _PHRASE_FLUSH_SUFFIXES = (".", "!", "?", ",", ";", ":")
 
 # Every WebSocket message type that means "this socket is finished".
@@ -170,6 +170,13 @@ def _contains_letter(text: str) -> bool:
     return any(ch.isalpha() for ch in text)
 
 
+class _TextFrame(NamedTuple):
+    """One text frame for the gateway. ``flush`` marks the reply's last one."""
+
+    text: str
+    flush: bool
+
+
 @dataclass
 class _SegmentInput:
     """One reply's tokenizer stream plus the flag that lets the sender spot the last frame."""
@@ -185,17 +192,25 @@ class _SegmentInput:
 class _FrameBatcher:
     """Groups tokenizer tokens into the text frames sent to the gateway.
 
-    In phrase/sentence mode a frame is cut when the buffer ends with one of
-    ``_PHRASE_FLUSH_SUFFIXES`` or reaches ``max_chars``; with a sentence
-    tokenizer every token is already a whole sentence, so this yields one frame
-    per sentence. In word mode every spoken word is a frame. A frame is never
-    cut without a letter in it (see ``_contains_letter``): letterless tokens
-    stay attached to a neighbouring word, because some providers reject a text
-    frame that carries no allowed-language character.
+    In ``"sentence"`` mode every token is already a whole sentence, so each one
+    becomes its own frame. Punctuation is not consulted: a sentence that ends
+    in a closing quote, a bracket, an ellipsis or a CJK full stop is still one
+    sentence, and cutting on ASCII punctuation instead would merge it with the
+    next. In ``"phrase"`` mode words are re-batched at ``_PHRASE_FLUSH_SUFFIXES``
+    or once the buffer reaches ``max_chars``. In ``"word"`` mode every spoken
+    word is a frame.
+
+    A frame is never cut before it holds a letter (see ``_contains_letter``),
+    so a letterless token stays attached to a neighbouring word: some providers
+    reject a frame with no allowed-language character. ``finish`` is the
+    exception. At the end of a reply there is no neighbour left, so it returns
+    whatever is buffered. Sending a bare "4200." gets it voiced by providers
+    that can, and refused loudly by providers that cannot, where dropping it
+    would leave the caller listening to silence.
     """
 
-    def __init__(self, *, batch_phrases: bool, max_chars: int) -> None:
-        self._batch_phrases = batch_phrases
+    def __init__(self, *, mode: Literal["sentence", "word", "phrase"], max_chars: int) -> None:
+        self._mode = mode
         self._max_chars = max_chars
         self._buf = ""
         self._has_letter = False
@@ -203,7 +218,11 @@ class _FrameBatcher:
     def push(self, token: str) -> str | None:
         """Add a token; return a completed frame when this token closes one."""
         piece = f"{token} "
-        if self._batch_phrases:
+        if self._mode == "sentence":
+            self._buf += piece
+            self._has_letter = self._has_letter or _contains_letter(token)
+            return self._take() if self._has_letter else None
+        if self._mode == "phrase":
             self._buf += piece
             self._has_letter = self._has_letter or _contains_letter(token)
             stripped = self._buf.rstrip()
@@ -231,8 +250,8 @@ class _FrameBatcher:
         return None
 
     def finish(self) -> str | None:
-        """Return the trailing buffer as a frame, or None if it is empty or letterless."""
-        if self._buf and self._has_letter:
+        """Return the trailing buffer as a frame, letters or not, or None if empty."""
+        if self._buf.strip():
             return self._take()
         self._buf, self._has_letter = "", False
         return None
@@ -465,9 +484,13 @@ class TTS(tts.TTS):
                 connection is reused by every reply, and it counts as one
                 concurrent session for the whole call. Defaults to True.
             text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
-                (the default; ``"auto"`` resolves to it) sends one frame per
-                sentence. ``"phrase"`` re-batches words at clause punctuation or
-                every ``phrase_max_chars``. ``"word"`` sends one frame per word.
+                (the default; ``"auto"`` resolves to it) sends each sentence the
+                tokenizer produces as one frame, and requires a
+                ``SentenceTokenizer``. ``"phrase"`` re-batches words at clause
+                punctuation or every ``phrase_max_chars``. ``"word"`` sends one
+                frame per word.
+            phrase_max_chars: In ``"phrase"`` mode, cut a frame once the buffer
+                reaches this many characters. Ignored in the other modes.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
         """
         if model_endpoint is not None:
@@ -550,6 +573,14 @@ class TTS(tts.TTS):
                 tokenize.blingfire.SentenceTokenizer()
                 if resolved_chunking == "sentence"
                 else tokenize.basic.WordTokenizer(ignore_punctuation=False)
+            )
+        elif resolved_chunking == "sentence" and isinstance(word_tokenizer, tokenize.WordTokenizer):
+            # Sentence mode frames one token at a time, so a word tokenizer
+            # here would send a frame per word while telemetry still reported
+            # "sentence". Say so instead of degrading quietly.
+            raise ValueError(
+                "text_chunking='sentence' needs a SentenceTokenizer; pass "
+                "text_chunking='phrase' or 'word' to use a WordTokenizer"
             )
 
         self._opts = _TTSOptions(
@@ -1591,16 +1622,15 @@ class SynthesizeStream(tts.SynthesizeStream):
         segment_started_at = time.perf_counter()
         output_emitter.start_segment(segment_id=segment_id)
         input_sent_event = asyncio.Event()
-        phrase_batching = self._opts.text_chunking in {"sentence", "phrase"}
         # The sender's state lives at segment scope, not inside send_task, so a
         # reconnect replays the whole reply: tokens are consumed from the
         # tokenizer once and a new attempt cannot get them back.
         # `sent_frames` is what reached the wire, `pending_frames` is what was
         # framed but not written yet, and `batcher` holds tokens not yet framed.
-        sent_frames: list[tuple[str, bool]] = []
-        pending_frames: list[tuple[str, bool]] = []
+        sent_frames: list[_TextFrame] = []
+        pending_frames: list[_TextFrame] = []
         batcher = _FrameBatcher(
-            batch_phrases=phrase_batching, max_chars=self._opts.phrase_max_chars
+            mode=self._opts.text_chunking, max_chars=self._opts.phrase_max_chars
         )
         # True once every frame of the reply has been produced (flush included).
         frames_complete = False
@@ -1710,7 +1740,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     payload["flush"] = True
                 await guarded_send(conn, json.dumps(payload))
                 pending_frames.pop(0)
-                sent_frames.append((frame, flush))
+                sent_frames.append(_TextFrame(frame, flush))
                 mark_first_text_sent()
 
         async def send_task(conn: _HeldConnection) -> None:
@@ -1741,7 +1771,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # reply: send its frame straight away without the flush.
                     ready_frame = batcher.push(token)
                     if ready_frame is not None:
-                        pending_frames.append((ready_frame, False))
+                        pending_frames.append(_TextFrame(ready_frame, False))
                         await write_pending(conn)
                     continue
 
@@ -1761,25 +1791,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                     frames.append(last)
                 if frames:
                     pending_frames.extend(
-                        (frame, index == len(frames) - 1) for index, frame in enumerate(frames)
+                        _TextFrame(frame, index == len(frames) - 1)
+                        for index, frame in enumerate(frames)
                     )
                     frames_complete = True
                 await write_pending(conn)
                 break
 
             if not frames_complete:
-                # Only reachable when the stream ended without input_ended being
-                # observed (a tokenizer that emits eagerly), or when the tail
-                # carried no letter and was dropped.
+                # The batcher now returns a letterless tail too, so this is only
+                # reachable from a custom tokenizer that emitted everything
+                # before input_ended was observed.
                 last = batcher.finish()
                 if last is not None:
-                    pending_frames.append((last, True))
+                    pending_frames.append(_TextFrame(last, True))
                     frames_complete = True
                     await write_pending(conn)
                 elif sent_frames:
-                    logger.debug("[TTS] tail produced no frame; sending standalone flush")
+                    # A standalone flush frame, which the regional hosts do not
+                    # honour. Reachable only via a custom tokenizer, but say so
+                    # rather than leaving a stalled reply unexplained.
+                    logger.info(
+                        "[TTS] tail produced no frame; sending a standalone flush, "
+                        "which the regional gateway hosts do not honour",
+                        extra={"tts_model": self._opts.model},
+                    )
                     await guarded_send(conn, self._FLUSH_MSG)
-                    sent_frames[-1] = (sent_frames[-1][0], True)
+                    sent_frames[-1] = sent_frames[-1]._replace(flush=True)
                     frames_complete = True
 
             logger.debug(f"[TTS] send_task: sent {len(sent_frames)} frames ({token_count} tokens)")
@@ -1791,8 +1829,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             ws = conn.ws
             await input_sent_event.wait()
             if not sent_frames and not pending_frames:
-                # A reply whose text carried no letters at all: nothing was sent,
-                # so no audio is coming. End the segment rather than waiting.
+                # The tokenizer produced nothing at all (whitespace-only text),
+                # so nothing was sent and no audio is coming. Text that carries
+                # no letters is sent now, so it no longer lands here.
                 logger.debug("[TTS] recv_task: no frames were sent, ending segment")
                 output_emitter.end_segment()
                 return

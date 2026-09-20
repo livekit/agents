@@ -76,10 +76,11 @@ def build_tts_init_payload(
 ) -> dict[str, Any]:
     """Build the Unmute TTS ``init`` message.
 
-    ``encoding`` and ``sample_rate`` are always sent: the plugin needs them to
-    decode the audio it receives. ``language`` and ``speed`` are sent only when
-    the caller set them, so the model's catalog defaults apply otherwise.
-    ``model_options`` are passed through verbatim and win on conflict.
+    ``encoding`` and ``sample_rate`` are always present in the payload: the
+    plugin needs them to decode the audio it receives. ``language`` and
+    ``speed`` are included only when the caller set them, so the model's
+    catalog defaults apply otherwise. ``model_options`` are passed through
+    verbatim and are applied last, so a key repeated there wins.
     """
     config: dict[str, Any] = {"encoding": encoding, "sample_rate": sample_rate}
     if language is not None:

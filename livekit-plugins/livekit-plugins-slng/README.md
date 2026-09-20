@@ -43,13 +43,17 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 
 `text_chunking` controls how LLM text is cut into frames for the gateway:
 
-- `"sentence"` (the default, and what `"auto"` resolves to): one frame per complete sentence, using `tokenize.blingfire.SentenceTokenizer`. Pass your own `word_tokenizer` to change the tokenizer.
-- `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60). This was the behaviour before sentence mode existed.
+- `"sentence"` (the default, and what `"auto"` resolves to): each sentence the tokenizer produces is sent as one frame. Requires a `SentenceTokenizer`; passing a `WordTokenizer` in this mode raises.
+- `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60). This was the behaviour before sentence mode existed, and `phrase_max_chars` applies only here.
 - `"word"`: one frame per word.
 
-Because the plugin sends complete sentences, a provider may run in per-frame mode (`segment="immediate"` on Rime, `auto_mode=True` on ElevenLabs) or in its own buffering mode, and both sound the same. That setting no longer affects audio quality, only how the provider paces its work.
+The default tokenizer is `tokenize.blingfire.SentenceTokenizer()`. It emits a sentence once the following one has begun, and it merges any span shorter than 20 characters into the sentence after it. A very short opener such as "Got it." therefore travels with the sentence that follows rather than leaving on its own. Pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)` if you want short openers sent separately, at the cost of an extra frame boundary the provider may voice as a pause.
 
-First audio arrives once the first sentence is complete, on every provider. Keep the opening sentence of each reply short ("Got it." then the rest) so the first frame leaves early. This is standard voice-agent practice, and it is what keeps latency flat with sentence-sized frames.
+First audio arrives when the first frame leaves, which in sentence mode is when the opening sentence is complete and the next one has started.
+
+Because frames are whole sentences, a provider running in per-frame mode (`segment="immediate"` on Rime, `auto_mode=True` on ElevenLabs) and one buffering to its own sentence boundaries now see the same boundaries, so that setting mostly affects how the provider paces its work rather than where it breaks.
+
+Text with no letters, such as a bare "4200.", is still sent as the reply's final frame. Providers that can voice it do; the ones that reject letterless input fail loudly, which is easier to diagnose than a reply that goes silent.
 
 ## TTS connections
 
