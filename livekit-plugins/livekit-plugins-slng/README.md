@@ -53,11 +53,15 @@ First audio arrives once the first sentence is complete, on every provider. Keep
 
 ## TTS connections
 
-The plugin holds one WebSocket per call for each model in `connections=[...]`. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, waits for `audio_end`, and keeps the socket open for the next reply. If the gateway closes the socket after a reply, the plugin reconnects and carries on, so a gateway that ends the session after every reply still works.
+The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, waits for `audio_end`, and keeps the socket open for the next reply. If the gateway closes the socket after a reply, the plugin reconnects and replays that reply, so a gateway that ends the session after every reply still works.
 
-Use the regional `<region>.api.slng.ai` base URLs. They expect the `flush` flag on the final text frame, which is the form the bridge contract defines. The older `api.slng.ai` host honours that flag for some providers only, so on that host a reply can stall waiting for audio that never ends. Move to a regional base URL, which needs a new API key.
+With `connections=[...]` only the model currently in use holds a connection. Switching to a fallback closes the previous model's socket, so a failover chain does not hold one socket per model.
 
-`warm_standby_enabled` is on by default and means "connect at session start". `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background whenever the gateway closes it. That one connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead.
+That connection counts as one concurrent session on your key for the whole call, including silences. Two short-lived exceptions: a reply that starts while the previous one is still being cancelled opens its own socket for that reply, and `synthesize()` (non-streaming) always uses a dedicated one.
+
+Use the regional `<region>.api.slng.ai` base URLs. They expect the `flush` flag on the final text frame, which is the form the bridge contract defines. The older `api.slng.ai` host honours that flag for some providers only. On that host the symptom is a reply that plays to the end and then hangs until the connection timeout; in the segment log `first_audio_ms` is set and `audio_end_ms` is null. Move to a regional base URL, which needs a new API key.
+
+`warm_standby_enabled` is on by default and means "connect at session start". `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background when the gateway closes a socket that has carried text. A socket the gateway closes before any reply used it is retried at most every two seconds, so a gateway that accepts and immediately closes cannot become a connect storm. Set `warm_standby_enabled=False` to connect on the first reply instead.
 
 ## End of turn finalization
 
