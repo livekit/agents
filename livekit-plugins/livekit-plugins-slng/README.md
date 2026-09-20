@@ -43,11 +43,11 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 
 `text_chunking` controls how LLM text is cut into frames for the gateway:
 
-- `"sentence"` (the default, and what `"auto"` resolves to): one frame per sentence. Requires a `SentenceTokenizer`.
+- `"sentence"` (the default, and what `"auto"` resolves to): one frame per sentence.
 - `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60).
 - `"word"`: one frame per word.
 
-The default tokenizer, `tokenize.blingfire.SentenceTokenizer()`, merges spans shorter than 20 characters into the sentence that follows, so a short opener such as "Got it." is sent with the next sentence. Pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)` to send it on its own.
+Sentence mode needs no setup: the plugin uses `tokenize.blingfire.SentenceTokenizer()` unless you pass a `word_tokenizer`. It merges spans shorter than 20 characters into the sentence that follows, so a short opener such as "Got it." is sent with the next sentence. To send it on its own, pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)`. An overriding tokenizer must be a `SentenceTokenizer` in this mode.
 
 ## TTS connections
 
