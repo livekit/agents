@@ -37,35 +37,25 @@ Additional keyword arguments are forwarded to the gateway and applied according 
 
 ## TTS init fields
 
-The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent, because the plugin needs them to decode the audio it receives. `language` and `speed` are sent only when you pass them, so the selected model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
 
 ## TTS text chunking
 
 `text_chunking` controls how LLM text is cut into frames for the gateway:
 
-- `"sentence"` (the default, and what `"auto"` resolves to): each sentence the tokenizer produces is sent as one frame. Requires a `SentenceTokenizer`; passing a `WordTokenizer` in this mode raises.
-- `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60). This was the behaviour before sentence mode existed, and `phrase_max_chars` applies only here.
+- `"sentence"` (the default, and what `"auto"` resolves to): one frame per sentence. Requires a `SentenceTokenizer`.
+- `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60).
 - `"word"`: one frame per word.
 
-The default tokenizer is `tokenize.blingfire.SentenceTokenizer()`. It emits a sentence once the following one has begun, and it merges any span shorter than 20 characters into the sentence after it. A very short opener such as "Got it." therefore travels with the sentence that follows rather than leaving on its own. Pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)` if you want short openers sent separately, at the cost of an extra frame boundary the provider may voice as a pause.
-
-First audio arrives when the first frame leaves, which in sentence mode is when the opening sentence is complete and the next one has started.
-
-Because frames are whole sentences, a provider running in per-frame mode (`segment="immediate"` on Rime, `auto_mode=True` on ElevenLabs) and one buffering to its own sentence boundaries now see the same boundaries, so that setting mostly affects how the provider paces its work rather than where it breaks.
-
-Text with no letters, such as a bare "4200.", is still sent as the reply's final frame. Providers that can voice it do; the ones that reject letterless input fail loudly, which is easier to diagnose than a reply that goes silent.
+The default tokenizer, `tokenize.blingfire.SentenceTokenizer()`, merges spans shorter than 20 characters into the sentence that follows, so a short opener such as "Got it." is sent with the next sentence. Pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)` to send it on its own.
 
 ## TTS connections
 
-The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, waits for `audio_end`, and keeps the socket open for the next reply. If the gateway closes the socket after a reply, the plugin reconnects and replays that reply, so a gateway that ends the session after every reply still works.
+The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
 
-With `connections=[...]` only the model currently in use holds a connection. Switching to a fallback closes the previous model's socket, so a failover chain does not hold one socket per model.
+Use the regional `<region>.api.slng.ai` base URLs, which need a new API key.
 
-That connection counts as one concurrent session on your key for the whole call, including silences. Two short-lived exceptions: a reply that starts while the previous one is still being cancelled opens its own socket for that reply, and `synthesize()` (non-streaming) always uses a dedicated one.
-
-Use the regional `<region>.api.slng.ai` base URLs. They expect the `flush` flag on the final text frame, which is the form the bridge contract defines. The older `api.slng.ai` host honours that flag for some providers only. On that host the symptom is a reply that plays to the end and then hangs until the connection timeout; in the segment log `first_audio_ms` is set and `audio_end_ms` is null. Move to a regional base URL, which needs a new API key.
-
-`warm_standby_enabled` is on by default and means "connect at session start". `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background when the gateway closes a socket that has carried text. A socket the gateway closes before any reply used it is retried at most every two seconds, so a gateway that accepts and immediately closes cannot become a connect storm. Set `warm_standby_enabled=False` to connect on the first reply instead.
+`warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
 
 ## End of turn finalization
 
