@@ -148,21 +148,6 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output(
         modalities = asyncio.Future[list[str]]()
         modalities.set_result(["audio", "text"])
 
-        message_ch.send_nowait(
-            llm.MessageGeneration(
-                message_id="message-id",
-                text_stream=text_ch,
-                audio_stream=audio_ch,
-                modalities=modalities,
-            )
-        )
-        message_ch.close()
-        function_ch.close()
-        text_ch.send_nowait("Hello")
-        text_ch.close()
-        audio_ch.send_nowait(_audio_frame(0.01))
-        audio_ch.close()
-
         rt_session.emit(
             "generation_created",
             llm.GenerationCreatedEvent(
@@ -177,6 +162,24 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output(
                 "input_speech_stopped",
                 llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
             )
+
+        # Keep the first output beyond the 1 ms budget. On fast CI runners an
+        # immediately queued frame can start within budget, correctly producing no alert.
+        await asyncio.sleep(0.01)
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        function_ch.close()
+        text_ch.send_nowait("Hello")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(0.01))
+        audio_ch.close()
 
         await asyncio.wait_for(event_received.wait(), timeout=5)
         if provider_order == "google":
