@@ -2435,6 +2435,7 @@ class AgentActivity(RecognitionHooks):
         ev: vad.VADEvent | None,
         speech_start_time: float,
     ) -> None:
+        self._session._cancel_latency_budget_watch()
         self._session._update_user_state("speaking", last_speaking_time=speech_start_time)
         if self._audio_recognition:
             self._audio_recognition._on_start_of_speech(
@@ -2753,7 +2754,12 @@ class AgentActivity(RecognitionHooks):
         if not info.skip_reply and not self._rt_turn_detection_enabled:
             self._cancel_false_interruption_timer()
 
-        if info.metrics.stopped_speaking_at is not None:
+        if (
+            not info.skip_reply
+            and self.llm is not None
+            and not self._rt_turn_detection_enabled
+            and info.metrics.stopped_speaking_at is not None
+        ):
             self._session._start_latency_budget_watch(info.metrics.stopped_speaking_at)
 
         old_task = self._user_turn_completed_atask
@@ -2777,6 +2783,9 @@ class AgentActivity(RecognitionHooks):
     async def _user_turn_completed_impl(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
+        def _abandon_latency_watch() -> None:
+            self._session._cancel_latency_budget_watch(info.metrics.stopped_speaking_at)
+
         if old_task is not None:
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
@@ -2828,6 +2837,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.commit_audio()
 
         if info.skip_reply:
+            _abandon_latency_watch()
             if info.new_transcript != "":
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
@@ -2835,6 +2845,7 @@ class AgentActivity(RecognitionHooks):
 
         if (current_speech := self._current_speech) is not None:
             if not current_speech.allow_interruptions:
+                _abandon_latency_watch()
                 logger.warning(
                     "skipping reply to user input, current speech generation cannot be interrupted",
                     extra={"lk.pii.user_input": info.new_transcript},
@@ -2848,6 +2859,7 @@ class AgentActivity(RecognitionHooks):
                 self._rt_session.interrupt()
 
         if self._scheduling_paused or self._new_turns_blocked:
+            _abandon_latency_watch()
             logger.warning(
                 "skipping on_user_turn_completed, speech scheduling is paused",
                 extra={"lk.pii.user_input": info.new_transcript},
@@ -2882,9 +2894,11 @@ class AgentActivity(RecognitionHooks):
                     temp_mutable_chat_ctx, new_message=user_message
                 )
             except StopResponse:
+                _abandon_latency_watch()
                 hook_span.add_event("stop_response")
                 return  # ignore this turn
             except Exception as e:
+                _abandon_latency_watch()
                 # the message may quote the transcript: honour the session's redaction too
                 trace_utils.record_exception(
                     hook_span,
@@ -2903,9 +2917,11 @@ class AgentActivity(RecognitionHooks):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
+            _abandon_latency_watch()
             return  # skip response if no llm is set
 
         if self._scheduling_paused or self._new_turns_blocked:
+            _abandon_latency_watch()
             logger.warning(
                 "skipping reply to user input, speech scheduling is paused",
                 extra={"lk.pii.user_input": info.new_transcript},
@@ -3475,12 +3491,9 @@ class AgentActivity(RecognitionHooks):
             return
         self._latency_budget_recorded_user_metrics = user_metrics
         stopped_at = user_metrics["stopped_speaking_at"]
-        if not self._session._finish_latency_budget_watch(
+        self._session._finish_latency_budget_watch(
             stopped_at=stopped_at, started_at=started_speaking_at, speech_id=speech_id
-        ):
-            self._session._evaluate_latency_budget(
-                latency=started_speaking_at - stopped_at, speech_id=speech_id
-            )
+        )
 
     @utils.log_exceptions(logger=logger)
     async def _pipeline_reply_task(

@@ -828,8 +828,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if watch is not None and watch.stopped_at == stopped_at and watch.speech_id is None:
             watch.speech_id = speech_id
 
-    def _cancel_latency_budget_watch(self) -> None:
+    def _cancel_latency_budget_watch(self, stopped_at: float | None = None) -> None:
         watch = self._latency_budget_watch
+        if stopped_at is not None and (watch is None or watch.stopped_at != stopped_at):
+            return
         self._latency_budget_watch = None
         if watch is not None and watch.task is not None:
             watch.task.cancel()

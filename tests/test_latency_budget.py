@@ -205,14 +205,17 @@ async def test_realtime_hook_say_emits_latency_budget_on_first_output(
         await session.start(Agent(instructions="test"))
 
         assert session._activity is not None
+        stopped_at = time.time() - 0.01
         context = _UserTurnCompletedContextVar.set(
             _UserTurnCompletedData(
                 activity=session._activity,
-                metrics={"stopped_speaking_at": time.time() - 0.01},
+                metrics={"stopped_speaking_at": stopped_at},
                 task=asyncio.current_task(),
             )
         )
         try:
+            if not spawned_task:
+                session._start_latency_budget_watch(stopped_at)
             if spawned_task:
 
                 async def _background_say():

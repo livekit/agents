@@ -28,6 +28,7 @@ from livekit.agents import (
     NotGivenOr,
     RunContext,
     SpeechCreatedEvent,
+    StopResponse,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -48,11 +49,17 @@ from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
-from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
+from livekit.agents.voice.audio_recognition import (
+    AudioRecognition,
+    _EndOfTurnInfo,
+    _EndOfTurnMetrics,
+)
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
 from livekit.agents.voice.io import PlaybackFinishedEvent
+from livekit.agents.voice.speech_handle import SpeechHandle
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
+from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -235,6 +242,115 @@ async def test_pipeline_latency_budget_fires_while_hook_is_stalled() -> None:
     assert len(events) == 1
     assert events[0].level == "exceeded"
     assert events[0].speech_id is None
+
+
+async def test_skipped_pipeline_turn_does_not_start_latency_watch() -> None:
+    session = create_session(FakeActions(), speed_factor=1)
+    audio_output = session.output.audio
+    assert isinstance(audio_output, _SyncedAudioOutput)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.2})
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    async with session:
+        await session.start(MyAgent())
+        assert session._activity is not None
+        session._activity.on_end_of_turn(
+            _EndOfTurnInfo(
+                skip_reply=True,
+                new_transcript="Hello",
+                transcript_confidence=1.0,
+                metrics=_EndOfTurnMetrics(
+                    started_speaking_at=time.time() - 1,
+                    stopped_speaking_at=time.time(),
+                    transcription_delay=0.0,
+                    end_of_turn_delay=0.0,
+                ),
+            )
+        )
+        await asyncio.sleep(0.3)
+    await audio_output._synchronizer.aclose()
+
+    assert events == []
+
+
+async def test_stop_response_cancels_pipeline_latency_watch() -> None:
+    class SilentAgent(MyAgent):
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            raise StopResponse
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.6})
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    await asyncio.wait_for(run_session(session, SilentAgent()), timeout=SESSION_TIMEOUT)
+
+    assert events == []
+
+
+async def test_new_pipeline_speech_cancels_latency_watch() -> None:
+    session = create_session(FakeActions(), speed_factor=1)
+    audio_output = session.output.audio
+    assert isinstance(audio_output, _SyncedAudioOutput)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.2})
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    async with session:
+        await session.start(MyAgent())
+        assert session._activity is not None
+        stopped_at = time.time()
+        session._start_latency_budget_watch(stopped_at)
+        session._activity.on_start_of_speech(None, time.time())
+        session._activity._evaluate_turn_latency_budget(
+            user_metrics={"stopped_speaking_at": stopped_at},
+            started_speaking_at=stopped_at + 0.5,
+            speech_id="stale-reply",
+        )
+        await asyncio.sleep(0.3)
+    await audio_output._synchronizer.aclose()
+
+    assert events == []
+
+
+async def test_uninterruptible_speech_abandons_pipeline_latency_watch() -> None:
+    session = create_session(FakeActions(), speed_factor=1)
+    audio_output = session.output.audio
+    assert isinstance(audio_output, _SyncedAudioOutput)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.2})
+    events: list[LatencyBudgetEvent] = []
+    session.on("latency_budget", events.append)
+
+    async with session:
+        await session.start(MyAgent())
+        activity = session._activity
+        assert activity is not None
+        activity._current_speech = SpeechHandle.create(allow_interruptions=False)
+        activity.on_end_of_turn(
+            _EndOfTurnInfo(
+                skip_reply=False,
+                new_transcript="Hello",
+                transcript_confidence=1.0,
+                metrics=_EndOfTurnMetrics(
+                    started_speaking_at=time.time() - 1,
+                    stopped_speaking_at=time.time(),
+                    transcription_delay=0.0,
+                    end_of_turn_delay=0.0,
+                ),
+            )
+        )
+        assert activity._user_turn_completed_atask is not None
+        await activity._user_turn_completed_atask
+        activity._current_speech = None
+        await asyncio.sleep(0.3)
+    await audio_output._synchronizer.aclose()
+
+    assert events == []
 
 
 def test_realtime_user_input_transcription_preserves_item_id() -> None:
