@@ -1469,14 +1469,19 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                     audio_b64 = resp.get("audio")
                     if isinstance(audio_b64, str) and audio_b64:
+                        # Guard the decode only: an emitter failure here would
+                        # otherwise be reported as an encoding problem and then
+                        # resurface as "connection closed unexpectedly".
                         try:
-                            output_emitter.push(base64.b64decode(audio_b64))
-                            audio_received = True
-                        except Exception:
+                            decoded = base64.b64decode(audio_b64)
+                        except ValueError:
                             logger.warning(
                                 "[TTS] invalid base64 audio in chunked synthesis",
                                 exc_info=True,
                             )
+                        else:
+                            output_emitter.push(decoded)
+                            audio_received = True
 
                     if is_final:
                         output_emitter.flush()
@@ -1826,6 +1831,22 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def recv_task(conn: _HeldConnection) -> None:
             nonlocal ready_ms, audio_end_ms, gateway_request_id, gateway_session_id
             nonlocal audio_chunks_seen, in_flight
+
+            def push_audio(data: bytes) -> None:
+                nonlocal audio_chunks_seen
+                audio_chunks_seen += 1
+                mark_first_audio_seen()
+                output_emitter.push(data)
+
+            def mark_segment_end() -> None:
+                # in_flight = False is what stops the interrupt path sending a
+                # cancel for a reply the gateway already finished, so every exit
+                # from the loop below goes through here.
+                nonlocal audio_end_ms, in_flight
+                audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
+                in_flight = False
+                output_emitter.end_segment()
+
             ws = conn.ws
             await input_sent_event.wait()
             if not sent_frames and not pending_frames:
@@ -1850,9 +1871,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             "model output (chunks=%s)",
                             audio_chunks_seen,
                         )
-                        audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
-                        in_flight = False
-                        output_emitter.end_segment()
+                        mark_segment_end()
                         break
                     if conn.reused:
                         raise _StaleConnection()
@@ -1860,9 +1879,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 # SLNG: Handle both binary (legacy) and JSON audio_chunk messages
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    audio_chunks_seen += 1
-                    mark_first_audio_seen()
-                    output_emitter.push(msg.data)
+                    push_audio(msg.data)
                 elif msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         resp = json.loads(msg.data)
@@ -1901,27 +1918,23 @@ class SynthesizeStream(tts.SynthesizeStream):
                         )
                         audio_b64 = resp.get("audio")
                         if isinstance(audio_b64, str) and audio_b64:
+                            # Only the decode is guarded. An emitter failure is
+                            # not an encoding problem, and swallowing it here
+                            # would drop a whole reply's audio while the log
+                            # pointed at the gateway.
                             try:
-                                mark_first_audio_seen()
-                                output_emitter.push(base64.b64decode(audio_b64))
-                            except Exception:
-                                if is_final:
-                                    logger.warning(
-                                        "[TTS] invalid base64 audio (isFinal frame)",
-                                        exc_info=True,
-                                    )
-                                else:
-                                    logger.warning(
-                                        "[TTS] invalid base64 audio (audio frame)",
-                                        exc_info=True,
-                                    )
+                                decoded = base64.b64decode(audio_b64)
+                            except ValueError:
+                                logger.warning(
+                                    "[TTS] invalid base64 audio (%s)",
+                                    "isFinal frame" if is_final else "audio frame",
+                                    exc_info=True,
+                                )
                             else:
-                                audio_chunks_seen += 1
+                                push_audio(decoded)
 
                         if is_final:
-                            audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
-                            in_flight = False
-                            output_emitter.end_segment()
+                            mark_segment_end()
                             break
 
                         if resp.get("error") is not None:
@@ -1937,20 +1950,16 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                     if event.kind == "audio_chunk":
                         if event.audio:
-                            audio_chunks_seen += 1
-                            mark_first_audio_seen()
-                            output_emitter.push(event.audio)
+                            push_audio(event.audio)
 
-                    # SLNG: "audio_end" or "end" instead of "Flushed"
+                    # The reply's terminal frame: audio_end, or a provider frame
+                    # ("Flushed", "done") that _normalize_ws_message_type maps
+                    # onto it, optionally carrying the last audio itself.
                     elif event.kind == "audio_end":
                         if event.audio:
-                            audio_chunks_seen += 1
-                            mark_first_audio_seen()
-                            output_emitter.push(event.audio)
+                            push_audio(event.audio)
                         logger.debug(f"[TTS] recv_task: audio_end after {audio_chunks_seen} chunks")
-                        audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
-                        in_flight = False
-                        output_emitter.end_segment()
+                        mark_segment_end()
                         break
 
                     elif event.kind == "error":
