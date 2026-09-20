@@ -138,8 +138,8 @@ class TestDrainTimeout:
                 asyncio.get_event_loop().run_until_complete(server.drain())
 
     @staticmethod
-    def _stuck_server(drain_timeout: int) -> AgentServer:
-        """An AgentServer with one job process whose join() never completes."""
+    def _drain_server(drain_timeout: int, *, running_job: bool = True) -> AgentServer:
+        """An AgentServer whose drain either waits forever or has nothing to wait for."""
         server = _make_server(drain_timeout=drain_timeout)
 
         server._draining = False
@@ -155,10 +155,24 @@ class TestDrainTimeout:
                 await stuck_future  # never resolves
 
         class FakeProcPool:
-            processes = [StuckProc()]
+            processes = [StuckProc()] if running_job else []
 
         server._proc_pool = FakeProcPool()  # type: ignore[assignment]
         return server
+
+    def test_zero_timeout_with_no_running_job_also_raises(self) -> None:
+        """A 0 deadline never yields to the coroutine, so even an idle drain reports
+        a timeout. cli.py catches that and proceeds to aclose(); pinned because it is
+        identical on 3.10 and 3.12 but still surprising.
+        """
+        server = self._drain_server(drain_timeout=0, running_job=False)
+
+        async def _scenario() -> None:
+            with pytest.raises(asyncio.TimeoutError):
+                await server.drain()
+
+        with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
+            asyncio.get_event_loop().run_until_complete(_scenario())
 
     def test_zero_drain_timeout_raises(self) -> None:
         """drain_timeout=0 bounds the wait like any other value.
@@ -168,10 +182,10 @@ class TestDrainTimeout:
         TimeoutError that cli.py catches (and that lets aclose() kill the
         children) never fired.
         """
-        self._assert_drain_times_out(self._stuck_server(drain_timeout=0))
+        self._assert_drain_times_out(self._drain_server(drain_timeout=0))
 
     def test_explicit_zero_timeout_raises(self) -> None:
-        self._assert_drain_times_out(self._stuck_server(drain_timeout=3600), timeout=0)
+        self._assert_drain_times_out(self._drain_server(drain_timeout=3600), timeout=0)
 
     @staticmethod
     def _assert_drain_times_out(server: AgentServer, **kwargs: int | None) -> None:
@@ -195,7 +209,7 @@ class TestDrainTimeout:
 
     def test_none_timeout_keeps_waiting(self) -> None:
         """None remains the documented off-switch: no TimeoutError, drain keeps waiting."""
-        server = self._stuck_server(drain_timeout=1)
+        server = self._drain_server(drain_timeout=1)
 
         async def _scenario() -> None:
             task = asyncio.create_task(server.drain(timeout=None))
