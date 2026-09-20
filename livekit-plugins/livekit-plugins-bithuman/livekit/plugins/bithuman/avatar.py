@@ -50,6 +50,13 @@ _logger.add(sys.stdout, level="INFO")
 _AVATAR_AGENT_IDENTITY = "bithuman-avatar-agent"
 _AVATAR_AGENT_NAME = "bithuman-avatar-agent"
 
+# The avatar models a cloud session may ask for, in BitHuman's own spelling.
+# "expression"/"essence" are the first-generation names and keep resolving to
+# the first-generation engines; "expression-2"/"essence-2" name the current
+# ones. The server validates this string and refuses an unknown one, so a typo
+# is an error at session start rather than a different engine rendering.
+BitHumanModel = Literal["expression", "essence", "expression-2", "essence-2"]
+
 
 def _is_valid_base64(s: str) -> bool:
     """
@@ -103,7 +110,7 @@ class AvatarSession(BaseAvatarSession):
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[Literal["expression", "essence"]] = "essence",
+        model: NotGivenOr[BitHumanModel] = "essence",
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
         runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
@@ -129,14 +136,19 @@ class AvatarSession(BaseAvatarSession):
             avatar_participant_name: The avatar participant name to use.
 
         Model Types:
-            BitHuman supports two model types with different capabilities:
+            BitHuman has two model families, each in two generations. The name is sent to
+            BitHuman with the session, so the model you name is the model that renders:
 
-            - **expression**: Provides dynamic real-time facial expressions and emotional responses.
-              This model can generate live emotional expressions based on the content and context,
-              offering more natural and interactive avatar behavior.
+            - **expression** / **expression-2**: dynamic real-time facial expressions and
+              emotional responses, generated live from the content and context.
 
-            - **essence**: Uses predefined actions and expressions. This model provides consistent
-              and predictable avatar behavior with pre-configured gestures and expressions.
+            - **essence** / **essence-2**: predefined actions and expressions — consistent,
+              predictable avatar behavior with pre-configured gestures.
+
+            The unsuffixed names are the first generation and keep working unchanged.
+            ``expression-2`` and ``essence-2`` are the current generation; an avatar has to
+            have been prepared for the model you ask for, and BitHuman refuses the session
+            (naming the models that avatar can be served as) if it has not.
 
         Parameter Combinations:
             The following parameter combinations determine the avatar mode and behavior:
@@ -148,14 +160,12 @@ class AvatarSession(BaseAvatarSession):
 
             2. **Cloud Mode with avatar_image**:
                - `avatar_image`: Custom avatar image for personalization
-               - `model`: Defaults to "expression" for dynamic emotional expressions
+               - `model`: use an expression model for dynamic emotional expressions
                - Provides real-time expression generation based on the custom image
 
             3. **Cloud Mode with avatar_id**:
                - `avatar_id`: Pre-configured avatar identifier
-               - `model`: Defaults to "essence" if not specified, but can be set to either:
-                 * "expression" for dynamic emotional responses
-                 * "essence" for predefined actions and expressions
+               - `model`: "essence" unless you name another; any of the four models above
                - Allows flexibility in choosing the interaction style
         """
         super().__init__()
@@ -212,6 +222,16 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
         self._runtime: AsyncBithuman | None = runtime or None
+
+    @property
+    def _is_expression_model(self) -> bool:
+        """True for every generation of the expression family.
+
+        Read in two places — the custom-endpoint request format and the legacy
+        ``mode`` field — and it must give the same answer in both, or a session
+        is dispatched one way and billed the other.
+        """
+        return str(self._model).startswith("expression")
 
     @property
     def avatar_identity(self) -> str:
@@ -361,7 +381,7 @@ class AvatarSession(BaseAvatarSession):
         # Custom endpoints use multipart/form-data format for direct avatar worker requests
         is_custom_endpoint = not self._is_default_api_url()
 
-        if is_custom_endpoint and self._model == "expression":
+        if is_custom_endpoint and self._is_expression_model:
             # Use FormData format for custom endpoints
             # Parse async parameter from URL if present
             async_mode = self._parse_async_parameter_from_url()
@@ -406,14 +426,21 @@ class AvatarSession(BaseAvatarSession):
             livekit_token: JWT token for room access
             room_name: Name of the LiveKit room
         """
-        # Prepare JSON data
+        # Prepare JSON data.
+        #
+        # `model` names the avatar model for this session explicitly. Without it the
+        # server falls back to `mode`, which can only distinguish the two
+        # first-generation engines — so which model a second-generation avatar was
+        # served as depended on a server-side default rather than on what the caller
+        # asked for. `mode` is still sent, unchanged, for servers that predate `model`.
         json_data = {
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
+            "model": str(self._model),
             "mode": "gpu"
             if (utils.is_given(self._avatar_image) and self._avatar_image is not None)
-            or self._model == "expression"
+            or self._is_expression_model
             else "cpu",
         }
 
