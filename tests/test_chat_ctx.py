@@ -676,6 +676,26 @@ def test_truncate_multiple_instructions():
     assert ctx.items[0].content == ["first"]
 
 
+def test_truncate_zero_max_items_keeps_only_instruction():
+    """`items[-0:]` is the whole list, so a zero budget used to keep every message."""
+    ctx = _make_ctx("system", "user", "assistant", "user")
+    ctx.truncate(max_items=0)
+    assert [item.role for item in ctx.items] == ["system"]
+
+
+def test_truncate_zero_max_items_without_instruction():
+    ctx = _make_ctx("user", "assistant", "user")
+    ctx.truncate(max_items=0)
+    assert ctx.items == []
+
+
+def test_truncate_negative_max_items_keeps_only_instruction():
+    """A negative budget trims from the front rather than keeping nothing."""
+    ctx = _make_ctx("developer", "user", "assistant", "user")
+    ctx.truncate(max_items=-2)
+    assert [item.role for item in ctx.items] == ["developer"]
+
+
 # --- remove tests ---
 
 
