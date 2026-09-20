@@ -950,11 +950,19 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     for proc in procs:
                         await proc.join()
 
-            # 0 is a legal timeout; a truthiness check would send it into the unbounded branch.
-            if timeout is not None:
-                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
-            else:
+            # 0 is a legal timeout; a truthiness check sent it into the unbounded branch.
+            if timeout is None:
                 await _drain()
+            elif timeout == 0:
+                # wait_for() cancels _drain() before it can look at the pool, so report a
+                # completed drain here instead of raising for work that already finished.
+                drained = all(task.done() for task in self._job_lifecycle_tasks) and not any(
+                    proc.running_job for proc in self._proc_pool.processes
+                )
+                if not drained:
+                    raise asyncio.TimeoutError
+            else:
+                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
 
     @utils.log_exceptions(logger=logger)
     async def simulate_job(

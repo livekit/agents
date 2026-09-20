@@ -160,16 +160,17 @@ class TestDrainTimeout:
         server._proc_pool = FakeProcPool()  # type: ignore[assignment]
         return server
 
-    def test_zero_timeout_with_no_running_job_also_raises(self) -> None:
-        """A 0 deadline never yields to the coroutine, so even an idle drain reports
-        a timeout. cli.py catches that and proceeds to aclose(); pinned because it is
-        identical on 3.10 and 3.12 but still surprising.
+    def test_zero_timeout_with_no_running_job_returns(self) -> None:
+        """Nothing left to wait for is a completed drain, not a timeout.
+
+        asyncio.wait_for() cancels _drain() before it can look at the process pool, so
+        drain(timeout=0) on an idle worker reported a timeout even when it had finished.
         """
         server = self._drain_server(drain_timeout=0, running_job=False)
 
         async def _scenario() -> None:
-            with pytest.raises(asyncio.TimeoutError):
-                await server.drain()
+            # bounded so a regression fails fast instead of hanging the suite
+            await asyncio.wait_for(server.drain(), 2.0)
 
         with patch.object(server, "_update_worker_status", new_callable=AsyncMock):
             asyncio.get_event_loop().run_until_complete(_scenario())
