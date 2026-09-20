@@ -1854,7 +1854,7 @@ class AgentActivity(RecognitionHooks):
                 user_metrics["stopped_speaking_at"], handle.id
             )
 
-        if user_message is not None and user_message.metrics is not None:
+        if is_given(user_message) and user_message is not None:
             stopped_at = user_message.metrics.get("stopped_speaking_at")
             self._session._bind_latency_budget_speech(stopped_at, handle.id)
 
