@@ -2782,7 +2782,6 @@ class AgentActivity(RecognitionHooks):
 
         if (
             not info.skip_reply
-            and self.llm is not None
             and not self._rt_turn_detection_enabled
             and info.metrics.stopped_speaking_at is not None
         ):
@@ -2951,7 +2950,7 @@ class AgentActivity(RecognitionHooks):
             # ignore stt transcription for realtime model
             user_message = None  # type: ignore
         elif self.llm is None:
-            _abandon_latency_watch()
+            _abandon_latency_watch(preserve_claimed_speech=True)
             return  # skip response if no llm is set
 
         if self._scheduling_paused or self._new_turns_blocked:

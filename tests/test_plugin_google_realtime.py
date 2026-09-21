@@ -196,6 +196,22 @@ async def test_transcript_contains_only_output_transcription_with_audio(
         assert await _drain_generation(generations[0]) == ("Tako je!", 1, [])
 
 
+async def test_proactive_audio_generation_preserves_user_response_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, proactivity=True) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+
+        session._user_audio_since_generation = True
+        session._start_new_generation()
+        assert generations[-1].responds_to_user_audio
+
+        session._mark_current_generation_done()
+        session._start_new_generation()
+        assert not generations[-1].responds_to_user_audio
+
+
 async def test_tool_call_is_delivered_without_written_call_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

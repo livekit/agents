@@ -329,6 +329,32 @@ async def test_stop_response_preserves_hook_reply_latency_watch(reply_kind: str)
     assert events[0].speech_id == hook_speech.speech_handle.id
 
 
+async def test_tts_only_hook_say_keeps_latency_budget() -> None:
+    class TTSOnlyAgent(MyAgent):
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            self.session.say("Please hold")
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    actions.add_tts(0.5, ttfb=0.2, input="Please hold")
+    session = create_session(actions, speed_factor=1)
+    session._llm = None
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.5})
+    events: list[LatencyBudgetEvent] = []
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("latency_budget", events.append)
+    session.on("speech_created", speeches.append)
+
+    await asyncio.wait_for(run_session(session, TTSOnlyAgent()), timeout=SESSION_TIMEOUT)
+
+    hook_speech = next(ev for ev in speeches if ev.source == "say")
+    assert len(events) == 1
+    assert events[0].level == "exceeded"
+    assert events[0].speech_id == hook_speech.speech_handle.id
+
+
 async def test_new_pipeline_speech_cancels_latency_watch() -> None:
     session = create_session(FakeActions(), speed_factor=1)
     audio_output = session.output.audio

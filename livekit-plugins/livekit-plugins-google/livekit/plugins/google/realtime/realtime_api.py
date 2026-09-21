@@ -563,6 +563,7 @@ class RealtimeSession(llm.RealtimeSession):
         self._unsent_item_ids: set[str] = set()
 
         self._in_user_activity = False
+        self._user_audio_since_generation = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
@@ -902,6 +903,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         if not self._in_user_activity:
             self._in_user_activity = True
+            self._user_audio_since_generation = True
             self._send_client_event(
                 types.LiveClientRealtimeInput(
                     activity_start=types.ActivityStart(),
@@ -1197,6 +1199,12 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
+                    if (sc := response.server_content) and (
+                        (sc.interim_input_transcription and sc.interim_input_transcription.text)
+                        or (sc.input_transcription and sc.input_transcription.text)
+                    ):
+                        self._user_audio_since_generation = True
+
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1353,14 +1361,16 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
+        responds_to_user_audio = self._user_audio_since_generation or not (
+            is_given(self._opts.proactivity) and self._opts.proactivity
+        )
+        self._user_audio_since_generation = False
         generation_event = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
-            # With proactive audio enabled, the server may speak without user input.
-            responds_to_user_audio=not (
-                is_given(self._opts.proactivity) and self._opts.proactivity
-            ),
+            # Proactivity permits unsolicited output, but does not make every turn unsolicited.
+            responds_to_user_audio=responds_to_user_audio,
             response_id=self._current_generation.response_id,
         )
 
