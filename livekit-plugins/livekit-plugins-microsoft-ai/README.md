@@ -204,10 +204,64 @@ Only transient failures retry, with no audio emitted from incomplete attempts.
 
 ## Examples and validation
 
+### TTS only in a real room, without a LiveKit Cloud account
+
+`examples/voice_agents/microsoft_ai_tts_room.py` uses only `microsoft_ai.TTS` and
+`AgentSession.say()`. There is no LLM, STT, VAD, microphone, text-input handler,
+remote session control or paid LiveKit Inference. It waits for a participant
+and an audio subscription, says `Hello, this is a Microsoft AI voice test.`
+once, waits for playback, and closes its session and TTS client. Synthesis
+retries and recording are disabled. A fresh room/job triggers another paid
+TTS request; do not repeatedly reconnect to test playback controls.
+
+Use a [local open-source LiveKit server](https://docs.livekit.io/home/self-hosting/local/)
+bound to loopback, or an existing LiveKit server. Set standard `LIVEKIT_*`
+variables separately from the private Microsoft AI configuration:
+
+```sh
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_API_KEY=devkey
+export LIVEKIT_API_SECRET=secret
+export MICROSOFT_AI_ENV_FILE=/path/outside/checkout/endpoints.env
+
+uv run --package livekit-plugins-microsoft-ai --no-default-groups \
+  python examples/voice_agents/microsoft_ai_tts_room.py dev --no-reload
+```
+
+`devkey` / `secret` are the public local-server development defaults, **not**
+Azure credentials and not suitable for a production or externally exposed
+server. Only the agent loads the private TTS file.
+
+Connect a subscribe-only participant using the official `livekit-client`
+browser SDK and a short-lived room-scoped token minted by a local backend.
+Call `room.startAudio()` from a click, attach subscribed audio tracks, and
+enable playback before the greeting. Do not give the browser the Microsoft AI
+key, server API secret or microphone access. Run only this unnamed demo agent
+against the local server so that automatic dispatch chooses it. This example
+uses the room transport; use `dev`, not the local-device `console` mode.
+
+The same example can run from a clean environment with the built wheel and
+the declared minimum released SDK, rather than relying on editable sources:
+
+```sh
+uv build --package livekit-plugins-microsoft-ai --out-dir /tmp/microsoft-ai-dist
+uv venv /tmp/microsoft-ai-room
+uv pip install --python /tmp/microsoft-ai-room/bin/python \
+  /tmp/microsoft-ai-dist/livekit_plugins_microsoft_ai-0.0.1-py3-none-any.whl \
+  'livekit-agents==1.8.2'
+/tmp/microsoft-ai-room/bin/python \
+  examples/voice_agents/microsoft_ai_tts_room.py dev --no-reload
+```
+
+### Full STT/LLM/TTS agent
+
 See `examples/voice_agents/microsoft_ai_agent.py` for an AgentSession using the
 existing OpenAI LLM, bundled VAD and this STT/TTS package. Its OpenAI credential
 is used by the LLM only. This full agent requires STT access as well as TTS.
-The CLI's `console` mode does not require LiveKit Cloud.
+It cannot run with only an Azure Speech TTS key: `microsoft_ai.STT` also needs
+its separate endpoint/model/credentials, and the LLM needs `OPENAI_API_KEY`.
+The CLI's `console` mode removes the Cloud requirement, not those provider
+requirements. Use the TTS-only room example when STT/LLM access is unavailable.
 
 ```sh
 uv run --package livekit-agents --extra microsoft-ai --extra openai --no-default-groups \
@@ -217,6 +271,8 @@ uv run --package livekit-agents --extra microsoft-ai --extra openai --no-default
 To use an external config file with the agent, set `MICROSOFT_AI_ENV_FILE` to
 its path first. Keep the LLM's `OPENAI_API_KEY` separate; the Microsoft AI config
 loader does not copy unrelated variables into the process environment.
+
+### Direct endpoint smoke test
 
 `examples/other/microsoft_ai_smoke.py` is a direct, explicit-opt-in smoke path
 without LiveKit Cloud or an LLM. It sends at most one short TTS request and one
@@ -268,7 +324,8 @@ Focused hermetic tests:
 uv sync --package livekit-plugins-microsoft-ai --no-default-groups
 uv sync --only-group dev --no-default-groups --inexact
 uv run --no-sync pytest tests/test_microsoft_ai_stt.py tests/test_microsoft_ai_tts.py \
-  tests/test_microsoft_ai_smoke.py tests/test_microsoft_ai_config.py --unit
+  tests/test_microsoft_ai_smoke.py tests/test_microsoft_ai_config.py \
+  tests/test_microsoft_ai_tts_room.py --unit
 ```
 
 These tests use fake sockets/HTTP responses and synthetic audio only. They
