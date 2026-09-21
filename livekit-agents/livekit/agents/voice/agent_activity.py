@@ -2783,7 +2783,15 @@ class AgentActivity(RecognitionHooks):
     async def _user_turn_completed_impl(
         self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
     ) -> None:
-        def _abandon_latency_watch() -> None:
+        def _abandon_latency_watch(*, preserve_claimed_speech: bool = False) -> None:
+            watch = self._session._latency_budget_watch
+            if (
+                preserve_claimed_speech
+                and watch is not None
+                and watch.stopped_at == info.metrics.stopped_speaking_at
+                and watch.speech_id is not None
+            ):
+                return
             self._session._cancel_latency_budget_watch(info.metrics.stopped_speaking_at)
 
         if old_task is not None:
@@ -2894,11 +2902,11 @@ class AgentActivity(RecognitionHooks):
                     temp_mutable_chat_ctx, new_message=user_message
                 )
             except StopResponse:
-                _abandon_latency_watch()
+                _abandon_latency_watch(preserve_claimed_speech=True)
                 hook_span.add_event("stop_response")
                 return  # ignore this turn
             except Exception as e:
-                _abandon_latency_watch()
+                _abandon_latency_watch(preserve_claimed_speech=True)
                 # the message may quote the transcript: honour the session's redaction too
                 trace_utils.record_exception(
                     hook_span,

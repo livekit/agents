@@ -293,6 +293,42 @@ async def test_stop_response_cancels_pipeline_latency_watch() -> None:
     assert events == []
 
 
+@pytest.mark.parametrize("reply_kind", ["say", "generate_reply"])
+async def test_stop_response_preserves_hook_reply_latency_watch(reply_kind: str) -> None:
+    class HookReplyAgent(MyAgent):
+        async def on_user_turn_completed(
+            self, turn_ctx: ChatContext, new_message: ChatMessage
+        ) -> None:
+            if reply_kind == "say":
+                self.session.say("Please hold")
+            else:
+                self.session.generate_reply(instructions="instructions:please hold")
+            raise StopResponse
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello", stt_delay=0.2)
+    if reply_kind == "say":
+        actions.add_tts(0.5, ttfb=0.2, input="Please hold")
+    else:
+        actions.add_llm("Please hold", input="instructions:please hold", ttft=0.1)
+        actions.add_tts(0.5, ttfb=0.2)
+
+    session = create_session(actions, speed_factor=1)
+    session._opts.latency_budget = session._resolve_latency_budget({"budget": 0.5})
+    events: list[LatencyBudgetEvent] = []
+    speeches: list[SpeechCreatedEvent] = []
+    session.on("latency_budget", events.append)
+    session.on("speech_created", speeches.append)
+
+    agent = HookReplyAgent(turn_handling={"preemptive_generation": {"enabled": False}})
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    hook_speech = next(ev for ev in speeches if ev.source == reply_kind)
+    assert len(events) == 1
+    assert events[0].level == "exceeded"
+    assert events[0].speech_id == hook_speech.speech_handle.id
+
+
 async def test_new_pipeline_speech_cancels_latency_watch() -> None:
     session = create_session(FakeActions(), speed_factor=1)
     audio_output = session.output.audio
