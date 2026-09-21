@@ -1367,7 +1367,7 @@ class RealtimeSession(llm.RealtimeSession):
         else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
-            self._handle_input_speech_started()
+            self._handle_input_speech_started(is_synthetic=True)
 
         self.emit("generation_created", generation_event)
 
@@ -1468,7 +1468,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         # emit input_speech_stopped event after the generation is done
-        self._handle_input_speech_stopped()
+        self._handle_input_speech_stopped(is_synthetic=True)
 
         gen = self._current_generation
 
@@ -1519,13 +1519,15 @@ class RealtimeSession(llm.RealtimeSession):
         if not gen.audio_ch.closed:
             gen.audio_ch.close()
 
-    def _handle_input_speech_started(self) -> None:
-        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+    def _handle_input_speech_started(self, *, is_synthetic: bool = False) -> None:
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent(is_synthetic=is_synthetic))
 
-    def _handle_input_speech_stopped(self) -> None:
+    def _handle_input_speech_stopped(self, *, is_synthetic: bool = False) -> None:
         self.emit(
             "input_speech_stopped",
-            llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=False, is_synthetic=is_synthetic
+            ),
         )
 
     def _reject_tool_calls(self, function_calls: list[types.FunctionCall]) -> None:

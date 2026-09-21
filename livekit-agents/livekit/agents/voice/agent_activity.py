@@ -478,7 +478,6 @@ class AgentActivity(RecognitionHooks):
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
         self._realtime_auto_tool_reply_pending = False
-        self._realtime_auto_tool_reply_speech_started = False
         self._realtime_user_stopped_speaking_at: float | None = None
         self._realtime_late_input_speech_stop = False
         self._realtime_turn_has_output = False
@@ -1573,6 +1572,8 @@ class AgentActivity(RecognitionHooks):
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
 
+        self._clear_realtime_auto_tool_reply(self._pending_auto_tool_reply_fut)
+
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
             self.llm.off("error", self._on_error)
@@ -2241,10 +2242,9 @@ class AgentActivity(RecognitionHooks):
 
         self._interruption_detected = False
 
-    def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
-        if self._realtime_auto_tool_reply_pending:
-            self._realtime_auto_tool_reply_speech_started = True
-        else:
+    def _on_input_speech_started(self, ev: llm.InputSpeechStartedEvent) -> None:
+        if not ev.is_synthetic:
+            self._clear_realtime_auto_tool_reply(self._pending_auto_tool_reply_fut)
             self._session._cancel_latency_budget_watch()
             self._realtime_turn_has_output = False
         if self.vad is None or self.using_default_vad:
@@ -2271,7 +2271,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
     def _on_input_speech_stopped(self, ev: llm.InputSpeechStoppedEvent) -> None:
-        if self._realtime_late_input_speech_stop:
+        if ev.is_synthetic:
+            self._realtime_late_input_speech_stop = False
+        elif self._realtime_late_input_speech_stop:
             # Some server-side providers report the stop after creating the reply.
             # Keep the generation's turn anchor rather than attributing a later turn.
             self._realtime_late_input_speech_stop = False
@@ -2327,17 +2329,14 @@ class AgentActivity(RecognitionHooks):
             return
 
         if self._scheduling_paused or self._new_turns_blocked:
+            self._clear_realtime_auto_tool_reply(self._pending_auto_tool_reply_fut)
             # TODO(theomonnom): should we "forward" this new turn to the next agent?
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
+        expected_reply = self._pending_auto_tool_reply_fut
         if self._realtime_auto_tool_reply_pending:
-            self._realtime_auto_tool_reply_pending = False
-            if self._realtime_auto_tool_reply_speech_started:
-                # Google pairs its synthetic pre-generation start with a stop when
-                # the tool continuation finishes; neither marks new user speech.
-                self._realtime_late_input_speech_stop = True
-            self._realtime_auto_tool_reply_speech_started = False
+            self._clear_realtime_auto_tool_reply(expected_reply)
 
         if self._realtime_user_stopped_speaking_at is None and not self._realtime_turn_has_output:
             # Generation creation is the first available end-of-turn signal for
@@ -2369,13 +2368,20 @@ class AgentActivity(RecognitionHooks):
             name="AgentActivity.realtime_generation",
         )
 
-        if (fut := self._pending_auto_tool_reply_fut) and not fut.done():
+        if expected_reply is not None:
             if (run_state := self._session._global_run_state) is not None and not run_state.done():
                 run_state._watch_handle(handle)
-            self._pending_auto_tool_reply_fut = None
-            fut.set_result(None)
 
         self._schedule_speech(handle, SpeechHandle.SPEECH_PRIORITY_NORMAL)
+
+    def _clear_realtime_auto_tool_reply(self, expected_reply: asyncio.Future[None] | None) -> None:
+        if expected_reply is None or self._pending_auto_tool_reply_fut is not expected_reply:
+            return
+        self._pending_auto_tool_reply_fut = None
+        self._realtime_auto_tool_reply_pending = False
+        self._realtime_late_input_speech_stop = False
+        if not expected_reply.done():
+            expected_reply.set_result(None)
 
     def _interrupt_by_audio_activity(self) -> None:
         """Interrupt the current speech or generation from detected audio activity."""
@@ -4856,22 +4862,15 @@ class AgentActivity(RecognitionHooks):
 
                 # if the realtime model auto-generates the tool reply, install a
                 # placeholder so the active RunResult waits for that reply
-                if (
-                    self._rt_session.capabilities.auto_tool_reply_generation
-                    and fnc_executed_ev.has_tool_reply
-                ):
-                    self._realtime_auto_tool_reply_pending = True
-                    self._realtime_auto_tool_reply_speech_started = False
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation
                     and fnc_executed_ev.has_tool_reply
-                    and self._pending_auto_tool_reply_fut is None
-                    and (run_state := self._session._global_run_state) is not None
-                    and not run_state.done()
                 ):
+                    self._clear_realtime_auto_tool_reply(self._pending_auto_tool_reply_fut)
                     auto_reply_fut = asyncio.get_event_loop().create_future()
                     self._pending_auto_tool_reply_fut = auto_reply_fut
+                    self._realtime_auto_tool_reply_pending = True
                     llm_label = self.llm._label
 
                     async def _wait_for_auto_tool_reply() -> None:
@@ -4883,11 +4882,13 @@ class AgentActivity(RecognitionHooks):
                                 llm_label,
                             )
                         finally:
-                            if self._pending_auto_tool_reply_fut is auto_reply_fut:
-                                self._pending_auto_tool_reply_fut = None
+                            self._clear_realtime_auto_tool_reply(auto_reply_fut)
 
                     task = asyncio.create_task(_wait_for_auto_tool_reply())
-                    run_state._watch_handle(task)
+                    if (
+                        run_state := self._session._global_run_state
+                    ) is not None and not run_state.done():
+                        run_state._watch_handle(task)
 
                 chat_ctx = self._rt_session.chat_ctx.copy()
                 chat_ctx.items.extend(new_fnc_outputs)
@@ -4898,10 +4899,10 @@ class AgentActivity(RecognitionHooks):
                         "failed to update chat context before generating the function calls results",  # noqa: E501
                         extra={"error": str(e)},
                     )
-                    if auto_reply_fut is not None and not auto_reply_fut.done():
-                        if self._pending_auto_tool_reply_fut is auto_reply_fut:
-                            self._pending_auto_tool_reply_fut = None
-                        auto_reply_fut.set_result(None)
+                    self._clear_realtime_auto_tool_reply(auto_reply_fut)
+                except BaseException:
+                    self._clear_realtime_auto_tool_reply(auto_reply_fut)
+                    raise
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:

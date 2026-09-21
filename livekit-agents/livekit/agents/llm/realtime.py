@@ -21,12 +21,14 @@ from .tool_context import Tool, ToolChoice, ToolContext
 
 @dataclass
 class InputSpeechStartedEvent:
-    pass
+    # Provider lifecycle signals can look like user speech without new audio input.
+    is_synthetic: bool = False
 
 
 @dataclass
 class InputSpeechStoppedEvent:
     user_transcription_enabled: bool
+    is_synthetic: bool = False
 
 
 @dataclass

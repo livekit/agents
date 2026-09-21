@@ -17,7 +17,7 @@ from collections.abc import Sequence
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, LatencyBudgetEvent, function_tool, utils
+from livekit.agents import Agent, AgentSession, LatencyBudgetEvent, function_tool, llm, utils
 from livekit.agents.llm import (
     FunctionCall,
     GenerationCreatedEvent,
@@ -303,7 +303,8 @@ async def test_manual_tool_reply_keeps_realtime_latency_budget_turn() -> None:
     assert events[0].speech_id is not None
 
 
-async def test_google_auto_tool_reply_does_not_restart_latency_budget() -> None:
+@pytest.mark.parametrize("barge_in", [False, True])
+async def test_google_auto_tool_reply_does_not_restart_latency_budget(barge_in: bool) -> None:
     model = FakeRealtimeModel(capabilities=fake_capabilities())
 
     class ToolAgent(Agent):
@@ -347,8 +348,15 @@ async def test_google_auto_tool_reply_does_not_restart_latency_budget() -> None:
             await asyncio.sleep(0.01)
         assert session._activity and session._activity._realtime_auto_tool_reply_pending
 
-        # Google emits a synthetic speech-start before the automatic tool generation.
-        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        if barge_in:
+            # A real barge-in cancels the old tool continuation and starts a new turn.
+            rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+            rt_session.emit(
+                "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+            )
+        else:
+            # Google emits a synthetic speech-start before an automatic tool generation.
+            rt_session.emit("input_speech_started", InputSpeechStartedEvent(is_synthetic=True))
         tool_message_ch = utils.aio.Chan[MessageGeneration]()
         tool_function_ch = utils.aio.Chan[FunctionCall]()
         tool_message_ch.close()
@@ -362,10 +370,11 @@ async def test_google_auto_tool_reply_does_not_restart_latency_budget() -> None:
             ),
         )
         rt_session.emit(
-            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+            "input_speech_stopped",
+            InputSpeechStoppedEvent(user_transcription_enabled=False, is_synthetic=True),
         )
         await asyncio.sleep(0.05)
-        assert len(events) == 1
+        assert len(events) == (2 if barge_in else 1)
 
         # The next actual user turn must still be able to start its own watch.
         rt_session.emit("input_speech_started", InputSpeechStartedEvent())
@@ -373,4 +382,88 @@ async def test_google_auto_tool_reply_does_not_restart_latency_budget() -> None:
             "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
         )
         await asyncio.sleep(0.02)
-        assert len(events) == 2
+        assert len(events) == (3 if barge_in else 2)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "update_error"])
+async def test_missing_auto_tool_reply_does_not_poison_later_turns(failure: str) -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        await session.start(ToolAgent())
+        rt_session = model.active_session
+        if failure == "update_error":
+            rt_session.update_error = llm.RealtimeError("update failed")
+
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(
+            FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+        )
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        for _ in range(500):
+            if session._activity and session._activity._realtime_auto_tool_reply_pending:
+                break
+            await asyncio.sleep(0.01)
+        if failure == "timeout":
+            assert session._activity and session._activity._realtime_auto_tool_reply_pending
+            await asyncio.sleep(5.1)
+        else:
+            await asyncio.sleep(0.02)
+
+        assert session._activity is not None
+        assert not session._activity._realtime_auto_tool_reply_pending
+        assert session._activity._pending_auto_tool_reply_fut is None
+
+        previous_events = len(events)
+        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        assert len(events) == previous_events + 1
+
+
+async def test_old_auto_tool_reply_cleanup_keeps_new_expectation() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="test"))
+        assert session._activity is not None
+        activity = session._activity
+        old_reply = asyncio.get_running_loop().create_future()
+        new_reply = asyncio.get_running_loop().create_future()
+        activity._pending_auto_tool_reply_fut = new_reply
+        activity._realtime_auto_tool_reply_pending = True
+
+        activity._clear_realtime_auto_tool_reply(old_reply)
+        assert activity._pending_auto_tool_reply_fut is new_reply
+        assert activity._realtime_auto_tool_reply_pending
+
+        activity._clear_realtime_auto_tool_reply(new_reply)
+        assert activity._pending_auto_tool_reply_fut is None
+        assert not activity._realtime_auto_tool_reply_pending
