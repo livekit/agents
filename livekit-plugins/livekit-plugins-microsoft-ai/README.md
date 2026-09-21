@@ -234,6 +234,50 @@ Only transient failures retry, with no audio emitted from incomplete attempts.
 
 ## Examples and validation
 
+### Microphone echo with STT and TTS, without an LLM
+
+`examples/voice_agents/microsoft_ai_echo.py` receives a browser microphone track
+through a real LiveKit room, transcribes it with `microsoft_ai.STT`, then echoes
+the completed user turn with `microsoft_ai.TTS`. It uses
+`Agent.on_user_turn_completed` and `AgentSession.say()`; `StopResponse` suppresses
+an additional model reply. There is no LLM, manual transcription injection,
+per-utterance `flush()` call, or paid LiveKit Inference.
+
+The same local Silero VAD model is passed to **both** STT and AgentSession;
+each opens its own stream. The plugin's VAD drives provider commits after
+0.5 seconds of observed silence. Session VAD detects barge-in after 0.2 seconds
+of speech. Echoes are interruptible and never automatically resumed after a
+false interruption; preemptive generation and provider retries are disabled.
+Do not add backend padding or promote interim text to a final to hide tail loss.
+
+With the same local-server `LIVEKIT_*` settings described below and an external
+file containing both providers' configuration:
+
+```sh
+uv run --package livekit-plugins-microsoft-ai --no-default-groups \
+  python examples/voice_agents/microsoft_ai_echo.py dev --no-reload --log-level info
+```
+
+In the browser, explicitly click Start microphone and grant permission.
+Publish only a microphone audio track using the official `livekit-client` SDK
+and a short-lived microphone-only, room-scoped token minted server-side. Enable
+playback from a user gesture, attach the agent audio, and consume the standard
+`lk.transcription` streams for transient interim/final captions. No microphone
+may start on page load or automatically after reconnect. Stop must release the
+capture track and disconnect. Use headphones to avoid feeding the echo back in.
+
+While connected, microphone audio is sent to the configured STT service and
+recognized final text is sent to TTS. The example disables recording and remote
+session control, accepts no typed-text input, and does not log transcripts.
+Its room captions and session state are transient. Do not enable audio dumps,
+debug transcript logs, external telemetry exporters, or browser recording when
+testing private speech. Each room session is limited to three minutes and
+closes both providers when its participant leaves.
+
+Automated fixture audio published through the same browser/LiveKit track is a
+useful transport and lifecycle test, but it does **not** validate a physical
+microphone, acoustic echo cancellation, or subjective sound quality.
+
 ### TTS only in a real room, without a LiveKit Cloud account
 
 `examples/voice_agents/microsoft_ai_tts_room.py` uses only `microsoft_ai.TTS` and
@@ -358,7 +402,7 @@ uv sync --package livekit-plugins-microsoft-ai --no-default-groups
 uv sync --only-group dev --no-default-groups --inexact
 uv run --no-sync pytest tests/test_microsoft_ai_stt.py tests/test_microsoft_ai_tts.py \
   tests/test_microsoft_ai_smoke.py tests/test_microsoft_ai_config.py \
-  tests/test_microsoft_ai_tts_room.py --unit
+  tests/test_microsoft_ai_tts_room.py tests/test_microsoft_ai_echo.py --unit
 ```
 
 These tests use fake sockets/HTTP responses and synthetic audio only. They
