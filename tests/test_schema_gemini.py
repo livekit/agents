@@ -344,3 +344,21 @@ async def test_const_becomes_a_single_value_enum():
     types.FunctionDeclaration.model_validate(
         {"name": "run", "description": "", "parameters": params}
     )
+
+
+def _raw_tool(name: str, parameters: dict) -> llm.RawFunctionTool:
+    return function_tool(
+        lambda raw_arguments: None,
+        raw_schema={"name": name, "description": "d", "parameters": parameters},
+    )
+
+
+# Test that a declaration Gemini rejects names the tool it came from
+async def test_rejected_tool_names_itself():
+    # minLength is a Schema field, so it reaches validation whatever the transformer drops
+    bad = _raw_tool(
+        "bad", {"type": "object", "properties": {"a": {"type": "string", "minLength": "many"}}}
+    )
+
+    with pytest.raises(ValueError, match="tool bad has a schema Gemini rejected"):
+        utils.create_tools_config(llm.ToolContext([bad]), use_parameters_json_schema=False)
