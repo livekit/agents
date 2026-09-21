@@ -1,0 +1,23 @@
+livekit-agents/livekit/agents/voice/agent_activity.py
+  s_b11cfac01a2bf1::t_9518687a6bed30 4138,4141-4144,4196,4198,4674,4779
+tests/test_realtime_error_logging.py
+  s_b11cfac01a2bf1::t_2b931b646b15b1 64
+  s_b11cfac01a2bf1::t_50fcd9dfc929b4 1-27,30-34,37-63,65-66,72-74
+  s_b11cfac01a2bf1::t_9518687a6bed30 28-29,35-36,67-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "29f133e300e9a4ee6d94686c6d5bb78bdb7d0215",
+  "prompts": {},
+  "sessions": {
+    "s_b11cfac01a2bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c0a7-8605-7b12-8f74-1fcac014922e",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
