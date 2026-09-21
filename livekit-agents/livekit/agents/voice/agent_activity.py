@@ -4009,10 +4009,7 @@ class AgentActivity(RecognitionHooks):
             if tool_messages:
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
-            if tool_output.initial_committed.is_set() is False:
-                tool_output.initial_committed.set()
-                if tool_output.late_flush_cb is not None:
-                    tool_output.late_flush_cb()
+            tool_output.release_initial_batch()
 
             if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
@@ -4772,10 +4769,7 @@ class AgentActivity(RecognitionHooks):
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
 
-                if not tool_output.initial_committed.is_set():
-                    tool_output.initial_committed.set()
-                    if tool_output.late_flush_cb is not None:
-                        tool_output.late_flush_cb()
+                tool_output.release_initial_batch()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:

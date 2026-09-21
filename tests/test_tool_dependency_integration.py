@@ -22,12 +22,24 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.voice.events import ToolCallEnded, ToolCallUpdated, ToolExecutionUpdatedEvent
+from livekit.agents.voice.events import ToolCallEnded, ToolExecutionUpdatedEvent
 
 from .fake_io import FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
-from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
-from .test_realtime_agent_state_during_tool import _generation
+from .fake_realtime import (
+    FakeRealtimeModel,
+    FakeRealtimeSession,
+    fake_capabilities,
+    generation as _generation,
+)
+from .tool_dependency_helpers import (
+    DelayedBatchFakeLLM as _DelayedBatchFakeLLM,
+    await_chain as _await_chain,
+    close as _close,
+    resolve_fake_realtime_replies as _resolve_fake_realtime_replies,
+    response as _response,
+    wait as _wait,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -35,8 +47,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 class _Trace:
     def __init__(self) -> None:
         self.order: list[str] = []
-        self.started: dict[str, asyncio.Event] = {}
-        self.updated: dict[str, asyncio.Event] = {}
         self.ended: dict[str, asyncio.Event] = {}
         self.terminals: dict[str, list[ToolCallEnded]] = {}
 
@@ -48,9 +58,7 @@ class _Trace:
 
     def _on_update(self, event: ToolExecutionUpdatedEvent) -> None:
         update = event.update
-        if isinstance(update, ToolCallUpdated):
-            self.event(self.updated, update.call_id).set()
-        elif isinstance(update, ToolCallEnded):
+        if isinstance(update, ToolCallEnded):
             self.terminals.setdefault(update.call_id, []).append(update)
             self.event(self.ended, update.call_id).set()
 
@@ -58,7 +66,6 @@ class _Trace:
 class _ObservingFakeLLM(FakeLLM):
     def __init__(self, *, fake_responses: list[FakeLLMResponse]) -> None:
         super().__init__(fake_responses=fake_responses)
-        self.observed_inputs: list[str] = []
         self.pending_seen = asyncio.Event()
 
     def chat(
@@ -84,51 +91,9 @@ class _ObservingFakeLLMStream(FakeLLMStream):
 
     async def _run(self) -> None:
         input_text = self._get_index_text()
-        self._llm.observed_inputs.append(input_text)
         if "pending" in input_text:
             self._llm.pending_seen.set()
         await super()._run()
-
-
-class _DelayedBatchFakeLLM(_ObservingFakeLLM):
-    def __init__(self, *, first_call: FunctionToolCall, second_call: FunctionToolCall) -> None:
-        super().__init__(fake_responses=[])
-        self.first_call = first_call
-        self.second_call = second_call
-        self.emit_second = asyncio.Event()
-        self.close_stream = asyncio.Event()
-        self.stream_eof = asyncio.Event()
-
-    def chat(
-        self,
-        *,
-        chat_ctx: Any,
-        tools: list[Tool] | None = None,
-        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
-        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
-    ) -> LLMStream:
-        return _DelayedBatchFakeLLMStream(
-            self,
-            chat_ctx=chat_ctx,
-            tools=tools or [],
-            conn_options=conn_options,
-        )
-
-
-class _DelayedBatchFakeLLMStream(FakeLLMStream):
-    _llm: _DelayedBatchFakeLLM
-
-    async def _run(self) -> None:
-        if self._get_index_text() != "batch":
-            return
-        self._llm.observed_inputs.append("batch")
-        self._send_chunk(tool_calls=[self._llm.first_call])
-        await self._llm.emit_second.wait()
-        self._send_chunk(tool_calls=[self._llm.second_call])
-        await self._llm.close_stream.wait()
-        self._llm.stream_eof.set()
 
 
 class _RecordingRealtimeSession(FakeRealtimeSession):
@@ -180,112 +145,6 @@ class _RecordingRealtimeModel(FakeRealtimeModel):
         session.update_error = self.bring_up_error
         self.created_sessions.append(session)
         return session
-
-
-async def _resolve_fake_realtime_replies(
-    realtime_session: _RecordingRealtimeSession,
-    stop: asyncio.Event,
-) -> None:
-    index = 1  # the initial response future is resolved by the test itself
-    while not stop.is_set():
-        while index < len(realtime_session._reply_futs):
-            future = realtime_session._reply_futs[index]
-            if not future.done():
-                future.set_result(
-                    _generation(
-                        response_id=f"followup-{index}",
-                        text="progress acknowledged",
-                        audio_duration=0.01,
-                    )
-                )
-            index += 1
-
-        if stop.is_set():
-            return
-        realtime_session.reply_created.clear()
-        stop_wait = asyncio.create_task(stop.wait())
-        reply_wait = asyncio.create_task(realtime_session.reply_created.wait())
-        done, pending = await asyncio.wait(
-            {stop_wait, reply_wait}, timeout=5, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        if not done:
-            raise asyncio.TimeoutError("fake realtime reply future was not created")
-        if stop_wait in done:
-            return
-
-
-async def _wait(event: asyncio.Event) -> None:
-    await asyncio.wait_for(event.wait(), timeout=5)
-
-
-def _await_chain(task: asyncio.Task[Any]) -> str:
-    chain: list[str] = []
-    awaitable: Any = task.get_coro()
-    seen: set[int] = set()
-    while awaitable is not None and id(awaitable) not in seen:
-        seen.add(id(awaitable))
-        name = getattr(awaitable, "__qualname__", type(awaitable).__name__)
-        frame = getattr(awaitable, "cr_frame", None)
-        if frame is not None:
-            name = f"{name} ({frame.f_code.co_filename}:{frame.f_lineno})"
-        chain.append(name)
-        child = getattr(awaitable, "cr_await", None)
-        if child is None:
-            child = getattr(awaitable, "gi_yieldfrom", None)
-        awaitable = child
-    return " -> ".join(chain)
-
-
-async def _close(session: AgentSession) -> None:
-    try:
-        await asyncio.wait_for(session.aclose(), timeout=5)
-    except asyncio.TimeoutError:
-        print("live tasks at natural session close timeout:")
-        for task in asyncio.all_tasks():
-            if task is not asyncio.current_task() and not task.done():
-                print(f"  {task.get_name()}: {_await_chain(task)}")
-        # Keep a failing lifecycle assertion from leaking a blocked speech/tool into
-        # the next test. The timeout is re-raised after bounded best-effort cleanup.
-        activity = session._activity
-        if activity is not None:
-            with contextlib.suppress(BaseException):
-                await activity._tool_executor.cancel_all()
-            speech = activity.current_speech
-            if speech is not None:
-                for task in speech._tasks:
-                    task.cancel()
-                speech._mark_done()
-        dangling = [
-            task
-            for task in asyncio.all_tasks()
-            if task is not asyncio.current_task()
-            and not task.done()
-            and (
-                task.get_name().startswith("tool_dependency_")
-                or task.get_name() in {"execute_tools_task", "tool_dependency_ready"}
-            )
-        ]
-        for task in dangling:
-            task.cancel()
-        if dangling:
-            await asyncio.gather(*dangling, return_exceptions=True)
-        with contextlib.suppress(BaseException):
-            await asyncio.wait_for(session.aclose(), timeout=2)
-        raise
-
-
-def _response(user_input: str, *calls: FunctionToolCall) -> FakeLLMResponse:
-    return FakeLLMResponse(
-        input=user_input,
-        content="",
-        ttft=0,
-        duration=0,
-        tool_calls=list(calls),
-    )
 
 
 def _new_session(llm: FakeLLM, *, on_dependency_error: str = "skip") -> AgentSession:

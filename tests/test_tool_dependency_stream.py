@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from collections.abc import AsyncIterator
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
-from livekit.agents.llm import FunctionCall, ToolContext, ToolFlag
-from livekit.agents.voice.events import ToolCallEnded, ToolExecutionUpdatedEvent
-from livekit.agents.voice.generation import perform_tool_executions
-from livekit.agents.voice.speech_handle import SpeechHandle
+from livekit.agents.llm import FunctionCall, ToolFlag
 
 from .fake_llm import FakeLLM
+from .tool_dependency_helpers import collect_terminals, dispatch_tool_stream, wait
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -27,10 +24,6 @@ async def _new_session(agent: Agent) -> AgentSession:
     )
     await session.start(agent)
     return session
-
-
-async def _wait(event: asyncio.Event) -> None:
-    await asyncio.wait_for(event.wait(), timeout=2)
 
 
 def _tool_tasks() -> list[asyncio.Task[object]]:
@@ -69,10 +62,43 @@ def _calls() -> tuple[FunctionCall, FunctionCall]:
 
 
 @pytest.mark.asyncio
+async def test_malformed_default_dispatch_emits_one_error_without_starting_tool() -> None:
+    body_started = asyncio.Event()
+    started_calls: list[FunctionCall] = []
+
+    @function_tool(name="prepare")
+    async def prepare(ctx: RunContext) -> str:
+        body_started.set()
+        return "must not run"
+
+    async def malformed_stream() -> AsyncIterator[FunctionCall]:
+        yield FunctionCall(name="prepare", call_id="prepare-call", arguments="not-json")
+
+    session = await _new_session(Agent(instructions="test", tools=[prepare]))
+    execution_task, tool_output = dispatch_tool_stream(
+        session,
+        [prepare],
+        malformed_stream(),
+        tool_execution_started_cb=started_calls.append,
+    )
+    try:
+        await asyncio.wait_for(execution_task, timeout=2)
+        assert len(tool_output.output) == 1
+        assert len([out for out in tool_output.output if out.fnc_call_out.is_error]) == 1
+        assert "Error parsing arguments for `prepare`" in tool_output.output[0].fnc_call_out.output
+        assert not started_calls
+        assert tool_output.first_tool_started_fut is not None
+        assert not tool_output.first_tool_started_fut.done()
+        assert not body_started.is_set()
+    finally:
+        await asyncio.wait_for(session.aclose(), timeout=2)
+        assert not _tool_tasks(), "tool or dependency tasks survived session close"
+
+
+@pytest.mark.asyncio
 async def test_cancelled_function_stream_cancels_readiness_and_settles_queued_dependency() -> None:
     root_started = asyncio.Event()
     dependent_started = asyncio.Event()
-    terminals: defaultdict[str, list[ToolCallEnded]] = defaultdict(list)
 
     @function_tool(name="root")
     async def root(ctx: RunContext) -> str:
@@ -91,28 +117,14 @@ async def test_cancelled_function_stream_cancels_readiness_and_settles_queued_de
         raise asyncio.CancelledError
 
     session = await _new_session(Agent(instructions="test", tools=[root, dependent]))
-    session.on(
-        "tool_execution_updated",
-        lambda event: (
-            terminals[event.update.call_id].append(event.update)
-            if isinstance(event, ToolExecutionUpdatedEvent)
-            and isinstance(event.update, ToolCallEnded)
-            else None
-        ),
-    )
-    execution_task, tool_output = perform_tool_executions(
-        session=session,
-        speech_handle=SpeechHandle.create(),
-        tool_ctx=ToolContext([root, dependent]),
-        tool_choice="auto",
-        function_stream=cancelled_stream(),
-        tool_execution_started_cb=lambda _: None,
-        tool_execution_completed_cb=lambda _: None,
+    terminals = collect_terminals(session)
+    execution_task, tool_output = dispatch_tool_stream(
+        session, [root, dependent], cancelled_stream()
     )
     assert tool_output.background_task is not None
     try:
         await asyncio.wait_for(tool_output.background_task, timeout=2)
-        await _wait(root_started)
+        await wait(root_started, timeout=2)
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(asyncio.shield(execution_task), timeout=0.5)
         assert not dependent_started.is_set()
@@ -128,7 +140,6 @@ async def test_cancelled_function_stream_cancels_readiness_and_settles_queued_de
 @pytest.mark.asyncio
 async def test_function_stream_exception_fails_readiness_and_settles_queued_dependency() -> None:
     dependent_started = asyncio.Event()
-    terminals: defaultdict[str, list[ToolCallEnded]] = defaultdict(list)
 
     @function_tool(name="root")
     async def root(ctx: RunContext) -> str:
@@ -146,24 +157,8 @@ async def test_function_stream_exception_fails_readiness_and_settles_queued_depe
         raise RuntimeError("stream failed")
 
     session = await _new_session(Agent(instructions="test", tools=[root, dependent]))
-    session.on(
-        "tool_execution_updated",
-        lambda event: (
-            terminals[event.update.call_id].append(event.update)
-            if isinstance(event, ToolExecutionUpdatedEvent)
-            and isinstance(event.update, ToolCallEnded)
-            else None
-        ),
-    )
-    execution_task, tool_output = perform_tool_executions(
-        session=session,
-        speech_handle=SpeechHandle.create(),
-        tool_ctx=ToolContext([root, dependent]),
-        tool_choice="auto",
-        function_stream=failing_stream(),
-        tool_execution_started_cb=lambda _: None,
-        tool_execution_completed_cb=lambda _: None,
-    )
+    terminals = collect_terminals(session)
+    execution_task, tool_output = dispatch_tool_stream(session, [root, dependent], failing_stream())
     assert tool_output.background_task is not None
     try:
         with pytest.raises(RuntimeError, match="stream failed"):
@@ -182,7 +177,6 @@ async def test_external_readiness_cancellation_abandons_dispatcher_without_orpha
     root_started = asyncio.Event()
     release_root = asyncio.Event()
     dependent_started = asyncio.Event()
-    terminals: defaultdict[str, list[ToolCallEnded]] = defaultdict(list)
 
     @function_tool(name="root", flags=ToolFlag.CANCELLABLE)
     async def root(ctx: RunContext) -> str:
@@ -202,27 +196,11 @@ async def test_external_readiness_cancellation_abandons_dispatcher_without_orpha
         await asyncio.Event().wait()
 
     session = await _new_session(Agent(instructions="test", tools=[root, dependent]))
-    session.on(
-        "tool_execution_updated",
-        lambda event: (
-            terminals[event.update.call_id].append(event.update)
-            if isinstance(event, ToolExecutionUpdatedEvent)
-            and isinstance(event.update, ToolCallEnded)
-            else None
-        ),
-    )
-    execution_task, tool_output = perform_tool_executions(
-        session=session,
-        speech_handle=SpeechHandle.create(),
-        tool_ctx=ToolContext([root, dependent]),
-        tool_choice="auto",
-        function_stream=open_stream(),
-        tool_execution_started_cb=lambda _: None,
-        tool_execution_completed_cb=lambda _: None,
-    )
+    terminals = collect_terminals(session)
+    execution_task, tool_output = dispatch_tool_stream(session, [root, dependent], open_stream())
     assert tool_output.background_task is not None
     try:
-        await _wait(root_started)
+        await wait(root_started, timeout=2)
         execution_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(execution_task, timeout=2)

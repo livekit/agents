@@ -11,19 +11,13 @@ from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.voice.events import ToolCallEnded, ToolCallUpdated, ToolExecutionUpdatedEvent
 
 from .fake_llm import FakeLLM, FakeLLMResponse
-from .test_tool_dependency_integration import _DelayedBatchFakeLLM
+from .tool_dependency_helpers import (
+    DelayedBatchFakeLLM as _DelayedBatchFakeLLM,
+    close as _close,
+    response as _response,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
-
-
-def _response(input_text: str, *calls: FunctionToolCall) -> FakeLLMResponse:
-    return FakeLLMResponse(
-        input=input_text,
-        content="",
-        ttft=0,
-        duration=0,
-        tool_calls=list(calls),
-    )
 
 
 async def _start(
@@ -40,15 +34,13 @@ async def _start(
     return session
 
 
-async def _close(session: AgentSession) -> None:
-    await asyncio.wait_for(session.aclose(), timeout=5)
-
-
 @pytest.mark.asyncio
 async def test_replaced_prerequisite_failure_blocks_dependent() -> None:
     first_started = asyncio.Event()
     replacement_started = asyncio.Event()
     dependent_started = asyncio.Event()
+    dependent_terminal = asyncio.Event()
+    terminal_events: list[ToolCallEnded] = []
     calls: list[str] = []
 
     @function_tool(name="prepare", flags=ToolFlag.CANCELLABLE, on_duplicate="replace")
@@ -80,13 +72,27 @@ async def test_replaced_prerequisite_failure_blocks_dependent() -> None:
             )
         ],
     )
+
+    def observe_terminal(event: ToolExecutionUpdatedEvent) -> None:
+        if isinstance(event.update, ToolCallEnded):
+            terminal_events.append(event.update)
+            if event.update.call_id == "commit-call":
+                dependent_terminal.set()
+
+    session.on("tool_execution_updated", observe_terminal)
     try:
         session.generate_reply(user_input="replace")
         await asyncio.wait_for(first_started.wait(), timeout=5)
         await asyncio.wait_for(replacement_started.wait(), timeout=5)
         assert calls == ["first", "second"]
-        await asyncio.sleep(0)
+        await asyncio.wait_for(dependent_terminal.wait(), timeout=5)
         assert not dependent_started.is_set()
+        dependent_event = next(event for event in terminal_events if event.call_id == "commit-call")
+        assert dependent_event.id == "commit-call"
+        assert dependent_event.status == "error"
+        assert dependent_event.message is not None
+        assert "Skipped" in dependent_event.message
+        assert "prerequisite failed" in dependent_event.message
     finally:
         await _close(session)
 
@@ -307,15 +313,10 @@ async def test_pending_dependent_is_replaced_by_one_final_history_output(
 
     def observe_history_insert(items: Any) -> None:
         history_insert(items)
-
-        def contains_final(item: Any) -> bool:
-            if hasattr(item, "type"):
-                return item.type == "function_call_output" and item.output == "dependent-final"
-            if isinstance(item, (list, tuple)):
-                return any(contains_final(child) for child in item)
-            return False
-
-        if contains_final(items):
+        if any(
+            item.type == "function_call_output" and item.output == "dependent-final"
+            for item in session.history.items
+        ):
             dependent_final_committed.set()
 
     session.history.insert = observe_history_insert
@@ -413,19 +414,12 @@ async def test_permanent_handoff_abandons_queued_old_activity_dependent() -> Non
 
     def observe_history_insert(items: Any) -> None:
         history_insert(items)
-
-        def contains_error(item: Any) -> bool:
-            if hasattr(item, "type"):
-                return (
-                    item.type == "function_call_output"
-                    and item.call_id == "dependent_final"
-                    and item.is_error
-                )
-            if isinstance(item, (list, tuple)):
-                return any(contains_error(child) for child in item)
-            return False
-
-        if contains_error(items):
+        if any(
+            item.type == "function_call_output"
+            and item.call_id == "dependent_final"
+            and item.is_error
+            for item in session.history.items
+        ):
             dependent_history_error.set()
 
     session.history.insert = observe_history_insert
@@ -566,20 +560,13 @@ async def test_handoff_abandons_activity_dependent_but_preserves_session_root() 
 
     def observe_history_insert(items: Any) -> None:
         history_insert(items)
-
-        def inspect(item: Any) -> None:
-            if hasattr(item, "type"):
-                if (
-                    item.type == "function_call_output"
-                    and item.call_id == "root_final"
-                    and item.output == "session-root-final"
-                ):
-                    root_final_committed.set()
-            elif isinstance(item, (list, tuple)):
-                for child in item:
-                    inspect(child)
-
-        inspect(items)
+        if any(
+            item.type == "function_call_output"
+            and item.call_id == "root_final"
+            and item.output == "session-root-final"
+            for item in session.history.items
+        ):
+            root_final_committed.set()
 
     session.history.insert = observe_history_insert
 

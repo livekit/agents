@@ -8,13 +8,17 @@ import pytest
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.llm import FunctionCall
 
-from .fake_realtime import FakeRealtimeModel, FakeRealtimeSession, fake_capabilities
-from .test_realtime_agent_state_during_tool import _generation
-from .test_tool_dependency_integration import (
-    _await_chain,
-    _close,
-    _resolve_fake_realtime_replies,
-    _wait,
+from .fake_realtime import (
+    FakeRealtimeModel,
+    FakeRealtimeSession,
+    fake_capabilities,
+    generation as _generation,
+)
+from .tool_dependency_helpers import (
+    await_chain as _await_chain,
+    close as _close,
+    resolve_fake_realtime_replies as _resolve_fake_realtime_replies,
+    wait as _wait,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]

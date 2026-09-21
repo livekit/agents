@@ -203,19 +203,12 @@ async def test_duplicate_dependent_id_keeps_refusal_and_final_correlated() -> No
 
     def observe_history(items: Any) -> None:
         history_insert(items)
-
-        def contains_final(item: Any) -> bool:
-            if hasattr(item, "type"):
-                return (
-                    item.type == "function_call_output"
-                    and item.name == "dependent"
-                    and item.output == "dependent final"
-                )
-            if isinstance(item, (list, tuple)):
-                return any(contains_final(child) for child in item)
-            return False
-
-        if contains_final(items):
+        if any(
+            item.type == "function_call_output"
+            and item.name == "dependent"
+            and item.output == "dependent final"
+            for item in session.history.items
+        ):
             final_committed.set()
 
     session.history.insert = observe_history

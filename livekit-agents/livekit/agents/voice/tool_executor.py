@@ -263,13 +263,7 @@ def _duplicate_key(
         return (fnc_name, _canonical_args(raw))
 
 
-@dataclass
-class _ToolTerminalOutcome:
-    status: Literal["done", "error", "cancelled"]
-
-    @property
-    def failed(self) -> bool:
-        return self.status != "done"
+TerminalStatus = Literal["done", "error", "cancelled"]
 
 
 class _ToolExecutionHandle:
@@ -280,13 +274,11 @@ class _ToolExecutionHandle:
     """
 
     def __init__(self) -> None:
-        self.terminal: asyncio.Future[_ToolTerminalOutcome] = (
-            asyncio.get_running_loop().create_future()
-        )
+        self.terminal: asyncio.Future[TerminalStatus] = asyncio.get_running_loop().create_future()
 
-    def set_terminal(self, outcome: _ToolTerminalOutcome) -> None:
+    def set_terminal(self, status: TerminalStatus) -> None:
         if not self.terminal.done():
-            self.terminal.set_result(outcome)
+            self.terminal.set_result(status)
 
 
 @dataclass
@@ -296,7 +288,7 @@ class _RunningTask:
     executor: _ToolExecutor
     allow_cancellation: bool
     duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
-    initial_committed: asyncio.Event | None = None
+    initial_batch_released: asyncio.Event | None = None
     initial_delivery: asyncio.Event | None = None
 
 
@@ -325,7 +317,6 @@ class _ToolExecutor:
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
-        self._admission_lock = asyncio.Lock()
         self._reserved_call_ids: set[str] = set()
 
         self._pending_updates: list[_PendingUpdate] = []
@@ -357,16 +348,22 @@ class _ToolExecutor:
         raw_arguments: dict[str, Any],
         mock: Callable[..., Any] | None = None,
         execution_handle: _ToolExecutionHandle | None = None,
-        initial_committed: asyncio.Event | None = None,
+        initial_batch_released: asyncio.Event | None = None,
         initial_delivery: asyncio.Event | None = None,
     ) -> Any:
         """Run ``tool``. Returns when the first ``ctx.update()`` lands or the tool returns."""
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
         info = tool.info
-        handle = execution_handle or _ToolExecutionHandle()
+        handle = execution_handle
+
+        def settle_terminal(status: Literal["done", "error", "cancelled"]) -> None:
+            if handle is not None:
+                handle.set_terminal(status)
 
         def emit_rejected(message: str, *, status: Literal["error", "cancelled"] = "error") -> None:
+            if handle is None:
+                return
             run_ctx.session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(
                     update=ToolCallEnded(
@@ -404,7 +401,7 @@ class _ToolExecutor:
                 status: Literal["error", "cancelled"] = (
                     "cancelled" if isinstance(duplicate_error, asyncio.CancelledError) else "error"
                 )
-                handle.set_terminal(_ToolTerminalOutcome(status=status))
+                settle_terminal(status)
                 emit_rejected(str(duplicate_error), status=status)
                 raise
             if duplicate_result is not None:
@@ -412,17 +409,16 @@ class _ToolExecutor:
                     "duplicate tool call rejected",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
-                handle.set_terminal(_ToolTerminalOutcome(status="error"))
+                settle_terminal("error")
                 emit_rejected(duplicate_result)
                 return duplicate_result
 
-        async with self._admission_lock:
-            if call_id in self._running_tasks or call_id in self._reserved_call_ids:
-                error = ValueError(f"Task already running for call_id: {call_id}")
-                handle.set_terminal(_ToolTerminalOutcome(status="error"))
-                emit_rejected(str(error))
-                raise error
-            self._reserved_call_ids.add(call_id)
+        if call_id in self._running_tasks or call_id in self._reserved_call_ids:
+            error = ValueError(f"Task already running for call_id: {call_id}")
+            settle_terminal("error")
+            emit_rejected(str(error))
+            raise error
+        self._reserved_call_ids.add(call_id)
 
         # the future is how RunContext.update() talks back to dispatch
         first_update_fut = asyncio.Future[Any]()
@@ -503,7 +499,7 @@ class _ToolExecutor:
             executor=self,
             allow_cancellation=allow_cancellation,
             duplicate_key=dup_key,
-            initial_committed=initial_committed,
+            initial_batch_released=initial_batch_released,
             initial_delivery=initial_delivery,
         )
         self._running_tasks[call_id] = running_task
@@ -553,7 +549,7 @@ class _ToolExecutor:
                     )
                 ),
             )
-            handle.set_terminal(_ToolTerminalOutcome(status=status))
+            settle_terminal(status)
 
         exe_task.add_done_callback(_on_done)
 
@@ -613,8 +609,8 @@ class _ToolExecutor:
         _wait_for_initial_delivery: bool = True,
     ) -> None:
         running_task = self._running_tasks.get(ctx.function_call.call_id)
-        if running_task is not None and running_task.initial_committed is not None:
-            await running_task.initial_committed.wait()
+        if running_task is not None and running_task.initial_batch_released is not None:
+            await running_task.initial_batch_released.wait()
         if (
             _wait_for_initial_delivery
             and running_task is not None

@@ -793,7 +793,7 @@ class _ToolOutput:
     output: list[ToolExecutionOutput]
     first_tool_started_fut: asyncio.Future[None]
     ready_fut: asyncio.Future[None] | None = None
-    initial_committed: asyncio.Event = field(default_factory=asyncio.Event)
+    initial_batch_released: asyncio.Event = field(default_factory=asyncio.Event)
     background_task: asyncio.Task[None] | None = None
     discovered_call_ids: set[str] = field(default_factory=set)
     first_visible_call_ids: set[str] = field(default_factory=set)
@@ -813,13 +813,24 @@ class _ToolOutput:
         else:
             self.ready_fut.set_result(None)
 
+    def release_initial_batch(self) -> None:
+        """Release ordering after initial processing, not provider acceptance.
+
+        Abandonment sets the event separately and discards buffered late output.
+        """
+        if self.initial_batch_released.is_set():
+            return
+        self.initial_batch_released.set()
+        if self.late_flush_cb is not None:
+            self.late_flush_cb()
+
 
 @dataclass
 class _DependencyNode:
     fnc_call: llm.FunctionCall
     executor: _ToolExecutor
     handle: _ToolExecutionHandle
-    launch: Callable[[], asyncio.Task[Any]]
+    admission: asyncio.Event | None
     after: tuple[str, ...]
     task: asyncio.Task[Any] | None = None
     admitted: bool = False
@@ -828,17 +839,12 @@ class _DependencyNode:
 
 
 def _validate_dependency_graph(
-    function_tools: dict[str, llm.FunctionTool | llm.RawFunctionTool],
-    *,
-    after_by_name: dict[str, tuple[str, ...]] | None = None,
+    after_by_name: dict[str, tuple[str, ...]],
 ) -> None:
     """Reject configured name cycles before any call in the response is admitted."""
-    after_by_name = after_by_name or {
-        name: tuple(tool.info.after) for name, tool in function_tools.items()
-    }
     graph = {
-        name: tuple(dep for dep in after_by_name.get(name, ()) if dep in function_tools)
-        for name in function_tools
+        name: tuple(dep for dep in dependencies if dep in after_by_name)
+        for name, dependencies in after_by_name.items()
     }
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -870,7 +876,6 @@ def _pending_tool_output(
             output=f"Tool `{fnc_call.name}` is pending prerequisite completion: {names}",
             is_error=False,
             reply_required=False,
-            pending=True,
         ),
         agent_task=None,
         raw_output=None,
@@ -888,13 +893,13 @@ class _DependencyScheduler:
         policy: Literal["skip", "run"],
         output_cb: Callable[[ToolExecutionOutput], None],
         terminal_cb: Callable[[ToolExecutionOutput, str], None],
-        initial_committed: asyncio.Event,
+        initial_batch_released: asyncio.Event,
         abandon_delivery: Callable[[], None],
     ) -> None:
         self._policy = policy
         self._output_cb = output_cb
         self._terminal_cb = terminal_cb
-        self._initial_committed = initial_committed
+        self._initial_batch_released = initial_batch_released
         self._abandon_delivery = abandon_delivery
         self._nodes: dict[str, _DependencyNode] = {}
         self._duplicate_counts: dict[str, int] = {}
@@ -933,7 +938,7 @@ class _DependencyScheduler:
             self._output_cb(_pending_tool_output(fnc_call=node.fnc_call, after=node.after))
         self._settle_without_execution(node, error)
 
-    def close(self) -> None:
+    def close_stream(self) -> None:
         self._closed = True
         self._resolve_waiting()
 
@@ -953,7 +958,9 @@ class _DependencyScheduler:
     async def abandon(self, error: BaseException) -> None:
         self._abandoned = True
         self._closed = True
-        self._initial_committed.set()
+        # Release waiters on abandonment, but discard buffered output below instead
+        # of flushing it into a response that will never be delivered.
+        self._initial_batch_released.set()
         self._abandon_delivery()
         admitted_cancellations = [
             node.executor.cancel(node.fnc_call.call_id)
@@ -1013,7 +1020,8 @@ class _DependencyScheduler:
         if node.admitted or node.settled or self._abandoned:
             return
         node.admitted = True
-        node.launch()
+        if node.admission is not None:
+            node.admission.set()
         watcher = asyncio.create_task(self._watch_terminal(node), name="tool_dependency_terminal")
         self._watch_tasks.add(watcher)
         watcher.add_done_callback(self._watch_tasks.discard)
@@ -1021,7 +1029,7 @@ class _DependencyScheduler:
     async def _watch_terminal(self, node: _DependencyNode) -> None:
         outcome = await asyncio.shield(node.handle.terminal)
         node.settled = True
-        node.failed = outcome.failed
+        node.failed = outcome != "done"
         self._resolve_waiting()
 
     def _duplicate_refusal_call(self, node: _DependencyNode) -> llm.FunctionCall:
@@ -1146,12 +1154,10 @@ async def _execute_tools_task(
         if (
             tool_output.stream_closed
             and tool_output.discovered_call_ids <= tool_output.first_visible_call_ids
-            and tool_output.ready_fut is not None
-            and not tool_output.ready_fut.done()
         ):
             tool_output._settle_ready()
 
-    def _tool_completed(out: ToolExecutionOutput) -> None:
+    def _on_tool_output(out: ToolExecutionOutput) -> None:
         if not dependency_mode:
             tool_execution_completed_cb(out)
             tool_output.output.append(out)
@@ -1164,7 +1170,7 @@ async def _execute_tools_task(
             )
         call_id = out.fnc_call.call_id
         if call_id in tool_output.first_visible_call_ids:
-            if tool_output.initial_committed.is_set():
+            if tool_output.initial_batch_released.is_set():
                 _deliver_late(out)
             else:
                 tool_output.late_outputs.append(out)
@@ -1198,7 +1204,7 @@ async def _execute_tools_task(
     }
     if dependency_mode:
         try:
-            _validate_dependency_graph(tool_ctx.function_tools, after_by_name=dependency_after)
+            _validate_dependency_graph(dependency_after)
         except BaseException as error:
             tool_output._settle_ready(error)
             raise
@@ -1235,7 +1241,6 @@ async def _execute_tools_task(
                 agent_task=out.agent_task,
                 raw_output=out.raw_output,
                 raw_exception=out.raw_exception,
-                pending=False,
             )
             tool_execution_completed_cb(update)
             out = update
@@ -1273,7 +1278,6 @@ async def _execute_tools_task(
                 agent_task=out.agent_task,
                 raw_output=out.raw_output,
                 raw_exception=out.raw_exception,
-                pending=False,
             )
         tool_execution_completed_cb(out)
 
@@ -1318,9 +1322,9 @@ async def _execute_tools_task(
     if dependency_mode:
         dependency_scheduler = _DependencyScheduler(
             policy=activity._dependency_error_policy,
-            output_cb=_tool_completed,
+            output_cb=_on_tool_output,
             terminal_cb=_dependency_terminal,
-            initial_committed=tool_output.initial_committed,
+            initial_batch_released=tool_output.initial_batch_released,
             abandon_delivery=_abandon_dependency_delivery,
         )
         activity._dependency_schedulers.add(dependency_scheduler)
@@ -1329,6 +1333,9 @@ async def _execute_tools_task(
         fnc_call: llm.FunctionCall,
         error: BaseException,
     ) -> None:
+        if dependency_scheduler is None:
+            _on_tool_output(make_tool_output(fnc_call=fnc_call, output=None, exception=error))
+            return
         if not tool_output.first_tool_started_fut.done():
             tool_output.first_tool_started_fut.set_result(None)
         tool_execution_started_cb(fnc_call)
@@ -1340,19 +1347,15 @@ async def _execute_tools_task(
         )
         if fnc_call.call_id not in run_contexts:
             run_contexts[fnc_call.call_id] = run_ctx
-        executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
         handle = _ToolExecutionHandle()
         node = _DependencyNode(
             fnc_call=fnc_call,
-            executor=executor,
+            executor=executor_by_name.get(fnc_call.name, activity._tool_executor),
             handle=handle,
-            launch=lambda: asyncio.create_task(asyncio.sleep(0)),
+            admission=None,
             after=dependency_after.get(fnc_call.name, ()),
         )
-        if dependency_scheduler is not None:
-            dependency_scheduler.add_failed(node, error)
-        else:
-            _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=error))
+        dependency_scheduler.add_failed(node, error)
 
     try:
         async for fnc_call in function_stream:
@@ -1379,7 +1382,7 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(
+                _on_tool_output(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
@@ -1400,7 +1403,7 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(
+                _on_tool_output(
                     make_tool_output(
                         fnc_call=fnc_call,
                         output=None,
@@ -1477,7 +1480,7 @@ async def _execute_tools_task(
                 )
 
                 executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
-                execution_handle = _ToolExecutionHandle()
+                execution_handle = _ToolExecutionHandle() if dependency_mode else None
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,
@@ -1485,7 +1488,9 @@ async def _execute_tools_task(
                     raw_arguments=raw_args,
                     mock=mock,
                     execution_handle=execution_handle,
-                    initial_committed=(tool_output.initial_committed if dependency_mode else None),
+                    initial_batch_released=(
+                        tool_output.initial_batch_released if dependency_mode else None
+                    ),
                     initial_delivery=(
                         initial_delivery_events.setdefault(fnc_call.call_id, asyncio.Event())
                         if dependency_scheduler is not None and dependency_after.get(fnc_call.name)
@@ -1557,7 +1562,7 @@ async def _execute_tools_task(
                     )
 
                     # TODO(theomonnom): Add the agent handoff inside the current_span
-                    _tool_completed(output)
+                    _on_tool_output(output)
 
                 admission_gate = asyncio.Event()
                 if not dependency_mode or not dependency_after.get(fnc_call.name, ()):
@@ -1589,19 +1594,12 @@ async def _execute_tools_task(
                 task.add_done_callback(lambda task: tasks.remove(task))
 
                 if dependency_scheduler is not None:
-
-                    def launch_admitted(
-                        gate: asyncio.Event = admission_gate,
-                        admitted_task: asyncio.Task[Any] = task,
-                    ) -> asyncio.Task[Any]:
-                        gate.set()
-                        return admitted_task
-
+                    assert execution_handle is not None
                     node = _DependencyNode(
                         fnc_call=fnc_call,
                         executor=executor,
                         handle=execution_handle,
-                        launch=launch_admitted,
+                        admission=admission_gate,
                         after=dependency_after.get(fnc_call.name, ()),
                         task=task,
                     )
@@ -1617,12 +1615,12 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
+                _on_tool_output(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
 
         tool_output.stream_closed = True
         if dependency_scheduler is not None:
-            dependency_scheduler.close()
+            dependency_scheduler.close_stream()
         _mark_ready()
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
         if dependency_scheduler is not None:

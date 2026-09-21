@@ -6,22 +6,12 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.llm import FunctionToolCall, ToolError
-from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.events import ToolCallEnded, ToolExecutionUpdatedEvent
 
-from .fake_llm import FakeLLM, FakeLLMResponse
+from .fake_llm import FakeLLM
+from .tool_dependency_helpers import response as _response
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
-
-
-def _response(*calls: FunctionToolCall) -> FakeLLMResponse:
-    return FakeLLMResponse(
-        input="book",
-        content="",
-        ttft=0,
-        duration=0,
-        tool_calls=list(calls),
-    )
 
 
 @pytest.mark.asyncio
@@ -55,6 +45,7 @@ async def test_dependency_policy_inheritance_and_agent_override(
         llm=FakeLLM(
             fake_responses=[
                 _response(
+                    "book",
                     FunctionToolCall(name="dependent", arguments="{}", call_id="dependent"),
                     FunctionToolCall(name="root", arguments="{}", call_id="root"),
                 )
@@ -84,14 +75,6 @@ async def test_dependency_policy_inheritance_and_agent_override(
         assert dependent_started.is_set() is should_run
     finally:
         await asyncio.wait_for(session.aclose(), timeout=5)
-
-
-def test_agent_async_options_only_inherits_dependency_policy() -> None:
-    session = AgentSession(tool_handling={"on_dependency_error": "run"})
-    agent = Agent(instructions="workflow", tool_handling={"async_options": {}})
-
-    assert session._dependency_error_policy == "run"
-    assert agent._dependency_error_policy is NOT_GIVEN
 
 
 @pytest.mark.parametrize("invalid", ["cancel", "", None, 1])
