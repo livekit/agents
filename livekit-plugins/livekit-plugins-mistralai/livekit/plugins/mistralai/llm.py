@@ -237,6 +237,7 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             tool_choice=resolved_tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
         )
 
 
@@ -253,6 +254,7 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
         tool_choice: ToolChoice | None = None,
+        parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
@@ -260,6 +262,7 @@ class LLMStream(llm.LLMStream):
         self._client = client
         self._extra_kwargs = extra_kwargs
         self._tool_choice = tool_choice
+        self._parallel_tool_calls = parallel_tool_calls
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
         self._provider_tool_args: dict[str, str] = {}
@@ -362,6 +365,9 @@ class LLMStream(llm.LLMStream):
 
             if self._tool_choice is not None:
                 call_kwargs["tool_choice"] = self._tool_choice
+
+            if is_given(self._parallel_tool_calls):
+                call_kwargs["parallel_tool_calls"] = self._parallel_tool_calls
 
             if tools_list:
                 call_kwargs["tools"] = tools_list
