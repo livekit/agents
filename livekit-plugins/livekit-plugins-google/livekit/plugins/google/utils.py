@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import TypeAdapter
+from pydantic.alias_generators import to_camel
 
 from google.genai import types
 from livekit.agents import llm
@@ -148,7 +149,23 @@ class _GeminiJsonSchema:
             return None
         return self.schema
 
+    # every key types.Schema accepts (field name plus its camelCase alias), together with
+    # the JSON Schema keywords this transformer still has to read itself. types.Schema is
+    # declared extra="forbid", so any other keyword -- readOnly, deprecated, $comment,
+    # x-google-* and other vendor extensions -- survives simplify() only to fail
+    # validation later when the FunctionDeclaration is built. `const` is kept because the
+    # conversion below turns it into the single-value `enum` Gemini does support.
+    _ALLOWED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        set(types.Schema.model_fields)
+        | {to_camel(name) for name in types.Schema.model_fields}
+        | {"anyOf", "$ref", "prefixItems", "const"}
+    )
+
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        for key in [k for k in schema if k not in self._ALLOWED_KEYS]:
+            logger.debug(f"dropping unsupported JSON Schema keyword: {key}")
+            schema.pop(key, None)
+
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
