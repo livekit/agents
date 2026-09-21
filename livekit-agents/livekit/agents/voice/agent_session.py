@@ -1721,6 +1721,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         )
 
     def update_agent(self, agent: Agent) -> None:
+        if self._amd is not None:
+            raise RuntimeError("agent handoffs are not supported while AMD is running")
         self._agent = agent
 
         if self._started:
@@ -1814,6 +1816,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         wait_on_enter: bool = True,
     ) -> None:
         async with self._activity_lock:
+            if self._amd is not None:
+                raise RuntimeError("agent handoffs are not supported while AMD is running")
             if self._closing and new_activity == "start":
                 # checked again after the drain below: closing may start while it's in flight
                 logger.warning(

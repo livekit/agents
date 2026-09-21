@@ -384,7 +384,9 @@ To place an outbound call, also set
 
 - Realtime requires session or AMD STT, a separate text classifier, client-side
   turn detection, per-response tool selection, and client-controlled tool replies.
-- Agent handoff during AMD is not supported.
+- Agent handoff during AMD is not supported. Tool handoffs are cancelled with a
+  warning. `update_agent()` and inline `AgentTask` switches raise `RuntimeError`.
+  Finish or close AMD before switching agents.
 - No audio-based hold detection.
 - Session-level `ivr_detection` cannot run alongside AMD. Entry raises if it is enabled.
 - The remote-session protocol maps screening to `AMD_UNKNOWN`. Full v2

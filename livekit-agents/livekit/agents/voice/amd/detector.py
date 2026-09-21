@@ -338,6 +338,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         activity = self._session._activity
         if activity is None:
             raise RuntimeError("start AgentSession before entering AMD")
+        if activity._new_turns_blocked or self._session._next_activity is not None:
+            raise RuntimeError("wait for the agent handoff to finish before entering AMD")
         if isinstance(activity.llm, llm.RealtimeModel):
             if activity._rt_turn_detection_enabled:
                 raise ValueError("amd requires client-side turn detection with realtime models")
@@ -507,6 +509,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     def _on_function_tools_executed(self, event: FunctionToolsExecutedEvent) -> None:
         if self.lifecycle not in {AMDLifecycle.PENDING, AMDLifecycle.ACTIVE}:
             return
+        if event.has_agent_handoff:
+            event.cancel_agent_handoff()
+            logger.warning("agent handoff cancelled while AMD is running")
         assert self._started_at is not None
         for call, output in event.zipped():
             if call.created_at >= self._started_at:

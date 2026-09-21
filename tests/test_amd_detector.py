@@ -1232,6 +1232,112 @@ async def test_stop_response_remains_owned_by_session() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("handoff", ["direct", "inline"])
+async def test_agent_handoff_is_rejected_until_amd_finishes(handoff: str) -> None:
+    entered = asyncio.Event()
+
+    class ReplacementAgent(Agent):
+        async def on_enter(self) -> None:
+            entered.set()
+
+    replacement = ReplacementAgent(instructions="Continue the call.")
+    async with running() as (detector, session, _, _):
+        original = session.current_agent
+        activity = session._activity
+        with pytest.raises(RuntimeError, match="handoffs are not supported while AMD is running"):
+            if handoff == "direct":
+                session.update_agent(replacement)
+            else:
+                await session._update_activity(replacement, previous_activity="pause")
+
+        assert session.current_agent is original
+        assert session._activity is activity
+        assert not activity._new_turns_blocked
+        assert not entered.is_set()
+        assert session.amd is detector
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+
+        await detector.aclose()
+        session.update_agent(replacement)
+        await asyncio.wait_for(entered.wait(), 2)
+        assert session.current_agent is replacement
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("draining", [False, True])
+async def test_amd_cannot_enter_during_an_agent_handoff(draining: bool) -> None:
+    exiting = asyncio.Event()
+    release_exit = asyncio.Event()
+
+    class OriginalAgent(Agent):
+        async def on_exit(self) -> None:
+            exiting.set()
+            await release_exit.wait()
+
+    async with AgentSession(llm=FakeLLM()) as session:
+        await session.start(OriginalAgent(instructions="Test"))
+        replacement = Agent(instructions="Continue the call.")
+        session.update_agent(replacement)
+        try:
+            if draining:
+                await asyncio.wait_for(exiting.wait(), 2)
+            detector = AMD(session, llm=None, stt=None)
+            with pytest.raises(RuntimeError, match="agent handoff to finish"):
+                await detector.__aenter__()
+            assert session.amd is None
+            assert detector.lifecycle is AMDLifecycle.INITIALIZED
+        finally:
+            release_exit.set()
+            await session._update_activity_atask
+
+        async with detector:
+            assert session.current_agent is replacement
+            assert session.amd is detector
+
+
+@pytest.mark.asyncio
+async def test_tool_handoff_is_cancelled_while_amd_is_running(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    replacement = Agent(instructions="Continue the call.")
+
+    class HandoffAgent(CustomerAgent):
+        @llm.function_tool
+        async def transfer(self) -> Agent:
+            """Transfer the call to the next agent."""
+            return replacement
+
+    original = HandoffAgent()
+    async with running(agent=original) as (detector, session, classifier, reply_model):
+        reply_model.fake_response_map[_DEFAULT_SCREENING_INSTRUCTIONS] = FakeLLMResponse(
+            input=_DEFAULT_SCREENING_INSTRUCTIONS,
+            content="",
+            ttft=0,
+            duration=0,
+            tool_calls=[llm.FunctionToolCall(name="transfer", arguments="{}", call_id="move")],
+        )
+        handles: list[SpeechHandle] = []
+        session.once("speech_created", lambda ev: handles.append(ev.speech_handle))
+        executed: list[FunctionToolsExecutedEvent] = []
+        session.on("function_tools_executed", executed.append)
+        await commit(detector, session, classifier, reply=True)
+        classifier.prediction(1, AMDCategory.MACHINE_SCREENING)
+        await eventually(lambda: bool(executed))
+        await asyncio.wait_for(handles[0], 2)
+
+        assert session.current_agent is original
+        assert session.amd is detector
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+        assert not executed[0].has_agent_handoff
+        assert executed[0].function_call_outputs[0] in session.history.items
+        assert "agent handoff cancelled while AMD is running" in caplog.text
+
+        await detector.aclose()
+        session.generate_reply(instructions=_DEFAULT_SCREENING_INSTRUCTIONS)
+        await eventually(lambda: session.current_agent is replacement)
+
+
+@pytest.mark.asyncio
 async def test_invalid_model_output_falls_back_and_releases_the_reply() -> None:
     async with running() as (detector, session, classifier, _):
         hooks = await commit(detector, session, classifier)

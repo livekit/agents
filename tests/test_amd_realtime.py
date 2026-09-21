@@ -546,6 +546,31 @@ async def test_amd_stt_supplies_transcripts_at_eot(
         await asyncio.wait_for(handles[0], 2)
 
 
+async def test_realtime_tool_handoff_is_cancelled_while_amd_is_running() -> None:
+    replacement = Agent(instructions="Continue the call.")
+
+    class HandoffAgent(Agent):
+        @llm.function_tool
+        async def transfer(self) -> Agent:
+            """Transfer the call to the next agent."""
+            return replacement
+
+    original = HandoffAgent(instructions="Call about an appointment.")
+    async with running(agent=original) as (detector, session, classifier, rt):
+        handle = await reply(session, classifier, rt, AMDCategory.MACHINE_SCREENING)
+        respond(rt, tool=llm.FunctionCall(call_id="move", name="transfer", arguments="{}"))
+        await asyncio.wait_for(handle, 2)
+
+        assert session.current_agent is original
+        assert session.amd is detector
+        assert detector.lifecycle is AMDLifecycle.ACTIVE
+        assert replacement._activity is None
+        outputs = [item for item in rt.chat_ctx.items if item.type == "function_call_output"]
+        assert len(outputs) == 1
+        assert outputs[0].call_id == "move"
+        assert outputs[0] in session.history.items
+
+
 @pytest.mark.parametrize("publish_fails", [False, True])
 async def test_ivr_dtmf_only_generates_a_reply_on_failure(
     monkeypatch: pytest.MonkeyPatch,
