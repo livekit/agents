@@ -110,7 +110,7 @@ class AvatarSession(BaseAvatarSession):
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[BitHumanModel] = "essence",
+        model: NotGivenOr[BitHumanModel] = NOT_GIVEN,
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
         runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
@@ -146,9 +146,14 @@ class AvatarSession(BaseAvatarSession):
               predictable avatar behavior with pre-configured gestures.
 
             The unsuffixed names are the first generation and keep working unchanged.
-            ``expression-2`` and ``essence-2`` are the current generation; an avatar has to
-            have been prepared for the model you ask for, and BitHuman refuses the session
-            (naming the models that avatar can be served as) if it has not.
+            ``expression-2`` and ``essence-2`` are the current generation.
+
+            Naming a model is OPTIONAL and it is a pin, not a hint: an avatar has to have
+            been prepared for the model you ask for, and BitHuman refuses the session
+            (naming the models that avatar can be served as) if it has not. Leave ``model``
+            unset and nothing is sent, so BitHuman resolves the avatar exactly as it did
+            before this parameter existed — which is why adding it changes nothing for
+            sessions that do not use it.
 
         Parameter Combinations:
             The following parameter combinations determine the avatar mode and behavior:
@@ -160,12 +165,14 @@ class AvatarSession(BaseAvatarSession):
 
             2. **Cloud Mode with avatar_image**:
                - `avatar_image`: Custom avatar image for personalization
-               - `model`: use an expression model for dynamic emotional expressions
+               - `model`: name an expression model for dynamic emotional expressions
                - Provides real-time expression generation based on the custom image
 
             3. **Cloud Mode with avatar_id**:
                - `avatar_id`: Pre-configured avatar identifier
-               - `model`: "essence" unless you name another; any of the four models above
+               - `model`: optional. Name any of the four models above to pin the
+                 session to it; leave it unset and BitHuman picks the model the
+                 avatar is prepared for, exactly as before this parameter existed.
                - Allows flexibility in choosing the interaction style
         """
         super().__init__()
@@ -185,15 +192,15 @@ class AvatarSession(BaseAvatarSession):
         self._mode = (
             "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
         )
-        # ★A caller may pass NOT_GIVEN explicitly: `NotGivenOr` permits it, and code
-        # that forwards an optional parameter through does it routinely. NotGiven
-        # defines `__repr__` as "NOT_GIVEN" and no `__str__`, so `str(NOT_GIVEN)` is
-        # the literal string "NOT_GIVEN" — which would be sent as the model name and
-        # refused by the server, on a call the caller expected to mean "the default".
-        # Normalised HERE, once, rather than at each read site, because the two
-        # readers below — `_is_expression_model` and the `model` field of the session
-        # request — must never disagree about which model this session is.
-        self._model: BitHumanModel = model if utils.is_given(model) else "essence"
+        # ★KEPT RAW, on purpose. An earlier draft normalised NOT_GIVEN to "essence"
+        # here. That is wrong in a way that only shows up for existing users: the
+        # signature used to default to "essence", so normalising made the plugin
+        # send `model: "essence"` on EVERY session, including ones whose caller
+        # never named a model. Before this PR nothing was sent and the server chose
+        # the generation; after it, an avatar prepared only as essence-2 would be
+        # told "essence" and REFUSED (the API answers 400 naming what the avatar
+        # can be served as). So the sentinel survives to the request, where it
+        # means "do not name a model" — and `str()` is never called on it.
 
         # validate mode-specific requirements
         if self._mode == "local":
@@ -239,7 +246,7 @@ class AvatarSession(BaseAvatarSession):
         ``mode`` field — and it must give the same answer in both, or a session
         is dispatched one way and billed the other.
         """
-        return str(self._model).startswith("expression")
+        return utils.is_given(self._model) and str(self._model).startswith("expression")
 
     @property
     def avatar_identity(self) -> str:
@@ -445,12 +452,13 @@ class AvatarSession(BaseAvatarSession):
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
-            "model": str(self._model),
             "mode": "gpu"
             if (utils.is_given(self._avatar_image) and self._avatar_image is not None)
             or self._is_expression_model
             else "cpu",
         }
+        if utils.is_given(self._model):
+            json_data["model"] = str(self._model)
 
         # Handle avatar image - convert to base64 for JSON serialization
         if isinstance(self._avatar_image, Image.Image):
@@ -531,7 +539,8 @@ class AvatarSession(BaseAvatarSession):
         # on different lines. Workers that predate the field ignore it (they read
         # the form into a dict and pick the keys they know), so sending it is
         # additive for every existing deployment.
-        form_data.add_field("model", str(self._model))
+        if utils.is_given(self._model):
+            form_data.add_field("model", str(self._model))
 
         # Add async_mode parameter if parsed from URL
         # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
