@@ -949,3 +949,29 @@ async def test_empty_session_resumption_config_is_included(
         assert passed_configs[0].session_resumption.transparent is None
     finally:
         await session.aclose()
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gemini-3.8-live", types.Behavior.NON_BLOCKING),
+        ("gemini-3.8-live-extended-thinking", types.Behavior.NON_BLOCKING),
+        ("gemini-3.1-flash-live-preview", None),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", None),
+    ],
+)
+def test_tool_behavior_default_follows_the_model(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: types.Behavior | None
+) -> None:
+    """Models that are async by default must be declared async, or SILENT is never claimed."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    behavior = RealtimeModel(model=model)._opts.tool_behavior
+    assert (behavior if utils.is_given(behavior) else None) == expected
+
+
+def test_explicit_tool_behavior_wins_over_the_model_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
+    assert model._opts.tool_behavior == types.Behavior.BLOCKING

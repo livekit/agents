@@ -30,6 +30,11 @@ from enum import Enum
 from typing import Any, Generic, Literal, TypeVar, overload
 from urllib.parse import urljoin, urlparse
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
 import aiohttp
 import jwt
 from aiohttp import web
@@ -63,6 +68,20 @@ UPDATE_LOAD_INTERVAL = 0.5
 HEARTBEAT_INTERVAL = 30
 WORKER_PROTOCOL_VERSION = 1
 DRAIN_TIMEOUT = 3600  # 1hr
+
+
+def _toml_agent_name(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return ""
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        logger.debug("ignoring unreadable livekit.toml", extra={"path": path, "error": str(e)})
+        return ""
+    agent = data.get("agent")
+    name = agent.get("name") if isinstance(agent, dict) else None
+    return name if isinstance(name, str) else ""
 
 
 def _default_setup_fnc(proc: JobProcess) -> Any:
@@ -220,7 +239,8 @@ class ServerOptions:
     agent_name: str = ""
     """Set agent_name to enable explicit dispatch. When explicit dispatch is enabled, jobs will not be dispatched to rooms automatically. Instead, you can either specify the agent(s) to be dispatched in the end-user's token, or use the AgentDispatch.createDispatch API.
 
-    By default it uses ``LIVEKIT_AGENT_NAME`` from environment"""  # noqa: E501
+    Deprecated: set the name in ``livekit.toml`` (``[agent] name``) or the ``LIVEKIT_AGENT_NAME``
+    environment variable instead; this parameter will be removed in a future release."""  # noqa: E501
     worker_type: WorkerType = WorkerType.ROOM
     """Whether to spin up an agent for each room or publisher."""
     max_retry: int = 16
@@ -365,6 +385,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
         self._agent_name = ""
+        self._agent_name_source: Literal["override", "code", "env", "livekit.toml", "none"] = "none"
         self._server_type = ServerType.ROOM
         self._id = "unregistered"
 
@@ -491,10 +512,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         Decorator or direct registrar for the RTC session entrypoint.
 
         Usage:
-            @server.rtc_session(agent_name="survey_agent")
+            @server.rtc_session()
             async def my_agent(job_ctx: JobContext): ...
 
-            server.rtc_session(my_agent, agent_name="survey_agent")
+            server.rtc_session(my_agent)
+
+        The agent name comes from ``LIVEKIT_AGENT_NAME`` or ``[agent] name`` in ``livekit.toml``.
+        ``agent_name`` is deprecated and will be removed in a future release.
         """
 
         def decorator(
@@ -510,15 +534,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             self._simulation_end_fnc = on_simulation_end
             # precedence: the LIVEKIT_AGENT_NAME_OVERRIDE env var (a platform-injected
             # force, e.g. from the lk simulation launcher) takes priority, then the
-            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default.
+            # explicit agent_name arg, then the LIVEKIT_AGENT_NAME env default, then
+            # [agent] name from livekit.toml (resolved in run(), production only).
             if os.environ.get("LIVEKIT_AGENT_NAME_OVERRIDE"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME_OVERRIDE"]
+                self._agent_name_source = "override"
             elif agent_name:
                 self._agent_name = agent_name
+                self._agent_name_source = "code"
             elif os.environ.get("LIVEKIT_AGENT_NAME"):
                 self._agent_name = os.environ["LIVEKIT_AGENT_NAME"]
+                self._agent_name_source = "env"
             else:
                 self._agent_name = ""
+                self._agent_name_source = "none"
             self._server_type = type
             return f
 
@@ -526,6 +555,24 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             return decorator(func)
 
         return decorator
+
+    def _resolve_agent_name(self, *, devmode: bool) -> None:
+        """Applies the livekit.toml fallback and warns about code-defined names.
+
+        Dev workers never take the toml name so they stay out of the deployed agent's pool.
+        """
+        if self._agent_name_source == "code":
+            logger.warning(
+                "agent_name is set in code; move it to livekit.toml ([agent] name). "
+                "The agent_name parameter will be removed in a future release.",
+                extra={"agent_name": self._agent_name},
+            )
+        if self._agent_name_source != "none" or devmode:
+            return
+        name = _toml_agent_name(os.path.join(os.getcwd(), "livekit.toml"))
+        if name:
+            self._agent_name = name
+            self._agent_name_source = "livekit.toml"
 
     @property
     def worker_info(self) -> WorkerInfo:
@@ -591,6 +638,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
             if self._simulation:
                 logger.info("simulation mode enabled: worker load limit disabled")
+
+            self._resolve_agent_name(devmode=devmode)
 
             self._loop = asyncio.get_event_loop()
             self._devmode = devmode
