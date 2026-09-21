@@ -445,53 +445,77 @@ class SpeechStream(stt.SpeechStream):
         # final tokens are accumulated across messages until an endpoint is detected.
         final = _TokenAccumulator()
         final_original = _TokenAccumulator()
+        # Source side of an utterance whose endpoint arrived before its translation.
+        held_original: _TokenAccumulator | None = None
         is_speaking = False
 
-        def send_endpoint_transcript() -> None:
+        def emit_final_transcript(source: _TokenAccumulator) -> None:
+            """Emit the final transcript pairing `source` with the translation in `final`."""
             nonlocal is_speaking
-            if final.text:
-                # Translation mode determines the role of each accumulator:
-                # when on, `final_original` carries the source side and
-                # `final` carries the target side -- even across flush windows
-                # where the originals were finalized in a prior message and
-                # only translation tokens land in this one. When translation
-                # is off, `final` IS the source side and `final_original`
-                # stays empty.
-                src_segs, tgt_segs = (
-                    (final_original._lang_segments, final._lang_segments)
-                    if is_translation_mode
-                    else (final._lang_segments, [])
+            # Translation mode determines the role of each accumulator: when on,
+            # `source` carries the source side and `final` carries the target side.
+            # When translation is off, `final` IS the source side and `source` stays empty.
+            src_segs, tgt_segs = (
+                (source._lang_segments, final._lang_segments)
+                if is_translation_mode
+                else (final._lang_segments, [])
+            )
+            source_languages, source_texts = _lang_segments_to_fields(src_segs)
+            target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
+            # A held utterance that never got a translation has an empty target side,
+            # so its own tokens carry the text and the timings.
+            spoken = final if final.text else source
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        spoken.to_speech_data(
+                            self.start_time_offset,
+                            source_languages=source_languages,
+                            source_texts=source_texts,
+                            target_languages=target_languages,
+                            target_texts=target_texts,
+                        )
+                    ],
                 )
-                source_languages, source_texts = _lang_segments_to_fields(src_segs)
-                target_languages, target_texts = _lang_segments_to_fields(tgt_segs)
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.FINAL_TRANSCRIPT,
-                        alternatives=[
-                            final.to_speech_data(
-                                self.start_time_offset,
-                                source_languages=source_languages,
-                                source_texts=source_texts,
-                                target_languages=target_languages,
-                                target_texts=target_texts,
-                            )
-                        ],
-                    )
+            )
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(
+                    type=SpeechEventType.END_OF_SPEECH,
                 )
-                self._event_ch.send_nowait(
-                    stt.SpeechEvent(
-                        type=SpeechEventType.END_OF_SPEECH,
-                    )
-                )
+            )
 
-                # Reset buffers.
-                final.reset()
-                final_original.reset()
+            # Reset buffers.
+            final.reset()
+            source.reset()
 
-                # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
-                is_speaking = False
-            else:
-                final_original.reset()
+            # Reset speaking state, so the next transcript will send START_OF_SPEECH again.
+            is_speaking = False
+
+        def flush_held_endpoint() -> None:
+            """Close the utterance whose endpoint arrived before its translation."""
+            nonlocal held_original
+            if held_original is None:
+                return
+            emit_final_transcript(held_original)
+            held_original = None
+
+        def send_endpoint_transcript() -> None:
+            nonlocal held_original, final_original
+            # An endpoint closes whatever is still held: the translation either
+            # landed in this message or is never coming.
+            flush_held_endpoint()
+            if is_translation_mode and final_original.text and not final.text:
+                # Soniox finalizes the source tokens before it produces their
+                # translation, so the target side can still be empty here. Hold the
+                # source and the endpoint until the translation lands, and start a
+                # fresh source buffer -- tokens that arrive meanwhile belong to the
+                # next utterance.
+                held_original, final_original = final_original, _TokenAccumulator()
+                return
+            if not final.text:
+                return
+            emit_final_transcript(final_original)
 
         if not self._ws:
             return
@@ -538,6 +562,10 @@ class SpeechStream(stt.SpeechStream):
                                 final.update(token)
                         else:
                             non_final.update(token)
+
+                    # 1b) a held endpoint closes as soon as its translation lands.
+                    if held_original is not None and final.text:
+                        flush_held_endpoint()
 
                     # 2) emit START_OF_SPEECH + transcript for remaining content.
                     if final.text or non_final.text:

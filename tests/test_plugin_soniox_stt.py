@@ -357,6 +357,143 @@ async def test_final_transcript_one_way_translation_single_target_run():
     assert sd.target_texts == ["Hola mundo."]
 
 
+# --- Endpoint before the translation ---------------------------------------
+
+
+def _translating_stream():
+    from livekit.plugins.soniox.stt import TranslationConfig
+
+    return _make_stream(translation=TranslationConfig(type="one_way", target_language="es"))
+
+
+async def test_endpoint_before_translation_pairs_each_utterance():
+    """Soniox finalizes the source tokens first, so `<end>` can arrive before the
+    translation. Each utterance still gets its own final, paired with its own source."""
+    stream = _translating_stream()
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        },
+        {
+            "tokens": [_final_token("Hola mundo.", "es", translation_status="translation")],
+            "total_audio_proc_ms": 700,
+        },
+        {
+            "tokens": [
+                _final_token("Good bye.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 1200,
+        },
+        {
+            "tokens": [_final_token("Adios.", "es", translation_status="translation")],
+            "total_audio_proc_ms": 1400,
+        },
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=8)
+    finals = [e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert len(finals) == 2
+
+    first, second = (e.alternatives[0] for e in finals)
+    assert (first.text, first.source_texts, first.target_texts) == (
+        "Hola mundo.",
+        ["Hello world."],
+        ["Hola mundo."],
+    )
+    assert (second.text, second.source_texts, second.target_texts) == (
+        "Adios.",
+        ["Good bye."],
+        ["Adios."],
+    )
+    assert first.source_languages == [LanguageCode("en")]
+    assert first.target_languages == [LanguageCode("es")]
+
+
+async def test_endpoint_before_translation_same_message():
+    """The translation can also land after `<end>` inside one message."""
+    stream = _translating_stream()
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+                _final_token("Hola mundo.", "es", translation_status="translation"),
+            ],
+            "total_audio_proc_ms": 500,
+        }
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=3)
+    sd = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT).alternatives[0]
+    assert sd.text == "Hola mundo."
+    assert sd.source_texts == ["Hello world."]
+    assert sd.target_texts == ["Hola mundo."]
+
+
+async def test_untranslated_utterance_emits_its_source_at_the_next_endpoint():
+    """A held utterance that never gets a translation is emitted source-only, so its
+    text is not lost and it cannot leak into the next utterance."""
+    stream = _translating_stream()
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        },
+        {
+            "tokens": [
+                _final_token("Good bye.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 1200,
+        },
+        {
+            "tokens": [_final_token("Adios.", "es", translation_status="translation")],
+            "total_audio_proc_ms": 1400,
+        },
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=7)
+    finals = [e.alternatives[0] for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert len(finals) == 2
+
+    assert finals[0].text == "Hello world."
+    assert finals[0].source_texts == ["Hello world."]
+    assert finals[0].target_texts is None
+
+    assert finals[1].text == "Adios."
+    assert finals[1].source_texts == ["Good bye."]
+    assert finals[1].target_texts == ["Adios."]
+
+
+async def test_finished_flushes_a_held_endpoint():
+    """The stream ending closes a held utterance instead of dropping it."""
+    stream = _translating_stream()
+    messages = [
+        {
+            "tokens": [
+                _final_token("Hello world.", "en", translation_status="original"),
+                END_TOKEN_FINAL,
+            ],
+            "total_audio_proc_ms": 500,
+        },
+        {"tokens": [], "finished": True, "total_audio_proc_ms": 900},
+    ]
+
+    events = await _drive_recv(stream, messages, expect_events=4)
+    sd = next(e for e in events if e.type == SpeechEventType.FINAL_TRANSCRIPT).alternatives[0]
+    assert sd.text == "Hello world."
+    assert sd.source_texts == ["Hello world."]
+    assert sd.target_texts is None
+
+
 # --- "none" untranslated chunk ---------------------------------------------
 
 
