@@ -201,6 +201,7 @@ class AvatarSession(BaseAvatarSession):
         # told "essence" and REFUSED (the API answers 400 naming what the avatar
         # can be served as). So the sentinel survives to the request, where it
         # means "do not name a model" — and `str()` is never called on it.
+        self._model = model
 
         # validate mode-specific requirements
         if self._mode == "local":
