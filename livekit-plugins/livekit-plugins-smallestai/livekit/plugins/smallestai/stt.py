@@ -84,7 +84,7 @@ T = TypeVar("T")
 
 
 class _PeriodicCollector(Generic[T]):
-    """Same logic as livekit-plugins-deepgram/_utils.py: sums values, flushes every `duration`."""
+    """Flushes every `duration`."""
 
     def __init__(self, callback: Callable[[T], None], *, duration: float) -> None:
         self._duration = duration
@@ -216,8 +216,7 @@ class STT(stt.STT):
                 only reliable end-of-speech signal: finals alone are also emitted
                 mid-utterance. With it off, every final closes the turn. Defaults to True.
             finalize_on_flush: Send ``{"type": "finalize"}`` when the framework flushes
-                the stream, so buffered speech is returned as a final immediately
-                (Deepgram's ``Finalize``). Defaults to True.
+                the stream, so buffered speech is returned as a final immediately. Defaults to True.
             finalize_on_words: Cut a final every ``max_words`` words during long
                 continuous speech. Unset uses the server default (on). The cut is not a
                 turn end; END_OF_SPEECH still follows the VAD.
@@ -548,7 +547,7 @@ class SpeechStream(stt.SpeechStream):
                     if flushed:
                         # The framework marked a segment end: the buffered tail is on the
                         # wire, now ask for it back as a final instead of leaving it to
-                        # the server's endpointing (Deepgram's Finalize contract).
+                        # the server's endpointing.
                         self._audio_duration_collector.flush()
                         if self._opts.finalize_on_flush:
                             await ws.send_str(SpeechStream._FINALIZE_MSG)
