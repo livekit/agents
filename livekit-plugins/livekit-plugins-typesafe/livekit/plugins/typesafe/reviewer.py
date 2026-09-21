@@ -1,0 +1,554 @@
+# Copyright 2025 LiveKit, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from collections import deque
+from collections.abc import AsyncIterable, Callable
+from dataclasses import dataclass, field
+from typing import Any, cast
+
+import aiohttp
+
+from livekit.agents import Agent, AgentSession, llm
+from livekit.agents.voice.agent import ModelSettings
+from livekit.agents.voice.events import ConversationItemAddedEvent, FunctionToolsExecutedEvent
+
+from ._client import DEFAULT_BASE_URL, DEFAULT_MODEL, SystemOneClient
+from .checks import Check, TurnState, default_checks
+from .log import logger
+
+_Chunk = llm.ChatChunk | str
+
+NUDGE_PREFIX = (
+    "Internal feedback from an automated reviewer, not from the user. Do not mention "
+    "this feedback to the user, and do not apologize. The response you just produced "
+    "has the following issues:"
+)
+NUDGE_SUFFIX = "Address these issues in your next response."
+
+_RESULTS_LIMIT = 200
+
+
+@dataclass
+class Verdict:
+    """The outcome of one review."""
+
+    triggered_checks: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    answers: dict[str, Any] = field(default_factory=dict)
+    reviewed_reply: str = ""
+    """The reply this verdict judged, so a recorded verdict stands on its own."""
+    created_at: float = field(default_factory=time.time)
+    duration: float = 0.0
+    """Wall-clock seconds the evaluation took, including the round trigger."""
+    model: str | None = None
+    """Versioned model that answered, e.g. ``jev-1.13.0``.
+
+    An alias like ``jev-latest`` moves under you, so the version behind a
+    threshold you tuned is worth keeping with the numbers you tuned it on.
+    """
+    usage: dict[str, int] = field(default_factory=dict)
+    """Token counts for this check. Only input tokens are billed."""
+    evaluated: bool = True
+    """False when the check could not run and the turn went unjudged.
+
+    Keeps "nothing was wrong" distinguishable from "nobody looked", which ``ok``
+    cannot do on its own because a failed check fails open.
+    """
+
+    @property
+    def needs_correction(self) -> bool:
+        """Whether a check triggered and the agent should be nudged.
+
+        Deliberately not an ``ok`` flag: a review that could not run fails open
+        and would read as approval. Pair with :attr:`evaluated` to tell "nothing
+        was wrong" from "nobody looked".
+        """
+        return bool(self.triggered_checks)
+
+    def summary(self) -> str:
+        """One line: every check's value, whether it triggered, and what it cost."""
+        checks = " ".join(
+            f"{'!' if check_id in self.triggered_checks else ''}{check_id}={_answer_value(answer)}"
+            for check_id, answer in self.answers.items()
+        )
+        if not self.evaluated:
+            checks = "unjudged"
+        return (
+            f"{checks} [{self.duration * 1000:.0f}ms "
+            f"{self.usage.get('input_tokens', '?')}tok {self.model or '-'}]"
+        )
+
+
+class Reviewer:
+    """Watches an agent against its own prompt and nudges it back on course.
+
+    The agent's ``instructions`` and tool catalog are sent to TypeSafe as state,
+    so the checks are written once and apply to any agent without being
+    rewritten. Every check rides in a single request.
+
+    Two placements, and they compose:
+
+    * observe (:meth:`attach`), the default. The review starts once the assistant's
+      message is committed and runs off the reply path entirely, so it adds nothing
+      to time-to-first-token. A trigger appends a correction to the chat context, which
+      the next generation picks up.
+    * gate (:meth:`gate`), opted into per check via ``default_checks(gated_check_ids=...)``.
+      The draft is held, evaluated, and redrafted once if a gated check triggers, all
+      before any audio. Nothing bad is spoken, but the reply waits for the full
+      generation plus one evaluation.
+
+    Gating needs the agent to delegate, since a realtime model has no
+    ``llm_node`` to hold::
+
+        class MyAgent(Agent):
+            async def llm_node(self, chat_ctx, tools, model_settings):
+                return await self.reviewer.gate(self, chat_ctx, tools, model_settings)
+
+    A failed or slow check is logged and treated as a pass. This is a nudge
+    layer, not an enforcement boundary: blocking every reply whenever TypeSafe
+    is unreachable would take the agent down with it. Do not use it as the only
+    thing standing between a caller and a harmful answer.
+
+    Args:
+        checks: Judgments to run. Defaults to :func:`default_checks`.
+        api_key: TypeSafe key. Falls back to ``TYPESAFE_API_KEY``.
+        base_url: API root, for staging or a proxy.
+        model: Model or alias to evaluate with.
+        timeout: Hard ceiling on one evaluation. Past it the turn goes unchecked.
+        history_turns: Conversation items of context sent with each check.
+        http_session: Session to use instead of the agent's shared one.
+        on_verdict: Called with every :class:`Verdict`, whether a check triggered or
+            not. The place to hang metrics or transcript annotations.
+    """
+
+    def __init__(
+        self,
+        *,
+        checks: list[Check] | None = None,
+        api_key: str | None = None,
+        base_url: str = DEFAULT_BASE_URL,
+        model: str = DEFAULT_MODEL,
+        timeout: float = 2.0,
+        history_turns: int = 6,
+        http_session: aiohttp.ClientSession | None = None,
+        on_verdict: Callable[[Verdict], None] | None = None,
+        _client: SystemOneClient | None = None,
+    ) -> None:
+        self._checks = checks if checks is not None else default_checks()
+        self._history_turns = history_turns
+        self._on_verdict = on_verdict
+        self._client = _client or SystemOneClient(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            timeout=timeout,
+            http_session=http_session,
+        )
+
+        # A plain bounded deque. How a call ended, above all whether the caller
+        # hung up, is the cheapest label available for tuning the thresholds
+        # above, but only if the probabilities behind each turn survive to the
+        # end of the call. Use on_verdict instead to stream every turn of a very
+        # long call out as it happens.
+        self._results: deque[Verdict] = deque(maxlen=_RESULTS_LIMIT)
+        self._session: AgentSession | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._tools_used: list[str] = []
+        self._tool_results: list[dict[str, str]] = []
+        # One string rather than a set of ids: the gate holds the reply, so at most
+        # one draft is ever in flight between gate() clearing it and
+        # conversation_item_added firing. Key by message id if that stops holding.
+        self._cleared_by_gate: str | None = None
+
+    @property
+    def checks(self) -> list[Check]:
+        return self._checks
+
+    @property
+    def results(self) -> list[Verdict]:
+        """Every verdict reached on this session, oldest first.
+
+        Read it when the call ends to pair how the call went with what the
+        checks saw on the way. A caller who hangs up early is the outcome label
+        these probabilities are worth calibrating against::
+
+            @session.on("close")
+            def _on_close(ev: CloseEvent) -> None:
+                if ev.reason == CloseReason.PARTICIPANT_DISCONNECTED:
+                    log_for_tuning(reviewer.results)
+        """
+        return list(self._results)
+
+    def attach(self, session: AgentSession) -> None:
+        """Start observing ``session``. Adds no latency to the reply path."""
+        if self._session is not None:
+            raise RuntimeError("this Reviewer is already attached to a session")
+        self._session = session
+        session.on("conversation_item_added", self._on_item)
+        session.on("function_tools_executed", self._on_tools_executed)
+        gated = [r.id for r in self._checks if r.gated]
+        logger.debug(
+            "reviewer attached",
+            extra={
+                "checks": [r.id for r in self._checks],
+                "gated": gated or None,
+                "model": self._client.model,
+            },
+        )
+
+    def detach(self) -> None:
+        """Stop observing and cancel any check still in flight."""
+        if self._session is None:
+            return
+        self._session.off("conversation_item_added", self._on_item)
+        self._session.off("function_tools_executed", self._on_tools_executed)
+        self._session = None
+        in_flight = [t for t in self._tasks if not t.done()]
+        for task in in_flight:
+            task.cancel()
+        logger.debug(
+            "reviewer detached",
+            extra={"checks": len(self._results), "cancelled": len(in_flight)},
+        )
+
+    def _on_tools_executed(self, ev: FunctionToolsExecutedEvent) -> None:
+        for call, out in ev.zipped():
+            self._tools_used.append(call.name)
+            self._tool_results.append({"tool": call.name, "result": str(out.output)[:2000]})
+
+    def _on_item(self, ev: ConversationItemAddedEvent) -> None:
+        item = ev.item
+        if getattr(item, "type", None) != "message":
+            return
+
+        if item.role == "user":  # type: ignore[union-attr]
+            self._tools_used.clear()
+            self._tool_results.clear()
+            return
+
+        if item.role != "assistant":  # type: ignore[union-attr]
+            return
+
+        text = item.text_content  # type: ignore[union-attr]
+        if not text:
+            return
+
+        if self._cleared_by_gate == text:
+            self._cleared_by_gate = None  # already judged on the way out
+            return
+
+        self._spawn(self._observe(text))
+
+    def _spawn(self, coro: Any) -> None:
+        task = asyncio.ensure_future(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _observe(self, reply: str) -> None:
+        session = self._session
+        if session is None:
+            return
+        agent = session.current_agent
+        try:
+            verdict = await self.review(agent, reply)
+            if verdict.triggered_checks:
+                await self._apply_nudge(agent, verdict)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # This runs detached from the reply path, so an unhandled error here
+            # would otherwise vanish into a dropped task with the call none the wiser.
+            logger.exception("reviewer check crashed, the call continues unsteered")
+
+    async def review(
+        self, agent: Agent, reviewed_reply: str, *, checks: list[Check] | None = None
+    ) -> Verdict:
+        """Evaluate one drafted reply and return the verdict without acting on it."""
+        return await self._evaluate(
+            self._build_state(agent, reviewed_reply),
+            checks if checks is not None else self._checks,
+        )
+
+    async def gate(
+        self,
+        agent: Agent,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+        *,
+        max_redrafts: int = 1,
+        draft: Callable[[llm.ChatContext], Any] | None = None,
+    ) -> AsyncIterable[_Chunk]:
+        """Hold the draft back until it passes, instead of correcting the next reply.
+
+        Nothing is spoken until the gated checks clear, so a bad reply is never
+        heard, at the cost of the full generation plus one evaluation before any
+        audio starts.
+
+        Falls straight through when no check is gated, or when the draft carries
+        tool calls. Nothing has been spoken yet in that case, so there is nothing
+        to hold back.
+
+        Args:
+            draft: Produces a reply for a chat context. Defaults to the agent's
+                stock LLM node; pass one to gate a custom ``llm_node``.
+        """
+        produce = draft or (lambda ctx: Agent.default.llm_node(agent, ctx, tools, model_settings))
+
+        gated = [r for r in self._checks if r.gated]
+        if not gated:
+            return await _as_stream(produce(chat_ctx))
+
+        ctx = chat_ctx
+        verdict = Verdict()
+        for attempt in range(max_redrafts + 1):
+            chunks = await _drain(produce(ctx))
+            text = _text_of(chunks)
+
+            if _has_tool_calls(chunks) or not text:
+                return _replay(chunks)
+
+            verdict = await self._evaluate(self._build_state(agent, text), gated)
+            if not verdict.needs_correction:
+                logger.debug(
+                    "gate cleared the draft",
+                    extra={"attempt": attempt, "elapsed_ms": round(verdict.duration * 1000)},
+                )
+                self._cleared_by_gate = text
+                return _replay(chunks)
+
+            if attempt == max_redrafts:
+                logger.warning(
+                    "gated checks still triggered after redrafting, releasing the reply "
+                    "and correcting the next turn instead",
+                    extra={
+                        "triggered_checks": verdict.triggered_checks,
+                        "redrafts": max_redrafts,
+                        "lk.pii.reviewed_reply": text[:500],
+                    },
+                )
+                self._cleared_by_gate = text
+                await self._apply_nudge(agent, verdict)
+                return _replay(chunks)
+
+            logger.debug(
+                "gate triggered, redrafting",
+                extra={"triggered_checks": verdict.triggered_checks, "attempt": attempt},
+            )
+            ctx = ctx.copy()
+            ctx.add_message(role="system", content=self._nudge_text(verdict))
+
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _build_state(self, agent: Agent, reviewed_reply: str) -> TurnState:
+        raw_instructions = agent.instructions
+        instructions = (
+            raw_instructions if isinstance(raw_instructions, str) else raw_instructions.render()
+        )
+
+        tools: list[dict[str, Any]] = []
+        for name, tool in llm.ToolContext(agent.tools).function_tools.items():
+            description: str | None
+            if llm.is_function_tool(tool):
+                description = tool.info.description
+            elif llm.is_raw_function_tool(tool):
+                description = tool.info.raw_schema.get("description")
+            else:
+                description = None
+            tools.append({"name": name, "description": description})
+
+        # Only what was actually said. The agent's instructions also sit in
+        # chat_ctx as a system message, and every nudge this plugin injects
+        # lands there too. Copying either into `transcript` would repeat the whole
+        # prompt in a field that already holds it as `instructions`, and would show the
+        # reviewer its own past notes as if the caller had said them.
+        transcript: list[dict[str, str]] = []
+        for item in agent.chat_ctx.items:
+            if getattr(item, "type", None) != "message":
+                continue
+            if item.role not in ("user", "assistant"):  # type: ignore[union-attr]
+                continue
+            text = item.text_content  # type: ignore[union-attr]
+            if text and text != reviewed_reply:
+                transcript.append({"role": item.role, "text": text})  # type: ignore[union-attr]
+        transcript = transcript[-self._history_turns :]
+
+        return TurnState(
+            instructions=instructions,
+            available_tools=tools,
+            transcript=transcript,
+            reviewed_reply=reviewed_reply,
+            tools_used_this_turn=list(self._tools_used),
+            tool_results=list(self._tool_results),
+        )
+
+    async def _evaluate(self, state: TurnState, checks: list[Check]) -> Verdict:
+        questions: dict[str, Any] = {}
+        active: list[Check] = []
+        for check in checks:
+            question = check.build(state)
+            if question is not None:
+                questions[check.id] = question
+                active.append(check)
+
+        if not questions:
+            logger.debug("no checks apply to this turn, skipping the check")
+            return Verdict()
+
+        payload = state.as_payload()
+        started = time.monotonic()
+        try:
+            response = await self._client.evaluate(payload, questions)
+        except Exception as e:
+            # Fail open: a reviewer check that cannot run must not silence the agent.
+            verdict = Verdict(
+                reviewed_reply=state.reviewed_reply,
+                duration=time.monotonic() - started,
+                evaluated=False,
+            )
+            logger.warning(
+                "reviewer check failed, this turn went unjudged",
+                extra={
+                    "error": str(e),
+                    "checks": [r.id for r in active],
+                    "state_chars": _payload_chars(payload),
+                    "elapsed_ms": round(verdict.duration * 1000),
+                },
+            )
+            self._record(verdict)
+            return verdict
+
+        answers = response.get("answers", {})
+        verdict = Verdict(
+            answers=answers,
+            reviewed_reply=state.reviewed_reply,
+            duration=time.monotonic() - started,
+            model=response.get("model"),
+            usage=response.get("usage") or {},
+        )
+        for check in active:
+            answer = answers.get(check.id)
+            if answer is None:
+                logger.warning(
+                    "check got no answer back", extra={"check": check.id, "model": verdict.model}
+                )
+                continue
+            try:
+                triggered = check.triggers_when(answer, state)
+            except (KeyError, TypeError) as e:
+                logger.warning(
+                    "check could not read its answer",
+                    extra={"check": check.id, "error": str(e), "answer": answer},
+                )
+                continue
+            if triggered:
+                verdict.triggered_checks.append(check.id)
+                verdict.reasons.append(check.reason)
+
+        # Every check's value, every turn. Without this you cannot tell a check
+        # that sat at 0.51 from one that sat at 0.99, which is the whole of
+        # knowing whether a threshold is in the right place.
+        logger.debug("check %s", verdict.summary())
+        self._record(verdict)
+        return verdict
+
+    def _record(self, verdict: Verdict) -> None:
+        self._results.append(verdict)
+        if self._on_verdict is None:
+            return
+        try:
+            self._on_verdict(verdict)
+        except Exception:
+            # A broken metrics callback must not take the call down with it.
+            logger.exception("on_verdict callback raised")
+
+    def _nudge_text(self, verdict: Verdict) -> str:
+        reasons = "\n".join(f"- {reason}" for reason in verdict.reasons)
+        return f"{NUDGE_PREFIX}\n{reasons}\n\n{NUDGE_SUFFIX}"
+
+    async def _apply_nudge(self, agent: Agent, verdict: Verdict) -> None:
+        logger.info(
+            "nudging the agent back on course",
+            extra={
+                "triggered_checks": verdict.triggered_checks,
+                "reasons": verdict.reasons,
+                "elapsed_ms": round(verdict.duration * 1000),
+                "model": verdict.model,
+                "lk.pii.reviewed_reply": verdict.reviewed_reply[:500],
+            },
+        )
+        ctx = agent.chat_ctx.copy()
+        ctx.add_message(role="system", content=self._nudge_text(verdict))
+        await agent.update_chat_ctx(ctx)
+
+
+def _answer_value(answer: dict[str, Any]) -> str:
+    """The one number that matters for a check, for a log line."""
+    kind = answer.get("type")
+    if kind == "noul":
+        return f"{answer.get('noul', float('nan')):.2f}"
+    if kind == "choice":
+        return f"{answer.get('choice')}@{answer.get('confidence', float('nan')):.2f}"
+    if kind == "score":
+        return (
+            f"{answer.get('score', float('nan')):.2f}@{answer.get('confidence', float('nan')):.2f}"
+        )
+    return "?"
+
+
+def _payload_chars(payload: Any) -> int:
+    """Rough size of what was sent, for diagnosing a 422 against the 32k state cap."""
+    try:
+        return len(json.dumps(payload, default=str))
+    except Exception:
+        return -1
+
+
+async def _as_stream(node: Any) -> AsyncIterable[_Chunk]:
+    stream = await node if asyncio.iscoroutine(node) else node
+    return cast(AsyncIterable[_Chunk], stream)
+
+
+async def _drain(node: Any) -> list[_Chunk]:
+    return [chunk async for chunk in await _as_stream(node)]
+
+
+def _text_of(chunks: list[_Chunk]) -> str:
+    parts = []
+    for chunk in chunks:
+        if isinstance(chunk, str):
+            parts.append(chunk)
+        elif isinstance(chunk, llm.ChatChunk) and chunk.delta and chunk.delta.content:
+            parts.append(chunk.delta.content)
+    return "".join(parts)
+
+
+def _has_tool_calls(chunks: list[_Chunk]) -> bool:
+    return any(
+        isinstance(c, llm.ChatChunk) and c.delta is not None and bool(c.delta.tool_calls)
+        for c in chunks
+    )
+
+
+def _replay(chunks: list[_Chunk]) -> AsyncIterable[_Chunk]:
+    async def gen() -> AsyncIterable[_Chunk]:
+        for chunk in chunks:
+            yield chunk
+
+    return gen()
