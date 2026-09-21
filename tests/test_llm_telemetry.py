@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -9,9 +10,16 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+from opentelemetry.trace import StatusCode
 
 from livekit.agents import llm
-from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import (
+    gen_ai,
+    set_tracer_provider,
+    trace_types,
+    tracer,
+    utils as telemetry_utils,
+)
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -19,7 +27,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.voice import generation
-from livekit.agents.voice.io import ModelSettings
+from livekit.agents.voice.io import LLMNode, ModelSettings
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -247,6 +255,146 @@ async def test_llm_stream_skips_content_builders_for_nonrecording_span(
     assert response.text == "hello"
     assert response.usage is not None
     assert response.usage.prompt_tokens == 100
+
+
+@pytest.mark.parametrize(
+    "node_kind", ["sync", "coroutine", "stream_start", "stream", "provider", "close"]
+)
+@pytest.mark.parametrize("redacted", [False, True])
+async def test_llm_node_records_exceptions(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    node_kind: str,
+    redacted: bool,
+) -> None:
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redacted)
+    failure = RuntimeError("private failure details")
+    closed = False
+
+    def sync_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> str:
+        raise failure
+
+    async def coroutine_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> str:
+        raise failure
+
+    async def stream_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> AsyncIterator[str]:
+        nonlocal closed
+        try:
+            if node_kind == "stream":
+                yield "partial response"
+            raise failure
+        finally:
+            closed = True
+
+    class FailingCloseStream:
+        def __aiter__(self) -> AsyncIterator[str]:
+            return self
+
+        async def __anext__(self) -> str:
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            raise failure
+
+    def close_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> FailingCloseStream:
+        return FailingCloseStream()
+
+    async def fail_provider(stream: _UsageLLMStream) -> None:
+        raise failure
+
+    monkeypatch.setattr(_UsageLLMStream, "_run", fail_provider)
+    async with _UsageLLM() as model:
+
+        def provider_node(
+            chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+        ) -> llm.LLMStream:
+            return model.chat(chat_ctx=chat_ctx, tools=tools)
+
+        nodes: dict[str, LLMNode] = {
+            "sync": sync_node,
+            "coroutine": coroutine_node,
+            "stream_start": stream_node,
+            "stream": stream_node,
+            "provider": provider_node,
+            "close": close_node,
+        }
+        task, _ = generation.perform_llm_inference(
+            node=nodes[node_kind],
+            chat_ctx=llm.ChatContext.empty(),
+            tool_ctx=llm.ToolContext([]),
+            model_settings=ModelSettings(),
+        )
+        with pytest.raises(RuntimeError) as raised:
+            await task
+        assert raised.value is failure
+
+    if node_kind in ("stream_start", "stream"):
+        assert closed
+    [span] = [span for span in span_exporter.get_finished_spans() if span.name == "llm_node"]
+    attrs = span.attributes or {}
+    assert attrs[trace_types.ATTR_ERROR_TYPE] == "RuntimeError"
+    assert span.status.status_code is StatusCode.ERROR
+    [exception] = [event for event in span.events if event.name == "exception"]
+    expected_message = telemetry_utils.REDACTED_EXCEPTION_MESSAGE if redacted else str(failure)
+    assert span.status.description == expected_message
+    assert exception.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == expected_message
+    if redacted:
+        assert str(failure) not in span.to_json()
+    if node_kind in ("sync", "coroutine", "close", "provider"):
+        assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in attrs
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["coroutine", "stream"])
+@pytest.mark.parametrize("redacted", [False, True])
+async def test_llm_node_cancellation_does_not_record_an_exception(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    redacted: bool,
+) -> None:
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redacted)
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+    closed = False
+
+    async def coroutine_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> str:
+        nonlocal closed
+        started.set()
+        try:
+            await blocked.wait()
+            return ""
+        finally:
+            closed = True
+
+    async def stream_node(
+        chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+    ) -> AsyncIterator[str]:
+        yield await coroutine_node(chat_ctx, tools, model_settings)
+
+    task, _ = generation.perform_llm_inference(
+        node=stream_node if streaming else coroutine_node,
+        chat_ctx=llm.ChatContext.empty(),
+        tool_ctx=llm.ToolContext([]),
+        model_settings=ModelSettings(),
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert closed
+    [span] = [span for span in span_exporter.get_finished_spans() if span.name == "llm_node"]
+    assert span.status.status_code is StatusCode.UNSET
+    assert not [event for event in span.events if event.name == "exception"]
 
 
 async def test_llm_node_skips_payloads_for_nonrecording_span(
