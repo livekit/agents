@@ -1410,21 +1410,6 @@ class AudioRecognition:
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
 
-        if (
-            ev.type
-            in (stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT)
-            and self._vad_base_turn_detection
-            and self._stt_pipeline is not None
-            and self._stt_pipeline.manual_flush
-        ):
-            self._update_last_language(ev.alternatives[0].language, ev.alternatives[0].text)
-            if (
-                not self._speaking
-                and self._last_speaking_time is not None
-                and not self._stt_flush_requested
-            ):
-                self._run_eou_detection(self._hooks.retrieve_chat_ctx(), trigger="stt")
-
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
@@ -1565,13 +1550,9 @@ class AudioRecognition:
         ):
             return
 
-        # Manual-commit STT may only supply interim text until EOT requests a flush.
-        transcript = self._audio_transcript
-        if auto_flush:
-            transcript = f"{transcript} {self._audio_interim_transcript}".strip()
         chat_ctx = chat_ctx.copy()
-        if transcript:
-            chat_ctx.add_message(role="user", content=transcript)
+        if self._audio_transcript:
+            chat_ctx.add_message(role="user", content=self._audio_transcript)
 
         turn_detector = (
             (
@@ -1580,7 +1561,7 @@ class AudioRecognition:
                 else self._turn_detector
             )
             if self._turn_detection_mode != "manual"
-            and (transcript or isinstance(self._turn_detector, _StreamingTurnDetector))
+            and (self._audio_transcript or isinstance(self._turn_detector, _StreamingTurnDetector))
             else None  # disable EOU model if manual turn detection enabled
         )
 
@@ -1604,6 +1585,7 @@ class AudioRecognition:
                 endpointing_delay=endpointing_delay,
             )
 
+            negative_eot = False
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
             backchannel_threshold: float | None = None
@@ -1667,6 +1649,7 @@ class AudioRecognition:
                             and unlikely_threshold is not None
                             and end_of_turn_probability < unlikely_threshold
                         ):
+                            negative_eot = True
                             endpointing_delay = self._endpointing.max_delay
 
                         eou_span_attributes: dict[str, Any] = {
@@ -1773,15 +1756,9 @@ class AudioRecognition:
                             )
 
             if auto_flush and not self._stt_flush_requested:
-                positive_eot = (
-                    end_of_turn_probability is not None
-                    and unlikely_threshold is not None
-                    and end_of_turn_probability >= unlikely_threshold
-                )
-                if self._turn_detector is not None and not positive_eot:
+                if negative_eot:
                     # Keep context through short pauses. Reserve the rest of the maximum
                     # endpointing delay for the final transcript, without awaiting an ack.
-                    endpointing_delay = self._endpointing.max_delay
                     flush_delay = endpointing_delay / 2
                     if last_speaking_time is not None:
                         flush_delay += last_speaking_time - time.time()
