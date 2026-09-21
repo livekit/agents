@@ -12,12 +12,22 @@ The acknowledged final matched every expected word, including the last word,
 without added silence or promoting an interim hypothesis. The endpoint
 acknowledged the configured 16 kHz rate before any audio was sent.
 
+A separate five-turn synthetic browser/WebRTC test passed through a local
+LiveKit server, real MAI STT with its own local VAD, the model-less echo example,
+and real MAI TTS back to browser audio. All five STT finals matched the complete
+expected words without duplicates. The test covered a brief internal pause,
+barge-in that cleared the old echo without stale output, explicit
+disconnect/reconnect, and closure of both sessions and providers. The fourth
+echo was intentionally interrupted; the other echoes completed. The microphone
+track remained open with ordinary inter-turn silence; no extra tail padding
+or manual per-utterance commits were used.
+
 This does **not** establish access in every resource/region, recognition
-accuracy across inputs/languages, every backend tail boundary, or long-session
-and VAD-driven multi-turn behavior; those still need live validation.
-Hermetic tests cover the client lifecycle and VAD ordering. Neither result is
-a model-latency benchmark. An Azure Speech TTS resource/key does **not**
-establish access to the separate STT service.
+accuracy across inputs/languages, every backend tail boundary, long-session
+reliability, physical microphone behavior, or subjective voice quality.
+Hermetic tests also cover the client lifecycle and VAD ordering. None of these
+results is a model-latency benchmark. An Azure Speech TTS resource/key does
+**not** establish access to the separate STT service.
 
 There is no LLM, speech-to-speech realtime model, Azure OpenAI convenience
 constructor, provider catalog, token minting, or OpenAI credential/model default.
@@ -282,6 +292,18 @@ the example waiting for a user turn until its session limit.
 Automated fixture audio published through the same browser/LiveKit track is a
 useful transport and lifecycle test, but it does **not** validate a physical
 microphone, acoustic echo cancellation, or subjective sound quality.
+
+The bounded acceptance used the installed wheel with released Agents 1.8.2,
+local LiveKit server 1.13.7 and browser client 2.22.3. It covered five short
+synthetic turns across two STT sessions, including a 180 ms internal pause
+below the configured 500 ms VAD silence threshold. The fifth turn interrupted
+the fourth echo; the old speech handle was interrupted, its output cleared,
+no server frames followed its completion, and browser audio energy stayed
+flat during the observed quiet interval after transport settling. All five
+STT finals, the four completed echoes, and disconnect cleanup passed.
+This test did not count punctuation-only shutdown fallbacks as user turns.
+A nonfatal SDK FFI-handle warning occurred during teardown; public session
+and provider closure checks passed.
 
 ### TTS only in a real room, without a LiveKit Cloud account
 
