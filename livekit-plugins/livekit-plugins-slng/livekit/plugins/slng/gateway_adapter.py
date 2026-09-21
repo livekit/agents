@@ -12,9 +12,15 @@ _MODEL_IDENTIFIER_RE = re.compile(
 _RETRYABLE_CLIENT_STATUS_CODES = {408, 409, 425, 429}
 _ERROR_MESSAGE_MAX_LEN = 500
 
+# The gateway's error codes, mapped to the HTTP status the retry logic reads.
+# A code missing here yields no status, and a status-less error is retried on
+# every candidate in turn, so a permanent failure (a malformed pronunciation
+# reference, say) costs a full walk of the chain on every reply. Keep this in
+# step with the codes the gateway emits on a websocket error frame.
 BRIDGE_ERROR_CODE_STATUS: dict[str, int] = {
     "auth_error": 401,
     "config_error": 400,
+    "configuration_error": 400,
     "invalid_request": 400,
     "payload_too_large": 413,
     "rate_limit": 429,
@@ -28,6 +34,16 @@ BRIDGE_ERROR_CODE_STATUS: dict[str, int] = {
     "provider_error": 502,
     "backend_error": 502,
     "backend_connection_failed": 502,
+    # Pronunciation: a bad reference is permanent, an unreachable dictionary
+    # service is not.
+    "invalid_pronunciation": 400,
+    "pronunciation_unauthenticated": 401,
+    "pronunciation_not_found": 404,
+    "pronunciation_unavailable": 503,
+    # Watermarking, TTS only.
+    "unsupported_watermark_format": 400,
+    "watermarking_error": 500,
+    "watermarking_unavailable": 503,
 }
 
 
@@ -80,7 +96,12 @@ def build_tts_init_payload(
     plugin needs them to decode the audio it receives. ``language`` and
     ``speed`` are included only when the caller set them, so the model's
     catalog defaults apply otherwise. ``model_options`` are passed through
-    verbatim and are applied last, so a key repeated there wins.
+    verbatim into ``config`` and are applied last, so a key repeated there
+    wins.
+
+    ``language`` is also sent at the top level, where some models read it in
+    preference to ``config``. Both copies carry the same value, including when
+    ``model_options`` overrode it, so the two cannot disagree.
     """
     config: dict[str, Any] = {"encoding": encoding, "sample_rate": sample_rate}
     if language is not None:
@@ -89,8 +110,8 @@ def build_tts_init_payload(
         config["speed"] = speed
     config.update(dict(model_options or {}))
     payload: dict[str, Any] = {"type": "init", "model": model, "voice": voice, "config": config}
-    if language is not None:
-        payload["language"] = language
+    if config.get("language") is not None:
+        payload["language"] = config["language"]
     return payload
 
 

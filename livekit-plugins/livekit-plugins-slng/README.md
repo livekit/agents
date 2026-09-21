@@ -37,7 +37,7 @@ Additional keyword arguments are forwarded to the gateway and applied according 
 
 ## TTS init fields
 
-The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent; `encoding` cannot be overridden, because the plugin decodes the audio itself. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
 
 ## TTS text chunking
 
@@ -47,13 +47,15 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 - `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60).
 - `"word"`: one frame per word.
 
-Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set), and cuts text that has no terminator, such as Thai, at a space once it passes 200 characters. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length, or any other `SentenceTokenizer` to replace it.
+Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set). Any piece longer than 200 characters is cut at a space, which is what makes a script with no terminator stream at all. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length; an overriding tokenizer must be a `SentenceTokenizer` in this mode.
+
+First audio arrives once the first sentence is complete, so an opening line like `"Sure, let me check that for you."` starts the audio sooner than a long first sentence does. Text in a script with no sentence terminator stays in one frame until it reaches `max_chars`, so first audio waits for the whole reply unless you lower it.
 
 ## TTS connections
 
-The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence with `flush: true` on the reply's last frame, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
+The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence followed by a `flush` that ends the reply, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
 
-Use the regional `<region>.api.slng.ai` base URLs, which need a new API key.
+The regional `<region>.api.slng.ai` hosts keep that socket open across replies, so prefer them; they need a new API key. The default `api.slng.ai` works, but several models end a reply by closing the socket there, and the plugin reconnects for the next one.
 
 `warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
 
@@ -119,3 +121,5 @@ Version 2.0 is a breaking change:
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
 - `api_token` still works on STT but is deprecated; use `api_key`.
 - TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.
+- TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames.
+- TTS `warm_standby_enabled` defaults to True, so the connection is open from session start and counts as one concurrent session for the whole call.

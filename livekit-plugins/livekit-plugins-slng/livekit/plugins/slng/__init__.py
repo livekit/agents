@@ -14,7 +14,7 @@
 
 """SLNG plugin for LiveKit Agents
 
-STT and TTS adapters for SLNG gateway models.
+STT and TTS adapters for SLNG gateway models, and the TTS sentence tokenizer.
 
 See https://docs.slng.ai/ for more information.
 """
