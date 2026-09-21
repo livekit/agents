@@ -68,6 +68,10 @@ class AMDPredictionEvent(BaseModel):
     """Stage after this prediction. Never ``wait``."""
     state_changed: bool = False
     """Whether this prediction started a new stage."""
+    corrects_stage: bool = False
+    """Whether this prediction explicitly corrected an earlier machine stage."""
+    correction_evidence: str | None = None
+    """Transcript quote supplied for this correction. Absent for normal and reused predictions."""
     prev_turn_category: AMDCategory | None = None
     prev_stage_category: AMDCategory | None = None
     inference_duration: float | None = None

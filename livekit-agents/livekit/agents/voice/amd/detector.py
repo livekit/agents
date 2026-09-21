@@ -574,6 +574,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                 turn,
                 stage=self._state,
                 allowed=sorted(_fsm.ALLOWED[self._state]),
+                corrections=sorted(_fsm.CORRECTIONS[self._state]),
+                previous_prediction=self._latest,
             )
             if self._menu_atask is not None:
                 self._menu_atask.cancel()
@@ -622,12 +624,16 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         *,
         effects: tuple[_fsm.Effect, ...] = (),
         state_changed: bool = False,
+        corrects_stage: bool = False,
+        correction_evidence: str | None = None,
     ) -> None:
         event = AMDPredictionEvent(
             turn_id=turn.turn_id,
             category=self._category,
             stage=self._state,
             state_changed=state_changed,
+            corrects_stage=corrects_stage,
+            correction_evidence=correction_evidence,
             reason=reason,
             transcript=turn.transcript.transcript,
             speech_duration=turn.speech_duration,
@@ -651,6 +657,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     "turn_id": later.turn_id,
                     "reason": AMDReason.REUSED,
                     "state_changed": False,
+                    "corrects_stage": False,
+                    "correction_evidence": None,
                     "transcript": later.transcript.transcript,
                     "speech_duration": later.speech_duration,
                     "delay": time.monotonic() - later.committed_at,
@@ -699,9 +707,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
 
     async def _classify(self, turn: Turn, request: AMDRequest) -> None:
         started = time.monotonic()
-        category: AMDCategory | None = None
+        response: _inference.AMDResponse | None = None
         try:
-            result = await _inference.classify(
+            response = await _inference.classify(
                 self._resources.llm,
                 request,
                 conn_options=self._session.conn_options.llm_conn_options,
@@ -717,7 +725,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             )
         else:
             turn.inference_duration = time.monotonic() - started
-            category = result.category
         # Cancellation is best effort. Providers may return after timeout or supersession.
         if asyncio.current_task() is not self._classifier_atask or self._check_hard_timeout():
             return
@@ -725,12 +732,20 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._timeout_inference()
             return
         self._cancel_classification()
-        if category is None or category not in _fsm.ALLOWED[self._state]:
+        allowed = (
+            _fsm.CORRECTIONS[self._state]
+            if response is not None and response.corrects_stage
+            else _fsm.ALLOWED[self._state]
+        )
+        if response is None or response.category not in allowed:
             self._record_prediction(turn, AMDReason.INFERENCE_ERROR)
         else:
 
-            def _accept_prediction(turn: Turn, category: AMDCategory) -> None:
-                result = _fsm.transition(self._state, category)
+            def _accept_prediction(turn: Turn, response: _inference.AMDResponse) -> None:
+                category = response.category
+                result = _fsm.transition(
+                    self._state, category, corrects_stage=response.corrects_stage
+                )
                 state_changed = result.next_state != self._state
                 if state_changed:
                     self._previous_stage = self._state
@@ -748,9 +763,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     AMDReason.PREDICTION,
                     effects=result.effects,
                     state_changed=state_changed,
+                    corrects_stage=response.corrects_stage,
+                    correction_evidence=response.correction_evidence
+                    if response.corrects_stage
+                    else None,
                 )
 
-            _accept_prediction(turn, category)
+            _accept_prediction(turn, response)
 
     async def _extract_menu(self, turn_id: int, transcript: str) -> None:
         started = time.monotonic()

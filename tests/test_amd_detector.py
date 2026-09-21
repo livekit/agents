@@ -110,7 +110,7 @@ class ClassifierLLM(FakeLLM):
         return await asyncio.wait_for(self.requests.get(), 2)
 
     def prediction(self, turn_id: int, category: AMDCategory, **kwargs: Any) -> None:
-        self.respond(turn_id, json.dumps({"category": category.value}))
+        self.respond(turn_id, json.dumps({"category": category.value, **kwargs}))
 
     def respond(self, turn_id: int, arguments: str) -> None:
         response = self.responses[turn_id]
@@ -2234,7 +2234,9 @@ async def test_split_screening_rollover_retains_all_turns() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled_by", ["timeout", "new_turn", "finish"])
-@pytest.mark.parametrize("outcome", ["human", "wait", "provider_error", "unexpected_error"])
+@pytest.mark.parametrize(
+    "outcome", ["human", "wait", "correction", "provider_error", "unexpected_error"]
+)
 async def test_classifier_that_ignores_cancellation_cannot_change_state(
     monkeypatch: pytest.MonkeyPatch, cancelled_by: str, outcome: str
 ) -> None:
@@ -2275,6 +2277,14 @@ async def test_classifier_that_ignores_cancellation_cannot_change_state(
             response.set_result(_inference.AMDResponse(category=AMDCategory.HUMAN))
         elif outcome == "wait":
             response.set_result(_inference.AMDResponse(category=AMDCategory.WAIT))
+        elif outcome == "correction":
+            response.set_result(
+                _inference.AMDResponse(
+                    category=AMDCategory.MACHINE_SCREENING,
+                    corrects_stage=True,
+                    correction_evidence="Please state your name.",
+                )
+            )
         elif outcome == "provider_error":
             response.set_result(APIConnectionError("stale provider failure"))
         else:
@@ -2595,7 +2605,7 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         assert not detector._reply_held_at(asyncio.get_running_loop().time())
         assert detector._voicemail_turn_id is None
         assert model.calls.empty()
-        transition.assert_called_once_with(previous, AMDCategory.WAIT)
+        transition.assert_called_once_with(previous, AMDCategory.WAIT, corrects_stage=False)
         await asyncio.sleep(1.6)
         assert model.calls.empty()
         assert detector.lifecycle is AMDLifecycle.ACTIVE
@@ -2611,7 +2621,7 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         assert detector._state is previous
         await asyncio.wait_for(model.calls.get(), 2)
         assert transition.call_count == 2
-        transition.assert_called_with(previous, AMDCategory.UNCERTAIN)
+        transition.assert_called_with(previous, AMDCategory.UNCERTAIN, corrects_stage=False)
 
 
 @pytest.mark.asyncio

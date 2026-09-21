@@ -2740,10 +2740,8 @@ class AgentActivity(RecognitionHooks):
         turn_hooks: TurnHooks | None = None,
     ) -> None:
         if old_task is not None:
-            # We never cancel user code as this is very confusing.
-            # So we wait for the old execution of on_user_turn_completed to finish.
-            # In practice this is OK because most speeches will be interrupted if a new turn
-            # is detected. So the previous execution should complete quickly.
+            # Let user hooks finish without cancellation. The tradeoff is a delayed realtime
+            # audio commit that may include audio from a later turn.
             await asyncio.wait({old_task})
             if not old_task.cancelled():
                 old_task.result()

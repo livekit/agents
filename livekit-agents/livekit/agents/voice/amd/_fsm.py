@@ -1,7 +1,8 @@
 """Call-category transitions. AMD executes effects and owns the run's lifecycle.
 
 ``uncertain`` and ``wait`` are per-turn predictions, not stages. They keep the
-current stage, so the allowed next categories stay constrained by that stage.
+current stage. Other machine stages require either a normal transition or an
+explicit correction of an earlier classification.
 """
 
 from dataclasses import dataclass
@@ -46,6 +47,14 @@ ALLOWED = {
     AMDCategory.MACHINE_UNAVAILABLE: frozenset(),
 }
 
+_CORRECTABLE_STAGES = frozenset(
+    {AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_VM, AMDCategory.MACHINE_IVR}
+)
+CORRECTIONS = {
+    state: _CORRECTABLE_STAGES - allowed if state in _CORRECTABLE_STAGES else frozenset()
+    for state, allowed in ALLOWED.items()
+}
+
 
 class Effect(Enum):
     EXTRACT_MENU = auto()
@@ -58,8 +67,11 @@ class Transition:
     effects: tuple[Effect, ...] = ()
 
 
-def transition(state: AMDCategory, prediction: AMDCategory) -> Transition:
-    if prediction not in ALLOWED[state]:
+def transition(
+    state: AMDCategory, prediction: AMDCategory, *, corrects_stage: bool = False
+) -> Transition:
+    allowed = CORRECTIONS[state] if corrects_stage else ALLOWED[state]
+    if prediction not in allowed:
         raise ValueError(f"invalid AMD transition: {state} -> {prediction}")
     match prediction:
         case AMDCategory.HUMAN | AMDCategory.MACHINE_UNAVAILABLE:

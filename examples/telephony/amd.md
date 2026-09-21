@@ -228,8 +228,51 @@ history. The DTMF tool is available only to IVR replies and their tool follow-up
 `uncertain` and `wait` are per-turn predictions, not stages. Each
 `amd_prediction` event carries both the `category` predicted for the turn and the
 `stage` AMD keeps after it. `state_changed` is true only when the stage changes.
-The stage constrains the classifier's allowed categories for the next turn, so
-an uncertain turn in voicemail cannot jump to screening.
+The stage constrains normal predictions for the next turn. An uncertain turn in
+voicemail keeps the voicemail stage; a later screening prediction requires an
+explicit correction.
+
+Each classification request includes the retained `stage`, the last accepted
+prediction's turn ID, category, and reason, and two disjoint category lists:
+
+- `allowed_next_categories`: normal predictions permitted from the retained stage.
+  The model returns `corrects_stage=false`, which is also the default when omitted.
+- `allowed_correction_categories`: predictions permitted only when correcting an
+  earlier machine classification. The model must return `corrects_stage=true`
+  and a non-empty `correction_evidence` quote from the transcript.
+
+The last accepted prediction can be `wait` or `uncertain` while the retained stage
+is still voicemail, screening, or IVR. Empty-turn reuse does not replace this
+prediction snapshot.
+
+| Retained stage | Categories requiring explicit correction |
+| --- | --- |
+| `machine-screening` | `machine-ivr` |
+| `machine-vm` | `machine-screening` |
+| `machine-ivr` | `machine-screening` |
+
+For example, after a mistaken voicemail classification, the model can return:
+
+```json
+{
+  "category": "machine-screening",
+  "corrects_stage": true,
+  "correction_evidence": "Please state your name and why you are calling."
+}
+```
+
+AMD validates the category against the selected list. A correction cannot use a
+normal-transition category. Invalid results use the existing inference-error
+fallback. Initial classification and terminal human or unavailable stages have
+no correction targets.
+
+Corrections apply to the current accepted turn and persist into later requests.
+They use the same inference deadline, silence wait, and stale-result checks as
+normal predictions. They do not create another turn, wait for late transcripts,
+rewrite earlier events, or reset delivered voicemail and sent DTMF.
+The `amd_prediction` event exposes `corrects_stage` and `correction_evidence`.
+Reused predictions keep the corrected stage without repeating the correction flag
+or evidence.
 
 `wait` skips the current reply without a silence wait or menu extraction. While
 the latest prediction is `wait`, the idle timer is paused; the overall `timeout`
@@ -252,7 +295,7 @@ An uncertain prediction keeps the current stage and its reply rule. AMD
 classifies again on the next transcribed turn.
 
 The FSM accepts classification results and returns the next category and effects.
-Its allowed transitions also constrain the classifier's output schema. AMD owns
+Its normal transitions and explicit corrections constrain the classifier's output schema. AMD owns
 turn IDs, inference, deadlines, counters, fallback, reply authorization, and playback.
 Timeouts and playback do not change the FSM. Repeated IVR predictions still request
 menu extraction.

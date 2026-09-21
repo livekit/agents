@@ -24,6 +24,8 @@ CHAT_CTX.add_message(role="user", content="input")
 REQUEST = AMDRequest(
     stage=AMDCategory.UNCERTAIN,
     allowed_next_categories=sorted(AMDCategory),
+    allowed_correction_categories=[],
+    previous_prediction=None,
     chat_ctx=CHAT_CTX,
     speech_duration=0.5,
 )
@@ -36,6 +38,8 @@ REQUEST = AMDRequest(
         "not JSON",
         "[]",
         '{"category":"unknown"}',
+        '{"category":"machine-screening","corrects_stage":"true"}',
+        '{"category":"machine-screening","corrects_stage":1}',
         '```json\n{"category":"human"}\n```',
     ],
 )
@@ -147,14 +151,21 @@ async def test_classifier_requires_exactly_one_result_tool(names: list[str]) -> 
     ],
 )
 @pytest.mark.parametrize("category", list(AMDCategory))
+@pytest.mark.parametrize("corrects_stage", [False, True])
 async def test_classifier_schema_and_validation_limit_predictions_to_allowed_states(
     stage: AMDCategory,
     category: AMDCategory,
+    corrects_stage: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents.voice.amd import _fsm
 
-    request = replace(REQUEST, stage=stage, allowed_next_categories=sorted(_fsm.ALLOWED[stage]))
+    request = replace(
+        REQUEST,
+        stage=stage,
+        allowed_next_categories=sorted(_fsm.ALLOWED[stage]),
+        allowed_correction_categories=sorted(_fsm.CORRECTIONS[stage]),
+    )
     model = FakeLLM(
         fake_responses=[
             FakeLLMResponse(
@@ -165,7 +176,13 @@ async def test_classifier_schema_and_validation_limit_predictions_to_allowed_sta
                 tool_calls=[
                     llm.FunctionToolCall(
                         name="record_result",
-                        arguments=json.dumps({"category": category}),
+                        arguments=json.dumps(
+                            {
+                                "category": category,
+                                "corrects_stage": corrects_stage,
+                                "correction_evidence": "input" if corrects_stage else "",
+                            }
+                        ),
                         call_id="result",
                     )
                 ],
@@ -175,14 +192,28 @@ async def test_classifier_schema_and_validation_limit_predictions_to_allowed_sta
     chat = Mock(wraps=model.chat)
     monkeypatch.setattr(model, "chat", chat)
     try:
-        if category in request.allowed_next_categories:
+        allowed = (
+            request.allowed_correction_categories
+            if corrects_stage
+            else request.allowed_next_categories
+        )
+        if category in allowed:
             assert (await _inference.classify(model, request)).category == category
         else:
             with pytest.raises(ValueError, match="not allowed"):
                 await _inference.classify(model, request)
         tools = chat.call_args.kwargs["tools"]
         schema = get_raw_function_info(tools[0]).raw_schema["parameters"]
-        assert schema["$defs"]["AMDCategory"]["enum"] == request.allowed_next_categories
+        assert schema["$defs"]["AMDCategory"]["enum"] == sorted(
+            {*request.allowed_next_categories, *request.allowed_correction_categories}
+        )
+        context = chat.call_args.kwargs["chat_ctx"]
+        constraints = json.loads(context.items[1].text_content)
+        assert constraints["allowed_next_categories"] == request.allowed_next_categories
+        assert constraints["allowed_correction_categories"] == request.allowed_correction_categories
+        assert not set(constraints["allowed_next_categories"]) & set(
+            constraints["allowed_correction_categories"]
+        )
         tool_ctx = llm.ToolContext(tools)
         for provider in ("openai", "google", "anthropic"):
             assert tool_ctx.parse_function_tools(provider)

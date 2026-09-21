@@ -34,6 +34,8 @@ class AMDRequest:
 
     stage: AMDCategory
     allowed_next_categories: list[AMDCategory]
+    allowed_correction_categories: list[AMDCategory]
+    previous_prediction: AMDPredictionEvent | None
     chat_ctx: llm.ChatContext
     speech_duration: float
 
@@ -59,11 +61,19 @@ class AMDChatContext(llm.ChatContext):
         self.items.extend([call.model_copy(), output.model_copy()])
 
     def create_request(
-        self, turn: Turn, *, stage: AMDCategory, allowed: list[AMDCategory]
+        self,
+        turn: Turn,
+        *,
+        stage: AMDCategory,
+        allowed: list[AMDCategory],
+        corrections: list[AMDCategory],
+        previous_prediction: AMDPredictionEvent | None,
     ) -> AMDRequest:
         return AMDRequest(
             stage=stage,
             allowed_next_categories=allowed,
+            allowed_correction_categories=corrections,
+            previous_prediction=previous_prediction.model_copy() if previous_prediction else None,
             chat_ctx=self.truncate(max_items=_HISTORY_LIMIT).copy(),
             speech_duration=turn.speech_duration,
         )

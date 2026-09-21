@@ -99,3 +99,34 @@ def test_same_ivr_state_extracts_each_menu() -> None:
     result = fsm.transition(state, Category.MACHINE_IVR)
     assert result.next_state == state
     assert result.effects == (fsm.Effect.EXTRACT_MENU,)
+
+
+@pytest.mark.parametrize(
+    ("initial", "corrected"),
+    [
+        (Category.MACHINE_SCREENING, Category.MACHINE_IVR),
+        (Category.MACHINE_VM, Category.MACHINE_SCREENING),
+        (Category.MACHINE_IVR, Category.MACHINE_SCREENING),
+    ],
+)
+def test_correction_requires_explicit_intent(initial: Category, corrected: Category) -> None:
+    with pytest.raises(ValueError, match="invalid AMD transition"):
+        fsm.transition(initial, corrected)
+    result = fsm.transition(initial, corrected, corrects_stage=True)
+    assert result.next_state == corrected
+    assert result.effects == (
+        (fsm.Effect.EXTRACT_MENU,) if corrected == Category.MACHINE_IVR else ()
+    )
+
+
+@pytest.mark.parametrize(
+    "stage", [Category.UNCERTAIN, Category.HUMAN, Category.MACHINE_UNAVAILABLE]
+)
+def test_corrections_cannot_start_or_reopen_detection(stage: Category) -> None:
+    with pytest.raises(ValueError, match="invalid AMD transition"):
+        fsm.transition(stage, Category.MACHINE_SCREENING, corrects_stage=True)
+
+
+def test_normal_progression_cannot_be_reported_as_a_correction() -> None:
+    with pytest.raises(ValueError, match="invalid AMD transition"):
+        fsm.transition(Category.MACHINE_VM, Category.MACHINE_IVR, corrects_stage=True)
