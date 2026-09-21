@@ -2267,7 +2267,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
-    { name = "openai", specifier = ">=2,<3" },
+    { name = "openai", specifier = ">=2.50,<3" },
     { name = "opentelemetry-api", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.0,<1.45" },
@@ -3225,7 +3225,7 @@ name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs", "images"] },
-    { name = "openai", extra = ["realtime"] },
+    { name = "openai" },
 ]
 
 [package.optional-dependencies]
@@ -3237,7 +3237,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=2.50" },
+    { name = "openai", specifier = ">=2.50" },
 ]
 provides-extras = ["vertex"]
 
@@ -4282,11 +4282,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ef/cf/36e3e7235fdf6d125c052acc0970924611b17a20a4fe580596faf4566a65/openai-2.53.0.tar.gz", hash = "sha256:baf5802ad08980e1d9d561e1b996e800c8bcd14af5847c6d0e7a5cc59e4d4116", size = 1099435, upload-time = "2026-08-03T21:42:01.664Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/0f/cc6afea3542a5142c5d8fc8211c5e059a8375105d004a41dfa2c7948dbb0/openai-2.53.0-py3-none-any.whl", hash = "sha256:c694ffc747a3c4d1663ef2b07b811315a476164ee5efa3a993967349ebca7618", size = 1659829, upload-time = "2026-08-03T21:41:59.581Z" },
-]
-
-[package.optional-dependencies]
-realtime = [
-    { name = "websockets" },
 ]
 
 [[package]]

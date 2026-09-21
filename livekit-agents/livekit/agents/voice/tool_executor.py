@@ -528,6 +528,9 @@ class _ToolExecutor:
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
 
+        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+            return
+
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
         if self._reply_task is None or self._reply_task.done():
