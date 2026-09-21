@@ -24,6 +24,7 @@ from typing import (
 from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
+from opentelemetry.sdk.trace import ReadableSpan
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -107,7 +108,7 @@ from .turn import (
 
 if TYPE_CHECKING:
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .transcription.text_transforms import TextTransforms
 
@@ -390,7 +391,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         stt: NotGivenOr[stt.STT | STTModels | str] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str
         ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -416,7 +417,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
         # deprecated
-        preemptive_generation: NotGivenOr[bool] = NOT_GIVEN,
+        preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         max_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
         false_interruption_timeout: NotGivenOr[float | None] = NOT_GIVEN,
@@ -446,7 +447,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 bundled silero VAD (``inference.VAD(model="silero")``) when
                 omitted. Pass ``vad=None`` to opt out, or pass an explicit
                 instance to customise options.
-            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel
+            llm (llm.LLM | llm.RealtimeModel | str, optional): LLM or RealtimeModel.
+                A model string resolves to a LiveKit Inference model: a realtime model
+                (e.g. ``"openai/gpt-realtime"``) for speech-to-speech, any other string
+                (e.g. ``"openai/gpt-4o"``) for the STT-LLM-TTS pipeline.
             tts (tts.TTS | str, optional): Text-to-speech engine.
             tools (list[llm.FunctionTool | llm.RawFunctionTool], optional): List of
                 tools shared by every agent in the agent session.
@@ -613,7 +617,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
@@ -1291,7 +1295,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if not self._started:
                 return
 
-            # teardown as one bar under agent_session; drain and on_exit nest inside it
+            # the whole close as one bar under agent_session: activity teardown, the close
+            # event's handlers, and room io. What any of it emits (a handler's spans, a stall
+            # in a plugin's teardown) nests here, and agent_session ends only after all of it
             close_span = tracer.start_span(
                 "session_close",
                 attributes={
@@ -1304,45 +1310,45 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
                 await self._teardown_activity(reason=reason, drain=drain)
+
+                self._started = False
+
+                self.emit("close", CloseEvent(error=error, reason=reason))
+
+                if self._session_host:
+                    await self._session_host.aclose()
+                    self._session_host = None
+
+                # close room io after close event is emitted
+                if self._room_io:
+                    await self._room_io.aclose()
+                    self._room_io = None
             finally:
+                # the session is closed whatever the teardown raised
+                self._started = False
+                self._cancel_user_away_timer()
+                self._user_state = "listening"
+                self._agent_state = "initializing"
+                self._stt_error_counts = 0
+                self._llm_error_counts = 0
+                self._tts_error_counts = 0
+
+                if self._global_run_state and not self._global_run_state.done():
+                    self._global_run_state._done_fut.set_exception(
+                        RuntimeError(f"session closed: {error}" if error else "session closed")
+                    )
+
                 close_span.end()
-                # the rest of the teardown (close event, room io) is under agent_session
                 otel_context.detach(close_token)
-
-            if self._session_span:
-                self._session_span.end()
-                self._session_span = None
-
-            self._started = False
-
-            self.emit("close", CloseEvent(error=error, reason=reason))
-
-            self._cancel_user_away_timer()
-            self._user_state = "listening"
-            self._agent_state = "initializing"
-            self._stt_error_counts = 0
-            self._llm_error_counts = 0
-            self._tts_error_counts = 0
-            self._root_span_context = None
-
-            if self._global_run_state and not self._global_run_state.done():
-                self._global_run_state._done_fut.set_exception(
-                    RuntimeError(f"session closed: {error}" if error else "session closed")
-                )
-
-            if self._session_host:
-                await self._session_host.aclose()
-                self._session_host = None
-
-            # close room io after close event is emitted
-            if self._room_io:
-                await self._room_io.aclose()
-                self._room_io = None
+                if self._session_span:
+                    self._session_span.end()
+                    self._session_span = None
+                self._root_span_context = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
 
     async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
-        """The part of closing that runs under the ``session_close`` span."""
+        """Stop the activity and the models; the first step of closing."""
         self._closing = True
         self._cancel_user_away_timer()
         self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
@@ -2204,7 +2210,17 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         elif self._user_speaking_span is not None:
             # end_time = last_speaking_time or time.time()
             # self._user_speaking_span.set_attribute(trace_types.ATTR_END_TIME, end_time)
-            self._user_speaking_span.end(end_time=last_speaking_time_ns)
+            end_time_ns = last_speaking_time_ns
+            if (
+                end_time_ns is not None
+                and isinstance(self._user_speaking_span, ReadableSpan)
+                and self._user_speaking_span.start_time is not None
+            ):
+                # a VAD end is backdated by the silence it waited on, so it can precede an
+                # STT-anchored start; never negative
+                end_time_ns = max(end_time_ns, self._user_speaking_span.start_time)
+
+            self._user_speaking_span.end(end_time=end_time_ns)
             self._user_speaking_span = None
 
         if state == "listening" and self._agent_state == "listening":
@@ -2261,7 +2277,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self.emit("conversation_item_added", ConversationItemAddedEvent(item=message))
 
     def _tool_items_added(self, items: Sequence[llm.FunctionCall | llm.FunctionCallOutput]) -> None:
-        self._chat_ctx.insert(items)
+        for item in items:
+            # a call recorded when its execution started must not be inserted a second time
+            self._chat_ctx._upsert_item(item)
 
     def _tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
         if (
