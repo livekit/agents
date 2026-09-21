@@ -210,9 +210,10 @@ Only transient failures retry, with no audio emitted from incomplete attempts.
 `AgentSession.say()`. There is no LLM, STT, VAD, microphone, text-input handler,
 remote session control or paid LiveKit Inference. It waits for a participant
 and an audio subscription, says `Hello, this is a Microsoft AI voice test.`
-once, waits for playback, and closes its session and TTS client. Synthesis
-retries and recording are disabled. A fresh room/job triggers another paid
-TTS request; do not repeatedly reconnect to test playback controls.
+once, waits for playback, closes its session and TTS client, and ends the
+one-shot job. Synthesis retries and recording are disabled. A fresh room/job
+triggers another paid TTS request; do not repeatedly reconnect to test playback
+controls.
 
 Use a [local open-source LiveKit server](https://docs.livekit.io/home/self-hosting/local/)
 bound to loopback, or an existing LiveKit server. Set standard `LIVEKIT_*`

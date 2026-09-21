@@ -82,6 +82,13 @@ async def test_waits_for_subscription_and_says_once_without_input_services(
         monkeypatch
     )
     monkeypatch.setenv("MICROSOFT_AI_ENV_FILE", "selected-private-config.env")
+
+    def shutdown(*, reason: str) -> None:
+        assert reason == "TTS greeting complete"
+        session.aclose.assert_awaited_once()
+        speech.__aexit__.assert_awaited_once()
+
+    context.shutdown.side_effect = shutdown
     task = asyncio.create_task(example.entrypoint(context))
     try:
         await asyncio.wait_for(started.wait(), 1)
@@ -115,6 +122,7 @@ async def test_waits_for_subscription_and_says_once_without_input_services(
     assert handle.awaited
     session.aclose.assert_awaited_once()
     speech.__aexit__.assert_awaited_once()
+    context.shutdown.assert_called_once_with(reason="TTS greeting complete")
 
 
 async def test_cancelling_before_room_ready_closes_without_synthesis(
@@ -127,6 +135,7 @@ async def test_cancelling_before_room_ready_closes_without_synthesis(
     with pytest.raises(asyncio.CancelledError):
         await task
     session.say.assert_not_called()
+    context.shutdown.assert_not_called()
     session.aclose.assert_awaited_once()
     speech.__aexit__.assert_awaited_once()
 
@@ -139,6 +148,7 @@ async def test_readiness_timeout_is_not_reported_as_success(
     with pytest.raises(asyncio.TimeoutError):
         await example.entrypoint(context)
     session.say.assert_not_called()
+    context.shutdown.assert_not_called()
     session.aclose.assert_awaited_once()
     speech.__aexit__.assert_awaited_once()
 
@@ -154,6 +164,7 @@ async def test_speech_handle_error_is_checked_and_resources_close(
         await example.entrypoint(context)
     assert caught.value is error
     assert handle.awaited
+    context.shutdown.assert_not_called()
     session.aclose.assert_awaited_once()
     speech.__aexit__.assert_awaited_once()
 
@@ -164,6 +175,7 @@ async def test_start_failure_closes_session_and_provider(monkeypatch: pytest.Mon
     with pytest.raises(RuntimeError, match="room setup failed"):
         await example.entrypoint(context)
     session.say.assert_not_called()
+    context.shutdown.assert_not_called()
     session.aclose.assert_awaited_once()
     speech.__aexit__.assert_awaited_once()
 

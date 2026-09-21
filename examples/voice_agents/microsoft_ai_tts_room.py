@@ -62,6 +62,7 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("The one-shot TTS greeting finished playing to the room")
         finally:
             await session.aclose()
+    ctx.shutdown(reason="TTS greeting complete")
 
 
 if __name__ == "__main__":
