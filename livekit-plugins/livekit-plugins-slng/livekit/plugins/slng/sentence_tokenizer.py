@@ -146,6 +146,11 @@ _ASCII_TERMINATORS = frozenset(".!?")
 # Closing quotes and brackets stay attached to the sentence they close.
 _CLOSERS = frozenset("\"'”’»›」』）)]}〉》】〕〗〙〛")
 _INNER_NEWLINES = re.compile(r"\s*\n+\s*")
+# Zero-width non-joiner and joiner: they bind the characters on either side.
+_JOINERS = frozenset("\u200c\u200d")
+# Canonical combining class of a virama, which requests a conjunct with the
+# consonant that follows it.
+_VIRAMA_CLASS = 9
 
 _Span = tuple[int, int]
 
@@ -197,6 +202,39 @@ def _boundaries(text: str) -> list[int]:
     return cuts
 
 
+def _binds_to_previous(char: str) -> bool:
+    """Whether ``char`` attaches to the character before it.
+
+    ``unicodedata.combining`` is the wrong test here: it returns the canonical
+    combining class, which is 0 for most Indic and Thai vowel signs (Devanagari
+    vowel sign I, Thai sara i, mai han-akat). The general category is what
+    identifies a mark. Joiners count too: they bind the letters either side.
+    """
+    return unicodedata.category(char).startswith("M") or char in _JOINERS
+
+
+def _binds_to_next(char: str) -> bool:
+    """Whether ``char`` attaches to the character after it.
+
+    A virama asks for a conjunct with the following consonant, and a joiner
+    binds forward by definition. Ending a chunk on either leaves a fragment
+    that renders and reads wrong.
+    """
+    return char in _JOINERS or unicodedata.combining(char) == _VIRAMA_CLASS
+
+
+def _safe_cut(text: str, cut: int, end: int) -> int:
+    """Move ``cut`` forward until it is not inside a cluster of joined characters."""
+    while cut < end:
+        while cut < end and _binds_to_previous(text[cut]):
+            cut += 1
+        if cut <= 0 or cut >= end or not _binds_to_next(text[cut - 1]):
+            break
+        # A joiner or virama ends the chunk: take the character it binds to.
+        cut += 1
+    return cut
+
+
 def _apply_budget(text: str, spans: list[_Span], max_chars: int) -> list[_Span]:
     """Cut spans over the budget, at the last space inside it when there is one."""
     out: list[_Span] = []
@@ -207,13 +245,12 @@ def _apply_budget(text: str, spans: list[_Span], max_chars: int) -> list[_Span]:
             while at_space > start and not text[at_space - 1].isspace():
                 at_space -= 1
             if at_space > start:
-                cut = at_space
+                cut = _safe_cut(text, at_space, end)
             else:
                 # Scripts that do not use spaces: cut at the budget, but never
-                # in front of a combining mark, which belongs to the letter
-                # before it.
-                while cut < end and unicodedata.combining(text[cut]):
-                    cut += 1
+                # inside a cluster, which would strand a vowel sign or a tone
+                # mark at the head of the next frame.
+                cut = _safe_cut(text, cut, end)
             if cut >= end:
                 break
             out.append((start, cut))
