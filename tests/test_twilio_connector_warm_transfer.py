@@ -288,6 +288,7 @@ async def test_unanswered_call_cancels_the_created_sid(
     )
     with pytest.raises(ToolError, match="no answer"):
         await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
+    await asyncio.gather(*task._twilio_tasks.tasks)
     client.calls.assert_called_once_with("CA_created")
     client.calls.return_value.update.assert_called_once_with(status="canceled")
 
@@ -360,7 +361,7 @@ async def test_cancellation_returns_before_late_creation_and_retains_cleanup(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_while_waiting", [False, True])
-async def test_cancellation_does_not_wait_for_pending_cleanup(
+async def test_timeout_or_cancellation_does_not_wait_for_pending_cleanup(
     monkeypatch: pytest.MonkeyPatch,
     twilio_sdk: Any,
     connector: AsyncMock,
@@ -385,8 +386,7 @@ async def test_cancellation_does_not_wait_for_pending_cleanup(
     )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
-        pending.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError if cancel_while_waiting else ToolError):
             await asyncio.wait_for(asyncio.shield(pending), timeout=0.5)
         assert not release.is_set()
         assert task._twilio_tasks.tasks

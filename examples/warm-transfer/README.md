@@ -80,6 +80,7 @@ the token does not authorize an arbitrary caller ID. Without a token (including 
 empty token), the task uses the business number even if `original_caller_number`
 is supplied. Transport timeouts and unrelated errors never trigger a second dial.
 
-Cancellation returns promptly while any in-flight call creation finishes in the
-background. If it returns a call SID, the task attempts to cancel that call while
-the worker is alive. Provider failure or worker shutdown can still prevent cleanup.
+Cancellation and ringing timeouts return promptly while cleanup continues in the
+background. If in-flight creation returns a call SID, the task attempts to cancel
+that call while the worker is alive. Provider failure or worker shutdown can still
+prevent cleanup.

@@ -613,11 +613,10 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
 
         try:
             await self._wait_for_human_agent(room=room, identity=identity)
-        except BaseException as error:
+        except BaseException:
             # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            cleanup = tasks.create_task(cancel_call(call_sid))
-            if not isinstance(error, asyncio.CancelledError):
-                await asyncio.shield(cleanup)
+            # A stalled provider must not keep the caller on hold after a timeout.
+            tasks.create_task(cancel_call(call_sid))
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
