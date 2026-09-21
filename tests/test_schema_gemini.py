@@ -263,6 +263,30 @@ async def test_function_tool_orders_live_api_parameters_as_declared():
     assert parameters.properties["details"].property_ordering == ["zeta", "alpha"]
 
 
+@pytest.mark.parametrize("key", ["propertyOrdering", "property_ordering"])
+async def test_raw_tool_keeps_explicit_property_ordering_on_live_api(key: str):
+    @function_tool(
+        raw_schema={
+            "name": "order",
+            "description": "A raw tool with an explicit property order.",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                key: ["b", "a"],
+            },
+        }
+    )
+    async def order(raw_arguments: dict[str, object]) -> None: ...
+
+    tools, _ = utils.create_tools_config(llm.ToolContext([order]), use_parameters_json_schema=False)
+
+    declarations = tools[0].function_declarations
+    assert declarations is not None
+    parameters = declarations[0].parameters
+    assert parameters is not None
+    assert parameters.property_ordering == ["b", "a"]
+
+
 # Test for a FunctionTool with no parameters. Both APIs should omit the schema
 async def test_function_tool_without_parameters():
     [text_schema] = llm.ToolContext([ping]).parse_function_tools("google")
