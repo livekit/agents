@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
 from livekit.agents.llm import (
@@ -18,6 +21,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given, shortuuid
 from mistralai.client import Mistral
+from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import (
     CompletionArgs,
     ConversationEvents,
@@ -260,6 +264,8 @@ class LLMStream(llm.LLMStream):
 
         except APITimeoutError:
             raise APITimeoutError(retryable=retryable) from None
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError(retryable=retryable) from e
         except APIStatusError as e:
             raise APIStatusError(
                 e.message,
@@ -268,6 +274,14 @@ class LLMStream(llm.LLMStream):
                 body=e.body,
                 retryable=retryable,
             ) from None
+        except (SDKError, HTTPValidationError) as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id"),
+                body=e.body,
+                retryable=retryable,
+            ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
 

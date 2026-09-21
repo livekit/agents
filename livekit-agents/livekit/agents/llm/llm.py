@@ -224,6 +224,18 @@ class LLM(
         await self.aclose()
 
 
+class _LLMEventChannel(aio.Chan[ChatChunk]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output_sent = False
+
+    def send_nowait(self, value: ChatChunk) -> None:
+        super().send_nowait(value)
+        # A provider can raise before the consumer or metrics task reads the chunk.
+        if value.delta and (value.delta.content or value.delta.tool_calls):
+            self.output_sent = True
+
+
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
 
@@ -240,7 +252,8 @@ class LLMStream(ABC):
         self._tools = tools
         self._conn_options = conn_options
 
-        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_ch = _LLMEventChannel()
+        self._retry_on_chunk_sent = True
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
@@ -315,6 +328,9 @@ class LLMStream(ABC):
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
+
+                if not self._retry_on_chunk_sent and self._event_ch.output_sent:
+                    e.retryable = False
 
                 retry_interval = self._conn_options._interval_for_retry(i)
 
