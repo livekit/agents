@@ -213,6 +213,13 @@ class _ResponseGeneration:
 
     input_transcription: str = ""
     output_text: str = ""
+    unspoken_text: str = ""
+    """Model-turn text held back while the turn may still produce audio; spoken words
+    arrive through output_transcription, so this is only the reply when no audio comes."""
+    modalities: asyncio.Future[list[Literal["text", "audio"]]] = field(
+        default_factory=asyncio.Future
+    )
+    """Resolved from what the turn actually carried, not from the session config."""
 
     _created_timestamp: float = field(default_factory=time.time)
     """The timestamp when the generation is created"""
@@ -1339,17 +1346,14 @@ class RealtimeSession(llm.RealtimeSession):
         )
         if not self._realtime_model.capabilities.audio_output:
             self._current_generation.audio_ch.close()
+            self._current_generation.modalities.set_result(["text"])
 
-        msg_modalities = asyncio.Future[list[Literal["text", "audio"]]]()
-        msg_modalities.set_result(
-            ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
-        )
         self._current_generation.message_ch.send_nowait(
             llm.MessageGeneration(
                 message_id=response_id,
                 text_stream=self._current_generation.text_ch,
                 audio_stream=self._current_generation.audio_ch,
-                modalities=msg_modalities,
+                modalities=self._current_generation.modalities,
             )
         )
 
@@ -1397,8 +1401,11 @@ class RealtimeSession(llm.RealtimeSession):
                 if part.thought:
                     # bypass reasoning output
                     continue
-                if part.text and forward_model_text:
-                    current_gen.push_text(part.text)
+                if part.text:
+                    if forward_model_text:
+                        current_gen.push_text(part.text)
+                    else:
+                        current_gen.unspoken_text += part.text
                 if part.inline_data:
                     if current_gen.audio_ch.closed:
                         # generation_complete already closed the audio stream; a turn
@@ -1411,6 +1418,8 @@ class RealtimeSession(llm.RealtimeSession):
                         continue
                     if not current_gen._first_token_timestamp:
                         current_gen._first_token_timestamp = time.time()
+                    if not current_gen.modalities.done():
+                        current_gen.modalities.set_result(["audio", "text"])
                     frame_data = part.inline_data.data
                     try:
                         if not isinstance(frame_data, bytes):
@@ -1511,6 +1520,17 @@ class RealtimeSession(llm.RealtimeSession):
     def _close_output_streams(self, gen: _ResponseGeneration) -> None:
         # ends the audio segment and finalizes the output transcript. called on
         # generation_complete (audio/text are done by then) and again at final teardown.
+        if not gen.modalities.done():
+            if gen._first_token_timestamp is None and gen.unspoken_text:
+                # the model answered an audio turn in text: that text is the whole reply
+                logger.warning(
+                    "Gemini answered an audio-modality turn with text only; nothing was spoken",
+                    extra={"lk.pii.text": gen.unspoken_text},
+                )
+                gen.push_text(gen.unspoken_text)
+                gen.modalities.set_result(["text"])
+            else:
+                gen.modalities.set_result(["audio", "text"])
         if not gen.text_ch.closed:
             if self._opts.output_audio_transcription is None:
                 # close the text data of transcription synchronizer
@@ -1576,6 +1596,8 @@ class RealtimeSession(llm.RealtimeSession):
                     arguments=arguments,
                 )
             )
+        # model-turn text on a tool turn is the call's rendering, never a spoken reply
+        gen.unspoken_text = ""
         self._mark_current_generation_done()
 
     def _handle_tool_call_cancellation(

@@ -136,6 +136,46 @@ async def test_unspoken_model_text_is_omitted_in_audio_session(
         assert gen.text_ch.empty()
 
 
+async def test_text_only_turn_in_audio_session_resolves_text_modality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemini sometimes answers an audio-modality turn with a text part and no audio.
+    The message must then report itself as text and carry that text, so the agent
+    can speak it through a TTS fallback instead of playing an empty audio stream."""
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        message = gen.message_ch.recv_nowait()
+
+        session._handle_server_content(
+            types.LiveServerContent(model_turn=types.Content(parts=[types.Part(text="Okay.")]))
+        )
+        session._handle_server_content(types.LiveServerContent(generation_complete=True))
+        session._handle_server_content(types.LiveServerContent(turn_complete=True))
+
+        assert await message.modalities == ["text"]
+        assert gen.output_text == "Okay."
+        text = ""
+        async for chunk in message.text_stream:
+            text += chunk
+        assert text == "Okay."
+
+
+async def test_audio_turn_resolves_audio_modality_on_first_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        session._start_new_generation()
+        gen = session._current_generation
+        assert gen is not None
+        message = gen.message_ch.recv_nowait()
+
+        assert not message.modalities.done()
+        session._handle_server_content(_audio_content())
+        assert message.modalities.result() == ["audio", "text"]
+
+
 async def test_model_text_is_forwarded_in_text_modality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
