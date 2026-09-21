@@ -204,7 +204,10 @@ class ServerOptions:
     """  # noqa: E501
 
     drain_timeout: int = DRAIN_TIMEOUT
-    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
+    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal.
+
+    Defaults to 3600 (1 hour); 0 waits indefinitely.
+    """
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
     )
@@ -926,7 +929,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._draining
 
     async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
-        """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
+        """Raise asyncio.TimeoutError if the processes didn't finish in time.
+
+        A `timeout` of None or 0 waits indefinitely.
+        """
 
         timeout = timeout if is_given(timeout) else self._drain_timeout
 
@@ -950,17 +956,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     for proc in procs:
                         await proc.join()
 
-            # 0 is a legal timeout; a truthiness check sent it into the unbounded branch.
-            if timeout is None:
+            # `0` and `None` both mean "no deadline": `ServerOptions.drain_timeout` is an int,
+            # so 0 is the only way to ask for an unbounded drain through it.
+            if timeout is None or timeout == 0:
                 await _drain()
-            elif timeout == 0:
-                # wait_for() cancels _drain() before it can look at the pool, so report a
-                # completed drain here instead of raising for work that already finished.
-                drained = all(task.done() for task in self._job_lifecycle_tasks) and not any(
-                    proc.running_job for proc in self._proc_pool.processes
-                )
-                if not drained:
-                    raise asyncio.TimeoutError
             else:
                 await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
 
