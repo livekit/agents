@@ -525,6 +525,13 @@ class AvatarSession(BaseAvatarSession):
         form_data.add_field("livekit_url", livekit_url)
         form_data.add_field("livekit_token", livekit_token)
         form_data.add_field("room_name", room_name)
+        # Name the model here too, for the same reason the JSON request does: this
+        # is the SELF-HOSTED path, and without it a worker cannot tell
+        # `expression` from `expression-2` — the two render differently and meter
+        # on different lines. Workers that predate the field ignore it (they read
+        # the form into a dict and pick the keys they know), so sending it is
+        # additive for every existing deployment.
+        form_data.add_field("model", str(self._model))
 
         # Add async_mode parameter if parsed from URL
         # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
