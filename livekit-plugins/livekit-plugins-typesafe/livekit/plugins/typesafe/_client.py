@@ -23,7 +23,16 @@ import aiohttp
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, utils
 
 DEFAULT_BASE_URL = "https://api.typesafe.ai/v1"
-DEFAULT_MODEL = "jev-latest"
+
+DEFAULT_MODEL = "jev-1.13.0"
+"""Pinned rather than the ``jev-latest`` alias.
+
+The thresholds in :func:`~livekit.plugins.typesafe.default_checks` were measured
+against this version. An alias moves on TypeSafe's schedule, and a new version
+can score the same reply differently, which would leave those thresholds quietly
+mis-set. Pass ``model="jev-latest"`` to track the alias instead, and re-measure
+the thresholds when it moves.
+"""
 
 
 class SystemOneClient:

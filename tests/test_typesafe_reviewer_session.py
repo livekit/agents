@@ -200,3 +200,87 @@ async def test_gating_one_check_does_not_switch_the_others_off() -> None:
     # and the observe-only check still caught it
     assert any("unsupported_claim" in v.triggered_checks for v in reviewer.results)
     assert len(_nudges(agent)) == 1
+
+
+async def test_a_gate_correction_lands_after_the_reply_it_criticizes() -> None:
+    """The note says "the response you just produced", so it must follow it.
+
+    An invariant guard rather than a regression test: ChatContext.insert orders
+    by created_at, so the reply sorts ahead of a later nudge even if one is
+    applied early. Deferring to commit does not depend on that.
+    """
+
+    class GatedAgent(_SupportAgent):
+        def __init__(self, reviewer: Reviewer) -> None:
+            super().__init__()
+            self._reviewer = reviewer
+
+        async def llm_node(self, chat_ctx, tools, model_settings):  # type: ignore[no-untyped-def]
+            return await self._reviewer.gate(self, chat_ctx, tools, model_settings)
+
+    answers = dict(CLEAN, unsupported_claim={"type": "noul", "noul": 0.97})
+    reviewer = Reviewer(  # type: ignore[arg-type]
+        _client=FakeSystemOne(answers),
+        checks=default_checks(gated_check_ids=["follows_instructions"]),
+    )
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "When does order 123 arrive?")
+    actions.add_llm(content="It arrives Tuesday.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions, speed_factor=2.0)
+    reviewer.attach(session)
+    agent = GatedAgent(reviewer)
+    await asyncio.wait_for(run_session(session, agent, drain_delay=1.5), timeout=60)
+
+    texts = [
+        i.text_content
+        for i in agent.chat_ctx.items
+        if getattr(i, "text_content", None) and getattr(i, "role", None) != "system"
+    ]
+    assert "It arrives Tuesday." in texts
+
+    [nudge] = _nudges(agent)
+    items = list(agent.chat_ctx.items)
+    reply_at = next(
+        n for n, i in enumerate(items) if getattr(i, "text_content", None) == "It arrives Tuesday."
+    )
+    assert items.index(nudge) > reply_at  # the correction follows the reply
+
+
+async def test_a_handoff_during_a_review_does_not_reassign_the_reply() -> None:
+    """The review is detached, so the session can move on while it runs.
+
+    Resolving session.current_agent when the review resumes would judge the old
+    agent's reply against the new agent's instructions, and write the
+    correction into an agent that never said it.
+    """
+    client = FakeSystemOne(OFF_COURSE, delay=0.2)
+    reviewer = Reviewer(_client=client)  # type: ignore[arg-type]
+
+    author = Agent(instructions="AUTHOR AGENT instructions.")
+    successor = Agent(instructions="SUCCESSOR AGENT instructions.")
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "Where is my order?")
+    actions.add_llm(content="That will be $40.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions, speed_factor=2.0)
+    reviewer.attach(session)
+
+    # hand off on the next tick, after the item event has been dispatched but
+    # while the review is still waiting on the network
+    @session.on("conversation_item_added")
+    def _swap(ev) -> None:  # type: ignore[no-untyped-def]
+        if getattr(ev.item, "role", None) == "assistant":
+            asyncio.get_running_loop().call_soon(session.update_agent, successor)
+
+    await asyncio.wait_for(run_session(session, author, drain_delay=2.0), timeout=60)
+
+    assert client.calls >= 1
+    state, _ = client.requests[0]
+    assert state["instructions"] == "AUTHOR AGENT instructions."
+    # the successor never produced that reply, so it is not corrected for it
+    assert _nudges(successor) == []

@@ -22,7 +22,7 @@ drifts. See :class:`Reviewer`.
 from livekit.agents import Plugin
 
 from ._client import SystemOneClient
-from .checks import Check, TurnState, default_checks
+from .checks import CALIBRATED_FOR, Check, TurnState, default_checks
 from .log import logger
 from .reviewer import Reviewer, Verdict
 from .version import __version__
@@ -36,6 +36,7 @@ class TypeSafePlugin(Plugin):
 Plugin.register_plugin(TypeSafePlugin())
 
 __all__ = [
+    "CALIBRATED_FOR",
     "Check",
     "Reviewer",
     "SystemOneClient",

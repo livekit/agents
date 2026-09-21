@@ -63,6 +63,13 @@ spotting one broken rule is easier than confirming every rule held. That is why 
 thresholds sit near the violating end rather than halfway. A threshold of 0.5 on
 `follows_instructions` looks reasonable and fires on replies that are perfectly fine.
 
+Because those numbers belong to one model version, the client pins `jev-1.13.0`
+rather than following the `jev-latest` alias. An alias moves on TypeSafe's schedule,
+and a version that scores replies differently would leave these thresholds quietly
+mis-set. To track the alias instead, pass `model="jev-latest"` and re-measure when it
+moves; the reviewer warns once if the model that answered is not the one the defaults
+were measured on.
+
 Nine replies under one prompt is a small sample, so re-measure on your own calls:
 
 ```python
@@ -138,6 +145,9 @@ version it was tuned on.
 | `WARNING` | check failed and the turn went unjudged; gate gave up after redrafting; a check could not read its answer |
 | `ERROR` | a check crashed, or your `on_verdict` callback raised |
 
+A `WARNING` also fires once per reviewer if the model that answered is not the one the
+default thresholds were measured against.
+
 Reply text is tagged `lk.pii.reviewed_reply` and truncated to 500 characters, so
 it travels with the repo's other PII fields and can be redacted the same way.
 
@@ -181,6 +191,10 @@ nothing left to correct. Its use is as the label you grade the checks against.
 - `expected_tool` assumes one tool per turn. An agent that legitimately calls two tools
   in a turn will show low confidence there. The check only triggers above a confidence
   floor, so it stays quiet instead of firing wrongly.
+- A reply is judged against the agent that produced it, captured when the message is
+  committed, and a correction is dropped rather than written into a different agent
+  after a handoff. `conversation_item_added` does not name the message's author, so a
+  handoff landing before that event is still attributed to the successor.
 - Jev works best in English. It handles other languages less well, so test on your own
   traffic before trusting the thresholds.
 

@@ -29,6 +29,13 @@ from typing import Any
 
 from .log import logger
 
+CALIBRATED_FOR = "jev-1.13.0"
+"""Model version the :func:`default_checks` thresholds were measured against.
+
+:data:`~livekit.plugins.typesafe._client.DEFAULT_MODEL` pins to this. If you
+point the reviewer at another version, re-measure before trusting the defaults.
+"""
+
 # A Choice may define at most 255 options; we reserve one for "none".
 _MAX_TOOL_OPTIONS = 254
 
@@ -110,8 +117,8 @@ def default_checks(
 ) -> list[Check]:
     """The generic check set, derived entirely from the agent's own prompt and tools.
 
-    These defaults were measured against Jev 1.13 on a small labelled set (nine
-    replies under one prompt), not merely guessed. They sit in the gap between
+    These defaults were measured against :data:`CALIBRATED_FOR` on a small
+    labelled set (nine replies under one prompt), not merely guessed. They sit in the gap between
     how Jev scores a compliant reply and how it scores a violating one.
 
     That gap is asymmetric and worth understanding before you move them. Jev is

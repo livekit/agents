@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import AsyncIterable, Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -29,7 +29,7 @@ from livekit.agents.voice.agent import ModelSettings
 from livekit.agents.voice.events import ConversationItemAddedEvent, FunctionToolsExecutedEvent
 
 from ._client import DEFAULT_BASE_URL, DEFAULT_MODEL, SystemOneClient
-from .checks import Check, TurnState, default_checks
+from .checks import CALIBRATED_FOR, Check, TurnState, default_checks
 from .log import logger
 
 _Chunk = llm.ChatChunk | str
@@ -42,6 +42,7 @@ NUDGE_PREFIX = (
 NUDGE_SUFFIX = "Address these issues in your next response."
 
 _RESULTS_LIMIT = 200
+_PENDING_GATE_LIMIT = 8
 
 
 @dataclass
@@ -151,6 +152,10 @@ class Reviewer:
         _client: SystemOneClient | None = None,
     ) -> None:
         self._checks = checks if checks is not None else default_checks()
+        # Only the shipped thresholds are tied to a measured version; once the
+        # caller supplies their own, drift is theirs to track.
+        self._thresholds_are_default = checks is None
+        self._warned_model_drift = False
         self._history_turns = history_turns
         self._on_verdict = on_verdict
         self._client = _client or SystemOneClient(
@@ -174,11 +179,16 @@ class Reviewer:
         # One string rather than a set of ids: the gate holds the reply, so at most
         # one draft is ever in flight between gate() clearing it and
         # conversation_item_added firing. Key by message id if that stops holding.
-        # Draft text a gate has already judged. Safe to skip on commit only
-        # because gate evaluates every check, not just the gated ones; judging
-        # the gated subset there and skipping here would leave the rest of the
-        # checks unevaluated for that reply.
-        self._judged_by_gate: set[str] = set()
+        # Verdicts a gate has already reached, queued per draft text and drained
+        # when the matching assistant item commits. A queue rather than a set
+        # because two generations can be in flight with identical short text
+        # ("Okay."), and a set would let the second be judged and billed twice.
+        # Deferring to commit also keeps a gate nudge behind the reply it is
+        # about, instead of in front of a message that does not exist yet.
+        # ponytail: bounded, and abandoned drafts are evicted oldest-first; a
+        # generation id would key this exactly if the framework exposed one at
+        # gate time.
+        self._pending_gate: OrderedDict[str, deque[Verdict]] = OrderedDict()
 
     @property
     def checks(self) -> list[Check]:
@@ -253,30 +263,45 @@ class Reviewer:
         if not text:
             return
 
-        # Safe to skip only because gate evaluates every check, not just the
-        # gated ones. Judging the gated subset there and skipping here would
-        # leave the remaining checks unevaluated for this reply, so the two
-        # placements would stop composing.
-        if text in self._judged_by_gate:
-            self._judged_by_gate.discard(text)
+        session = self._session
+        if session is None:
+            return
+        # The agent that produced this reply, captured now rather than when the
+        # detached review resumes: a handoff can make session.current_agent
+        # somebody else while the request is in flight, and judging A's reply
+        # against B's instructions would be meaningless.
+        #
+        # Not airtight. conversation_item_added names the message but not its
+        # author, so a handoff that lands before this handler runs is still
+        # attributed to the successor. Closing that needs agent ownership on
+        # the event itself, which the framework does not expose today.
+        author = session.current_agent
+
+        queued = self._pending_gate.get(text)
+        if queued:
+            # Gate already ran every check on this draft. Apply its correction
+            # here, now that the reply it criticises is actually in the context.
+            verdict = queued.popleft()
+            if not queued:
+                self._pending_gate.pop(text, None)
+            if verdict.triggered_checks:
+                self._spawn(self._apply_nudge_to(author, verdict))
             return
 
-        self._spawn(self._observe(text, item.id))  # type: ignore[union-attr]
+        self._spawn(self._observe(text, item.id, author))  # type: ignore[union-attr]
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _observe(self, reply: str, item_id: str) -> None:
-        session = self._session
-        if session is None:
+    async def _observe(self, reply: str, item_id: str, agent: Agent) -> None:
+        if self._session is None:
             return
-        agent = session.current_agent
         try:
             verdict = await self.review(agent, reply, exclude_item_id=item_id)
             if verdict.triggered_checks:
-                await self._apply_nudge(agent, verdict)
+                await self._apply_nudge_to(agent, verdict)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -359,10 +384,10 @@ class Reviewer:
                         "triggered_checks": verdict.triggered_checks or None,
                     },
                 )
-                self._judged_by_gate.add(text)
-                if verdict.needs_correction:
-                    # cleared the gate but tripped an observe-only check
-                    await self._apply_nudge(agent, verdict)
+                # Queued, not applied: the assistant message does not exist
+                # yet, so nudging here would put the correction in front of the
+                # reply it criticises. _on_item applies it once that commits.
+                self._queue_gate_verdict(text, verdict)
                 return _replay(chunks)
 
             if attempt == max_redrafts:
@@ -375,8 +400,7 @@ class Reviewer:
                         "lk.pii.reviewed_reply": text[:500],
                     },
                 )
-                self._judged_by_gate.add(text)
-                await self._apply_nudge(agent, verdict)
+                self._queue_gate_verdict(text, verdict)
                 return _replay(chunks)
 
             logger.debug(
@@ -484,8 +508,10 @@ class Reviewer:
                 active.append(check)
 
         if not questions:
-            logger.debug("no checks apply to this turn, skipping the check")
-            return Verdict()
+            logger.debug("no checks apply to this turn, nothing to review")
+            verdict = Verdict(reviewed_reply=state.reviewed_reply, evaluated=False)
+            self._record(verdict)
+            return verdict
 
         payload = state.as_payload()
         started = time.monotonic()
@@ -514,6 +540,7 @@ class Reviewer:
             return verdict
 
         answers = response.get("answers", {})
+        self._warn_on_model_drift(response.get("model"))
         verdict = Verdict(
             answers=answers,
             reviewed_reply=state.reviewed_reply,
@@ -521,6 +548,7 @@ class Reviewer:
             model=response.get("model"),
             usage=response.get("usage") or {},
         )
+        readable = 0
         for check in active:
             answer = answers.get(check.id)
             if answer is None:
@@ -540,9 +568,19 @@ class Reviewer:
                     },
                 )
                 continue
+            readable += 1
             if triggered:
                 verdict.triggered_checks.append(check.id)
                 verdict.reasons.append(check.reason)
+
+        # "Nobody looked" covers a partial look too. A 200 carrying {"answers": {}}
+        # would otherwise land as a clean, fully evaluated turn.
+        verdict.evaluated = readable == len(active)
+        if not verdict.evaluated:
+            logger.warning(
+                "not every check came back, treating the turn as unjudged",
+                extra={"answered": readable, "expected": len(active), "model": verdict.model},
+            )
 
         # Every check's value, every turn. Without this you cannot tell a check
         # that sat at 0.51 from one that sat at 0.99, which is the whole of
@@ -550,6 +588,37 @@ class Reviewer:
         logger.debug("check %s", verdict.summary())
         self._record(verdict)
         return verdict
+
+    def _queue_gate_verdict(self, text: str, verdict: Verdict) -> None:
+        """Hand a gate's verdict to the commit path, keyed by the draft text."""
+        queue = self._pending_gate.get(text)
+        if queue is None:
+            queue = deque()
+            self._pending_gate[text] = queue
+        queue.append(verdict)
+        self._pending_gate.move_to_end(text)
+        # A replayed stream that never commits would otherwise leave its entry
+        # behind for a later identical reply to consume.
+        while len(self._pending_gate) > _PENDING_GATE_LIMIT:
+            stale, _ = self._pending_gate.popitem(last=False)
+            logger.debug("evicting an uncommitted gate verdict", extra={"chars": len(stale)})
+
+    def _warn_on_model_drift(self, answered_by: str | None) -> None:
+        """Say so once if the shipped thresholds are judging an unmeasured version."""
+        if (
+            self._warned_model_drift
+            or not self._thresholds_are_default
+            or answered_by is None
+            or answered_by == CALIBRATED_FOR
+        ):
+            return
+        self._warned_model_drift = True
+        logger.warning(
+            "default thresholds were measured on a different model version, so they "
+            "may no longer separate compliant replies from violating ones; re-measure "
+            "them or pin the model",
+            extra={"answered_by": answered_by, "calibrated_for": CALIBRATED_FOR},
+        )
 
     def _record(self, verdict: Verdict) -> None:
         self._results.append(verdict)
@@ -564,6 +633,23 @@ class Reviewer:
     def _nudge_text(self, verdict: Verdict) -> str:
         reasons = "\n".join(f"- {reason}" for reason in verdict.reasons)
         return f"{NUDGE_PREFIX}\n{reasons}\n\n{NUDGE_SUFFIX}"
+
+    async def _apply_nudge_to(self, agent: Agent, verdict: Verdict) -> None:
+        """Nudge the agent that produced the reply, if it is still the one talking.
+
+        A handoff can retire that agent mid-review. Writing the correction into
+        an inactive agent would go unread, and writing it into its successor
+        would tell a different agent, under different instructions, to fix
+        behaviour it never produced.
+        """
+        session = self._session
+        if session is not None and session.current_agent is not agent:
+            logger.debug(
+                "dropping a correction for an agent that has since handed off",
+                extra={"triggered_checks": verdict.triggered_checks},
+            )
+            return
+        await self._apply_nudge(agent, verdict)
 
     async def _apply_nudge(self, agent: Agent, verdict: Verdict) -> None:
         logger.info(

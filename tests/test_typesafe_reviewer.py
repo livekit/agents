@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -7,7 +8,7 @@ import pytest
 
 from livekit.agents import Agent, llm
 from livekit.agents.llm import ChatChunk, ChoiceDelta, FunctionToolCall, function_tool
-from livekit.plugins.typesafe import Reviewer, Verdict, default_checks
+from livekit.plugins.typesafe import CALIBRATED_FOR, Reviewer, Verdict, default_checks
 from livekit.plugins.typesafe.reviewer import NUDGE_PREFIX
 
 pytestmark = pytest.mark.unit
@@ -16,11 +17,19 @@ pytestmark = pytest.mark.unit
 class FakeSystemOne:
     """Stands in for the TypeSafe endpoint; records what was asked."""
 
-    model = "jev-latest"  # part of the client contract Reviewer logs on attach
+    model = "jev-1.13.0"  # part of the client contract Reviewer logs on attach
+    answering_model = "jev-1.13.0"  # what the response says actually answered
 
-    def __init__(self, answers: dict[str, Any] | list[dict[str, Any]], *, fail: bool = False):
+    def __init__(
+        self,
+        answers: dict[str, Any] | list[dict[str, Any]],
+        *,
+        fail: bool = False,
+        delay: float = 0.0,
+    ):
         self._answers = answers if isinstance(answers, list) else [answers]
         self._fail = fail
+        self._delay = delay
         self.requests: list[tuple[Any, dict[str, Any]]] = []
 
     @property
@@ -31,12 +40,14 @@ class FakeSystemOne:
         self, state: Any, questions: dict[str, Any], *, model: str | None = None
     ) -> dict[str, Any]:
         self.requests.append((state, questions))
+        if self._delay:
+            await asyncio.sleep(self._delay)
         if self._fail:
             raise RuntimeError("typesafe is down")
         answers = self._answers[min(len(self.requests) - 1, len(self._answers) - 1)]
         # shaped like a real response: versioned id, not the alias, plus usage
         return {
-            "model": "jev-1.13.0",
+            "model": self.answering_model,
             "answers": answers,
             "usage": {"input_tokens": 296, "output_tokens": 20},
         }
@@ -80,6 +91,15 @@ def make_agent(*, tools: list[Any] | None = None) -> Agent:
         instructions="You are a support agent. Never quote a price.",
         tools=tools if tools is not None else [],
     )
+
+
+def _nudges(agent: Agent) -> list[Any]:
+    """Steering notes in the context, excluding the agent's own instructions."""
+    return [
+        i
+        for i in agent.chat_ctx.items
+        if getattr(i, "text_content", None) and i.text_content.startswith(NUDGE_PREFIX)
+    ]
 
 
 def make_reviewer(client: FakeSystemOne, **kwargs: Any) -> Reviewer:
@@ -276,7 +296,8 @@ async def test_gate_gives_up_after_max_redrafts_and_still_nudges() -> None:
 
     assert await collect(out) == ["That will be $40."]  # released rather than silenced
     assert client.calls == 2
-    assert agent.chat_ctx.items[-1].text_content.startswith(NUDGE_PREFIX)
+    assert _nudges(agent) == []  # deferred until the reply commits
+    assert reviewer._pending_gate["That will be $40."]
 
 
 async def test_gate_lets_tool_calls_through_unjudged() -> None:
@@ -307,7 +328,7 @@ async def test_gate_lets_tool_calls_through_unjudged() -> None:
     assert client.calls == 0
 
 
-async def test_gate_marks_its_draft_as_fully_judged() -> None:
+async def test_gate_hands_its_verdict_to_the_commit_path() -> None:
     """Observe may skip the committed item only because gate ran every check."""
     reviewer = make_reviewer(
         FakeSystemOne(CLEAN), checks=default_checks(gated_check_ids=["follows_instructions"])
@@ -316,7 +337,7 @@ async def test_gate_marks_its_draft_as_fully_judged() -> None:
 
     await collect(await reviewer.gate(make_agent(), llm.ChatContext.empty(), [], None, draft=draft))
 
-    assert "All set." in reviewer._judged_by_gate
+    assert len(reviewer._pending_gate["All set."]) == 1
 
 
 async def test_gate_evaluates_every_check_not_only_the_gated_ones() -> None:
@@ -362,7 +383,10 @@ async def test_gate_releases_but_still_nudges_when_only_an_ungated_check_trigger
     assert await collect(out) == ["It ships Tuesday."]  # gate cleared, nothing redrafted
     assert client.calls == 1
     assert reviewer.results[0].triggered_checks == ["unsupported_claim"]
-    assert agent.chat_ctx.items[-1].text_content.startswith(NUDGE_PREFIX)
+    # queued, not applied: the reply it criticises is not in the context yet
+    assert _nudges(agent) == []
+    [queued] = reviewer._pending_gate["It ships Tuesday."]
+    assert queued.triggered_checks == ["unsupported_claim"]
 
 
 async def test_gate_builds_state_from_the_generation_context_not_the_agent() -> None:
@@ -640,3 +664,97 @@ async def test_modality_instructions_are_rendered_not_passed_as_an_object() -> N
     state, _ = client.requests[0]
     assert isinstance(state["instructions"], str)
     assert "Be brief." in state["instructions"]
+
+
+# --- model / threshold coupling -------------------------------------------
+
+
+def test_the_default_model_is_the_version_the_thresholds_were_measured_on() -> None:
+    """Calibrated defaults must not ride a moving alias."""
+    from livekit.plugins.typesafe._client import DEFAULT_MODEL
+
+    assert DEFAULT_MODEL == CALIBRATED_FOR
+    assert not DEFAULT_MODEL.endswith("latest")
+
+
+async def test_a_different_model_warns_once_when_the_defaults_are_in_use(caplog) -> None:
+    client = FakeSystemOne(CLEAN)
+    client.answering_model = "jev-2.0.0"
+    reviewer = make_reviewer(client)
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.typesafe"):
+        await reviewer.review(make_agent(), "one")
+        await reviewer.review(make_agent(), "two")
+
+    drift = [r for r in caplog.records if "default thresholds were measured" in r.message]
+    assert len(drift) == 1  # once per reviewer, not once per turn
+    assert drift[0].answered_by == "jev-2.0.0"
+    assert drift[0].calibrated_for == CALIBRATED_FOR
+
+
+async def test_no_drift_warning_when_the_caller_set_their_own_thresholds(caplog) -> None:
+    """Someone who measured their own thresholds does not need telling."""
+    client = FakeSystemOne(CLEAN)
+    client.answering_model = "jev-2.0.0"
+    reviewer = make_reviewer(client, checks=default_checks(follows_instructions=0.4))
+
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.typesafe"):
+        await reviewer.review(make_agent(), "anything")
+
+    assert not [r for r in caplog.records if "default thresholds were measured" in r.message]
+
+
+async def test_no_drift_warning_on_the_calibrated_version(caplog) -> None:
+    reviewer = make_reviewer(FakeSystemOne(CLEAN))
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.typesafe"):
+        await reviewer.review(make_agent(), "anything")
+
+    assert not [r for r in caplog.records if "default thresholds were measured" in r.message]
+
+
+async def test_an_empty_answer_set_is_unjudged_not_clean() -> None:
+    """A 200 carrying {"answers": {}} must not be counted as a clean turn."""
+    reviewer = make_reviewer(FakeSystemOne({}))
+    verdict = await reviewer.review(make_agent(), "anything")
+
+    assert not verdict.evaluated
+    assert not verdict.needs_correction  # fails open, but visibly so
+
+
+async def test_a_partial_answer_set_is_also_unjudged() -> None:
+    reviewer = make_reviewer(FakeSystemOne({"follows_instructions": noul(0.9)}))
+    verdict = await reviewer.review(make_agent(), "anything")
+
+    assert not verdict.evaluated
+    assert verdict.answers  # the answer that did arrive is still recorded
+
+
+async def test_a_turn_with_no_applicable_checks_still_reaches_results() -> None:
+    """Otherwise the reply silently vanishes from results and on_verdict."""
+    seen: list[Verdict] = []
+    reviewer = make_reviewer(FakeSystemOne(CLEAN), checks=[], on_verdict=seen.append)
+
+    verdict = await reviewer.review(make_agent(), "nothing to check here")
+
+    assert verdict.reviewed_reply == "nothing to check here"
+    assert not verdict.evaluated
+    assert reviewer.results == [verdict] and seen == [verdict]
+
+
+async def test_two_identical_gated_drafts_are_each_accounted_for() -> None:
+    """A set collapses them and lets the second reply be judged and billed twice."""
+    client = FakeSystemOne(CLEAN)
+    reviewer = make_reviewer(
+        client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+    agent = make_agent()
+
+    for _ in range(2):
+        await collect(
+            await reviewer.gate(
+                agent, llm.ChatContext.empty(), [], None, draft=text_draft("One moment.")
+            )
+        )
+
+    assert len(reviewer._pending_gate["One moment."]) == 2
+    assert client.calls == 2
