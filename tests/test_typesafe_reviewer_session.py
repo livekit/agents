@@ -157,3 +157,46 @@ async def test_thresholds_from_default_checks_reach_a_live_session() -> None:
         checks=default_checks(unsupported_claim=0.8),
     )
     assert not relaxed.results[0].needs_correction
+
+
+async def test_gating_one_check_does_not_switch_the_others_off() -> None:
+    """The two placements must compose over a real session.
+
+    The gate judges only its own checks, so the committed item still has to run
+    the rest. Keying the handoff by text alone silently disabled four of five.
+    """
+
+    class GatedAgent(_SupportAgent):
+        def __init__(self, reviewer: Reviewer) -> None:
+            super().__init__()
+            self._reviewer = reviewer
+
+        async def llm_node(self, chat_ctx, tools, model_settings):  # type: ignore[no-untyped-def]
+            return await self._reviewer.gate(self, chat_ctx, tools, model_settings)
+
+    # clears the gated check, violates an observe-only one
+    answers = dict(CLEAN, unsupported_claim={"type": "noul", "noul": 0.97})
+    client = FakeSystemOne(answers)
+    reviewer = Reviewer(  # type: ignore[arg-type]
+        _client=client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.0, "When does order 123 arrive?")
+    actions.add_llm(content="It arrives Tuesday.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions, speed_factor=2.0)
+    reviewer.attach(session)
+    agent = GatedAgent(reviewer)
+
+    await asyncio.wait_for(run_session(session, agent, drain_delay=1.5), timeout=60)
+
+    # the gate cleared the draft, so the reply was spoken unchanged
+    assert any(
+        getattr(i, "role", None) == "assistant" and i.text_content == "It arrives Tuesday."
+        for i in agent.chat_ctx.items
+    )
+    # and the observe-only check still caught it
+    assert any("unsupported_claim" in v.triggered_checks for v in reviewer.results)
+    assert len(_nudges(agent)) == 1

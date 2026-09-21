@@ -174,7 +174,11 @@ class Reviewer:
         # One string rather than a set of ids: the gate holds the reply, so at most
         # one draft is ever in flight between gate() clearing it and
         # conversation_item_added firing. Key by message id if that stops holding.
-        self._cleared_by_gate: str | None = None
+        # Draft text a gate has already judged. Safe to skip on commit only
+        # because gate evaluates every check, not just the gated ones; judging
+        # the gated subset there and skipping here would leave the rest of the
+        # checks unevaluated for that reply.
+        self._judged_by_gate: set[str] = set()
 
     @property
     def checks(self) -> list[Check]:
@@ -249,24 +253,28 @@ class Reviewer:
         if not text:
             return
 
-        if self._cleared_by_gate == text:
-            self._cleared_by_gate = None  # already judged on the way out
+        # Safe to skip only because gate evaluates every check, not just the
+        # gated ones. Judging the gated subset there and skipping here would
+        # leave the remaining checks unevaluated for this reply, so the two
+        # placements would stop composing.
+        if text in self._judged_by_gate:
+            self._judged_by_gate.discard(text)
             return
 
-        self._spawn(self._observe(text))
+        self._spawn(self._observe(text, item.id))  # type: ignore[union-attr]
 
     def _spawn(self, coro: Any) -> None:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _observe(self, reply: str) -> None:
+    async def _observe(self, reply: str, item_id: str) -> None:
         session = self._session
         if session is None:
             return
         agent = session.current_agent
         try:
-            verdict = await self.review(agent, reply)
+            verdict = await self.review(agent, reply, exclude_item_id=item_id)
             if verdict.triggered_checks:
                 await self._apply_nudge(agent, verdict)
         except asyncio.CancelledError:
@@ -277,13 +285,22 @@ class Reviewer:
             logger.exception("reviewer check crashed, the call continues unsteered")
 
     async def review(
-        self, agent: Agent, reviewed_reply: str, *, checks: list[Check] | None = None
+        self,
+        agent: Agent,
+        reviewed_reply: str,
+        *,
+        checks: list[Check] | None = None,
+        exclude_item_id: str | None = None,
     ) -> Verdict:
-        """Evaluate one drafted reply and return the verdict without acting on it."""
-        return await self._evaluate(
-            self._build_state(agent, reviewed_reply),
-            checks if checks is not None else self._checks,
-        )
+        """Evaluate one drafted reply and return the verdict without acting on it.
+
+        Args:
+            exclude_item_id: Chat item to leave out of the transcript, normally
+                the committed assistant message this reply came from. It already
+                travels to the model as ``reviewed_reply``.
+        """
+        state = self._build_state(agent, reviewed_reply, exclude_item_id=exclude_item_id)
+        return await self._evaluate(state, checks if checks is not None else self._checks)
 
     async def gate(
         self,
@@ -311,8 +328,8 @@ class Reviewer:
         """
         produce = draft or (lambda ctx: Agent.default.llm_node(agent, ctx, tools, model_settings))
 
-        gated = [r for r in self._checks if r.gated]
-        if not gated:
+        gated_ids = {c.id for c in self._checks if c.gated}
+        if not gated_ids:
             return await _as_stream(produce(chat_ctx))
 
         ctx = chat_ctx
@@ -324,13 +341,28 @@ class Reviewer:
             if _has_tool_calls(chunks) or not text:
                 return _replay(chunks)
 
-            verdict = await self._evaluate(self._build_state(agent, text), gated)
-            if not verdict.needs_correction:
+            # #1: the pending user message is committed to agent.chat_ctx only
+            # after the speech is scheduled, so the generation context is the
+            # only place it exists right now. #4: `tools` is the flattened
+            # catalog for this turn, which includes session and MCP tools.
+            # #2: evaluate everything, but let only the gated checks hold the
+            # draft; the rest still produce answers, metrics and a nudge.
+            state = self._build_state(agent, text, chat_ctx=ctx, tools=tools)
+            verdict = await self._evaluate(state, self._checks)
+            gated_triggered = [c for c in verdict.triggered_checks if c in gated_ids]
+            if not gated_triggered:
                 logger.debug(
                     "gate cleared the draft",
-                    extra={"attempt": attempt, "elapsed_ms": round(verdict.duration * 1000)},
+                    extra={
+                        "attempt": attempt,
+                        "elapsed_ms": round(verdict.duration * 1000),
+                        "triggered_checks": verdict.triggered_checks or None,
+                    },
                 )
-                self._cleared_by_gate = text
+                self._judged_by_gate.add(text)
+                if verdict.needs_correction:
+                    # cleared the gate but tripped an observe-only check
+                    await self._apply_nudge(agent, verdict)
                 return _replay(chunks)
 
             if attempt == max_redrafts:
@@ -338,32 +370,61 @@ class Reviewer:
                     "gated checks still triggered after redrafting, releasing the reply "
                     "and correcting the next turn instead",
                     extra={
-                        "triggered_checks": verdict.triggered_checks,
+                        "triggered_checks": gated_triggered,
                         "redrafts": max_redrafts,
                         "lk.pii.reviewed_reply": text[:500],
                     },
                 )
-                self._cleared_by_gate = text
+                self._judged_by_gate.add(text)
                 await self._apply_nudge(agent, verdict)
                 return _replay(chunks)
 
             logger.debug(
                 "gate triggered, redrafting",
-                extra={"triggered_checks": verdict.triggered_checks, "attempt": attempt},
+                extra={"triggered_checks": gated_triggered, "attempt": attempt},
             )
             ctx = ctx.copy()
             ctx.add_message(role="system", content=self._nudge_text(verdict))
 
         raise AssertionError("unreachable")  # pragma: no cover
 
-    def _build_state(self, agent: Agent, reviewed_reply: str) -> TurnState:
+    def _build_state(
+        self,
+        agent: Agent,
+        reviewed_reply: str,
+        *,
+        chat_ctx: llm.ChatContext | None = None,
+        tools: list[llm.Tool] | None = None,
+        exclude_item_id: str | None = None,
+    ) -> TurnState:
+        """Assemble what the reviewer is shown about this turn.
+
+        Args:
+            chat_ctx: Context the reply was generated from. Gate must pass this:
+                the pending user message reaches ``agent.chat_ctx`` only once the
+                speech is scheduled, so during generation it lives nowhere else.
+            tools: Flattened catalog for this turn. Falls back to the session's
+                effective catalog, which unlike ``agent.tools`` also carries
+                tools registered on the ``AgentSession`` and over MCP.
+        """
         raw_instructions = agent.instructions
+        # Voice turns resolve the audio variant, and an Instructions built by
+        # resolve_template can hold the whole prompt there with an empty common
+        # part. Rendering bare would hide rules the model was actually given.
         instructions = (
-            raw_instructions if isinstance(raw_instructions, str) else raw_instructions.render()
+            raw_instructions
+            if isinstance(raw_instructions, str)
+            else raw_instructions.render(modality="audio")
         )
 
-        tools: list[dict[str, Any]] = []
-        for name, tool in llm.ToolContext(agent.tools).function_tools.items():
+        catalog: list[llm.Tool] | list[llm.Tool | llm.Toolset]
+        if tools is not None:
+            catalog = tools
+        else:
+            catalog = self._effective_tools(agent)
+
+        tool_infos: list[dict[str, Any]] = []
+        for name, tool in llm.ToolContext(catalog).function_tools.items():
             description: str | None
             if llm.is_function_tool(tool):
                 description = tool.info.description
@@ -371,32 +432,47 @@ class Reviewer:
                 description = tool.info.raw_schema.get("description")
             else:
                 description = None
-            tools.append({"name": name, "description": description})
+            tool_infos.append({"name": name, "description": description})
 
         # Only what was actually said. The agent's instructions also sit in
         # chat_ctx as a system message, and every nudge this plugin injects
         # lands there too. Copying either into `transcript` would repeat the whole
-        # prompt in a field that already holds it as `instructions`, and would show the
-        # reviewer its own past notes as if the caller had said them.
+        # prompt in a field that already holds it as `instructions`, and would show
+        # the reviewer its own past notes as if the caller had said them.
+        source = chat_ctx if chat_ctx is not None else agent.chat_ctx
         transcript: list[dict[str, str]] = []
-        for item in agent.chat_ctx.items:
+        for item in source.items:
             if getattr(item, "type", None) != "message":
                 continue
             if item.role not in ("user", "assistant"):  # type: ignore[union-attr]
                 continue
+            # Exclude by identity, never by text: an earlier turn can repeat the
+            # reply word for word ("Yes." answered with "Yes.") and would vanish.
+            if exclude_item_id is not None and item.id == exclude_item_id:
+                continue
             text = item.text_content  # type: ignore[union-attr]
-            if text and text != reviewed_reply:
+            if text:
                 transcript.append({"role": item.role, "text": text})  # type: ignore[union-attr]
         transcript = transcript[-self._history_turns :]
 
         return TurnState(
             instructions=instructions,
-            available_tools=tools,
+            available_tools=tool_infos,
             transcript=transcript,
             reviewed_reply=reviewed_reply,
             tools_used_this_turn=list(self._tools_used),
             tool_results=list(self._tool_results),
         )
+
+    def _effective_tools(self, agent: Agent) -> list[llm.Tool | llm.Toolset]:
+        """Every tool the LLM could call this turn, not just the agent's own."""
+        session = self._session
+        if session is None:
+            return list(agent.tools)
+        try:
+            return list(session.tools) + list(agent.tools)
+        except Exception:  # pragma: no cover - session not started
+            return list(agent.tools)
 
     async def _evaluate(self, state: TurnState, checks: list[Check]) -> Verdict:
         questions: dict[str, Any] = {}
@@ -425,7 +501,10 @@ class Reviewer:
             logger.warning(
                 "reviewer check failed, this turn went unjudged",
                 extra={
-                    "error": str(e),
+                    # APIStatusError stringifies the response body, which can
+                    # echo back the prompt, transcript or reply we sent it.
+                    "lk.pii.error": str(e),
+                    "error_type": type(e).__name__,
                     "checks": [r.id for r in active],
                     "state_chars": _payload_chars(payload),
                     "elapsed_ms": round(verdict.duration * 1000),
@@ -454,7 +533,11 @@ class Reviewer:
             except (KeyError, TypeError) as e:
                 logger.warning(
                     "check could not read its answer",
-                    extra={"check": check.id, "error": str(e), "answer": answer},
+                    extra={
+                        "check": check.id,
+                        "error": str(e),
+                        "lk.pii.answer": answer,
+                    },
                 )
                 continue
             if triggered:
@@ -521,7 +604,17 @@ def _payload_chars(payload: Any) -> int:
 
 
 async def _as_stream(node: Any) -> AsyncIterable[_Chunk]:
+    """Normalize every shape ``llm_node`` is allowed to return into a stream.
+
+    The framework accepts a coroutine resolving to a whole string, a single
+    ``ChatChunk`` or ``None`` as well as an async iterable, so a custom node
+    delegating to :meth:`Reviewer.gate` can hand us any of them.
+    """
     stream = await node if asyncio.iscoroutine(node) else node
+    if stream is None:
+        return _replay([])
+    if isinstance(stream, (str, llm.ChatChunk)):
+        return _replay([stream])
     return cast(AsyncIterable[_Chunk], stream)
 
 

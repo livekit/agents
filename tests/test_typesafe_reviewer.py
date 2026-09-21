@@ -307,7 +307,8 @@ async def test_gate_lets_tool_calls_through_unjudged() -> None:
     assert client.calls == 0
 
 
-async def test_gate_marks_its_draft_so_observe_does_not_recheck_it() -> None:
+async def test_gate_marks_its_draft_as_fully_judged() -> None:
+    """Observe may skip the committed item only because gate ran every check."""
     reviewer = make_reviewer(
         FakeSystemOne(CLEAN), checks=default_checks(gated_check_ids=["follows_instructions"])
     )
@@ -315,7 +316,166 @@ async def test_gate_marks_its_draft_so_observe_does_not_recheck_it() -> None:
 
     await collect(await reviewer.gate(make_agent(), llm.ChatContext.empty(), [], None, draft=draft))
 
-    assert reviewer._cleared_by_gate == "All set."
+    assert "All set." in reviewer._judged_by_gate
+
+
+async def test_gate_evaluates_every_check_not_only_the_gated_ones() -> None:
+    """Turning one check into a gate must not switch the others off."""
+    client = FakeSystemOne(CLEAN)
+    reviewer = make_reviewer(
+        client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+
+    await collect(
+        await reviewer.gate(
+            make_agent(tools=[lookup_order]),
+            llm.ChatContext.empty(),
+            [lookup_order],  # the flattened catalog the pipeline hands llm_node
+            None,
+            draft=text_draft("All set."),
+        )
+    )
+
+    _state, questions = client.requests[0]
+    assert set(questions) == {
+        "follows_instructions",
+        "unsupported_claim",
+        "advances_task",
+        "expected_tool",
+        "severity",
+    }
+
+
+async def test_gate_releases_but_still_nudges_when_only_an_ungated_check_triggers() -> None:
+    """A draft can clear the gate and still deserve a correction next turn."""
+    only_ungated = dict(CLEAN, unsupported_claim=noul(0.95))
+    client = FakeSystemOne(only_ungated)
+    reviewer = make_reviewer(
+        client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+    agent = make_agent()
+
+    out = await reviewer.gate(
+        agent, llm.ChatContext.empty(), [], None, draft=text_draft("It ships Tuesday.")
+    )
+
+    assert await collect(out) == ["It ships Tuesday."]  # gate cleared, nothing redrafted
+    assert client.calls == 1
+    assert reviewer.results[0].triggered_checks == ["unsupported_claim"]
+    assert agent.chat_ctx.items[-1].text_content.startswith(NUDGE_PREFIX)
+
+
+async def test_gate_builds_state_from_the_generation_context_not_the_agent() -> None:
+    """The pending user message is only in the context handed to llm_node.
+
+    It reaches ``agent.chat_ctx`` after the speech is scheduled, so a gate that
+    read the agent would judge the draft without the request that prompted it.
+    """
+    client = FakeSystemOne(CLEAN)
+    reviewer = make_reviewer(
+        client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+
+    pending = llm.ChatContext.empty()
+    pending.add_message(role="user", content="Where is order 123?")
+
+    await collect(
+        await reviewer.gate(make_agent(), pending, [], None, draft=text_draft("It shipped."))
+    )
+
+    state, _ = client.requests[0]
+    assert state["transcript"] == [{"role": "user", "text": "Where is order 123?"}]
+
+
+async def test_gate_uses_the_turns_tool_catalog() -> None:
+    """Session-registered tools reach llm_node but are not on agent.tools."""
+    client = FakeSystemOne(CLEAN)
+    reviewer = make_reviewer(
+        client, checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+
+    await collect(
+        await reviewer.gate(
+            make_agent(),  # the agent itself owns no tools
+            llm.ChatContext.empty(),
+            [lookup_order],
+            None,
+            draft=text_draft("Let me check."),
+        )
+    )
+
+    state, questions = client.requests[0]
+    assert [t["name"] for t in state["available_tools"]] == ["lookup_order"]
+    assert "expected_tool" in questions
+
+
+async def test_audio_only_instructions_reach_the_reviewer() -> None:
+    """A voice turn resolves the audio variant; reviewing the common part hides rules."""
+    from livekit.agents.llm.chat_context import Instructions
+
+    client = FakeSystemOne(CLEAN)
+    agent = Agent(instructions=Instructions("Be helpful.", audio="Never read card numbers aloud."))
+
+    await make_reviewer(client).review(agent, "Your card is 4111 1111 1111 1111.")
+
+    state, _ = client.requests[0]
+    assert "Never read card numbers aloud." in state["instructions"]
+
+
+async def test_transcript_keeps_an_earlier_turn_that_repeats_the_reply() -> None:
+    """Excluding the reviewed item by text also deletes any turn that matches it."""
+    client = FakeSystemOne(CLEAN)
+    reviewer = make_reviewer(client)
+    agent = make_agent()
+
+    ctx = agent.chat_ctx.copy()
+    ctx.add_message(role="user", content="Yes")
+    reply = ctx.add_message(role="assistant", content="Yes")
+    await agent.update_chat_ctx(ctx)
+
+    await reviewer.review(agent, "Yes", exclude_item_id=reply.id)
+
+    state, _ = client.requests[0]
+    assert state["transcript"] == [{"role": "user", "text": "Yes"}]
+
+
+async def test_a_scalar_llm_node_result_still_flows_through_gate() -> None:
+    """llm_node may resolve to a bare string, a single chunk, or None."""
+    reviewer = make_reviewer(
+        FakeSystemOne(CLEAN), checks=default_checks(gated_check_ids=["follows_instructions"])
+    )
+
+    async def scalar(_ctx: llm.ChatContext) -> str:
+        return "Hello there."
+
+    out = await reviewer.gate(
+        make_agent(), llm.ChatContext.empty(), [], None, draft=lambda c: scalar(c)
+    )
+    assert await collect(out) == ["Hello there."]
+
+
+async def test_a_none_llm_node_result_yields_nothing_rather_than_raising() -> None:
+    reviewer = make_reviewer(FakeSystemOne(CLEAN))
+
+    async def nothing(_ctx: llm.ChatContext) -> None:
+        return None
+
+    out = await reviewer.gate(
+        make_agent(), llm.ChatContext.empty(), [], None, draft=lambda c: nothing(c)
+    )
+    assert await collect(out) == []
+
+
+async def test_an_error_body_is_tagged_as_pii(caplog) -> None:
+    """A TypeSafe error stringifies its response body, which can echo the prompt."""
+    reviewer = make_reviewer(FakeSystemOne(CLEAN, fail=True))
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.typesafe"):
+        await reviewer.review(make_agent(), "anything")
+
+    [rec] = [r for r in caplog.records if "went unjudged" in r.message]
+    assert getattr(rec, "lk.pii.error") == "typesafe is down"
+    assert not hasattr(rec, "error")
+    assert rec.error_type == "RuntimeError"
 
 
 # --- history --------------------------------------------------------------
@@ -450,7 +610,7 @@ async def test_an_outage_warns_with_enough_to_diagnose_it(caplog) -> None:
         await reviewer.review(make_agent(), "anything")
 
     [rec] = [r for r in caplog.records if "went unjudged" in r.message]
-    assert rec.error == "typesafe is down"
+    assert getattr(rec, "lk.pii.error") == "typesafe is down"
     assert rec.checks == ["follows_instructions", "unsupported_claim", "advances_task", "severity"]
     assert rec.state_chars > 0  # the 32k state cap is the usual 422
 
