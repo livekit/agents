@@ -236,6 +236,7 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            tool_choice=resolved_tool_choice,
         )
 
 
@@ -251,12 +252,14 @@ class LLMStream(llm.LLMStream):
         tools: list[llm.Tool],
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         extra_kwargs: dict[str, Any],
+        tool_choice: ToolChoice | None = None,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._api_mode = api_mode
         self._client = client
         self._extra_kwargs = extra_kwargs
+        self._tool_choice = tool_choice
         self._tool_ctx = llm.ToolContext(tools)
         self._emitted_tool_calls: set[str] = set()
         self._provider_tool_args: dict[str, str] = {}
@@ -352,11 +355,13 @@ class LLMStream(llm.LLMStream):
                     "presence_penalty",
                     "frequency_penalty",
                     "random_seed",
-                    "tool_choice",
                 ):
                     val = getattr(completion_args, field, None)
                     if val is not None:
                         call_kwargs[field] = val
+
+            if self._tool_choice is not None:
+                call_kwargs["tool_choice"] = self._tool_choice
 
             if tools_list:
                 call_kwargs["tools"] = tools_list
