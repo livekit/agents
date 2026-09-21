@@ -441,3 +441,138 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+def _live_flux_stream(ws: _LiveWS, *, speaking: bool):
+    """A real SpeechStreamv2 running its real _run loop against a fake socket."""
+    import dataclasses
+    from typing import Any, cast
+
+    from livekit.agents import DEFAULT_API_CONNECT_OPTIONS
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2, STTv2
+
+    instance = STTv2(api_key="test-key", sample_rate=16000)
+    stream = SpeechStreamv2(
+        stt=instance,
+        opts=dataclasses.replace(instance._opts, sample_rate=16000),
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        api_key="test-key",
+        http_session=cast(Any, SimpleNamespace(closed=False)),
+        base_url="wss://api.deepgram.com/v2/listen",
+    )
+    # whether Flux has an open turn; normally set by StartOfTurn on the recv path,
+    # which never runs here because _LiveWS.receive() parks
+    stream._speaking = speaking
+
+    async def _fake_connect() -> Any:
+        return ws
+
+    # patched before the _run task gets its first tick, so no real socket is opened
+    stream._connect_ws = _fake_connect
+    return stream
+
+
+async def test_flux_flush_forces_the_end_of_turn():
+    # flush() means "end the current segment", and ForceEndTurn is how Flux says that,
+    # exactly as Finalize is on v1. without it a flushed turn sits until eot_threshold
+    # is met or eot_timeout_ms elapses.
+    ws = _LiveWS()
+    stream = _live_flux_stream(ws, speaking=True)
+    try:
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: ws.sent() == ["audio"])
+
+        stream.flush()
+        await _wait_until(lambda: ws.sent() == ["audio", "ForceEndTurn"])
+    finally:
+        await stream.aclose()
+
+
+async def test_flux_flush_is_quiet_when_no_turn_is_open():
+    # end_input() flushes on every close, and forcing a turn that never started only
+    # earns a FORCE_END_TURN_NO_ACTIVE_TURN warning back
+    ws = _LiveWS()
+    stream = _live_flux_stream(ws, speaking=False)
+    try:
+        stream.push_frame(_frame(50))
+        stream.flush()
+        # the second chunk pins the ordering: a ForceEndTurn would land between them
+        stream.push_frame(_frame(50))
+        await _wait_until(lambda: ws.sent() == ["audio", "audio"])
+    finally:
+        await stream.aclose()
+
+
+class _EventCh:
+    def __init__(self) -> None:
+        self.events: list = []
+
+    def send_nowait(self, event) -> None:
+        self.events.append(event)
+
+
+def _make_flux_event_stream():
+    """Drives _process_stream_event without a connection or the _run loop."""
+    from livekit.plugins.deepgram.stt_v2 import SpeechStreamv2, STTOptions
+
+    stream = SimpleNamespace(
+        _opts=STTOptions(
+            model="flux-general-en",
+            sample_rate=16000,
+            keyterm=[],
+            endpoint_url="wss://api.deepgram.com/v2/listen",
+        ),
+        _event_ch=_EventCh(),
+        _request_id="",
+        _speaking=False,
+        start_time_offset=0.0,
+    )
+    stream._send_transcript_event = SpeechStreamv2._send_transcript_event.__get__(stream)
+    stream._process_stream_event = SpeechStreamv2._process_stream_event.__get__(stream)
+    return stream
+
+
+async def test_flux_manual_end_of_turn_finalizes_the_turn():
+    from livekit.agents import stt
+
+    stream = _make_flux_event_stream()
+
+    stream._process_stream_event({"type": "TurnInfo", "event": "StartOfTurn", "words": []})
+    # trigger=manual is the reply to ForceEndTurn; it has to finalize exactly like
+    # a model-detected EndOfTurn, otherwise a forced turn never reaches the LLM
+    stream._process_stream_event(
+        {
+            "type": "TurnInfo",
+            "event": "EndOfTurn",
+            "trigger": "manual",
+            "transcript": "cancel my subscription",
+            "words": [{"word": "cancel", "confidence": 0.9, "start": 0.0, "end": 0.5}],
+        }
+    )
+
+    assert [e.type for e in stream._event_ch.events] == [
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.FINAL_TRANSCRIPT,
+        stt.SpeechEventType.END_OF_SPEECH,
+    ]
+    assert stream._event_ch.events[1].alternatives[0].text == "cancel my subscription"
+    assert stream._speaking is False
+
+
+async def test_flux_warning_is_surfaced_without_ending_the_stream(caplog):
+    import logging
+
+    stream = _make_flux_event_stream()
+
+    # forcing a turn that never started is recoverable, unlike an Error
+    with caplog.at_level(logging.WARNING, logger="livekit.plugins.deepgram"):
+        stream._process_stream_event(
+            {
+                "type": "Warning",
+                "code": "FORCE_END_TURN_NO_ACTIVE_TURN",
+                "description": "no active turn to end",
+            }
+        )
+
+    assert "deepgram sent a warning" in caplog.text
+    assert stream._event_ch.events == []
