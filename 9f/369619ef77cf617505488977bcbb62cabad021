@@ -1,7 +1,10 @@
 livekit-agents/livekit/agents/voice/tool_executor.py
   s_b11cfac01a2bf1::t_954ded617f6ec9 24,451-453
+  s_b11cfac01a2bf1::t_9518687a6bed30 24,451-452
+  s_b11cfac01a2bf1::t_fe6c9b0bc71682 453
 tests/test_tools.py
   s_b11cfac01a2bf1::t_43afc98591795f 2202-2211,2216,2218,2223,2229
+  s_b11cfac01a2bf1::t_50fcd9dfc929b4 2202-2211,2216,2218,2223,2229
 ---
 {
   "schema_version": "authorship/3.0.0",
