@@ -89,6 +89,7 @@ members = [
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
     "livekit-plugins-spitch",
+    "livekit-plugins-synthesia",
     "livekit-plugins-tavus",
     "livekit-plugins-telnyx",
     "livekit-plugins-trugen",
@@ -677,26 +678,27 @@ wheels = [
 
 [[package]]
 name = "bithuman"
-version = "2.7.0"
+version = "2.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "av", marker = "python_full_version < '3.14'" },
-    { name = "loguru", marker = "python_full_version < '3.14'" },
-    { name = "networkx", marker = "python_full_version < '3.14'" },
-    { name = "numpy", marker = "python_full_version < '3.14'" },
-    { name = "opencv-python-headless", marker = "python_full_version < '3.14'" },
-    { name = "pydantic", marker = "python_full_version < '3.14'" },
-    { name = "pydantic-settings", marker = "python_full_version < '3.14'" },
-    { name = "pyyaml", marker = "python_full_version < '3.14'" },
-    { name = "soundfile", marker = "python_full_version < '3.14'" },
+    { name = "av" },
+    { name = "loguru" },
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "soundfile" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/f4/9faa8a78e8968f4404e5e47a2852d7a97313a667424a8e6f8bff16a28899/bithuman-2.7.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:b399a37e187c17a8874e0eeb8e7e7a0907a4155537fac08185dabdb62491a7aa", size = 27205973, upload-time = "2026-07-17T00:14:45.72Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/a5/40bdd753427b1da0fedda69b49c1748ef015cb696f5589e00f1c1583fe62/bithuman-2.7.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:c9b48614a2fc4d41e746866d8015cbe4c938f3015fba350b4ec871e68fd65167", size = 16999376, upload-time = "2026-07-17T00:14:12.829Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/fd/5f6691083f2a1fa04ce0aabf246affce9d8f583cd15e933bb7bfd8b24811/bithuman-2.7.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:e1db36bf327c5290f492fa7c44f6cc8012d20f0e681360a557b2c2b525b5628d", size = 18158588, upload-time = "2026-07-17T00:14:08.381Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/7c/92a39e19be2012c87a5f4a2a2795204acb3aeb7494a9c57ca47b92405ab3/bithuman-2.7.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:32d746e790c3cd59877b9f2b566168c0954fde5ac29bf7ed9e414d131ae25584", size = 27206062, upload-time = "2026-07-17T00:15:17.352Z" },
-    { url = "https://files.pythonhosted.org/packages/29/ba/67a984b1568d43cdcd1d24061c50715d68319c5a69716074811709f412e3/bithuman-2.7.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:0ace42a748c99fdd8764bfbaf39c58bced02d1e8cc4a549edf39a846a3f44685", size = 16999419, upload-time = "2026-07-17T00:14:27.629Z" },
-    { url = "https://files.pythonhosted.org/packages/74/de/7dcd1c98b229898eee416d15a7ec1e0c43e90143a6cb8d8b12aac504fb8c/bithuman-2.7.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2bce74db0daf656cc13d22395370b503581eee969a77aca4823ebab0eed10076", size = 18158601, upload-time = "2026-07-17T00:13:50.538Z" },
+    { url = "https://files.pythonhosted.org/packages/34/06/413e869d4235b81dcd278f924e6c08d8eae1077ea27b4176f4922f5def80/bithuman-2.11.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:4045c7ba77b0e9547b31252957f7b1dde08c89af88dfbe436a9170bad60ce0c2", size = 31846102, upload-time = "2026-09-16T03:36:21.42Z" },
+    { url = "https://files.pythonhosted.org/packages/34/fd/0a2e57f2dce58e1f97e43531a3cd28c0d1a31efd37777c4b880f107028f5/bithuman-2.11.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:fedea6ac0c2f4d43c069b13e0b36b2c21dd1b42d36963d994822bed8984dc8b1", size = 20663154, upload-time = "2026-09-16T03:38:11.738Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/94/ab55dd600edee98c314b886401cba477c6b6640070dcfedd4a92231b3e65/bithuman-2.11.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:c0d667c283cc22fc9d6373837b4d7dac0619356787c7057de2cc4cb43b0039ee", size = 22151773, upload-time = "2026-09-16T03:38:14.048Z" },
+    { url = "https://files.pythonhosted.org/packages/70/33/2909eb66e497aae6306fa467f21920bf5b4417de923f380dea11b5828372/bithuman-2.11.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:9e7212694e0faa4ddb9044b61b1c17b0e50a9e1c87a7bf883ea2ec2f6fc447d0", size = 31846264, upload-time = "2026-09-16T03:36:23.964Z" },
+    { url = "https://files.pythonhosted.org/packages/70/fd/585eae30e8c1be0ebd75def89f86cf6eeb3dad81e9cd3991b86c28f3fc7a/bithuman-2.11.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:e207ae995339d6eb33e3fff465c8b67ae2570f7460ff44c44ccf039088c92cf3", size = 20663080, upload-time = "2026-09-16T03:38:16.343Z" },
+    { url = "https://files.pythonhosted.org/packages/87/5c/7a0e3276be6e83d6f089c6a189627e91a6a2c39110a7d9513e14c9263f55/bithuman-2.11.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:fa1f65e23fa197bcf665e9326cd9480c672eb794f3889a8405014092f736bacc", size = 22151817, upload-time = "2026-09-16T03:38:18.593Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/63/5dd01796ad68d4bb4301da37cd08ccf34692015539c09829a6cfcd935b47/bithuman-2.11.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:58a708ce9ec1f358249c2a32954513569d790fc7e40b8f1bd034ddba49701735", size = 31846411, upload-time = "2026-09-16T03:36:26.408Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/c6/9747b47b56f87a9c75a5ebd9b939035bc458fcb22616d0eb445bed9ffe43/bithuman-2.11.0-cp314-cp314-manylinux_2_28_aarch64.whl", hash = "sha256:77cc30aa459db8ccff872b1d650fc6c9715345bf2ad38250c03449caf8680fea", size = 20663707, upload-time = "2026-09-16T03:38:20.921Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/14/7dd7050ac1e37b48afdf55e61430a9a8f7a5e7bca2cd7b50e8dbcc625d4c/bithuman-2.11.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:cb87b9da954671bb68d006ffa405bcbdb81a537bac5dff5bade49388e77c74ba", size = 22151944, upload-time = "2026-09-16T03:38:23.084Z" },
 ]
 
 [[package]]
@@ -2173,6 +2175,9 @@ speechmatics = [
 spitch = [
     { name = "livekit-plugins-spitch" },
 ]
+synthesia = [
+    { name = "livekit-plugins-synthesia" },
+]
 tavus = [
     { name = "livekit-plugins-tavus" },
 ]
@@ -2275,6 +2280,7 @@ requires-dist = [
     { name = "livekit-plugins-speechify", marker = "extra == 'speechify'", editable = "livekit-plugins/livekit-plugins-speechify" },
     { name = "livekit-plugins-speechmatics", marker = "extra == 'speechmatics'", editable = "livekit-plugins/livekit-plugins-speechmatics" },
     { name = "livekit-plugins-spitch", marker = "extra == 'spitch'", editable = "livekit-plugins/livekit-plugins-spitch" },
+    { name = "livekit-plugins-synthesia", marker = "extra == 'synthesia'", editable = "livekit-plugins/livekit-plugins-synthesia" },
     { name = "livekit-plugins-tavus", marker = "extra == 'tavus'", editable = "livekit-plugins/livekit-plugins-tavus" },
     { name = "livekit-plugins-trugen", marker = "extra == 'trugen'", editable = "livekit-plugins/livekit-plugins-trugen" },
     { name = "livekit-plugins-turn-detector", marker = "extra == 'turn-detector'", editable = "livekit-plugins/livekit-plugins-turn-detector" },
@@ -2287,7 +2293,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
-    { name = "openai", specifier = ">=2,<3" },
+    { name = "openai", specifier = ">=2.50,<3" },
     { name = "opentelemetry-api", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.0,<1.45" },
@@ -2299,13 +2305,13 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sounddevice", specifier = ">=0.5" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.15.1" },
     { name = "types-protobuf", specifier = ">=4" },
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "ojin", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "ojin", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2631,7 +2637,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.41" },
+    { name = "anthropic", specifier = ">=0.41,<1" },
     { name = "httpx" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
@@ -2755,14 +2761,16 @@ requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 name = "livekit-plugins-bithuman"
 source = { editable = "livekit-plugins/livekit-plugins-bithuman" }
 dependencies = [
-    { name = "bithuman", marker = "python_full_version < '3.14'" },
+    { name = "bithuman" },
     { name = "livekit-agents" },
+    { name = "pillow" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "bithuman", marker = "python_full_version >= '3.11' and python_full_version < '3.14'", specifier = ">=0.5.25,<3" },
+    { name = "bithuman", specifier = ">=0.5.25,<3" },
     { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "pillow", specifier = ">=10.3.0" },
 ]
 
 [[package]]
@@ -3257,7 +3265,7 @@ name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs", "images"] },
-    { name = "openai", extra = ["realtime"] },
+    { name = "openai" },
 ]
 
 [package.optional-dependencies]
@@ -3269,7 +3277,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=2.50" },
+    { name = "openai", specifier = ">=2.50" },
 ]
 provides-extras = ["vertex"]
 
@@ -3354,10 +3362,16 @@ name = "livekit-plugins-rime"
 source = { editable = "livekit-plugins/livekit-plugins-rime" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs"] },
+    { name = "protobuf" },
+    { name = "rime-api" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
+requires-dist = [
+    { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
+    { name = "protobuf", specifier = ">=6.33.5" },
+    { name = "rime-api", specifier = ">=0.0.1" },
+]
 
 [[package]]
 name = "livekit-plugins-rtzr"
@@ -3510,13 +3524,15 @@ name = "livekit-plugins-speechmatics"
 source = { editable = "livekit-plugins/livekit-plugins-speechmatics" }
 dependencies = [
     { name = "livekit-agents" },
-    { name = "speechmatics-voice", extra = ["smart"] },
+    { name = "speechmatics-agent-stt" },
+    { name = "speechmatics-voice" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "speechmatics-voice", extras = ["smart"], specifier = ">=0.2.8" },
+    { name = "speechmatics-agent-stt", specifier = "~=0.1.0" },
+    { name = "speechmatics-voice", specifier = ">=0.2.8" },
 ]
 
 [[package]]
@@ -3532,6 +3548,16 @@ requires-dist = [
     { name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" },
     { name = "spitch", specifier = ">=1.47.0" },
 ]
+
+[[package]]
+name = "livekit-plugins-synthesia"
+source = { editable = "livekit-plugins/livekit-plugins-synthesia" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-tavus"
@@ -3656,8 +3682,8 @@ name = "loguru"
 version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
-    { name = "win32-setctime", marker = "python_full_version < '3.14' and sys_platform == 'win32'" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+    { name = "win32-setctime", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3a/05/a1dae3dffd1116099471c643b8924f5aa6524411dc6c63fdae648c4f1aca/loguru-0.7.3.tar.gz", hash = "sha256:19480589e77d47b8d85b2c827ad95d49bf31b0dcde16593892eb51dd18706eb6", size = 63559, upload-time = "2024-12-06T11:20:56.608Z" }
 wheels = [
@@ -4157,15 +4183,6 @@ wheels = [
 ]
 
 [[package]]
-name = "networkx"
-version = "3.6.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
-]
-
-[[package]]
 name = "nltk"
 version = "3.10.3"
 source = { registry = "https://pypi.org/simple" }
@@ -4330,17 +4347,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/78/0f/cc6afea3542a5142c5d8fc8211c5e059a8375105d004a41dfa2c7948dbb0/openai-2.53.0-py3-none-any.whl", hash = "sha256:c694ffc747a3c4d1663ef2b07b811315a476164ee5efa3a993967349ebca7618", size = 1659829, upload-time = "2026-08-03T21:41:59.581Z" },
 ]
 
-[package.optional-dependencies]
-realtime = [
-    { name = "websockets" },
-]
-
 [[package]]
 name = "opencv-python-headless"
 version = "4.14.0.94"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "numpy", marker = "python_full_version < '3.14'" },
+    { name = "numpy" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/67/8a/51ff1c6287be0b6cd3070cf095875da4ff7d6eda38507e6ada5608786a78/opencv_python_headless-4.14.0.94.tar.gz", hash = "sha256:4afa2ea1214453648be88259f035712454faa9039b686de7753569ba8eec1577", size = 96405664, upload-time = "2026-07-28T19:23:48.758Z" }
 wheels = [
@@ -5462,6 +5474,18 @@ wheels = [
 ]
 
 [[package]]
+name = "rime-api"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/65/b56e9f8f2215cc5f53a5240debc76c6bc4b2a919a5950dd3699c4ef78814/rime_api-0.0.1.tar.gz", hash = "sha256:399985b3cfd0346f2c710a12a5ff609a7584a0e42443a690d75449958e5b6065", size = 17110, upload-time = "2026-09-07T23:08:31.894Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/36/91/a90aaab25be635286ac79d2fa6b83940ea284485d83b30bb88fd66d84497/rime_api-0.0.1-py3-none-any.whl", hash = "sha256:75d4244a8fa3a5a828774fea853968376baa514756d779e47fb2c0a84b9d5ffe", size = 21307, upload-time = "2026-09-07T23:08:30.83Z" },
+]
+
+[[package]]
 name = "rpds-py"
 version = "2026.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -5825,9 +5849,9 @@ name = "soundfile"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "python_full_version < '3.14'" },
-    { name = "numpy", marker = "python_full_version < '3.14'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.14'" },
+    { name = "cffi" },
+    { name = "numpy" },
+    { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d2/db/949331952a6fb1c5b12e9de80fd08747966c2039d1a61db4764fbd3981c2/soundfile-0.14.0.tar.gz", hash = "sha256:ba1c1a2d618bca5c406647c83b89f07cc8810fa506a50622a6993ba130c1de11", size = 47842, upload-time = "2026-06-06T08:58:47.869Z" }
 wheels = [
@@ -5910,16 +5934,28 @@ wheels = [
 ]
 
 [[package]]
+name = "speechmatics-agent-stt"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "speechmatics-rt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b5/52/fdc366b34c77aef07b5af89e764c2a40457f125bbcba9df825cfad24bb56/speechmatics_agent_stt-0.1.0.tar.gz", hash = "sha256:ca17027d43aab73df16ce757600027f107b07de60aa2434274a0fe0bc0889452", size = 16798, upload-time = "2026-09-07T08:58:17.231Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/0b/71650f93c1328a6a96313b26c60830c9903d01177f8821aaec4b8c45d097/speechmatics_agent_stt-0.1.0-py3-none-any.whl", hash = "sha256:0e87e1a954660515763834ff268b509a0025cd5484aef092e13a047621d11d5b", size = 17896, upload-time = "2026-09-07T08:58:16.158Z" },
+]
+
+[[package]]
 name = "speechmatics-rt"
-version = "1.1.0"
+version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/63/96d8fc26077f393487e7160ff33790392a6071cbfa38bf5bbba43ca3e218/speechmatics_rt-1.1.0.tar.gz", hash = "sha256:9fbf948b93212dfbf698026533126c472a67098f1f0e3d97ed6e2f1201b10712", size = 28438, upload-time = "2026-06-17T10:32:07.191Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/2b/2270997af25f5e5a288fe8887d434683eb25c0486e6a51654d228f851285/speechmatics_rt-1.1.1.tar.gz", hash = "sha256:c560df8edcf0af3a565310f1a744feee9a9c0bb35e665225305ae7e7343a390f", size = 29797, upload-time = "2026-08-26T08:21:14.822Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/2e/1ba7289cc93b20fc3c91c0d225d4b9bdf6fcdb5ca1c6ada384bffa8c2e45/speechmatics_rt-1.1.0-py3-none-any.whl", hash = "sha256:3d73a8f530ac6810320584bdb443971c28d074ef3167399a6365c8b0e6ca5db9", size = 34507, upload-time = "2026-06-17T10:32:06.109Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/f4/45fec42d4d7356f611c66491537ca6d8c003bcc6ad7c3b21b103ba1e0da4/speechmatics_rt-1.1.1-py3-none-any.whl", hash = "sha256:4c1154d8862c838e307861207fcd590477b3f473c9084ef30ee2b65419adbcd6", size = 36258, upload-time = "2026-08-26T08:21:13.776Z" },
 ]
 
 [[package]]
@@ -5934,13 +5970,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e4/b2/72b5b2203bbefbd22e7692adaca0dd7c2feebed1aaea5599ec579f74fbbf/speechmatics_voice-0.2.8.tar.gz", hash = "sha256:b2d9cbf773fd94400c744734662e2b16b5bdc4271d0dafde46ac032c438fe000", size = 61419, upload-time = "2026-01-26T16:26:09.082Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/89/2d/a2ab215a7a31fad5ef9267420dc9ced96d6d52e5b80b131ef41424607849/speechmatics_voice-0.2.8-py3-none-any.whl", hash = "sha256:423ac7620ae8c98f175faace2184ac4ab1fe448ffb41af57aae05ec655326f79", size = 57629, upload-time = "2026-01-26T16:26:07.59Z" },
-]
-
-[package.optional-dependencies]
-smart = [
-    { name = "certifi" },
-    { name = "onnxruntime" },
-    { name = "transformers" },
 ]
 
 [[package]]

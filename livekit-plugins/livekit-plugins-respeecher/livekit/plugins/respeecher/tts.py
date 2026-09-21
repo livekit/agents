@@ -163,7 +163,6 @@ class TTS(tts.TTS):
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
         )
-        self._retired_pools: list[utils.ConnectionPool[aiohttp.ClientWebSocketResponse]] = []
 
     @property
     def model(self) -> str:
@@ -202,16 +201,11 @@ class TTS(tts.TTS):
         """Update TTS options"""
         if is_given(model) and model != self._opts.model:
             self._opts.model = model
-            # The model is baked into the WebSocket URL, so existing pooled
-            # connections can't serve the new model. Retire the old pool
-            # (letting any in-flight stream finish using its connection) and
-            # route new requests through a fresh pool. The retired pool is
-            # closed during aclose().
-            self._retired_pools.append(self._pool)
-            self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
-                connect_cb=self._connect_ws,
-                close_cb=self._close_ws,
-            )
+            # The model is baked into the WebSocket URL, so pooled connections
+            # can't serve the new one. invalidate() stops reusing them: idle ones
+            # are closed on the next drain, and one a stream is still using keeps
+            # working until it is returned, then is closed.
+            self._pool.invalidate()
 
         if is_given(voice_id):
             self._opts.voice_id = voice_id
@@ -239,9 +233,6 @@ class TTS(tts.TTS):
 
         self._streams.clear()
         await self._pool.aclose()
-        for pool in self._retired_pools:
-            await pool.aclose()
-        self._retired_pools.clear()
 
 
 class ChunkedStream(tts.ChunkedStream):
