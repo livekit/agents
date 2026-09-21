@@ -82,6 +82,11 @@ class DriveThruAgent(Agent):
             ],
         )
 
+    async def on_enter(self) -> None:
+        await self.session.generate_reply(
+            instructions="Greet the customer now that they've pulled up to the speaker, and ask what they'd like to order."
+        )
+
     def build_combo_order_tool(
         self, combo_items: list[MenuItem], drink_items: list[MenuItem], sauce_items: list[MenuItem]
     ) -> FunctionTool:
