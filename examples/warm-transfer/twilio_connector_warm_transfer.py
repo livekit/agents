@@ -20,15 +20,30 @@ SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+1200
 # TwiML; Twilio then streams the supervisor's call audio back to the connector.
 
 
+def inbound_caller_id() -> tuple[str, str]:
+    """Return the customer call's `From` and `CallToken`.
+
+    Both come from the validated Twilio voice webhook for the inbound call; a real app
+    keeps them in server-side state keyed by that call's `CallSid`, out of prompts, chat
+    history, logs, and participant attributes. An empty token means the supervisor sees
+    TWILIO_FROM_NUMBER instead of the customer's number. A nonempty token requires
+    twilio>=6.55.0.
+    """
+    return "", ""
+
+
 class TwilioSupportAgent(SupportAgent):
     async def _start_transfer(self) -> WarmTransferResult:
         assert SUPERVISOR_PHONE_NUMBER is not None
         assert TWILIO_FROM_NUMBER is not None
+        original_caller_number, twilio_call_token = inbound_caller_id()
         return await TwilioConnectorWarmTransferTask(
             SUPERVISOR_PHONE_NUMBER,
             twilio_from_number=TWILIO_FROM_NUMBER,
             twilio_account_sid=TWILIO_ACCOUNT_SID,
             twilio_auth_token=TWILIO_AUTH_TOKEN,
+            original_caller_number=original_caller_number,
+            twilio_call_token=twilio_call_token,
             chat_ctx=self.chat_ctx,
             # give up if the supervisor doesn't pick up within 25s:
             # ringing_timeout=25,

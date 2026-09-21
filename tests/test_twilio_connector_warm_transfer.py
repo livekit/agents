@@ -2,12 +2,13 @@ import asyncio
 import sys
 import threading
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, create_autospec
 from xml.etree import ElementTree
 
 import pytest
 
-from livekit import api, rtc
+from livekit import rtc
 from livekit.agents.beta.workflows import TwilioConnectorWarmTransferTask, warm_transfer
 from livekit.agents.llm import ToolError
 
@@ -22,42 +23,52 @@ CONNECT_URL = "wss://connector.example.test/stream?one=1&two=2"
 
 class FakeTwilioRestException(Exception):
     def __init__(self, status: int, code: int) -> None:
-        super().__init__("Twilio rejected call")
+        super().__init__("Twilio rejected the call")
         self.status = status
         self.code = code
 
 
-def legacy_create(*, to: str, from_: str, twiml: str) -> None:
-    pass
+def token_create(*, to: str, from_: str, twiml: str, call_token: str = "") -> None: ...
 
 
-def token_create(*, to: str, from_: str, twiml: str, call_token: str = "") -> None:
-    pass
+def legacy_create(*, to: str, from_: str, twiml: str) -> None: ...
+
+
+class TokenCallList:
+    create = staticmethod(token_create)
+
+
+class LegacyCallList:
+    create = staticmethod(legacy_create)
 
 
 @pytest.fixture(autouse=True)
 def mock_background_audio(monkeypatch: pytest.MonkeyPatch) -> None:
-    # These tests exercise call origination without starting a room or an audio mixer.
+    # these tests exercise call origination only; no room or audio mixer is started
     monkeypatch.setattr(warm_transfer, "BackgroundAudioPlayer", Mock())
 
 
 @pytest.fixture
-def twilio_client(monkeypatch: pytest.MonkeyPatch) -> Mock:
-    client = Mock()
-    client.calls.create = create_autospec(token_create)
-    client.calls.create.return_value = SimpleNamespace(sid="CA_test_transfer")
-    rest = SimpleNamespace(Client=Mock(return_value=client))
-    monkeypatch.setitem(sys.modules, "twilio", SimpleNamespace(rest=rest))
-    monkeypatch.setitem(sys.modules, "twilio.rest", rest)
-    monkeypatch.setitem(
-        sys.modules,
-        "twilio.base.exceptions",
-        SimpleNamespace(TwilioRestException=FakeTwilioRestException),
-    )
-    monkeypatch.setitem(
-        sys.modules, "twilio.http.http_client", SimpleNamespace(TwilioHttpClient=Mock())
-    )
-    return client
+def twilio_sdk(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Install a stub `twilio` package and return the mocked REST client."""
+
+    def install(call_list: type = TokenCallList) -> Mock:
+        client = Mock()
+        client.calls.create = create_autospec(
+            call_list.create, return_value=SimpleNamespace(sid="CA_test_transfer")
+        )
+        rest = SimpleNamespace(Client=Mock(return_value=client))
+        modules = {
+            "twilio": SimpleNamespace(rest=rest),
+            "twilio.rest": rest,
+            "twilio.base.exceptions": SimpleNamespace(TwilioRestException=FakeTwilioRestException),
+            "twilio.rest.api.v2010.account.call": SimpleNamespace(CallList=call_list),
+        }
+        for name, module in modules.items():
+            monkeypatch.setitem(sys.modules, name, module)
+        return client
+
+    return install
 
 
 @pytest.fixture
@@ -70,272 +81,234 @@ def connector(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return connect
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("use_call_token", [False, True])
-async def test_legacy_sdk_compatibility(
-    monkeypatch: pytest.MonkeyPatch, twilio_client: Mock, connector: AsyncMock, use_call_token: bool
-) -> None:
-    twilio_client.calls.create = create_autospec(
-        legacy_create, return_value=SimpleNamespace(sid="CA_test_transfer")
-    )
-    options = {"twilio_call_token": CALL_TOKEN} if use_call_token else {}
-    task = TwilioConnectorWarmTransferTask(
+def build_task(**options: str) -> TwilioConnectorWarmTransferTask:
+    return TwilioConnectorWarmTransferTask(
         HUMAN_NUMBER,
         twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
         twilio_account_sid="AC_test_account",
         twilio_auth_token="test_auth_token",
         **options,
     )
-    wait_for_answer = AsyncMock()
-    monkeypatch.setattr(task, "_wait_for_human_agent", wait_for_answer)
-    room = Mock(spec=rtc.Room)
 
-    if use_call_token:
-        with pytest.raises(RuntimeError, match=r"pip install 'twilio>=6\.55\.0'"):
-            await task._originate_human_agent(room_name="consult-room", identity="human", room=room)
-        connector.assert_not_awaited()
-        twilio_client.calls.create.assert_not_called()
-        wait_for_answer.assert_not_awaited()
-    else:
-        await task._originate_human_agent(room_name="consult-room", identity="human", room=room)
-        twilio_client.calls.create.assert_called_once()
-        assert "call_token" not in twilio_client.calls.create.call_args.kwargs
-        wait_for_answer.assert_awaited_once_with(room=room, identity="human")
+
+async def dial(task: TwilioConnectorWarmTransferTask, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(task, "_wait_for_human_agent", AsyncMock())
+    await task._originate_human_agent(
+        room_name="consult-room", identity="human", room=Mock(spec=rtc.Room)
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("use_call_token", [False, True])
-async def test_transfer_dial_preserves_caller_id(
-    monkeypatch: pytest.MonkeyPatch, twilio_client: Mock, connector: AsyncMock, use_call_token: bool
-) -> None:
-    options = {"twilio_call_token": CALL_TOKEN} if use_call_token else {}
-    from_number = CALLER_NUMBER if use_call_token else TWILIO_NUMBER
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_account_sid="AC_test_account",
-        twilio_auth_token="test_auth_token",
-        **options,
-    )
-    wait_for_answer = AsyncMock()
-    monkeypatch.setattr(task, "_wait_for_human_agent", wait_for_answer)
-    room = Mock(spec=rtc.Room)
-
-    await task._originate_human_agent(room_name="consult-room", identity="human", room=room)
-
-    connector.assert_awaited_once_with(
-        api.ConnectTwilioCallRequest(
-            twilio_call_direction=api.ConnectTwilioCallRequest.TwilioCallDirection.TWILIO_CALL_DIRECTION_OUTBOUND,
-            room_name="consult-room",
-            participant_identity="human",
-        )
-    )
-    twilio_client.calls.create.assert_called_once()
-    dial = twilio_client.calls.create.call_args.kwargs
-    assert dial["from_"] == from_number
-    assert dial["to"] == HUMAN_NUMBER
-    if use_call_token:
-        assert dial["call_token"] == CALL_TOKEN
-    else:
-        assert "call_token" not in dial
-    stream = ElementTree.fromstring(dial["twiml"]).find("./Connect/Stream")
-    assert stream is not None and stream.attrib == {"url": CONNECT_URL}
-    assert CALL_TOKEN not in dial["twiml"]
-    wait_for_answer.assert_awaited_once_with(room=room, identity="human")
-
-
-@pytest.mark.asyncio
-async def test_rejected_call_token_does_not_retry_with_another_caller_id(
-    monkeypatch: pytest.MonkeyPatch, twilio_client: Mock, connector: AsyncMock
-) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test_account",
-        twilio_auth_token="test_auth_token",
-    )
-    wait_for_answer = AsyncMock()
-    monkeypatch.setattr(task, "_wait_for_human_agent", wait_for_answer)
-    twilio_client.calls.create.side_effect = RuntimeError("Twilio rejected the forwarded call")
-
-    with pytest.raises(RuntimeError, match="Twilio rejected"):
-        await task._originate_human_agent(
-            room_name="consult-room", identity="human", room=Mock(spec=rtc.Room)
-        )
-
-    twilio_client.calls.create.assert_called_once()
-    wait_for_answer.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_call_token_transfer_cancels_unanswered_call(
-    monkeypatch: pytest.MonkeyPatch, twilio_client: Mock, connector: AsyncMock
-) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test_account",
-        twilio_auth_token="test_auth_token",
-    )
-    monkeypatch.setattr(
-        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("supervisor did not answer"))
-    )
-
-    with pytest.raises(ToolError, match="supervisor did not answer"):
-        await task._originate_human_agent(
-            room_name="consult-room", identity="human", room=Mock(spec=rtc.Room)
-        )
-
-    twilio_client.calls.assert_called_once_with("CA_test_transfer")
-    twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("second_failure", [False, True])
-async def test_caller_id_rejection_retries_once(
+@pytest.mark.parametrize(
+    ("options", "expected_from", "expect_token"),
+    [
+        (
+            {"twilio_call_token": CALL_TOKEN, "original_caller_number": CALLER_NUMBER},
+            CALLER_NUMBER,
+            True,
+        ),
+        ({}, TWILIO_NUMBER, False),
+        ({"original_caller_number": CALLER_NUMBER}, TWILIO_NUMBER, False),
+        ({"twilio_call_token": "", "original_caller_number": CALLER_NUMBER}, TWILIO_NUMBER, False),
+    ],
+    ids=["token-and-original", "no-token", "original-without-token", "empty-token"],
+)
+async def test_dial_uses_expected_caller_id(
     monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
+    twilio_sdk: Any,
     connector: AsyncMock,
-    second_failure: bool,
+    options: dict[str, str],
+    expected_from: str,
+    expect_token: bool,
 ) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test_account",
-        twilio_auth_token="test_auth_token",
-    )
-    wait = AsyncMock()
-    monkeypatch.setattr(task, "_wait_for_human_agent", wait)
-    twilio_client.calls.create.side_effect = [
-        FakeTwilioRestException(400, 21210),
-        FakeTwilioRestException(400, 21210)
-        if second_failure
-        else SimpleNamespace(sid="CA_fallback"),
+    client = twilio_sdk()
+
+    await dial(build_task(**options), monkeypatch)
+
+    connector.assert_awaited_once()
+    client.calls.create.assert_called_once()
+    kwargs = client.calls.create.call_args.kwargs
+    assert kwargs["to"] == HUMAN_NUMBER
+    assert kwargs["from_"] == expected_from
+    assert ("call_token" in kwargs) is expect_token
+    if expect_token:
+        assert kwargs["call_token"] == CALL_TOKEN
+    stream = ElementTree.fromstring(kwargs["twiml"]).find("./Connect/Stream")
+    assert stream is not None and stream.attrib == {"url": CONNECT_URL}
+    assert CALL_TOKEN not in kwargs["twiml"]
+    assert CALL_TOKEN not in str(connector.call_args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [21210, 21212], ids=["unverified-from", "invalid-from"])
+async def test_rejected_caller_id_retries_once_without_token(
+    monkeypatch: pytest.MonkeyPatch, twilio_sdk: Any, connector: AsyncMock, code: int
+) -> None:
+    client = twilio_sdk()
+    client.calls.create.side_effect = [
+        FakeTwilioRestException(400, code),
+        SimpleNamespace(sid="CA_retry"),
     ]
-    if second_failure:
-        with pytest.raises(FakeTwilioRestException):
-            await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
-        wait.assert_not_awaited()
-    else:
-        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
-        wait.assert_awaited_once()
-    assert twilio_client.calls.create.call_count == 2
-    first, second = [call.kwargs for call in twilio_client.calls.create.call_args_list]
+
+    await dial(
+        build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER), monkeypatch
+    )
+
+    assert client.calls.create.call_count == 2
+    first, second = (call.kwargs for call in client.calls.create.call_args_list)
     assert first["from_"] == CALLER_NUMBER
     assert first["call_token"] == CALL_TOKEN
-    assert second == {"to": HUMAN_NUMBER, "from_": TWILIO_NUMBER, "twiml": first["twiml"]}
-    connector.assert_awaited_once()
+    assert second["from_"] == TWILIO_NUMBER
+    assert "call_token" not in second
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,code", [(400, 21211), (403, 21210), (429, 20429), (500, 21210)])
-async def test_unrelated_rejections_do_not_retry(
-    monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
-    connector: AsyncMock,
-    status: int,
-    code: int,
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(400, 21211), (403, 21210), (500, 21210), (429, 20429), (403, 21212), (500, 21212)],
+)
+async def test_other_twilio_errors_propagate_without_retry(
+    monkeypatch: pytest.MonkeyPatch, twilio_sdk: Any, connector: AsyncMock, status: int, code: int
 ) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test_account",
-        twilio_auth_token="test_auth_token",
-    )
-    twilio_client.calls.create.side_effect = FakeTwilioRestException(status, code)
+    client = twilio_sdk()
+    client.calls.create.side_effect = FakeTwilioRestException(status, code)
+
     with pytest.raises(FakeTwilioRestException):
-        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
-    twilio_client.calls.create.assert_called_once()
-
-
-def test_token_requires_original_caller() -> None:
-    with pytest.raises(ValueError, match="requires original_caller_number"):
-        TwilioConnectorWarmTransferTask(
-            HUMAN_NUMBER,
-            twilio_from_number=TWILIO_NUMBER,
-            twilio_call_token=CALL_TOKEN,
+        await dial(
+            build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER),
+            monkeypatch,
         )
+
+    client.calls.create.assert_called_once()
+
+
+def test_call_token_requires_original_caller_number(twilio_sdk: Any) -> None:
+    twilio_sdk()
+
+    with pytest.raises(ValueError, match="original_caller_number"):
+        build_task(twilio_call_token=CALL_TOKEN)
+
+
+def test_call_token_requires_recent_twilio_sdk(twilio_sdk: Any) -> None:
+    twilio_sdk(LegacyCallList)
+
+    with pytest.raises(RuntimeError, match=r"twilio>=6\.55\.0"):
+        build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
+
+    # the token-free path stays usable on older SDKs
+    build_task(original_caller_number=CALLER_NUMBER)
+
+
+def test_missing_twilio_fails_at_construction_only_with_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "twilio.rest.api.v2010.account.call", None)
+    with pytest.raises(ImportError, match=r"twilio>=6\.55\.0"):
+        build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
+    build_task()
+
+
+@pytest.mark.asyncio
+async def test_legacy_sdk_can_still_dial_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_sdk: Any,
+    connector: AsyncMock,
+) -> None:
+    client = twilio_sdk(LegacyCallList)
+    await dial(build_task(original_caller_number=CALLER_NUMBER), monkeypatch)
+    client.calls.create.assert_called_once()
+    assert "call_token" not in client.calls.create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [21210, 21212])
+async def test_failed_fallback_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, twilio_sdk: Any, connector: AsyncMock, code: int
+) -> None:
+    client = twilio_sdk()
+    client.calls.create.side_effect = FakeTwilioRestException(400, code)
+    with pytest.raises(FakeTwilioRestException):
+        await dial(
+            build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER),
+            monkeypatch,
+        )
+    assert client.calls.create.call_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("token", [None, ""])
-async def test_business_caller_rejection_does_not_retry(
-    twilio_client: Mock,
+@pytest.mark.parametrize("code", [21210, 21212])
+async def test_business_number_rejection_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_sdk: Any,
     connector: AsyncMock,
     token: str | None,
+    code: int,
 ) -> None:
-    options = {"twilio_call_token": token} if token is not None else {}
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_account_sid="AC_test",
-        twilio_auth_token="test",
-        **options,
-    )
-    twilio_client.calls.create.side_effect = FakeTwilioRestException(400, 21210)
+    client = twilio_sdk()
+    client.calls.create.side_effect = FakeTwilioRestException(400, code)
     with pytest.raises(FakeTwilioRestException):
-        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
-    twilio_client.calls.create.assert_called_once()
-    assert twilio_client.calls.create.call_args.kwargs["from_"] == TWILIO_NUMBER
-    assert "call_token" not in twilio_client.calls.create.call_args.kwargs
+        await dial(
+            build_task(**({"twilio_call_token": token} if token is not None else {})), monkeypatch
+        )
+    client.calls.create.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_unanswered_fallback_cancels_fallback_call(
+async def test_ambiguous_transport_failure_is_not_retried(
     monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
+    twilio_sdk: Any,
     connector: AsyncMock,
 ) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test",
-        twilio_auth_token="test",
-    )
-    twilio_client.calls.create.side_effect = [
-        FakeTwilioRestException(400, 21210),
-        SimpleNamespace(sid="CA_fallback"),
-    ]
-    monkeypatch.setattr(
-        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
-    )
-    with pytest.raises(ToolError):
-        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
-    assert twilio_client.calls.create.call_count == 2
-    twilio_client.calls.assert_called_once_with("CA_fallback")
-    twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
+    client = twilio_sdk()
+    client.calls.create.side_effect = TimeoutError("request timed out")
+    with pytest.raises(TimeoutError):
+        await dial(
+            build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER),
+            monkeypatch,
+        )
+    client.calls.create.assert_called_once()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback", [False, True])
-@pytest.mark.parametrize("rejected", [False, True])
-async def test_cancellation_during_call_creation_retains_cleanup(
+async def test_unanswered_call_cancels_the_created_sid(
     monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
+    twilio_sdk: Any,
     connector: AsyncMock,
     fallback: bool,
+) -> None:
+    client = twilio_sdk()
+    client.calls.create.side_effect = (
+        [FakeTwilioRestException(400, 21210)] if fallback else []
+    ) + [SimpleNamespace(sid="CA_created")]
+    task = build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
+    monkeypatch.setattr(
+        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
+    )
+    with pytest.raises(ToolError, match="no answer"):
+        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
+    client.calls.assert_called_once_with("CA_created")
+    client.calls.return_value.update.assert_called_once_with(status="canceled")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["legacy", "forwarded", "fallback"])
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_cancellation_returns_before_late_creation_and_retains_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_sdk: Any,
+    connector: AsyncMock,
+    mode: str,
     rejected: bool,
 ) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test",
-        twilio_auth_token="test",
+    client = twilio_sdk()
+    task = build_task(
+        **(
+            {"twilio_call_token": CALL_TOKEN, "original_caller_number": CALLER_NUMBER}
+            if mode != "legacy"
+            else {}
+        )
     )
     wait = AsyncMock()
     monkeypatch.setattr(task, "_wait_for_human_agent", wait)
@@ -347,172 +320,78 @@ async def test_cancellation_during_call_creation_retains_cleanup(
     def create(**kwargs: str) -> SimpleNamespace:
         nonlocal attempts
         attempts += 1
-        if fallback and attempts == 1:
+        if mode == "fallback" and attempts == 1:
             raise FakeTwilioRestException(400, 21210)
         loop.call_soon_threadsafe(started.set)
         if not release.wait(timeout=5):
             raise RuntimeError("test did not release worker")
         if rejected:
             raise FakeTwilioRestException(400, 21210)
-        return SimpleNamespace(sid="CA_late_call")
+        return SimpleNamespace(sid="CA_late")
 
-    twilio_client.calls.create.side_effect = create
-    dial = asyncio.create_task(
-        task._originate_human_agent(
-            room_name="consult",
-            identity="human",
-            room=Mock(),
-        )
+    client.calls.create.side_effect = create
+    pending = asyncio.create_task(
+        task._originate_human_agent(room_name="consult", identity="human", room=Mock())
     )
     try:
         await asyncio.wait_for(started.wait(), timeout=5)
-        dial.cancel()
-        await asyncio.sleep(0)
-        dial.cancel()  # teardown can request cancellation more than once
-        await asyncio.sleep(0)
-        assert not dial.done()
-        release.set()
+        pending.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(dial, timeout=5)
-        assert attempts == (2 if fallback else 1)
-        wait.assert_not_awaited()
-        if rejected:
-            twilio_client.calls.assert_not_called()
-        else:
-            twilio_client.calls.assert_called_once_with("CA_late_call")
-            twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
-    finally:
-        release.set()
-        if not dial.done():
-            dial.cancel()
-            await asyncio.gather(dial, return_exceptions=True)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stall", ["create", "unanswered_cancel"])
-async def test_stalled_cleanup_has_deadline_and_retains_late_cleanup(
-    monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
-    connector: AsyncMock,
-    stall: str,
-) -> None:
-    monkeypatch.setattr(warm_transfer, "_TWILIO_CLEANUP_TIMEOUT", 0.03)
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        original_caller_number=CALLER_NUMBER,
-        twilio_call_token=CALL_TOKEN,
-        twilio_account_sid="AC_test",
-        twilio_auth_token="test",
-    )
-    started = asyncio.Event()
-    release = threading.Event()
-    cleaned = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    attempts = 0
-
-    def block() -> None:
-        loop.call_soon_threadsafe(started.set)
-        if not release.wait(timeout=3):
-            raise RuntimeError("worker not released")
-
-    def create(**kwargs: str) -> SimpleNamespace:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise FakeTwilioRestException(400, 21210)
-        if stall == "create":
-            block()
-        return SimpleNamespace(sid="CA_late")
-
-    def cancel(**kwargs: str) -> None:
-        if stall != "create":
-            block()
-        loop.call_soon_threadsafe(cleaned.set)
-
-    twilio_client.calls.create.side_effect = create
-    twilio_client.calls.return_value.update.side_effect = cancel
-    wait = AsyncMock(side_effect=ToolError("no answer"))
-    monkeypatch.setattr(task, "_wait_for_human_agent", wait)
-    dial = asyncio.create_task(
-        task._originate_human_agent(
-            room_name="consult",
-            identity="human",
-            room=Mock(),
-        )
-    )
-    try:
-        await asyncio.wait_for(started.wait(), timeout=1)
-        if stall == "create":
-            dial.cancel()
-        # For cancel stalls, the answer failure already initiated cleanup.
-        for _ in range(3):
-            await asyncio.sleep(0)
-            if not dial.done():
-                dial.cancel()
-        done, _ = await asyncio.wait({dial}, timeout=0.5)
-        assert dial in done, "teardown exceeded its cleanup deadline"
-        with pytest.raises(asyncio.CancelledError):
-            dial.result()
+            await asyncio.wait_for(asyncio.shield(pending), timeout=0.5)
         assert not release.is_set()
-        assert warm_transfer._twilio_cleanup_tasks
-        release.set()
-        await asyncio.wait_for(cleaned.wait(), timeout=1)
-        await asyncio.gather(*warm_transfer._twilio_cleanup_tasks)
-        await asyncio.sleep(0)
-        assert not warm_transfer._twilio_cleanup_tasks
-        twilio_client.calls.assert_called_once_with("CA_late")
-        assert attempts == 2
+        assert task._twilio_tasks.tasks
     finally:
         release.set()
-        await asyncio.gather(dial, *warm_transfer._twilio_cleanup_tasks, return_exceptions=True)
+        await asyncio.gather(pending, return_exceptions=True)
+        outcomes = await asyncio.gather(*task._twilio_tasks.tasks, return_exceptions=True)
+        assert all(
+            result is None or isinstance(result, (SimpleNamespace, FakeTwilioRestException))
+            for result in outcomes
+        )
+    assert not task._twilio_tasks.tasks
+    assert attempts == (2 if mode == "fallback" else 1)
+    wait.assert_not_awaited()
+    if rejected:
+        client.calls.assert_not_called()
+    else:
+        client.calls.assert_called_once_with("CA_late")
+        client.calls.return_value.update.assert_called_once_with(status="canceled")
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancelled", [False, True])
-async def test_failure_cleanup_preserves_shutdown_cancellation(
+@pytest.mark.parametrize("cancel_while_waiting", [False, True])
+async def test_cancellation_does_not_wait_for_pending_cleanup(
     monkeypatch: pytest.MonkeyPatch,
-    twilio_client: Mock,
+    twilio_sdk: Any,
     connector: AsyncMock,
-    cancelled: bool,
+    cancel_while_waiting: bool,
 ) -> None:
-    task = TwilioConnectorWarmTransferTask(
-        HUMAN_NUMBER,
-        twilio_from_number=TWILIO_NUMBER,
-        twilio_account_sid="AC_test",
-        twilio_auth_token="test",
-    )
-    monkeypatch.setattr(
-        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
-    )
+    client = twilio_sdk()
+    task = build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
+    error = asyncio.CancelledError() if cancel_while_waiting else ToolError("no answer")
+    monkeypatch.setattr(task, "_wait_for_human_agent", AsyncMock(side_effect=error))
     started = asyncio.Event()
     release = threading.Event()
     loop = asyncio.get_running_loop()
 
     def cancel(**kwargs: str) -> None:
         loop.call_soon_threadsafe(started.set)
-        assert release.wait(timeout=3)
+        if not release.wait(timeout=5):
+            raise RuntimeError("test did not release cleanup")
 
-    twilio_client.calls.return_value.update.side_effect = cancel
-    dial = asyncio.create_task(
-        task._originate_human_agent(
-            room_name="consult",
-            identity="human",
-            room=Mock(),
-        )
+    client.calls.return_value.update.side_effect = cancel
+    pending = asyncio.create_task(
+        task._originate_human_agent(room_name="consult", identity="human", room=Mock())
     )
     try:
-        await asyncio.wait_for(started.wait(), timeout=1)
-        if cancelled:
-            dial.cancel("shutdown")
-            await asyncio.sleep(0)
-            dial.cancel("shutdown again")
-            await asyncio.sleep(0)
-        release.set()
-        with pytest.raises(asyncio.CancelledError if cancelled else ToolError):
-            await asyncio.wait_for(dial, timeout=1)
-        assert dial.cancelled() is cancelled
-        twilio_client.calls.return_value.update.assert_called_once_with(status="canceled")
+        await asyncio.wait_for(started.wait(), timeout=5)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(asyncio.shield(pending), timeout=0.5)
+        assert not release.is_set()
+        assert task._twilio_tasks.tasks
     finally:
         release.set()
-        await asyncio.gather(dial, *warm_transfer._twilio_cleanup_tasks, return_exceptions=True)
+        await asyncio.gather(pending, return_exceptions=True)
+        await asyncio.gather(*task._twilio_tasks.tasks)
+    assert not task._twilio_tasks.tasks

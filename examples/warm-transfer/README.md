@@ -50,21 +50,13 @@ python warm_transfer.py dev
 
 ## Twilio connector transfers with the original caller ID
 
-[`twilio_connector_warm_transfer.py`](twilio_connector_warm_transfer.py) uses the
-[Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/) to dial the
-supervisor through Twilio's Calls API and connect their audio to the consultation
-room. This path requires LiveKit Cloud and the optional `twilio` Python package.
+[`twilio_connector_warm_transfer.py`](twilio_connector_warm_transfer.py) dials the
+supervisor through the [Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/)
+and Twilio's Calls API, which needs LiveKit Cloud and the optional `twilio` package.
 
-Passing `twilio_call_token` requires `twilio>=6.55.0`, which
-[added CallToken to the Calls API client](https://github.com/twilio/twilio-python/releases/tag/6.55.0).
-Install or upgrade with `pip install 'twilio>=6.55.0'`. If an older SDK lacks
-this parameter, the task raises an upgrade error before contacting the connector
-or dialing. Transfers without a token retain the existing behavior.
-
-To show an inbound customer's phone number to the supervisor, capture `From` and
-`CallToken` from that call's validated Twilio voice webhook. Keep them together in
-your server-side state, keyed by the inbound `CallSid`, and supply them to the task
-when that call requests a transfer:
+To show the inbound customer's number to the supervisor instead of your Twilio number,
+pass `original_caller_number` (the inbound call's `From`) together with
+`twilio_call_token` (its `CallToken`), both captured from the validated voice webhook:
 
 ```python
 result = await TwilioConnectorWarmTransferTask(
@@ -76,24 +68,18 @@ result = await TwilioConnectorWarmTransferTask(
 )
 ```
 
-Twilio credentials are read from `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`, or
-can be supplied through the task's corresponding constructor arguments. The task
-passes the token unchanged to Twilio as `call_token`; it does not put it into the
-connector request or TwiML. Retrieve it through your application's server-side
-call context, and keep it out of prompts, chat history, logs, and participant
-attributes.
+`twilio_call_token` requires `twilio>=6.55.0`; the task raises an upgrade error at
+construction otherwise. If Twilio rejects the preserved caller ID with HTTP 400 and
+error [21210](https://www.twilio.com/docs/api/errors/21210) (From not verified) or
+[21212](https://www.twilio.com/docs/api/errors/21212) (invalid From), the task retries
+once from `twilio_from_number` without the token; other errors are not retried. Keep the
+token in server-side state, out of prompts, chat history, logs, and participant attributes.
 
-`twilio_from_number` is the agent/business Twilio number or verified caller ID.
-`original_caller_number` must match the original incoming call's `From`; the token
-does not authorize an arbitrary caller ID. Supplying a nonempty `twilio_call_token`
-requires `original_caller_number`. Without a token (or with an empty token), the task
-uses the business number, even when the original caller number is available.
+Keep the number/token pair together, keyed by the inbound `CallSid`;
+the token does not authorize an arbitrary caller ID. Without a token (including an
+empty token), the task uses the business number even if `original_caller_number`
+is supplied. Transport timeouts and unrelated errors never trigger a second dial.
 
-If Twilio explicitly rejects the preservation attempt with HTTP 400 and
-[error 21210 (unverified From)](https://www.twilio.com/docs/api/errors/21210),
-the task retries once from the business number without the token. Other errors,
-including network timeouts and failures after call creation, are not retried to
-avoid duplicate calls. A failed fallback is propagated to the transfer workflow.
-
-The [Twilio Calls API](https://www.twilio.com/docs/voice/api/call-resource#create-a-call)
-supports CallToken directly, so this workflow does not require a Twilio conference.
+Cancellation returns promptly while any in-flight call creation finishes in the
+background. If it returns a call SID, the task attempts to cancel that call while
+the worker is alive. Provider failure or worker shutdown can still prevent cleanup.
