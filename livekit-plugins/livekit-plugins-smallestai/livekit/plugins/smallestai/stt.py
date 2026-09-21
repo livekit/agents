@@ -21,9 +21,8 @@ Wire contract of the Pulse streaming API, as this plugin relies on it:
   socket) and ``{"type": "close_stream"}`` (flush, answer with ``is_last`` and close).
 * Transcript messages carry ``transcript`` (the gateway also duplicates it as
   ``transcription``), ``is_final``, ``is_last``, ``from_finalize`` on the answer to a
-  finalize, optional ``speech_final``, optional ``joins_previous`` when a final opens
-  with a piece that continues the previous final's last word, and ``words`` on finals
-  when word timestamps or diarization are on.
+  finalize, optional ``speech_final``, and ``words`` on finals when word timestamps or
+  diarization are on.
 * With ``vad_events`` the server sends standalone ``speech_started`` /
   ``speech_ended`` messages from its acoustic VAD. They are the end-of-turn signal:
   a final on its own is not, because the server also cuts finals inside an utterance
@@ -606,8 +605,12 @@ class SpeechStream(stt.SpeechStream):
                 if data.get("type") == "error" or (
                     "error" in data and "transcript" not in data and "transcription" not in data
                 ):
+                    # The payload may echo user content; it goes only in the PII-marked
+                    # log field and the exception body, not in the message the retry
+                    # logger prints.
+                    logger.error("Smallest AI STT error", extra={"lk.pii.data": data})
                     raise APIStatusError(
-                        message=f"Smallest AI STT error: {data.get('message') or data.get('error')}",
+                        message=f"Smallest AI STT error ({data.get('status') or 'error'})",
                         status_code=-1,
                         request_id=self._session_id or None,
                         body=data,
@@ -655,6 +658,9 @@ class SpeechStream(stt.SpeechStream):
                 if ws is not None:
                     await ws.close()
                 self._audio_duration_collector.flush()
+                # A socket that ends mid-utterance (reconnect, drop) takes the server's
+                # speech_ended with it: close the turn here so START/END stay paired.
+                self._end_speech()
 
     def _stream_params(self) -> dict[str, Any]:
         """Query parameters for the streaming connection; unset knobs are left to the server."""
@@ -723,7 +729,6 @@ class SpeechStream(stt.SpeechStream):
             ) from None
 
         self._report_connection_acquired(time.perf_counter() - t0, False)
-        self._speaking = False
         logger.debug("established Smallest AI STT WebSocket connection")
         return ws
 
@@ -864,10 +869,6 @@ def _transcript_to_speech_data(
     redacted_entities: list[str] = data.get("redacted_entities") or []
     if redacted_entities:
         metadata["redacted_entities"] = redacted_entities
-    if data.get("joins_previous"):
-        # This final's first word continues the previous final's last word (a finalize
-        # cut the word); a consumer that glues finals should not put a space between them.
-        metadata["joins_previous"] = True
 
     return [
         stt.SpeechData(
