@@ -1,0 +1,279 @@
+# Microsoft AI speech plugin for LiveKit Agents
+
+**Azure Speech TTS is live-smoke-verified; STT is protocol-tested only.** The
+complete-text/complete-audio TTS path has been verified with MAI-Voice-2-Flash
+(Harper, PCM16 mono at 24 kHz). This is not a guarantee of access in every
+resource/region or a model-latency benchmark.
+
+Native streaming STT has hermetic coverage but still requires live endpoint
+validation, including its backend audio-tail behavior. An Azure Speech TTS
+resource/key does **not** establish access to that STT service.
+
+There is no LLM, speech-to-speech realtime model, Azure OpenAI convenience
+constructor, provider catalog, token minting, or OpenAI credential/model default.
+
+The implementation adapts the Apache-2.0-licensed LiveKit OpenAI plugin's package
+and STT/TTS interfaces, and the Azure plugin's REST transport pattern. It does
+not depend on either plugin. Transport, transcription finalization, and the
+escaped SSML/WAV mapping are specific to this integration. See `LICENSE` and `NOTICE`.
+
+## Local installation
+
+From this repository, install the workspace package rather than assuming a
+published distribution exists:
+
+```sh
+uv sync --package livekit-plugins-microsoft-ai --no-default-groups
+```
+
+## Configuration
+
+Pass constructor arguments or set the following environment variables. There
+are deliberately no default endpoints, models, voice IDs, or TTS sample rate.
+Obtain these values and the exact contract from your deployment owner.
+
+| Environment variable | Constructor argument |
+| --- | --- |
+| `MICROSOFT_AI_STT_URL` | `STT(url=...)` |
+| `MICROSOFT_AI_STT_API_KEY` | `STT(api_key=...)` |
+| `MICROSOFT_AI_STT_MODEL` | `STT(model=...)` |
+| `MICROSOFT_AI_STT_LANGUAGE` | `STT(language=...)` (optional) |
+| `MICROSOFT_AI_TTS_URL` | `TTS(url=...)` |
+| `MICROSOFT_AI_TTS_REGION` | `TTS(region=...)` (when no URL is configured) |
+| `MICROSOFT_AI_TTS_API_KEY` | `TTS(api_key=...)` |
+| `MICROSOFT_AI_TTS_MODEL` | `TTS(model=...)` |
+| `MICROSOFT_AI_TTS_VOICE` | `TTS(voice=...)` |
+| `MICROSOFT_AI_TTS_SAMPLE_RATE` | `TTS(sample_rate=...)` |
+| `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)` |
+
+URLs are complete endpoints, including any required path and query string. For
+example, `wss://stt.example.invalid/v1/realtime?intent=transcription` is a **dummy**,
+not a Microsoft service address. No path or model query parameter is appended.
+TLS is required except for loopback development endpoints. For TTS, a configured
+full URL wins over `region`, regardless of which configuration source provides
+each. Only when no URL is configured does an explicitly supplied region select
+the standard public-cloud endpoint. Other required empty values fail rather
+than falling back silently.
+
+TTS sends the Azure Speech resource key as `Ocp-Apim-Subscription-Key`, **not**
+as a raw-key Bearer token. STT defaults to `Authorization: Bearer ...`, a
+provisional authentication boundary to confirm with its deployment owner.
+Explicit `headers` (including `{}`) replace credential lookup and cannot be
+combined with `api_key`. Use them only for a confirmed alternate authentication
+scheme. No credentials are read from OpenAI/Azure variables. Caller-supplied
+`http_session` objects are borrowed; otherwise providers own lazy sessions and
+close them in `aclose()`.
+
+Keep actual connection information in your environment or a user-selected
+local dotenv file **outside the checkout** (or a deliberately ignored file).
+The providers load a file only when `env_file` or `MICROSOFT_AI_ENV_FILE` selects
+one; there is no automatic `.env` discovery. Files are parsed with python-dotenv,
+without shell sourcing, variable interpolation, environment mutation or value
+logging. Precedence is constructor argument, then process environment, then the
+selected file. An empty required value fails instead of falling back silently.
+Use owner-only file permissions and never copy this file into commits.
+
+The smoke script additionally accepts `--env-file`. It preflights all selected
+service configurations before making any request, so an empty/partial template
+cannot accidentally start a selected live test. On POSIX it requires the selected
+file to have mode `0600`. Never commit endpoints,
+credentials, recordings, transcripts or request/response captures. Provider
+errors deliberately omit response bodies and transport exception details that
+could echo this information.
+
+## STT contract and lifecycle
+
+```python
+from livekit.agents import inference
+from livekit.plugins import microsoft_ai
+
+detector = inference.VAD(model="silero")
+speech_to_text = microsoft_ai.STT(vad=detector, language="en")
+text_to_speech = microsoft_ai.TTS()
+```
+
+`vad` is explicit. Pass a LiveKit VAD with ordered, input-relative inference
+timestamps (the current bundled Silero VAD provides these), or pass `vad=None`
+and call the stream's `flush()` / `end_input()` yourself. **Configuring only
+AgentSession's VAD is insufficient:** it does not commit native STT streams.
+
+The provisional protocol is:
+
+1. Await `session.created`, send `session.update`, await `session.updated`.
+2. Configure a transcription session with `audio.input.format` equal to
+   `{"type": "audio/pcm", "rate": 16000}`, a required transcription `model`,
+   optional `language`, and `turn_detection: null`, `noise_reduction: null`.
+3. Send base64 PCM16 little-endian mono audio as `input_audio_buffer.append`.
+4. For an item identified by `item_id`, an
+   `conversation.item.input_audio_transcription.intermediate` event's
+   `intermediate` replaces the revisable hypothesis. A `.delta` event's `delta`
+   appends finalized text and clears the hypothesis. Both produce LiveKit
+   interim results, not final utterances.
+5. Drain audio, send `input_audio_buffer.commit`, await
+   `input_audio_buffer.committed` with `item_id`, then `.completed` with the
+   authoritative `transcript`. Only this emits a LiveKit final transcript,
+   followed by end-of-speech. The socket stays open for subsequent utterances.
+
+The deployment must be verified to implement these event fields and
+handshake/commit ordering. HTTP statuses are preserved; WebSocket
+`error` / transcription `.failed` events are terminal unless a pre-audio
+transient status is supplied. The initial error mapping recognizes
+`error.status_code`, `invalid_api_key`, `rate_limit_exceeded`, `content_filter`
+and `safety_violation`; it never disables or works around safety checks.
+
+VAD inference timestamps serialize audio and turn boundaries, so later audio
+cannot overtake an earlier commit even if VAD processing or uploads are slow.
+Mono input at other sample rates is resampled by the SDK. Stereo is rejected.
+Transport frames are 50 ms; the final shorter frame and resampler/VAD remainder
+are sent without rounding away samples or adding synthetic padding.
+
+**Tail limitation:** sending every byte and receiving `.completed` proves
+transport completion, not that the backend decoded an incomplete model chunk.
+There is no invented padding rule. An obviously discarded outstanding
+hypothesis fails explicitly rather than being promoted to a fabricated final.
+A live test must verify the full expected transcript, particularly the last
+word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
+backend drain/flush mechanism if commit does not decode the tail.
+
+`flush()` commits and waits internally before processing subsequent input;
+it leaves the socket open. `end_input()` flushes, waits for the acknowledged
+final and closes the socket. `aclose()` cancels immediately, without committing
+or exposing buffered events. Batch `recognize()` is unsupported and
+`offline_recognize=False`.
+
+`APIConnectOptions.timeout` bounds connection, handshake, writes and
+finalization. `max_retry` is a finite connection-only retry budget: after any
+audio is consumed, a disconnect/error is surfaced without replay or hidden
+reconnection. Reopening the stream is the caller's decision. Input is bounded
+by `max_buffered_audio` (default 5 seconds) and 1,024 queued entries; overflow
+fails explicitly. Pace prerecorded input rather than enqueueing entire files.
+
+## Azure Speech TTS contract
+
+This implementation follows Microsoft's public
+[MAI voice documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-voices)
+and [Speech REST reference](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech).
+It posts SSML to the **exact configured synthesis URL**, with
+`Content-Type: application/ssml+xml`, `Ocp-Apim-Subscription-Key`,
+`X-Microsoft-OutputFormat`, `User-Agent`, and `Accept: audio/wav`.
+
+Supply the full synthesis endpoint, including its documented
+`cognitiveservices/v1` path and any resource-specific routing. A generic Azure
+resource URL or SDK endpoint may not be a usable REST synthesis URL. The plugin
+does not append a path, infer a region, rewrite the host, or follow redirects.
+Confirm that the provided URL is correct before live validation.
+
+Alternatively, supply `region` / `MICROSOFT_AI_TTS_REGION` without a URL. It
+constructs `https://<region>.tts.speech.microsoft.com/cognitiveservices/v1`,
+following the standard public-cloud Azure Speech convention. This is not a
+region-availability catalog or access guarantee. Sovereign clouds and
+custom/private deployments require an explicit full URL. There is no automatic
+region detection, failover or redirection to a different region.
+
+The full `voice` ID selects the voice and model in SSML. `model` is required
+metadata and is checked against the voice ID's suffix, case-insensitively.
+For example, the public documentation pairs `mai-voice-2-flash` with
+`en-US-Harper:MAI-Voice-2-Flash`; availability still depends on the resource and
+region. **Voice-2.1-Flash and Voice-2-Flash are not treated as aliases.**
+SSML language defaults to `en-US`; override the `language` constructor argument
+for other locales.
+
+Text and attributes are XML-escaped structurally. Input text is always plain
+text, not caller-supplied SSML; it cannot inject `<audio>` or other markup. No
+speaker tags, `input`/`prompt` JSON, separate JSON `voice` property, token minting,
+voice cloning, safety overrides or quality-disable controls are included.
+
+The response must be HTTP 200 with a WAV content type and a complete,
+uncompressed PCM16 mono WAV at the configured rate. Supported documented WAV
+rates are 8,000, 22,050, 24,000, 44,100 and 48,000 Hz; at 24 kHz the output header
+is `riff-24khz-16bit-mono-pcm`. Empty/truncated audio, wrong rates/channels,
+JSON/base64 envelopes, SSE, MP3 and raw PCM are rejected, not guessed.
+Request construction and decoding are isolated in `tts.py`; unsupported direct
+JSON/Foundry variants are not silently tried as fallbacks.
+
+`TTS.synthesize()` returns a `ChunkedStream` of correctly framed audio after
+the complete response has been validated. `streaming=False` is intentional.
+AgentSession supplies its existing sentence `tts.StreamAdapter` for incremental
+LLM text; there is no claim of native text/audio streaming. Cancellation closes
+the request and stops output, including already buffered frames.
+
+Client-side safeguards, not advertised provider limits, are configurable:
+`max_text_length=4096`, `max_audio_bytes=10485760`, and
+`request_timeout=30` seconds. HTTP errors and safety refusals remain errors.
+Only transient failures retry, with no audio emitted from incomplete attempts.
+
+## Examples and validation
+
+See `examples/voice_agents/microsoft_ai_agent.py` for an AgentSession using the
+existing OpenAI LLM, bundled VAD and this STT/TTS package. Its OpenAI credential
+is used by the LLM only. This full agent requires STT access as well as TTS.
+The CLI's `console` mode does not require LiveKit Cloud.
+
+```sh
+uv run --package livekit-agents --extra microsoft-ai --extra openai --no-default-groups \
+  python examples/voice_agents/microsoft_ai_agent.py console
+```
+
+To use an external config file with the agent, set `MICROSOFT_AI_ENV_FILE` to
+its path first. Keep the LLM's `OPENAI_API_KEY` separate; the Microsoft AI config
+loader does not copy unrelated variables into the process environment.
+
+`examples/other/microsoft_ai_smoke.py` is a direct, explicit-opt-in smoke path
+without LiveKit Cloud or an LLM. It sends at most one short TTS request and one
+user-approved speech fixture, with no automatic retries, recording, transcript
+printing, audio playback or load testing. TTS uses the Azure Speech subscription
+key; STT bearer auth must be confirmed separately. The whole smoke run is
+bounded to 50 seconds.
+
+```sh
+uv run --package livekit-plugins-microsoft-ai --no-default-groups \
+  python examples/other/microsoft_ai_smoke.py --help
+```
+
+After confirming the exact TTS endpoint and approving the fixed short text,
+opt in to **TTS only**, with no STT URL, key, model or fixture required:
+
+```sh
+uv run --package livekit-plugins-microsoft-ai --no-default-groups \
+  python examples/other/microsoft_ai_smoke.py --run-live --tts \
+  --env-file /path/outside/checkout/endpoints.env
+```
+
+Only when STT access and its protocol are separately confirmed, test a tiny
+approved STT fixture (add `--tts` to test both services):
+
+```sh
+uv run --package livekit-plugins-microsoft-ai --no-default-groups \
+  python examples/other/microsoft_ai_smoke.py --run-live \
+  --env-file /path/outside/checkout/endpoints.env \
+  --stt-wav /path/outside/checkout/approved-speech.wav \
+  --expected-text-file /path/outside/checkout/approved-expected.txt
+```
+
+The WAV must be PCM16 mono at 16 kHz, nonempty and no longer than five seconds.
+The script checks the complete expected words, ignoring only case/punctuation.
+It sends no additional silence and does not fabricate a final transcript from
+an intermediate hypothesis. Repeat manually with a separately approved short,
+non-chunk-aligned clip to check the deployment's tail handling; one successful
+clip is not a universal tail guarantee. `--tts` sends only the fixed text
+`Hello, this is a Microsoft AI voice test.` It validates framing, not subjective
+voice quality. Omit either service's flags to test only the other.
+The reported elapsed time covers the client synthesis call through complete
+stream closure; it is **not model TTFA** because audio is emitted only after
+the complete WAV response has been validated.
+
+Focused hermetic tests:
+
+```sh
+uv sync --package livekit-plugins-microsoft-ai --no-default-groups
+uv sync --only-group dev --no-default-groups --inexact
+uv run --no-sync pytest tests/test_microsoft_ai_stt.py tests/test_microsoft_ai_tts.py \
+  tests/test_microsoft_ai_smoke.py tests/test_microsoft_ai_config.py --unit
+```
+
+These tests use fake sockets/HTTP responses and synthetic audio only. They
+validate client behavior, not real endpoint compatibility.
+Validate each service independently for a new deployment: confirm URLs,
+credentials and auth transport, model/voice IDs, and event/request/response
+schemas. Successful Azure Speech TTS validation does not validate STT or its
+backend audio-tail finalization contract.
