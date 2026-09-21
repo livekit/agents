@@ -1357,6 +1357,10 @@ class RealtimeSession(llm.RealtimeSession):
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            # With proactive audio enabled, the server may speak without user input.
+            responds_to_user_audio=not (
+                is_given(self._opts.proactivity) and self._opts.proactivity
+            ),
             response_id=self._current_generation.response_id,
         )
 

@@ -480,7 +480,7 @@ class AgentActivity(RecognitionHooks):
         self._realtime_auto_tool_reply_pending = False
         self._realtime_user_stopped_speaking_at: float | None = None
         self._realtime_late_input_speech_stop = False
-        self._realtime_turn_has_output = False
+        self._realtime_turn_resolved = False
         self._latency_budget_recorded_user_metrics: llm.MetricsReport | None = None
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
@@ -2246,7 +2246,7 @@ class AgentActivity(RecognitionHooks):
         if not ev.is_synthetic:
             self._clear_realtime_auto_tool_reply(self._pending_auto_tool_reply_fut)
             self._session._cancel_latency_budget_watch()
-            self._realtime_turn_has_output = False
+            self._realtime_turn_resolved = False
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2278,7 +2278,7 @@ class AgentActivity(RecognitionHooks):
             # Keep the generation's turn anchor rather than attributing a later turn.
             self._realtime_late_input_speech_stop = False
         else:
-            self._realtime_turn_has_output = False
+            self._realtime_turn_resolved = False
             self._realtime_user_stopped_speaking_at = time.time()
             self._session._start_latency_budget_watch(self._realtime_user_stopped_speaking_at)
         if self.vad is None or self.using_default_vad:
@@ -2338,7 +2338,11 @@ class AgentActivity(RecognitionHooks):
         if self._realtime_auto_tool_reply_pending:
             self._clear_realtime_auto_tool_reply(expected_reply)
 
-        if self._realtime_user_stopped_speaking_at is None and not self._realtime_turn_has_output:
+        if (
+            ev.responds_to_user_audio
+            and self._realtime_user_stopped_speaking_at is None
+            and not self._realtime_turn_resolved
+        ):
             # Generation creation is the first available end-of-turn signal for
             # providers that emit input_speech_stopped only after output begins.
             self._realtime_user_stopped_speaking_at = time.time()
@@ -4492,7 +4496,7 @@ class AgentActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
                 self._realtime_user_stopped_speaking_at = None
-                self._realtime_turn_has_output = True
+                self._realtime_turn_resolved = True
 
             self._session._update_agent_state(
                 "speaking",
@@ -4929,6 +4933,18 @@ class AgentActivity(RecognitionHooks):
                 )
 
         # no reply follows, so nothing else clears the "thinking" the tool asserted
+        if (
+            not tool_reply_expected
+            and started_speaking_at is None
+            and user_stopped_speaking_at is not None
+            and self._realtime_user_stopped_speaking_at == user_stopped_speaking_at
+        ):
+            self._session._cancel_latency_budget_watch(user_stopped_speaking_at)
+            self._realtime_user_stopped_speaking_at = None
+            # This turn is intentionally silent; a later server generation must not
+            # infer another user stop from the absent timestamp.
+            self._realtime_turn_resolved = True
+
         if not tool_reply_expected and self._no_pending_speech:
             self._session._update_agent_state(
                 "thinking" if self._background_speeches else "listening"

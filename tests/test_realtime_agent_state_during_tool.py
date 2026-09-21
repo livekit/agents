@@ -17,7 +17,15 @@ from collections.abc import Sequence
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, LatencyBudgetEvent, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    LatencyBudgetEvent,
+    ToolResult,
+    function_tool,
+    llm,
+    utils,
+)
 from livekit.agents.llm import (
     FunctionCall,
     GenerationCreatedEvent,
@@ -359,7 +367,6 @@ async def test_google_auto_tool_reply_does_not_restart_latency_budget(barge_in: 
             rt_session.emit("input_speech_started", InputSpeechStartedEvent(is_synthetic=True))
         tool_message_ch = utils.aio.Chan[MessageGeneration]()
         tool_function_ch = utils.aio.Chan[FunctionCall]()
-        tool_message_ch.close()
         tool_function_ch.close()
         rt_session.emit(
             "generation_created",
@@ -369,6 +376,33 @@ async def test_google_auto_tool_reply_does_not_restart_latency_budget(barge_in: 
                 user_initiated=False,
             ),
         )
+        await asyncio.sleep(0.02)
+        tool_text_ch = utils.aio.Chan[str]()
+        tool_audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        tool_modalities = asyncio.Future[list[str]]()
+        tool_modalities.set_result(["audio", "text"])
+        tool_message_ch.send_nowait(
+            MessageGeneration(
+                message_id="tool-reply",
+                text_stream=tool_text_ch,
+                audio_stream=tool_audio_ch,
+                modalities=tool_modalities,
+            )
+        )
+        tool_message_ch.close()
+        tool_text_ch.send_nowait("It is sunny")
+        tool_text_ch.close()
+        samples = int(_SAMPLE_RATE * 0.01)
+        tool_audio_ch.send_nowait(
+            rtc.AudioFrame(
+                data=b"\x00\x01" * samples,
+                sample_rate=_SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=samples,
+            )
+        )
+        tool_audio_ch.close()
+        await asyncio.wait_for(speeches[-1].speech_handle.wait_for_playout(), timeout=5)
         rt_session.emit(
             "input_speech_stopped",
             InputSpeechStoppedEvent(user_transcription_enabled=False, is_synthetic=True),
@@ -467,3 +501,47 @@ async def test_old_auto_tool_reply_cleanup_keeps_new_expectation() -> None:
         activity._clear_realtime_auto_tool_reply(new_reply)
         assert activity._pending_auto_tool_reply_fut is None
         assert not activity._realtime_auto_tool_reply_pending
+
+
+async def test_silent_realtime_tool_turn_cancels_latency_watch() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def send_dtmf(self) -> ToolResult:
+            """Send a DTMF digit without a spoken reply."""
+            return ToolResult("sent", reply_required=False)
+
+    events: list[LatencyBudgetEvent] = []
+    tool_executed = asyncio.Event()
+    async with AgentSession(llm=model, latency_budget={"budget": 0.1}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("function_tools_executed", lambda _: tool_executed.set())
+        await session.start(SilentToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(FunctionCall(call_id="dtmf-1", name="send_dtmf", arguments="{}"))
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        await asyncio.wait_for(tool_executed.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+        assert events == []
+        assert session._latency_budget_watch is None

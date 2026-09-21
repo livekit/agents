@@ -163,7 +163,10 @@ _RECORDING_ALL_OFF: RecordingOptions = {
 
 
 class LatencyBudgetOptions(TypedDict, total=False):
-    """Thresholds for end-of-user-speech to first-agent-output latency."""
+    """Thresholds watched from the end of user speech until first agent output.
+
+    A warning and an exceeded event may both be emitted for one turn before output begins.
+    """
 
     budget: Required[float]
     """Maximum acceptable latency in seconds. Required when configured."""
@@ -543,11 +546,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
-            latency_budget (LatencyBudgetOptions, optional): Emits a ``latency_budget`` event
-                when end-of-user-speech to first-agent-output latency reaches the optional
-                warning threshold or exceeds the required budget, even if no output has
-                started yet. The event's ``speech_id`` is ``None`` until a reply exists.
-                Disabled by default.
+            latency_budget (LatencyBudgetOptions, optional): Watches elapsed time from the
+                end of user speech until the agent's first output. Emits a ``latency_budget``
+                event as each configured threshold is reached, even if output has not begun;
+                a turn can emit both ``warning`` and ``exceeded`` events. The event's
+                ``speech_id`` may be ``None`` if no reply has been associated yet. If output
+                begins before a threshold, that threshold does not emit an event. Disabled
+                by default.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.

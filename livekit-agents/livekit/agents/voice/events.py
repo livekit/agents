@@ -477,18 +477,22 @@ class SpeechCreatedEvent(BaseModel):
 
 
 class LatencyBudgetEvent(BaseModel):
-    """Emitted when an agent turn reaches a configured latency threshold."""
+    """Emitted when a turn meets a latency threshold by its first output.
+
+    Warning and exceeded thresholds can each produce an event for the same turn.
+    Emission can occur before output begins.
+    """
 
     type: Literal["latency_budget"] = "latency_budget"
     level: Literal["warning", "exceeded"]
     latency: float
-    """Elapsed seconds since user speech stopped when the threshold was reached."""
+    """Elapsed seconds since user speech stopped when the event was emitted."""
     threshold: float
     """The threshold that selected ``level``."""
     budget: float
     """The configured maximum latency, in seconds."""
     speech_id: str | None
-    """Speech that owns the turn, or ``None`` if no reply exists yet."""
+    """Speech associated with the turn, or ``None`` if none is known at emission time."""
     created_at: float = Field(default_factory=time.time)
 
 

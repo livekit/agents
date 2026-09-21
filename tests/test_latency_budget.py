@@ -154,6 +154,7 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output(
                 message_stream=message_ch,
                 function_stream=function_ch,
                 user_initiated=False,
+                responds_to_user_audio=provider_order != "stop_first",
             ),
         )
 
@@ -195,6 +196,51 @@ async def test_realtime_server_turn_emits_latency_budget_on_first_output(
         assert events[0].speech_id
 
 
+async def test_proactive_realtime_generation_has_no_latency_budget() -> None:
+    model = FakeRealtimeModel()
+    events: list[LatencyBudgetEvent] = []
+    speeches = []
+
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("speech_created", speeches.append)
+        await session.start(Agent(instructions="test"))
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["audio", "text"])
+        function_ch.close()
+        model.active_session.emit(
+            "generation_created",
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+        await asyncio.sleep(0.02)
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="proactive",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("Hello")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(0.01))
+        audio_ch.close()
+        await asyncio.wait_for(speeches[0].speech_handle.wait_for_playout(), timeout=5)
+
+    assert events == []
+
+
 @pytest.mark.parametrize("provider_order", ["stop_first", "google"])
 async def test_realtime_auto_tool_reply_does_not_start_another_latency_turn(
     provider_order: str,
@@ -225,6 +271,7 @@ async def test_realtime_auto_tool_reply_does_not_start_another_latency_turn(
                 message_stream=message_ch,
                 function_stream=function_ch,
                 user_initiated=False,
+                responds_to_user_audio=True,
             ),
         )
         await asyncio.sleep(0.03)
@@ -264,6 +311,7 @@ async def test_realtime_auto_tool_reply_does_not_start_another_latency_turn(
                 message_stream=tool_message_ch,
                 function_stream=tool_function_ch,
                 user_initiated=False,
+                responds_to_user_audio=True,
             ),
         )
         await asyncio.sleep(0.04)
