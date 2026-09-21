@@ -26,7 +26,7 @@ from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import aiohttp
 
@@ -135,8 +135,11 @@ class STT(stt.STT):
         url: Full WebSocket URL, or MICROSOFT_AI_STT_URL. No paths/query parameters
             are added automatically.
         model: Deployment model ID, or MICROSOFT_AI_STT_MODEL. No model is assumed.
-        api_key: Bearer credential, or MICROSOFT_AI_STT_API_KEY.
-        headers: Explicit authentication headers instead of api_key/environment lookup.
+        api_key: Credential, or MICROSOFT_AI_STT_API_KEY, sent using auth_header.
+        auth_header: Authorization (the default, with Bearer prefix) or api-key
+            (raw credential), or MICROSOFT_AI_STT_AUTH_HEADER. No auth fallback occurs.
+        headers: Explicit authentication headers instead of api_key/auth_header
+            environment lookup. Cannot be combined with either constructor argument.
         language: Optional transcription language hint, or MICROSOFT_AI_STT_LANGUAGE.
         http_session: Optional caller-owned aiohttp session.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
@@ -152,6 +155,7 @@ class STT(stt.STT):
         url: str | None = None,
         model: str | None = None,
         api_key: str | None = None,
+        auth_header: Literal["Authorization", "api-key"] | None = None,
         headers: Mapping[str, str] | None = None,
         language: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -177,6 +181,7 @@ class STT(stt.STT):
             api_key=api_key,
             headers=headers,
             http_session=http_session,
+            auth_header=auth_header,
         )
         self._vad = vad
         self._language = language

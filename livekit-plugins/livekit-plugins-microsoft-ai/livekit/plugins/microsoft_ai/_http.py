@@ -18,6 +18,7 @@ import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -79,6 +80,7 @@ class HTTPClient:
         api_key: str | None,
         headers: Mapping[str, str] | None,
         http_session: aiohttp.ClientSession | None,
+        auth_header: Literal["Authorization", "api-key"] | None = None,
     ) -> None:
         self.url = config.required(url, f"MICROSOFT_AI_{service}_URL")
         parsed = urlsplit(self.url)
@@ -97,15 +99,33 @@ class HTTPClient:
         if headers is not None:
             if api_key is not None:
                 raise ValueError("Pass either api_key or headers, not both")
+            if auth_header is not None:
+                raise ValueError("Pass either auth_header or headers, not both")
             # An explicit mapping, including {}, deliberately bypasses API-key environment lookup.
             self.headers = dict(headers)
         else:
+            selected_header = "Ocp-Apim-Subscription-Key"
+            if service == "STT":
+                configured_header = (
+                    auth_header
+                    if auth_header is not None
+                    else config.get("MICROSOFT_AI_STT_AUTH_HEADER")
+                )
+                selected_header = (
+                    configured_header if configured_header is not None else "Authorization"
+                )
+                if selected_header not in ("Authorization", "api-key"):
+                    raise ValueError(
+                        "MICROSOFT_AI_STT_AUTH_HEADER/auth_header must be Authorization or api-key"
+                    )
             key = config.required(api_key, f"MICROSOFT_AI_{service}_API_KEY")
-            self.headers = (
-                {"Ocp-Apim-Subscription-Key": key}
-                if service == "TTS"
-                else {"Authorization": f"Bearer {key}"}
-            )
+            if any(ord(char) < 32 or ord(char) == 127 for char in key):
+                raise ValueError(
+                    f"MICROSOFT_AI_{service}_API_KEY cannot contain control characters"
+                )
+            self.headers = {
+                selected_header: f"Bearer {key}" if selected_header == "Authorization" else key
+            }
         self.headers.setdefault("User-Agent", "LiveKit Agents")
         self._session = http_session
         self._owns_session = http_session is None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -198,3 +199,117 @@ def test_invalid_region_is_not_interpolated_into_a_host(region: str) -> None:
             voice="en-US-Dummy:test",
             sample_rate=24000,
         )
+
+
+@pytest.mark.parametrize(
+    ("auth_header", "value"),
+    [("Authorization", "Bearer dummy-stt-key"), ("api-key", "dummy-stt-key")],
+)
+def test_stt_auth_selector_from_file(
+    tmp_path: Path, auth_header: Literal["Authorization", "api-key"], value: str
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(
+        DUMMY_CONFIG + f"MICROSOFT_AI_STT_AUTH_HEADER={auth_header}\n", encoding="utf-8"
+    )
+    instance = microsoft_ai.STT(vad=None, env_file=path)
+    assert instance._client.headers == {auth_header: value, "User-Agent": "LiveKit Agents"}
+    assert "dummy-stt-key" not in instance._client.url
+    tts = microsoft_ai.TTS(env_file=path)
+    assert tts._client.headers["Ocp-Apim-Subscription-Key"] == "dummy-tts-key"
+    assert "Authorization" not in tts._client.headers and "api-key" not in tts._client.headers
+
+
+def test_stt_auth_selector_uses_argument_environment_file_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG + "MICROSOFT_AI_STT_AUTH_HEADER=api-key\n", encoding="utf-8")
+    monkeypatch.setenv("MICROSOFT_AI_STT_AUTH_HEADER", "Authorization")
+    assert microsoft_ai.STT(vad=None, env_file=path)._client.headers["Authorization"] == (
+        "Bearer dummy-stt-key"
+    )
+    instance = microsoft_ai.STT(
+        vad=None, env_file=path, auth_header="api-key", api_key="argument-key"
+    )
+    assert instance._client.headers["api-key"] == "argument-key"
+    assert "Authorization" not in instance._client.headers
+
+
+@pytest.mark.parametrize(
+    "selector",
+    ["", " ", "Api-Key", "Bearer", "Ocp-Apim-Subscription-Key", "api-key\r\nx-secret: dummy"],
+)
+def test_invalid_auth_selector_fails_without_echoing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selector: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    monkeypatch.setenv("MICROSOFT_AI_STT_AUTH_HEADER", selector)
+    with pytest.raises(ValueError, match="must be Authorization or api-key") as caught:
+        microsoft_ai.STT(vad=None, env_file=path)
+    assert "dummy" not in str(caught.value)
+    assert not caplog.records
+
+
+def test_custom_headers_override_selector_environment_without_loading_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(
+        DUMMY_CONFIG.replace('MICROSOFT_AI_STT_API_KEY="dummy-stt-key"', ""), encoding="utf-8"
+    )
+    monkeypatch.setenv("MICROSOFT_AI_STT_AUTH_HEADER", "invalid-unused-value")
+    instance = microsoft_ai.STT(vad=None, env_file=path, headers={"Authorization": "Bearer custom"})
+    assert instance._client.headers == {
+        "Authorization": "Bearer custom",
+        "User-Agent": "LiveKit Agents",
+    }
+    assert microsoft_ai.STT(vad=None, env_file=path, headers={})._client.headers == {
+        "User-Agent": "LiveKit Agents"
+    }
+    with pytest.raises(ValueError, match="either auth_header or headers"):
+        microsoft_ai.STT(vad=None, env_file=path, headers={}, auth_header="api-key")
+
+
+@pytest.mark.parametrize(
+    "credential", ["dummy\r\nx-header:value", "dummy\n", "dummy\x00", "dummy\x7f"]
+)
+def test_stt_credentials_cannot_inject_header_values(
+    tmp_path: Path, credential: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    with pytest.raises(ValueError, match="control characters") as caught:
+        microsoft_ai.STT(vad=None, env_file=path, api_key=credential, auth_header="api-key")
+    assert "dummy" not in str(caught.value)
+    assert not caplog.records
+
+
+async def test_stt_only_smoke_reads_auth_selector_without_tts_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(
+        "\n".join(line for line in DUMMY_CONFIG.splitlines() if "MICROSOFT_AI_STT_" in line)
+        + "\nMICROSOFT_AI_STT_AUTH_HEADER=api-key\n",
+        encoding="utf-8",
+    )
+    checked = False
+
+    async def check(provider: microsoft_ai.STT, pcm: bytes, expected: str) -> None:
+        nonlocal checked
+        assert provider._client.headers["api-key"] == "dummy-stt-key"
+        assert "Authorization" not in provider._client.headers
+        assert pcm == b"\0\0" and expected == "test"
+        checked = True
+
+    monkeypatch.setattr(smoke, "_check_stt", check)
+    monkeypatch.setattr(
+        microsoft_ai, "TTS", MagicMock(side_effect=AssertionError("TTS is not selected"))
+    )
+    await smoke._run(pcm=b"\0\0", expected="test", check_tts=False, env_file=path)
+    assert checked

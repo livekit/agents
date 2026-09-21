@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
@@ -35,7 +36,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(aiohttp.ClientSession, "_request", forbidden)
     monkeypatch.delenv("MICROSOFT_AI_ENV_FILE", raising=False)
-    for name in ("URL", "MODEL", "API_KEY", "LANGUAGE"):
+    for name in ("URL", "MODEL", "API_KEY", "AUTH_HEADER", "LANGUAGE"):
         monkeypatch.delenv(f"MICROSOFT_AI_STT_{name}", raising=False)
 
 
@@ -152,6 +153,67 @@ async def test_environment_and_explicit_custom_auth(monkeypatch: pytest.MonkeyPa
     assert instance.model == "environment-model"
     with pytest.raises(ValueError, match="either api_key or headers"):
         microsoft_ai.STT(vad=None, api_key="dummy", headers={})
+
+
+async def test_api_key_from_selected_file_uses_exact_ga_transcription_url(tmp_path: Path) -> None:
+    url = "wss://stt.example.invalid/openai/v1/realtime?intent=transcription"
+    config = tmp_path / "endpoints.env"
+    config.write_text(
+        f"MICROSOFT_AI_STT_URL={url}\n"
+        "MICROSOFT_AI_STT_MODEL=dummy-deployment\n"
+        "MICROSOFT_AI_STT_API_KEY=dummy-raw-key\n"
+        "MICROSOFT_AI_STT_AUTH_HEADER=api-key\n",
+        encoding="utf-8",
+    )
+    socket = FakeSocket()
+    http = fake_session()
+    http.ws_connect = AsyncMock(return_value=socket)
+    instance = microsoft_ai.STT(vad=None, env_file=config, http_session=http)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame(803))
+        stream.end_input()
+        assert finals(await collect(stream)) == ["turn 1"]
+    args, kwargs = http.ws_connect.call_args
+    assert args == (url,)
+    assert kwargs["headers"] == {"api-key": "dummy-raw-key", "User-Agent": "LiveKit Agents"}
+    assert "Authorization" not in kwargs["headers"]
+    assert "params" not in kwargs
+    assert socket.sent[0]["session"]["audio"]["input"]["transcription"] == {
+        "model": "dummy-deployment"
+    }
+    assert socket.closed
+
+
+async def test_api_key_auth_failure_never_falls_back_or_discloses_credentials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    http = fake_session()
+    http.ws_connect = AsyncMock(
+        side_effect=aiohttp.WSServerHandshakeError(
+            request_info=MagicMock(),
+            history=(),
+            status=401,
+            message="dummy-private-key-and-url",
+        )
+    )
+    instance = microsoft_ai.STT(
+        vad=None,
+        url=STT_URL,
+        model="test",
+        api_key="dummy-private-key",
+        auth_header="api-key",
+        http_session=http,
+    )
+    async with instance, instance.stream(conn_options=APIConnectOptions(max_retry=3)) as stream:
+        with pytest.raises(APIStatusError) as caught:
+            await collect(stream)
+    assert caught.value.status_code == 401
+    http.ws_connect.assert_awaited_once()
+    assert http.ws_connect.call_args.kwargs["headers"]["api-key"] == "dummy-private-key"
+    assert "Authorization" not in http.ws_connect.call_args.kwargs["headers"]
+    assert "dummy-private-key" not in str(caught.value)
+    assert "dummy-private-key" not in caplog.text
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize("samples", [1, 157, 799, 800, 801, 2417])

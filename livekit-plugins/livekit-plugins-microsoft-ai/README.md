@@ -36,6 +36,7 @@ Obtain these values and the exact contract from your deployment owner.
 | --- | --- |
 | `MICROSOFT_AI_STT_URL` | `STT(url=...)` |
 | `MICROSOFT_AI_STT_API_KEY` | `STT(api_key=...)` |
+| `MICROSOFT_AI_STT_AUTH_HEADER` | `STT(auth_header=...)`: `Authorization` or `api-key` |
 | `MICROSOFT_AI_STT_MODEL` | `STT(model=...)` |
 | `MICROSOFT_AI_STT_LANGUAGE` | `STT(language=...)` (optional) |
 | `MICROSOFT_AI_TTS_URL` | `TTS(url=...)` |
@@ -56,10 +57,17 @@ the standard public-cloud endpoint. Other required empty values fail rather
 than falling back silently.
 
 TTS sends the Azure Speech resource key as `Ocp-Apim-Subscription-Key`, **not**
-as a raw-key Bearer token. STT defaults to `Authorization: Bearer ...`, a
-provisional authentication boundary to confirm with its deployment owner.
-Explicit `headers` (including `{}`) replace credential lookup and cannot be
-combined with `api_key`. Use them only for a confirmed alternate authentication
+as a raw-key Bearer token. STT preserves its `Authorization: Bearer ...` default.
+For an Azure realtime endpoint using resource-key authentication, explicitly set
+`MICROSOFT_AI_STT_AUTH_HEADER=api-key` (or `auth_header="api-key"`); it sends the
+raw credential from `MICROSOFT_AI_STT_API_KEY` as the `api-key` header, with no
+Bearer prefix. The selector accepts only the exact values `Authorization` and
+`api-key`; an empty/unknown value is an error. No auth fallback or automatic
+scheme detection occurs, and credentials are never added to the URL.
+
+Explicit `headers` (including `{}`) override the STT selector and credential
+environment settings and cannot be combined with `api_key` or `auth_header`
+constructor arguments. Use them only for a confirmed alternate authentication
 scheme. No credentials are read from OpenAI/Azure variables. Caller-supplied
 `http_session` objects are borrowed; otherwise providers own lazy sessions and
 close them in `aclose()`.
@@ -82,6 +90,17 @@ errors deliberately omit response bodies and transport exception details that
 could echo this information.
 
 ## STT contract and lifecycle
+
+For the Azure GA **transcription** endpoint, the official
+[transcription example](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/realtime-audio-websockets#transcribe-audio-in-real-time)
+uses `/openai/v1/realtime?intent=transcription`; the deployment name is sent in
+`session.audio.input.transcription.model`, not added as a URL query parameter.
+Configure the full URL in `MICROSOFT_AI_STT_URL` and the deployment in
+`MICROSOFT_AI_STT_MODEL`. The plugin sends that URL unchanged; it does not add
+the conversation API's `model=` query or preview `deployment`/`api-version`
+parameters. Do not put a key in the URL. This routing/auth documentation does
+not establish this deployment's audio rate or transcript-event compatibility:
+the MAI contract below still needs separate live validation.
 
 ```python
 from livekit.agents import inference
@@ -279,8 +298,10 @@ loader does not copy unrelated variables into the process environment.
 without LiveKit Cloud or an LLM. It sends at most one short TTS request and one
 user-approved speech fixture, with no automatic retries, recording, transcript
 printing, audio playback or load testing. TTS uses the Azure Speech subscription
-key; STT bearer auth must be confirmed separately. The whole smoke run is
-bounded to 50 seconds.
+key; STT uses the explicitly configured auth selector (Bearer by default, or
+raw `api-key`). The smoke script reads it from the same external dotenv file;
+no key or header value belongs in CLI arguments. The whole smoke run is bounded
+to 50 seconds.
 
 ```sh
 uv run --package livekit-plugins-microsoft-ai --no-default-groups \
