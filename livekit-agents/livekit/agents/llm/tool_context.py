@@ -199,6 +199,17 @@ DuplicateScope = Literal["name", "name_and_args"]
                      guarantee; put that in the tool body.
 """
 
+DependencyNames = tuple[str, ...]
+
+
+def _normalize_dependency_names(after: Sequence[str]) -> DependencyNames:
+    if isinstance(after, str):
+        raise TypeError("function_tool(after=...) must be a sequence of tool names")
+    names = tuple(after)
+    if any(not isinstance(name, str) for name in names):
+        raise TypeError("function_tool(after=...) must contain only tool names")
+    return names
+
 
 @dataclass
 class FunctionToolInfo:
@@ -207,6 +218,7 @@ class FunctionToolInfo:
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
+    after: DependencyNames = ()
 
 
 class RawFunctionDescription(TypedDict):
@@ -232,6 +244,7 @@ class RawFunctionToolInfo:
     flags: ToolFlag
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
+    after: DependencyNames = ()
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"
@@ -311,6 +324,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    after: Sequence[str] = (),
 ) -> RawFunctionTool[_P, _R]: ...
 
 
@@ -322,6 +336,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    after: Sequence[str] = (),
 ) -> Callable[[Callable[_P, _R]], RawFunctionTool[_P, _R]]: ...
 
 
@@ -334,6 +349,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    after: Sequence[str] = (),
 ) -> FunctionTool[_P, _R]: ...
 
 
@@ -346,6 +362,7 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    after: Sequence[str] = (),
 ) -> Callable[[Callable[_P, _R]], FunctionTool[_P, _R]]: ...
 
 
@@ -358,11 +375,30 @@ def function_tool(
     flags: ToolFlag = ToolFlag.NONE,
     on_duplicate: DuplicateMode = "allow",
     duplicate_scope: DuplicateScope = "name",
+    after: Sequence[str] = (),
 ) -> (
     FunctionTool[_P, _R]
     | RawFunctionTool[_P, _R]
     | Callable[[Callable[_P, _R]], FunctionTool[_P, _R] | RawFunctionTool[_P, _R]]
 ):
+    """Create a function tool from a callable.
+
+    Args:
+        after: Tool names that must finish before this tool is admitted. Dependencies
+            are local to one streamed function-call batch: every matching call is a
+            prerequisite. Independent root calls may start before end-of-stream
+            (EOF), while dependent calls wait until EOF before admission. If no
+            matching call is present in the batch, no dependency edge is created.
+            ``ctx.update()`` reports progress but does not satisfy a dependency;
+            terminal completion is required.
+
+            Cycles are validated against the available tool snapshot before dispatch.
+            This metadata orders execution only; it does not regenerate arguments or
+            pass results between tools. Cancellation, session close, and permanent
+            handoff abandon queued dependents without running them.
+    """
+    normalized_after = _normalize_dependency_names(after)
+
     def deco_raw(
         func: Callable[_P, _R],
     ) -> RawFunctionTool[_P, _R]:
@@ -385,6 +421,7 @@ def function_tool(
             flags=flags,
             on_duplicate=on_duplicate,
             duplicate_scope=duplicate_scope,
+            after=normalized_after,
         )
         return RawFunctionTool(func, info)
 
@@ -402,6 +439,7 @@ def function_tool(
             flags=flags,
             on_duplicate=on_duplicate,
             duplicate_scope=duplicate_scope,
+            after=normalized_after,
         )
         return FunctionTool(wrapped, info)
 

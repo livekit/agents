@@ -383,6 +383,8 @@ class FunctionCallOutput(BaseModel):
     AgentSession uses it to decide whether to generate a follow-up reply.
     Realtime models can also use it to schedule their response.
     """
+    pending: bool = Field(default=False)
+    """Whether this is a non-terminal framework placeholder for queued work."""
 
 
 class AgentHandoff(BaseModel):

@@ -25,7 +25,7 @@ from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
 from .events import UserTurnExceededEvent
 from .speech_handle import SpeechHandle
-from .tool_executor import ToolHandlingOptions
+from .tool_executor import ToolHandlingOptions, _resolve_dependency_error_policy
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
@@ -127,6 +127,11 @@ class Agent:
         # back to session"; async_options absent on a given tool_handling means NOT_GIVEN
         self._async_tool_options = (
             tool_handling.get("async_options", NOT_GIVEN) if is_given(tool_handling) else NOT_GIVEN
+        )
+        self._dependency_error_policy = (
+            _resolve_dependency_error_policy(tool_handling)
+            if is_given(tool_handling) and "on_dependency_error" in tool_handling
+            else NOT_GIVEN
         )
 
         if isinstance(mcp_servers, list) and len(mcp_servers) == 0:

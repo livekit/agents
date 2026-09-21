@@ -92,7 +92,12 @@ from .recorder_io import RecorderIO
 from .remote_session import RoomSessionTransport, SessionHost, SessionTransport
 from .run_result import RunOutputOptions, RunResult
 from .speech_handle import InputDetails, SpeechHandle
-from .tool_executor import ToolHandlingOptions, _resolve_async_tool_options, _RunningTasks
+from .tool_executor import (
+    ToolHandlingOptions,
+    _resolve_async_tool_options,
+    _resolve_dependency_error_policy,
+    _RunningTasks,
+)
 from .turn import (
     EndpointingOptions,
     InterruptionOptions,
@@ -656,6 +661,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._tools = tools if is_given(tools) else []
         self._async_tool_options = _resolve_async_tool_options(
             tool_handling.get("async_options") if is_given(tool_handling) else None
+        )
+        self._dependency_error_policy = _resolve_dependency_error_policy(
+            tool_handling if is_given(tool_handling) else None
         )
 
         # unrecoverable error counts; stt resets on transcript, llm/tts on speaking

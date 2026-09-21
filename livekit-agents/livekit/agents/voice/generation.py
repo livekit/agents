@@ -35,7 +35,11 @@ from ..utils import aio
 from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
-from .tool_executor import _build_executor_map
+from .tool_executor import (
+    _build_executor_map,
+    _ToolExecutionHandle,
+    _ToolExecutor,
+)
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -788,6 +792,270 @@ async def forward_generation(
 class _ToolOutput:
     output: list[ToolExecutionOutput]
     first_tool_started_fut: asyncio.Future[None]
+    ready_fut: asyncio.Future[None] | None = None
+    initial_committed: asyncio.Event = field(default_factory=asyncio.Event)
+    background_task: asyncio.Task[None] | None = None
+    discovered_call_ids: set[str] = field(default_factory=set)
+    first_visible_call_ids: set[str] = field(default_factory=set)
+    pending_call_ids: set[str] = field(default_factory=set)
+    late_outputs: list[ToolExecutionOutput] = field(default_factory=list)
+    late_flush_cb: Callable[[], None] | None = None
+    stream_closed: bool = False
+
+    def _settle_ready(self, error: BaseException | None = None) -> None:
+        """Settle dependency readiness exactly once."""
+        if self.ready_fut is None or self.ready_fut.done():
+            return
+        if isinstance(error, asyncio.CancelledError):
+            self.ready_fut.cancel()
+        elif error is not None:
+            self.ready_fut.set_exception(error)
+        else:
+            self.ready_fut.set_result(None)
+
+
+@dataclass
+class _DependencyNode:
+    fnc_call: llm.FunctionCall
+    executor: _ToolExecutor
+    handle: _ToolExecutionHandle
+    launch: Callable[[], asyncio.Task[Any]]
+    after: tuple[str, ...]
+    task: asyncio.Task[Any] | None = None
+    admitted: bool = False
+    settled: bool = False
+    failed: bool = False
+
+
+def _validate_dependency_graph(
+    function_tools: dict[str, llm.FunctionTool | llm.RawFunctionTool],
+    *,
+    after_by_name: dict[str, tuple[str, ...]] | None = None,
+) -> None:
+    """Reject configured name cycles before any call in the response is admitted."""
+    after_by_name = after_by_name or {
+        name: tuple(tool.info.after) for name, tool in function_tools.items()
+    }
+    graph = {
+        name: tuple(dep for dep in after_by_name.get(name, ()) if dep in function_tools)
+        for name in function_tools
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in visiting:
+            raise ValueError(f"cyclic tool dependency involving `{name}`")
+        if name in visited:
+            return
+        visiting.add(name)
+        for dependency in graph[name]:
+            visit(dependency)
+        visiting.remove(name)
+        visited.add(name)
+
+    for name in graph:
+        visit(name)
+
+
+def _pending_tool_output(
+    *, fnc_call: llm.FunctionCall, after: tuple[str, ...]
+) -> ToolExecutionOutput:
+    names = ", ".join(after)
+    return ToolExecutionOutput(
+        fnc_call=fnc_call.model_copy(),
+        fnc_call_out=llm.FunctionCallOutput(
+            name=fnc_call.name,
+            call_id=fnc_call.call_id,
+            output=f"Tool `{fnc_call.name}` is pending prerequisite completion: {names}",
+            is_error=False,
+            reply_required=False,
+            pending=True,
+        ),
+        agent_task=None,
+        raw_output=None,
+        raw_exception=None,
+        pending=True,
+    )
+
+
+class _DependencyScheduler:
+    """Response-local static-name dependency gate above tool executors."""
+
+    def __init__(
+        self,
+        *,
+        policy: Literal["skip", "run"],
+        output_cb: Callable[[ToolExecutionOutput], None],
+        terminal_cb: Callable[[ToolExecutionOutput, str], None],
+        initial_committed: asyncio.Event,
+        abandon_delivery: Callable[[], None],
+    ) -> None:
+        self._policy = policy
+        self._output_cb = output_cb
+        self._terminal_cb = terminal_cb
+        self._initial_committed = initial_committed
+        self._abandon_delivery = abandon_delivery
+        self._nodes: dict[str, _DependencyNode] = {}
+        self._duplicate_counts: dict[str, int] = {}
+        self._closed = False
+        self._abandoned = False
+        self._watch_tasks: set[asyncio.Task[Any]] = set()
+
+    def add(self, node: _DependencyNode) -> None:
+        if self._abandoned:
+            self._settle_without_execution(
+                node, ToolError("tool dependency response was already abandoned")
+            )
+            return
+        if node.fnc_call.call_id in self._nodes:
+            error = ToolError(f"duplicate function call id: {node.fnc_call.call_id}")
+            self._settle_without_execution(node, error, fnc_call=self._duplicate_refusal_call(node))
+            return
+        self._nodes[node.fnc_call.call_id] = node
+        if node.after:
+            self._output_cb(_pending_tool_output(fnc_call=node.fnc_call, after=node.after))
+            if self._closed:
+                self._resolve_waiting()
+            return
+        self._admit(node)
+
+    def add_failed(self, node: _DependencyNode, error: BaseException) -> None:
+        """Register a parsed/validated call that failed before executor admission."""
+        if self._abandoned:
+            self._settle_without_execution(node, error)
+            return
+        if node.fnc_call.call_id in self._nodes:
+            self._settle_without_execution(node, error, fnc_call=self._duplicate_refusal_call(node))
+            return
+        self._nodes[node.fnc_call.call_id] = node
+        if node.after:
+            self._output_cb(_pending_tool_output(fnc_call=node.fnc_call, after=node.after))
+        self._settle_without_execution(node, error)
+
+    def close(self) -> None:
+        self._closed = True
+        self._resolve_waiting()
+
+    async def wait(self) -> None:
+        while True:
+            if self._abandoned:
+                return
+            self._watch_tasks.difference_update({task for task in self._watch_tasks if task.done()})
+            watch_tasks = list(self._watch_tasks)
+            if watch_tasks:
+                await asyncio.wait(watch_tasks, return_when=asyncio.FIRST_COMPLETED)
+                continue
+            if all(node.settled for node in self._nodes.values()):
+                return
+            await asyncio.sleep(0)
+
+    async def abandon(self, error: BaseException) -> None:
+        self._abandoned = True
+        self._closed = True
+        self._initial_committed.set()
+        self._abandon_delivery()
+        admitted_cancellations = [
+            node.executor.cancel(node.fnc_call.call_id)
+            for node in self._nodes.values()
+            if node.admitted
+            and not node.settled
+            and node.task is not None
+            and node.executor._owning_activity is not None
+        ]
+        if admitted_cancellations:
+            await asyncio.gather(*admitted_cancellations, return_exceptions=True)
+        for node in list(self._nodes.values()):
+            if not node.admitted and not node.settled:
+                self._settle_without_execution(node, error)
+        watch_tasks = tuple(self._watch_tasks)
+        self._watch_tasks.clear()
+        for task in watch_tasks:
+            task.cancel()
+        if watch_tasks:
+            await asyncio.gather(*watch_tasks, return_exceptions=True)
+
+    def abandon_pending(self, error: BaseException) -> None:
+        """Reject queued nodes synchronously when a tool requests a handoff."""
+        self._abandoned = True
+        self._closed = True
+        for node in list(self._nodes.values()):
+            if not node.admitted and not node.settled:
+                self._settle_without_execution(node, error)
+
+    def _matching_prerequisites(self, node: _DependencyNode) -> list[_DependencyNode]:
+        return [
+            candidate
+            for candidate in self._nodes.values()
+            if candidate is not node and candidate.fnc_call.name in node.after
+        ]
+
+    def _resolve_waiting(self) -> None:
+        if not self._closed or self._abandoned:
+            return
+        for node in list(self._nodes.values()):
+            if node.admitted or node.settled or not node.after:
+                continue
+            prerequisites = self._matching_prerequisites(node)
+            if any(not prerequisite.settled for prerequisite in prerequisites):
+                continue
+            if self._policy == "skip" and any(
+                prerequisite.failed for prerequisite in prerequisites
+            ):
+                self._settle_without_execution(
+                    node,
+                    ToolError(f"Skipped `{node.fnc_call.name}` because a prerequisite failed"),
+                )
+            else:
+                self._admit(node)
+
+    def _admit(self, node: _DependencyNode) -> None:
+        if node.admitted or node.settled or self._abandoned:
+            return
+        node.admitted = True
+        node.launch()
+        watcher = asyncio.create_task(self._watch_terminal(node), name="tool_dependency_terminal")
+        self._watch_tasks.add(watcher)
+        watcher.add_done_callback(self._watch_tasks.discard)
+
+    async def _watch_terminal(self, node: _DependencyNode) -> None:
+        outcome = await asyncio.shield(node.handle.terminal)
+        node.settled = True
+        node.failed = outcome.failed
+        self._resolve_waiting()
+
+    def _duplicate_refusal_call(self, node: _DependencyNode) -> llm.FunctionCall:
+        call_id = node.fnc_call.call_id
+        count = self._duplicate_counts.get(call_id, 0) + 1
+        self._duplicate_counts[call_id] = count
+        return node.fnc_call.model_copy(
+            update={
+                "id": utils.shortuuid("item_"),
+                "call_id": f"{call_id}_duplicate_{count}",
+            }
+        )
+
+    def _settle_without_execution(
+        self,
+        node: _DependencyNode,
+        error: BaseException,
+        *,
+        fnc_call: llm.FunctionCall | None = None,
+    ) -> None:
+        if node.settled:
+            return
+        node.settled = True
+        node.failed = True
+        output = make_tool_output(
+            fnc_call=fnc_call or node.fnc_call,
+            output=None,
+            exception=error,
+        )
+        self._output_cb(output)
+        if node.task is not None:
+            node.task.cancel()
+        self._terminal_cb(output, node.fnc_call.call_id)
+        self._resolve_waiting()
 
 
 def perform_tool_executions(
@@ -800,8 +1068,13 @@ def perform_tool_executions(
     tool_execution_started_cb: Callable[[llm.FunctionCall], Any],
     tool_execution_completed_cb: Callable[[ToolExecutionOutput], Any],
 ) -> tuple[asyncio.Task[None], _ToolOutput]:
-    tool_output = _ToolOutput(output=[], first_tool_started_fut=asyncio.Future())
-    task = asyncio.create_task(
+    dependency_mode = any(tool.info.after for tool in tool_ctx.function_tools.values())
+    tool_output = _ToolOutput(
+        output=[],
+        first_tool_started_fut=asyncio.Future(),
+        ready_fut=asyncio.get_running_loop().create_future() if dependency_mode else None,
+    )
+    background_task = asyncio.create_task(
         _execute_tools_task(
             session=session,
             speech_handle=speech_handle,
@@ -814,7 +1087,34 @@ def perform_tool_executions(
         ),
         name="execute_tools_task",
     )
-    return task, tool_output
+    if not dependency_mode:
+        return background_task, tool_output
+
+    tool_output.background_task = background_task
+
+    async def _wait_for_first_dependency_output() -> None:
+        try:
+            assert tool_output.ready_fut is not None
+            done, _ = await asyncio.wait(
+                {tool_output.ready_fut, background_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if tool_output.ready_fut not in done:
+                await asyncio.shield(background_task)
+            await asyncio.shield(tool_output.ready_fut)
+        except asyncio.CancelledError:
+            if not background_task.done():
+                background_task.cancel()
+            await asyncio.gather(background_task, return_exceptions=True)
+            raise
+        except Exception:
+            await asyncio.gather(background_task, return_exceptions=True)
+            raise
+
+    return (
+        asyncio.create_task(_wait_for_first_dependency_output(), name="tool_dependency_ready"),
+        tool_output,
+    )
 
 
 @utils.log_exceptions(logger=logger)
@@ -840,16 +1140,51 @@ async def _execute_tools_task(
     from .events import RunContext
     from .run_result import _MockToolsContextVar, _SessionMockTools
 
+    dependency_mode = any(tool.info.after for tool in tool_ctx.function_tools.values())
+
+    def _mark_ready() -> None:
+        if (
+            tool_output.stream_closed
+            and tool_output.discovered_call_ids <= tool_output.first_visible_call_ids
+            and tool_output.ready_fut is not None
+            and not tool_output.ready_fut.done()
+        ):
+            tool_output._settle_ready()
+
     def _tool_completed(out: ToolExecutionOutput) -> None:
+        if not dependency_mode:
+            tool_execution_completed_cb(out)
+            tool_output.output.append(out)
+            return
+        if out.agent_task is not None and dependency_scheduler is not None:
+            # A returned Agent is a permanent handoff.  Stop old-activity admission
+            # synchronously, before the terminal watcher can resolve queued nodes.
+            dependency_scheduler.abandon_pending(
+                ToolError("tool handoff abandoned queued dependency work")
+            )
+        call_id = out.fnc_call.call_id
+        if call_id in tool_output.first_visible_call_ids:
+            if tool_output.initial_committed.is_set():
+                _deliver_late(out)
+            else:
+                tool_output.late_outputs.append(out)
+            return
+
         tool_execution_completed_cb(out)
         tool_output.output.append(out)
+        tool_output.first_visible_call_ids.add(call_id)
+        if out.pending:
+            tool_output.pending_call_ids.add(call_id)
+        _mark_ready()
 
     activity = session._activity
     if activity is None:
+        error = RuntimeError("no active AgentActivity to execute tools")
         logger.error(
             "no active AgentActivity to execute tools",
             extra={"speech_id": speech_handle.id},
         )
+        tool_output._settle_ready(error)
         return
 
     # Route AsyncToolset members to their own executor so session-scoped async
@@ -858,7 +1193,167 @@ async def _execute_tools_task(
         toolsets=tool_ctx.toolsets, default=activity._tool_executor
     )
 
+    dependency_after = {
+        name: tuple(tool.info.after) for name, tool in tool_ctx.function_tools.items()
+    }
+    if dependency_mode:
+        try:
+            _validate_dependency_graph(tool_ctx.function_tools, after_by_name=dependency_after)
+        except BaseException as error:
+            tool_output._settle_ready(error)
+            raise
+
+    dependency_scheduler: _DependencyScheduler | None = None
     tasks: list[asyncio.Task[Any]] = []
+    reply_tasks: set[asyncio.Task[Any]] = set()
+    run_contexts: dict[str, RunContext] = {}
+    initial_delivery_events: dict[str, asyncio.Event] = {}
+
+    def _deliver_late(out: ToolExecutionOutput) -> None:
+        original_call_id = out.fnc_call.call_id
+        ctx = run_contexts.get(original_call_id)
+        if ctx is None:
+            return
+        executor = executor_by_name.get(out.fnc_call.name, activity._tool_executor)
+
+        if ctx._updates:
+            # A dependent can call ctx.update() after its pending placeholder was
+            # committed.  The executor only wakes the tool at its first update; turn
+            # that first pair into a fresh deferred item.  Later terminal output is
+            # delivered directly by the executor's own deferred-reply path.
+            first_call, first_output = ctx._updates[0]
+            update_id = f"{original_call_id}_update_0"
+            update_call = first_call.model_copy(
+                update={"id": utils.shortuuid("item_"), "call_id": update_id}
+            )
+            update_output = first_output.model_copy(
+                update={"id": utils.shortuuid("item_"), "call_id": update_id}
+            )
+            update = ToolExecutionOutput(
+                fnc_call=update_call,
+                fnc_call_out=update_output,
+                agent_task=out.agent_task,
+                raw_output=out.raw_output,
+                raw_exception=out.raw_exception,
+                pending=False,
+            )
+            tool_execution_completed_cb(update)
+            out = update
+            awaitable: list[llm.ChatItem] = [
+                out.fnc_call,
+                out.fnc_call_out,
+            ]
+            if out.agent_task is not None:
+                session.update_agent(out.agent_task)
+            reply_task = asyncio.create_task(
+                executor._enqueue_reply(ctx, awaitable, _wait_for_initial_delivery=False),
+                name=f"tool_dependency_reply_{out.fnc_call.name}",
+            )
+            reply_tasks.add(reply_task)
+            reply_task.add_done_callback(reply_tasks.discard)
+            if delivery_event := initial_delivery_events.get(original_call_id):
+
+                def release_initial_delivery(
+                    _: asyncio.Task[Any], event: asyncio.Event = delivery_event
+                ) -> None:
+                    event.set()
+
+                reply_task.add_done_callback(release_initial_delivery)
+            return
+
+        if original_call_id in tool_output.pending_call_ids and not out.pending:
+            final_id = f"{original_call_id}_final"
+            out = ToolExecutionOutput(
+                fnc_call=out.fnc_call.model_copy(
+                    update={"id": utils.shortuuid("item_"), "call_id": final_id}
+                ),
+                fnc_call_out=out.fnc_call_out.model_copy(
+                    update={"id": utils.shortuuid("item_"), "call_id": final_id}
+                ),
+                agent_task=out.agent_task,
+                raw_output=out.raw_output,
+                raw_exception=out.raw_exception,
+                pending=False,
+            )
+        tool_execution_completed_cb(out)
+
+        async def _deliver() -> None:
+            if out.agent_task is not None:
+                session.update_agent(out.agent_task)
+            await executor._enqueue_reply(ctx, [out.fnc_call, out.fnc_call_out])
+
+        reply_task = asyncio.create_task(
+            _deliver(), name=f"tool_dependency_reply_{out.fnc_call.name}"
+        )
+        reply_tasks.add(reply_task)
+        reply_task.add_done_callback(reply_tasks.discard)
+
+    def _flush_late_outputs() -> None:
+        late_outputs = tool_output.late_outputs[:]
+        tool_output.late_outputs.clear()
+        for out in late_outputs:
+            _deliver_late(out)
+
+    tool_output.late_flush_cb = _flush_late_outputs
+
+    def _abandon_dependency_delivery() -> None:
+        tool_output.late_outputs.clear()
+        for event in initial_delivery_events.values():
+            event.set()
+
+    def _dependency_terminal(out: ToolExecutionOutput, original_call_id: str) -> None:
+        from .events import ToolCallEnded, ToolExecutionUpdatedEvent
+
+        session._tool_execution_updated(
+            ToolExecutionUpdatedEvent(
+                update=ToolCallEnded(
+                    id=out.fnc_call_out.call_id,
+                    call_id=original_call_id,
+                    message=out.fnc_call_out.output,
+                    status="error",
+                )
+            )
+        )
+
+    if dependency_mode:
+        dependency_scheduler = _DependencyScheduler(
+            policy=activity._dependency_error_policy,
+            output_cb=_tool_completed,
+            terminal_cb=_dependency_terminal,
+            initial_committed=tool_output.initial_committed,
+            abandon_delivery=_abandon_dependency_delivery,
+        )
+        activity._dependency_schedulers.add(dependency_scheduler)
+
+    def _record_pre_execution_failure(
+        fnc_call: llm.FunctionCall,
+        error: BaseException,
+    ) -> None:
+        if not tool_output.first_tool_started_fut.done():
+            tool_output.first_tool_started_fut.set_result(None)
+        tool_execution_started_cb(fnc_call)
+        run_ctx = RunContext(
+            activity=activity,
+            session=session,
+            speech_handle=speech_handle,
+            function_call=fnc_call,
+        )
+        if fnc_call.call_id not in run_contexts:
+            run_contexts[fnc_call.call_id] = run_ctx
+        executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+        handle = _ToolExecutionHandle()
+        node = _DependencyNode(
+            fnc_call=fnc_call,
+            executor=executor,
+            handle=handle,
+            launch=lambda: asyncio.create_task(asyncio.sleep(0)),
+            after=dependency_after.get(fnc_call.name, ()),
+        )
+        if dependency_scheduler is not None:
+            dependency_scheduler.add_failed(node, error)
+        else:
+            _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=error))
+
     try:
         async for fnc_call in function_stream:
             if tool_choice == "none":
@@ -872,6 +1367,9 @@ async def _execute_tools_task(
                 continue
 
             # TODO(theomonnom): assert other tool_choice values
+
+            if not (dependency_mode and fnc_call.call_id in run_contexts):
+                tool_output.discovered_call_ids.add(fnc_call.call_id)
 
             if (function_tool := tool_ctx.function_tools.get(fnc_call.name)) is None:
                 logger.warning(
@@ -928,12 +1426,9 @@ async def _execute_tools_task(
                         "speech_id": speech_handle.id,
                     },
                 )
-                _tool_completed(
-                    make_tool_output(
-                        fnc_call=fnc_call,
-                        output=None,
-                        exception=ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}"),
-                    )
+                _record_pre_execution_failure(
+                    fnc_call,
+                    ToolError(f"Error parsing arguments for `{fnc_call.name}`: {e}"),
                 )
                 continue
 
@@ -942,6 +1437,13 @@ async def _execute_tools_task(
             canonical = json.dumps(raw_args, default=str)
             if canonical != json_args:
                 fnc_call.arguments = canonical
+
+            if dependency_scheduler is not None and fnc_call.call_id in run_contexts:
+                _record_pre_execution_failure(
+                    fnc_call,
+                    ToolError(f"duplicate function call id: {fnc_call.call_id}"),
+                )
+                continue
 
             if not tool_output.first_tool_started_fut.done():
                 tool_output.first_tool_started_fut.set_result(None)
@@ -963,6 +1465,7 @@ async def _execute_tools_task(
                     speech_handle=speech_handle,
                     function_call=fnc_call,
                 )
+                run_contexts[fnc_call.call_id] = run_ctx
 
                 logger.debug(
                     "executing mock tool" if mocked else "executing tool",
@@ -974,12 +1477,20 @@ async def _execute_tools_task(
                 )
 
                 executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+                execution_handle = _ToolExecutionHandle()
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,
                     run_ctx=run_ctx,
                     raw_arguments=raw_args,
                     mock=mock,
+                    execution_handle=execution_handle,
+                    initial_committed=(tool_output.initial_committed if dependency_mode else None),
+                    initial_delivery=(
+                        initial_delivery_events.setdefault(fnc_call.call_id, asyncio.Event())
+                        if dependency_scheduler is not None and dependency_after.get(fnc_call.name)
+                        else None
+                    ),
                 )
 
                 @tracer.start_as_current_span("function_tool")
@@ -1048,13 +1559,27 @@ async def _execute_tools_task(
                     # TODO(theomonnom): Add the agent handoff inside the current_span
                     _tool_completed(output)
 
+                admission_gate = asyncio.Event()
+                if not dependency_mode or not dependency_after.get(fnc_call.name, ()):
+                    admission_gate.set()
+
+                async def _admitted_traceable_tool(
+                    gate: asyncio.Event = admission_gate,
+                    callable_: Callable = function_callable,
+                    call: llm.FunctionCall = fnc_call,
+                    description: str | None = _tool_description(function_tool),
+                    label: str = activity.agent.label,
+                ) -> None:
+                    await gate.wait()
+                    await _traceable_fnc_tool(
+                        callable_,
+                        call,
+                        description,
+                        label,
+                    )
+
                 task = asyncio.create_task(
-                    _traceable_fnc_tool(
-                        function_callable,
-                        fnc_call,
-                        _tool_description(function_tool),
-                        activity.agent.label,
-                    ),
+                    _admitted_traceable_tool(),
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
@@ -1062,6 +1587,25 @@ async def _execute_tools_task(
                 )
                 tasks.append(task)
                 task.add_done_callback(lambda task: tasks.remove(task))
+
+                if dependency_scheduler is not None:
+
+                    def launch_admitted(
+                        gate: asyncio.Event = admission_gate,
+                        admitted_task: asyncio.Task[Any] = task,
+                    ) -> asyncio.Task[Any]:
+                        gate.set()
+                        return admitted_task
+
+                    node = _DependencyNode(
+                        fnc_call=fnc_call,
+                        executor=executor,
+                        handle=execution_handle,
+                        launch=launch_admitted,
+                        after=dependency_after.get(fnc_call.name, ()),
+                        task=task,
+                    )
+                    dependency_scheduler.add(node)
             except Exception as e:
                 # catching exceptions here because even though the function is asynchronous,
                 # errors such as missing or incompatible arguments can still occur at
@@ -1076,9 +1620,20 @@ async def _execute_tools_task(
                 _tool_completed(make_tool_output(fnc_call=fnc_call, output=None, exception=e))
                 continue
 
+        tool_output.stream_closed = True
+        if dependency_scheduler is not None:
+            dependency_scheduler.close()
+        _mark_ready()
         await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
+        if dependency_scheduler is not None:
+            await dependency_scheduler.wait()
+        _mark_ready()
+        if reply_tasks:
+            await asyncio.gather(*reply_tasks, return_exceptions=True)
 
     except asyncio.CancelledError:
+        if dependency_scheduler is not None:
+            await dependency_scheduler.abandon(ToolError("tool dependency response abandoned"))
         if len(tasks) > 0:
             names = [task.get_name() for task in tasks]
             logger.debug(
@@ -1088,9 +1643,17 @@ async def _execute_tools_task(
                     "speech_id": speech_handle.id,
                 },
             )
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+        tool_output._settle_ready(asyncio.CancelledError())
+    except BaseException as error:
+        if dependency_scheduler is not None:
+            await dependency_scheduler.abandon(error)
+        tool_output._settle_ready(error)
+        raise
     finally:
         await utils.aio.cancel_and_wait(*tasks)
+        if dependency_scheduler is not None:
+            activity._dependency_schedulers.discard(dependency_scheduler)
 
         if len(tool_output.output) > 0:
             logger.debug(
@@ -1129,6 +1692,7 @@ class ToolExecutionOutput:
     agent_task: Agent | None
     raw_output: Any
     raw_exception: BaseException | None
+    pending: bool = False
 
 
 def make_tool_output(
