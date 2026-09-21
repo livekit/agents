@@ -46,7 +46,24 @@ Five checks, all derived from the prompt rather than hand-authored per agent:
 | `expected_tool` | Choice | a tool clearly should have been called and was not |
 | `severity` | Score | the conversation is far enough off course to matter |
 
-The thresholds need tuning against recordings of your own calls:
+The defaults were measured against Jev 1.13 rather than guessed, on a small labelled
+set of nine replies under one prompt. They sit in the gap between how Jev scores a
+compliant reply and how it scores a violating one:
+
+| Check | compliant | violating | default |
+| --- | --- | --- | --- |
+| `follows_instructions` | 0.46 to 0.93 | 0.01 to 0.03 | 0.25 |
+| `unsupported_claim` | 0.06 to 0.29 | 0.93 to 0.99 | 0.6 |
+| `advances_task` | 0.42 to 0.94 | 0.02 to 0.05 | 0.25 |
+| `severity` | 0.05 to 1.87 | 2.51 to 2.83 | 2.2 |
+
+The gap is asymmetric, which is worth knowing before you move a threshold. Jev is close
+to certain about a violation and much less certain that nothing is wrong, because
+spotting one broken rule is easier than confirming every rule held. That is why the
+thresholds sit near the violating end rather than halfway. A threshold of 0.5 on
+`follows_instructions` looks reasonable and fires on replies that are perfectly fine.
+
+Nine replies under one prompt is a small sample, so re-measure on your own calls:
 
 ```python
 reviewer = typesafe.Reviewer(

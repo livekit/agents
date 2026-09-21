@@ -101,30 +101,40 @@ def _tool_options(state: TurnState) -> dict[str, Any] | None:
 
 def default_checks(
     *,
-    follows_instructions: float = 0.5,
+    follows_instructions: float = 0.25,
     unsupported_claim: float = 0.6,
-    advances_task: float = 0.4,
+    advances_task: float = 0.25,
     expected_tool_confidence: float = 0.7,
-    severity: float = 2.0,
+    severity: float = 2.2,
     gated_check_ids: Sequence[str] = (),
 ) -> list[Check]:
     """The generic check set, derived entirely from the agent's own prompt and tools.
 
-    Every threshold is a starting point, not a calibrated default. TypeSafe's
-    own guidance is emphatic that thresholds must be evaluated against your data
-    and the cost of acting on them; treat these as something to tune on
-    recordings of real calls.
+    These defaults were measured against Jev 1.13 on a small labelled set (nine
+    replies under one prompt), not merely guessed. They sit in the gap between
+    how Jev scores a compliant reply and how it scores a violating one.
+
+    That gap is asymmetric and worth understanding before you move them. Jev is
+    close to certain about a violation and much less certain that nothing is
+    wrong, because spotting one broken rule is easier than confirming every rule
+    held. A compliant reply scored 0.46 to 0.93 on ``follows_instructions`` while
+    a violating one scored 0.01 to 0.03, so the threshold belongs well below the
+    midpoint. A threshold of 0.5 looks reasonable and fires on replies that are
+    perfectly fine.
+
+    Nine replies under one prompt is a small sample. Re-measure on your own
+    calls, as TypeSafe's own guidance recommends.
 
     Args:
-        follows_instructions: Trip when the probability the reply obeys the prompt
+        follows_instructions: Trigger when the probability the reply obeys the prompt
             falls below this.
-        unsupported_claim: Trip when the probability the reply invented a fact
+        unsupported_claim: Trigger when the probability the reply invented a fact
             rises above this.
-        advances_task: Trip when the probability the reply advances the task falls
+        advances_task: Trigger when the probability the reply advances the task falls
             below this.
         expected_tool_confidence: Only trust a tool mismatch when the Choice is
             at least this confident.
-        severity: Trip when the weighted severity level reaches this. Levels run
+        severity: Trigger when the weighted severity level reaches this. Levels run
             0 (on track) to 3 (must not continue).
         gated_check_ids: Ids of the checks that should block a reply rather than correct the
             next one. Gating costs the full draft plus one evaluation before any
