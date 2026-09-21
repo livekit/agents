@@ -4,7 +4,7 @@ import re
 from copy import deepcopy
 from typing import Any, ClassVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 
 from google.genai import types
@@ -34,14 +34,16 @@ def create_tools_config(
     """
     gemini_tools: list[types.Tool] = []
 
-    function_tools = [
-        types.FunctionDeclaration.model_validate(schema)
-        for schema in tool_ctx.parse_function_tools(
-            "google",
-            tool_behavior=tool_behavior.value if tool_behavior else None,
-            use_parameters_json_schema=use_parameters_json_schema,
-        )
-    ]
+    function_tools: list[types.FunctionDeclaration] = []
+    for schema in tool_ctx.parse_function_tools(
+        "google",
+        tool_behavior=tool_behavior.value if tool_behavior else None,
+        use_parameters_json_schema=use_parameters_json_schema,
+    ):
+        try:
+            function_tools.append(types.FunctionDeclaration.model_validate(schema))
+        except ValidationError as e:
+            raise ValueError(f"tool {schema.get('name')} has a schema Gemini rejected") from e
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
