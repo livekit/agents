@@ -185,7 +185,15 @@ class AvatarSession(BaseAvatarSession):
         self._mode = (
             "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
         )
-        self._model = model
+        # ★A caller may pass NOT_GIVEN explicitly: `NotGivenOr` permits it, and code
+        # that forwards an optional parameter through does it routinely. NotGiven
+        # defines `__repr__` as "NOT_GIVEN" and no `__str__`, so `str(NOT_GIVEN)` is
+        # the literal string "NOT_GIVEN" — which would be sent as the model name and
+        # refused by the server, on a call the caller expected to mean "the default".
+        # Normalised HERE, once, rather than at each read site, because the two
+        # readers below — `_is_expression_model` and the `model` field of the session
+        # request — must never disagree about which model this session is.
+        self._model: BitHumanModel = model if utils.is_given(model) else "essence"
 
         # validate mode-specific requirements
         if self._mode == "local":
