@@ -260,7 +260,10 @@ uv run --package livekit-plugins-microsoft-ai --no-default-groups \
 
 In the browser, explicitly click Start microphone and grant permission.
 Publish only a microphone audio track using the official `livekit-client` SDK
-and a short-lived microphone-only, room-scoped token minted server-side. Enable
+and a short-lived, room-scoped token minted server-side. Set `canPublish: true`
+**and** `canPublishSources: ["microphone"]`; the browser SDK requires the
+publish gate as well as the source allowlist. Do not grant video, room admin,
+or remote agent control. Enable
 playback from a user gesture, attach the agent audio, and consume the standard
 `lk.transcription` streams for transient interim/final captions. No microphone
 may start on page load or automatically after reconnect. Stop must release the
@@ -272,7 +275,9 @@ session control, accepts no typed-text input, and does not log transcripts.
 Its room captions and session state are transient. Do not enable audio dumps,
 debug transcript logs, external telemetry exporters, or browser recording when
 testing private speech. Each room session is limited to three minutes and
-closes both providers when its participant leaves.
+closes both providers when its participant leaves. Initial participant/audio
+readiness is bounded to ten seconds, so a failed browser join cannot leave
+the example waiting for a user turn until its session limit.
 
 Automated fixture audio published through the same browser/LiveKit track is a
 useful transport and lifecycle test, but it does **not** validate a physical

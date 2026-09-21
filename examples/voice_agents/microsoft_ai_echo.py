@@ -108,6 +108,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 session_host=False,
                 record=False,
             )
+            await asyncio.wait_for(session.room_io.wait_for_ready(), timeout=10.0)
             try:
                 await asyncio.wait_for(closed.wait(), timeout=SESSION_LIMIT)
             except asyncio.TimeoutError:

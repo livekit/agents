@@ -104,6 +104,7 @@ def _mock_entrypoint(monkeypatch: pytest.MonkeyPatch):
     vad_factory = MagicMock(return_value=detector)
     monkeypatch.setattr(example.inference, "VAD", vad_factory)
     session = MagicMock(spec=AgentSession)
+    session.room_io = SimpleNamespace(wait_for_ready=AsyncMock())
     callbacks = {}
 
     def on(event):
@@ -178,6 +179,7 @@ async def test_shares_vad_with_native_stt_and_closes_on_participant_disconnect(
     assert room["room_options"].text_output is True
     fake.session.say.assert_not_called()
     fake.session.generate_reply.assert_not_called()
+    fake.session.room_io.wait_for_ready.assert_awaited_once()
     fake.session.aclose.assert_awaited_once()
     fake.recognizer.__aexit__.assert_awaited_once()
     fake.speech.__aexit__.assert_awaited_once()
@@ -206,6 +208,20 @@ async def test_session_time_limit_is_bounded(monkeypatch: pytest.MonkeyPatch) ->
     fake.recognizer.__aexit__.assert_awaited_once()
     fake.speech.__aexit__.assert_awaited_once()
     fake.ctx.shutdown.assert_called_once_with(reason="Echo session ended")
+
+
+async def test_room_readiness_failure_closes_without_waiting_for_a_user_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _mock_entrypoint(monkeypatch)
+    fake.session.room_io.wait_for_ready.side_effect = asyncio.TimeoutError()
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(example.entrypoint(fake.ctx), 1)
+    fake.session.say.assert_not_called()
+    fake.session.aclose.assert_awaited_once()
+    fake.recognizer.__aexit__.assert_awaited_once()
+    fake.speech.__aexit__.assert_awaited_once()
+    fake.ctx.shutdown.assert_not_called()
 
 
 async def test_real_model_less_session_speaks_final_text_and_can_interrupt() -> None:
