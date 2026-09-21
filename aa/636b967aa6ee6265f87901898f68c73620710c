@@ -1,0 +1,25 @@
+tests/test_llm_telemetry.py
+  s_f50cdb7f85c15d::t_3aacb1590e4e92 3,5,13,30,263-397
+  s_f50cdb7f85c15d::t_04de03c414bffe 16-22,260-262
+  s_f50cdb7f85c15d::t_dd77784f642502 398-399
+livekit-agents/livekit/agents/voice/generation.py
+  s_f50cdb7f85c15d::t_04de03c414bffe 27-33,183
+  s_f50cdb7f85c15d::t_b88bc7b88cdf3f 189-202
+  s_f50cdb7f85c15d::t_3841497e2c10bd 203-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa636b967aa6ee6265f87901898f68c73620710c",
+  "prompts": {},
+  "sessions": {
+    "s_f50cdb7f85c15d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abca-c07b-78d0-bbbd-52575ebd6b3f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
