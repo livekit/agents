@@ -238,6 +238,9 @@ async def test_programmatic_interrupt_does_not_mark_proactive_reply_as_user_audi
         session.interrupt()
         assert session._in_user_activity
         assert not session._user_audio_since_generation
+        session._note_user_audio_transcription(
+            types.LiveServerMessage(server_content=types.LiveServerContent(interrupted=True))
+        )
         session._start_new_generation()
         assert not generations[-1].responds_to_user_audio
 
@@ -245,6 +248,37 @@ async def test_programmatic_interrupt_does_not_mark_proactive_reply_as_user_audi
         assert session._user_audio_since_generation
         session._mark_current_generation_done()
         session._start_new_generation()
+        assert generations[-1].responds_to_user_audio
+
+
+@pytest.mark.parametrize(
+    "transcription_kind", ["interim_input_transcription", "input_transcription"]
+)
+async def test_proactive_generation_barge_in_keeps_user_audio_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+    transcription_kind: str,
+) -> None:
+    async with _make_configured_session(monkeypatch, proactivity=True) as session:
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+
+        session._start_new_generation()
+        assert not generations[-1].responds_to_user_audio
+
+        # Gemini can report new input while its prior output is still active.
+        session._note_user_audio_transcription(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    **{transcription_kind: types.Transcription(text="Hello")}
+                )
+            )
+        )
+        session._note_user_audio_transcription(
+            types.LiveServerMessage(server_content=types.LiveServerContent(interrupted=True))
+        )
+        session._mark_current_generation_done()
+        session._start_new_generation()
+
         assert generations[-1].responds_to_user_audio
 
 

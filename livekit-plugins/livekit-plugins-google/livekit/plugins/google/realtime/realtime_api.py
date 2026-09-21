@@ -564,6 +564,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._in_user_activity = False
         self._user_audio_since_generation = False
+        self._programmatic_interrupt_pending = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
@@ -923,6 +924,8 @@ class RealtimeSession(llm.RealtimeSession):
         ):
             return
         if self._manual_activity_detection:
+            if not self._in_user_activity:
+                self._programmatic_interrupt_pending = True
             self._start_user_activity()
 
     def truncate(
@@ -1364,6 +1367,7 @@ class RealtimeSession(llm.RealtimeSession):
             is_given(self._opts.proactivity) and self._opts.proactivity
         )
         self._user_audio_since_generation = False
+        self._programmatic_interrupt_pending = False
         generation_event = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
@@ -1717,13 +1721,26 @@ class RealtimeSession(llm.RealtimeSession):
         )
 
     def _note_user_audio_transcription(self, response: types.LiveServerMessage) -> None:
-        if self._current_generation and not self._current_generation._done:
-            # Later transcript chunks belong to this response, not a future one.
+        if not (sc := response.server_content):
             return
-        if (sc := response.server_content) and (
-            (sc.interim_input_transcription and sc.interim_input_transcription.text)
-            or (sc.input_transcription and sc.input_transcription.text)
+
+        if sc.interrupted:
+            # The server can interrupt active output for a new user turn. An
+            # activity_start sent by interrupt() is not evidence of user audio.
+            if not self._programmatic_interrupt_pending:
+                self._user_audio_since_generation = True
+            self._programmatic_interrupt_pending = False
+
+        if sc.interim_input_transcription and sc.interim_input_transcription.text:
+            # Interim text reports live input, including barge-ins during output.
+            self._user_audio_since_generation = True
+        elif (
+            sc.input_transcription
+            and sc.input_transcription.text
+            and (not self._current_generation or self._current_generation._done)
         ):
+            # Final transcript chunks during active output may belong to its
+            # original input, so they must not arm a later generation.
             self._user_audio_since_generation = True
 
     def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
