@@ -1781,7 +1781,7 @@ async def test_vad_fallback_uses_next_vad_inference_event(
                 speaking=True,
             )
         )
-        current_speech.interrupt.assert_called_once_with()
+        current_speech.interrupt.assert_called_once_with(source="audio_activity")
         assert any(
             record.levelno == logging.INFO
             and "falling back to VAD-based interruption" in record.message
@@ -2077,6 +2077,26 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
 
 
 @pytest.mark.parametrize(

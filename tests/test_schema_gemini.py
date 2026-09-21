@@ -4,6 +4,8 @@ import pytest
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from livekit.agents import llm
+from livekit.agents.llm import function_tool
 from livekit.plugins.google import utils
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
@@ -185,3 +187,178 @@ async def test_json_def_date():
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
+
+
+#  FunctionTool: Gemini FunctionDeclaration tests
+
+
+@function_tool
+async def save_contact(fields: dict[str, str]) -> None:
+    """Save the contact fields gathered in the conversation (free-form keys)."""
+
+
+@function_tool
+async def ping() -> None:
+    """A tool without parameters."""
+
+
+# Test for Gemini Text API. It should emit parameters_json_schema
+async def test_function_tool_uses_parameters_json_schema_on_text_api():
+    [schema] = llm.ToolContext([save_contact]).parse_function_tools("google")
+
+    assert "parameters" not in schema
+    fields = schema["parameters_json_schema"]["properties"]["fields"]
+    assert fields["type"] == "object"
+    assert fields["additionalProperties"] == {"type": "string"}
+    assert schema["parameters_json_schema"]["required"] == ["fields"]
+
+    decl = types.FunctionDeclaration.model_validate(schema)
+    assert decl.parameters is None
+    assert decl.parameters_json_schema is not None
+
+
+# Test for Gemini Live API. It should keep the simplified legacy parameters
+async def test_function_tool_uses_legacy_parameters_on_live_api():
+    [schema] = llm.ToolContext([save_contact]).parse_function_tools(
+        "google", use_parameters_json_schema=False
+    )
+
+    assert "parameters_json_schema" not in schema
+    assert schema["parameters"] == {
+        "type": types.Type.OBJECT,
+        "properties": {"fields": {"type": types.Type.OBJECT}},
+        "required": ["fields"],
+    }
+    types.FunctionDeclaration.model_validate(schema)
+
+
+# Test for a FunctionTool with no parameters. Both APIs should omit the schema
+async def test_function_tool_without_parameters():
+    [text_schema] = llm.ToolContext([ping]).parse_function_tools("google")
+    assert text_schema["parameters_json_schema"] is None
+    assert "parameters" not in text_schema
+
+    [live_schema] = llm.ToolContext([ping]).parse_function_tools(
+        "google", use_parameters_json_schema=False
+    )
+    assert live_schema["parameters"] is None
+    assert "parameters_json_schema" not in live_schema
+
+
+# Test for RawFunctionTool and FunctionTool matching on the text API
+async def test_raw_function_tool_matches_function_tool_on_text_api():
+    raw = function_tool(
+        lambda raw_arguments: None,
+        raw_schema={
+            "name": "save_contact",
+            "description": "Save the contact fields gathered in the conversation (free-form keys).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fields": {"type": "object", "additionalProperties": {"type": "string"}}
+                },
+                "required": ["fields"],
+            },
+        },
+    )
+    [raw_schema] = llm.ToolContext([raw]).parse_function_tools("google")
+    [fnc_schema] = llm.ToolContext([save_contact]).parse_function_tools("google")
+
+    raw_fields = raw_schema["parameters_json_schema"]["properties"]["fields"]
+    fnc_fields = fnc_schema["parameters_json_schema"]["properties"]["fields"]
+    assert fnc_fields["additionalProperties"] == raw_fields["additionalProperties"]
+    assert fnc_schema["parameters_json_schema"]["required"] == ["fields"]
+
+
+# Test for create_tools_config emitting parameters_json_schema
+async def test_create_tools_config_emits_parameters_json_schema():
+    tools, _ = utils.create_tools_config(llm.ToolContext([save_contact]))
+
+    [tool] = tools
+    assert tool.function_declarations is not None
+    [decl] = tool.function_declarations
+    assert decl.parameters is None
+    assert decl.parameters_json_schema is not None
+    assert decl.parameters_json_schema["properties"]["fields"]["additionalProperties"] == {
+        "type": "string"
+    }
+
+
+# #7349: JSON Schema annotation keywords that a real MCP server emits are legal input
+# but reach types.FunctionDeclaration, whose Schema model is declared extra="forbid".
+
+
+async def test_unknown_schema_keywords_are_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "view": {
+                "type": "string",
+                "enum": ["THREAD_VIEW_UNSPECIFIED", "THREAD_VIEW_MINIMAL"],
+                "x-google-enum-descriptions": ["a", "b"],
+            },
+            "limit": {"type": "integer", "readOnly": True, "deprecated": True},
+        },
+        "required": ["view"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert "x-google-enum-descriptions" not in params["properties"]["view"]
+    types.FunctionDeclaration.model_validate(
+        {"name": "search_threads", "description": "", "parameters": params}
+    )
+
+
+async def test_unknown_keyword_inside_ref_definition_is_dropped():
+    schema = {
+        "type": "object",
+        "properties": {
+            "attachments": {"type": "array", "items": {"$ref": "#/$defs/Attachment"}},
+        },
+        "$defs": {
+            "Attachment": {
+                "type": "object",
+                "properties": {"id": {"type": "string", "readOnly": True}},
+            }
+        },
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    types.FunctionDeclaration.model_validate(
+        {"name": "create_draft", "description": "", "parameters": params}
+    )
+
+
+# `const` is not a types.Schema field either, but unlike the keywords above the
+# transformer itself consumes it: it converts a literal into the single-value `enum`
+# Gemini does support. Dropping it before that conversion would silently widen the
+# parameter to any value of its type.
+async def test_const_becomes_a_single_value_enum():
+    schema = {
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "const": "only", "readOnly": True},
+        },
+        "required": ["mode"],
+    }
+    params = utils._GeminiJsonSchema(schema).simplify()
+    assert params["properties"]["mode"] == {"type": types.Type.STRING, "enum": ["only"]}
+    types.FunctionDeclaration.model_validate(
+        {"name": "run", "description": "", "parameters": params}
+    )
+
+
+def _raw_tool(name: str, parameters: dict) -> llm.RawFunctionTool:
+    return function_tool(
+        lambda raw_arguments: None,
+        raw_schema={"name": name, "description": "d", "parameters": parameters},
+    )
+
+
+# Test that a declaration Gemini rejects names the tool it came from
+async def test_rejected_tool_names_itself():
+    # minLength is a Schema field, so it reaches validation whatever the transformer drops
+    bad = _raw_tool(
+        "bad", {"type": "object", "properties": {"a": {"type": "string", "minLength": "many"}}}
+    )
+
+    with pytest.raises(ValueError, match="tool bad has a schema Gemini rejected"):
+        utils.create_tools_config(llm.ToolContext([bad]), use_parameters_json_schema=False)

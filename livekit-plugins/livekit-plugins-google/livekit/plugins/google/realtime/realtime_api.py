@@ -74,10 +74,32 @@ KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
 # See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
 KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.8-live",
+        "gemini-3.8-live-extended-thinking",
         "gemini-3.1-flash-live-preview",
         "gemini-2.5-flash-native-audio-preview-12-2025",
     }
 )
+
+
+# generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
+# answer that placeholder with an empty turn instead, so they must not get it.
+MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
+
+
+def _needs_reply_placeholder(model: str) -> bool:
+    return not any(tag in model for tag in MODELS_WITHOUT_REPLY_PLACEHOLDER)
+
+
+# These models declare tools NON_BLOCKING unless the client says otherwise. Sending nothing
+# would leave the server async while we still treat the tools as blocking.
+MODELS_DEFAULT_NON_BLOCKING: tuple[str, ...] = ("3.8",)
+
+
+def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
+    if any(tag in model for tag in MODELS_DEFAULT_NON_BLOCKING):
+        return types.Behavior.NON_BLOCKING
+    return NOT_GIVEN
 
 
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
@@ -291,7 +313,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
-            tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
+            tool_behavior (Behavior, optional): The behavior for tool call. Defaults to NON_BLOCKING on models that declare it by default (Gemini 3.8 Live), and to the server default (BLOCKING) elsewhere.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
@@ -327,7 +349,6 @@ class RealtimeModel(llm.RealtimeModel):
                 else "gemini-2.5-flash-native-audio-preview-12-2025"
             )
 
-        mutable = "3.1" not in model
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
                 message_truncation=False,
@@ -336,8 +357,8 @@ class RealtimeModel(llm.RealtimeModel):
                 auto_tool_reply_generation=True,
                 audio_output=types.Modality.AUDIO in modalities,
                 manual_function_calls=False,
-                mutable_chat_context=mutable,
-                mutable_instructions=mutable,
+                mutable_chat_context=True,
+                mutable_instructions=True,
                 mutable_tools=False,
                 per_response_tool_choice=False,
             )
@@ -377,12 +398,6 @@ class RealtimeModel(llm.RealtimeModel):
         # Validate model/API compatibility for known models
         _validate_model_api_match(model, use_vertexai)
 
-        if "3.1" in model:
-            logger.warning(
-                f"'{model}' has limited mid-session update support. instructions, chat "
-                "context, and tool updates will not be applied until the next session."
-            )
-
         self._opts = _RealtimeOptions(
             model=model,
             api_key=gemini_api_key,
@@ -408,7 +423,9 @@ class RealtimeModel(llm.RealtimeModel):
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
             api_version=api_version,
-            tool_behavior=tool_behavior,
+            tool_behavior=tool_behavior
+            if is_given(tool_behavior)
+            else _default_tool_behavior(model),
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
@@ -646,9 +663,11 @@ class RealtimeSession(llm.RealtimeSession):
                     turns=[
                         types.Content(
                             parts=[types.Part(text=instructions)],
-                            # Vertex AI ignores role=None or role="system" and only works with role="model".
-                            # Gemini Live API (non-Vertex) errors on role="system"; role=None works as system role.
-                            role="model" if self._opts.vertexai else None,
+                            # Both APIs error on role="system". This was role=None on the
+                            # Gemini API, which 2.5 accepted as the system role but 3.1 and
+                            # 3.8 reject with a 1007 close that kills the session. "model"
+                            # is accepted by all three and by Vertex.
+                            role="model",
                         )
                     ],
                     turn_complete=False,
@@ -711,9 +730,9 @@ class RealtimeSession(llm.RealtimeSession):
                 ]
             ):
                 logger.warning(
-                    "a tool result wants no reply, but Gemini will answer it anyway; declare "
-                    "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
-                    "regardless, since an unanswered call blocks the session.",
+                    "a tool result wants no reply, but Gemini will answer it anyway; pass "
+                    "tool_behavior=NON_BLOCKING to keep it silent. Sending it regardless, "
+                    "since an unanswered call blocks the session.",
                     extra={"functions": silenced},
                 )
 
@@ -845,12 +864,11 @@ class RealtimeSession(llm.RealtimeSession):
             )
             self._in_user_activity = False
 
-        # Gemini requires the last message to end with user's turn
-        # so we need to add a placeholder user turn in order to trigger a new generation
         turns = []
         if is_given(instructions):
             turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
+        if _needs_reply_placeholder(self._opts.model):
+            turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
         def _on_timeout() -> None:
@@ -950,9 +968,9 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
-            config = self._build_connect_config()
             session = None
             try:
+                config = self._build_connect_config()
                 logger.debug("connecting to Gemini Realtime API...")
                 t0 = time.perf_counter()
                 async with self._client.aio.live.connect(
