@@ -894,10 +894,13 @@ class AvatarSession(BaseAvatarSession):
         reports flowing so the session degrades (silently, since the avatar
         carried the only audio track) instead of deadlocking.
         """
-        # Read before teardown: closing the runner is what strands the segment.
-        owed = self._sink is not None and self._sink.owes_segment_end
-
         await self.aclose()
+
+        # Read after teardown, not before: the runner keeps draining the audio
+        # output until aclose() cancels its reader, so a turn captured after the
+        # fatal can still become owed here. Once aclose() returns, no consumer is
+        # left to change the obligation before the null drain takes over.
+        owed = self._sink is not None and self._sink.owes_segment_end
 
         if self._drain_stopped:
             # A concurrent aclose() already finished its cleanup while this one

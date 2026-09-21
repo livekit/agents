@@ -610,6 +610,47 @@ async def test_fatal_completes_a_marker_the_runner_never_drained() -> None:
     await s.aclose()
 
 
+async def test_fatal_completes_a_segment_the_runner_takes_while_closing() -> None:
+    """The reader keeps draining the queue until its own cancellation, inside aclose().
+
+    A reply captured after the fatal is therefore consumed *during* teardown,
+    and only becomes owed once the runner has pushed its marker through. Reading
+    the sink before the runner stops misses it, and the session blocks in
+    wait_for_playout() for good.
+    """
+    s = session()
+    s._client = FakeSTVClient()
+    sink = _FrameSink()
+    s._sink = sink
+    audio_output = QueueAudioOutput(sample_rate=24000, wait_playback_start=True)
+    s._audio_output = audio_output
+
+    # The session speaks after the fatal: the frames go to a reader that is
+    # about to be cancelled, but has not been cancelled yet.
+    await audio_output.capture_frame(_frame(100))
+    audio_output.flush()
+
+    class _ReaderStillDraining:
+        """Stands in for AvatarRunner: the reader drains, then is torn down."""
+
+        async def aclose(self) -> None:
+            sink.note_input_segment_open()
+            sink.note_input_audio()
+            async for item in audio_output:
+                if isinstance(item, AudioSegmentEnd):
+                    sink.note_input_segment_end()
+                    return
+
+    s._avatar_runner = _ReaderStillDraining()  # type: ignore[assignment]
+    assert not sink.owes_segment_end, "nothing is owed until the reader takes the marker"
+
+    await s._degrade()
+
+    ev = await asyncio.wait_for(audio_output.wait_for_playout(), 2)
+    assert ev.interrupted is False
+    await s.aclose()
+
+
 async def test_fatal_between_the_first_frame_and_the_runner_fails_the_start() -> None:
     """_on_fatal cannot schedule a degrade before a runner exists to tear down."""
     s = session()
