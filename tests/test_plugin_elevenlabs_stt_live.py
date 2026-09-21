@@ -1,4 +1,4 @@
-"""Live ElevenLabs transcription with local VAD."""
+"""Live ElevenLabs transcription with manual and automatic turn commits."""
 
 from __future__ import annotations
 
@@ -19,7 +19,25 @@ from livekit.plugins import elevenlabs, silero
 pytestmark = pytest.mark.plugin("elevenlabs")
 
 
-async def test_live_vad_flush_preserves_each_turn() -> None:
+class _FixedTurnDetector:
+    model = "fixed-test-prediction"
+    provider = "test"
+
+    def __init__(self, probability: float) -> None:
+        self.probability = probability
+
+    async def supports_language(self, language):
+        return True
+
+    async def unlikely_threshold(self, language):
+        return 0.5
+
+    async def predict_end_of_turn(self, chat_ctx, *, timeout=None):
+        return self.probability
+
+
+@pytest.mark.parametrize("turn_detection", ["vad", "manual", 0.1, 0.9])
+async def test_live_flush_preserves_each_turn(turn_detection) -> None:
     load_dotenv(Path(__file__).parents[1] / ".env")
     if not os.environ.get("ELEVEN_API_KEY"):
         pytest.skip("ELEVEN_API_KEY is required for live ElevenLabs validation")
@@ -34,7 +52,11 @@ async def test_live_vad_flush_preserves_each_turn() -> None:
         session = AgentSession(
             stt=stt,
             vad=silero.VAD.load(),
-            turn_handling={"turn_detection": "vad"},
+            turn_handling={
+                "turn_detection": _FixedTurnDetector(turn_detection)
+                if isinstance(turn_detection, float)
+                else turn_detection,
+            },
             session_close_transcript_timeout=0,
         )
         finals: asyncio.Queue[str] = asyncio.Queue()
@@ -63,7 +85,13 @@ async def test_live_vad_flush_preserves_each_turn() -> None:
             assert finals.empty()
             for _ in range(2):
                 await feed(audio)
-                await feed(silence)
+                if turn_detection == "manual":
+                    committed = await session.commit_user_turn(
+                        transcript_timeout=10, skip_reply=True
+                    )
+                    assert "weather" in committed.lower()
+                else:
+                    await feed(silence)
                 transcript = await asyncio.wait_for(finals.get(), timeout=20)
                 assert "weather" in transcript.lower()
                 assert "paris" in transcript.lower()

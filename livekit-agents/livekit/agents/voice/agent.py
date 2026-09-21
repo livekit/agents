@@ -388,7 +388,7 @@ class Agent:
         You can override this node with your own implementation for more flexibility (e.g.,
         custom pre-processing of audio, additional buffering, or alternative STT strategies).
 
-        If your override buffers audio passed to Agent.default.stt_node, automatic VAD
+        If your override buffers audio passed to Agent.default.stt_node, framework
         flushing can occur before that audio reaches STT. Set
         stt.capabilities.manual_flush = False on the underlying STT providers and manage
         flushing in your implementation.
@@ -547,13 +547,9 @@ class Agent:
                     )
                     stream.start_time_offset = time.time() - _audio_input_started_at
 
-                    def _flush() -> None:
-                        if wrapped_stt.capabilities.manual_flush:
-                            stream.flush()
-
                     pipeline = _STTPipelineContextVar.get(None)
                     if pipeline:
-                        pipeline._flush_callback = _flush
+                        pipeline._recognize_stream = stream
 
                     @utils.log_exceptions(logger=logger)
                     async def _forward_input() -> None:
@@ -566,7 +562,7 @@ class Agent:
                             yield event
                     finally:
                         if pipeline:
-                            pipeline._flush_callback = None
+                            pipeline._recognize_stream = None
                         await utils.aio.cancel_and_wait(forward_task)
             finally:
                 if temporary_adapter is not None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -98,16 +100,15 @@ class _PassthroughAgent(_TestAgent):
 
 
 @pytest.mark.parametrize("agent_type", [_TestAgent, _PassthroughAgent])
-@pytest.mark.parametrize("turn_detection", ["vad", None, "manual", "stt"])
 @pytest.mark.parametrize("manual_flush", [True, False])
-async def test_vad_eos_flushes_supported_stt_in_audio_order(
-    turn_detection, manual_flush: bool, agent_type
+async def test_pipeline_flushes_supported_stt_in_audio_order(
+    manual_flush: bool, agent_type
 ) -> None:
     stt_impl = _FlushableSTT(manual_flush=manual_flush)
     session = AgentSession(
         stt=stt_impl,
         vad=FakeVAD(),
-        turn_handling={"turn_detection": turn_detection},
+        turn_handling={"turn_detection": "manual"},
         session_close_transcript_timeout=0.0,
     )
     await session.start(agent_type())
@@ -126,7 +127,7 @@ async def test_vad_eos_flushes_supported_stt_in_audio_order(
                     assert recognition._stt_pipeline is pipeline
                     assert stt_impl.streams.empty()
                 else:
-                    assert pipeline._flush_callback is None
+                    assert pipeline._recognize_stream is None
                     assert recognition._stt_pipeline is not pipeline
                     pipeline = recognition._stt_pipeline
                     stream = await asyncio.wait_for(stt_impl.streams.get(), 5)
@@ -140,6 +141,7 @@ async def test_vad_eos_flushes_supported_stt_in_audio_order(
                 )
             )
             pipeline.audio_ch.send_nowait(frame)
+            assert pipeline.flush() is manual_flush
             await recognition._on_vad_event(
                 vad.VADEvent(
                     type=vad.VADEventType.END_OF_SPEECH,
@@ -151,7 +153,7 @@ async def test_vad_eos_flushes_supported_stt_in_audio_order(
             )
             pipeline.audio_ch.send_nowait(frame)
             assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
-            if manual_flush and turn_detection in ("vad", None):
+            if manual_flush:
                 assert isinstance(
                     await asyncio.wait_for(stream.inputs.get(), 5),
                     stt.RecognizeStream._FlushSentinel,
@@ -172,4 +174,120 @@ async def test_vad_eos_flushes_supported_stt_in_audio_order(
         assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
     finally:
         await session.aclose()
-    assert pipeline._flush_callback is None
+    assert pipeline._recognize_stream is None
+
+
+@pytest.mark.parametrize("manual_flush", [True, False])
+@pytest.mark.parametrize("recent_final", [True, False])
+@pytest.mark.parametrize("audio_detached", [True, False])
+async def test_manual_commit_flushes_supported_stt(
+    manual_flush: bool, recent_final: bool, audio_detached: bool
+) -> None:
+    stt_impl = _FlushableSTT(manual_flush=manual_flush)
+    session = AgentSession(
+        stt=stt_impl,
+        vad=FakeVAD(),
+        turn_handling={"turn_detection": "manual"},
+        session_close_transcript_timeout=0.0,
+    )
+    await session.start(_TestAgent())
+    try:
+        stream = await asyncio.wait_for(stt_impl.streams.get(), 5)
+        recognition = session._activity._audio_recognition
+        frame = rtc.AudioFrame.create(16000, 1, 160)
+        recognition._push_audio(frame)
+        assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+        if recent_final:
+            recognition._last_final_transcript_time = time.time()
+        commit = recognition._commit_user_turn(
+            audio_detached=audio_detached,
+            transcript_timeout=0.02,
+            stt_flush_duration=0.2,
+            skip_reply=True,
+        )
+        if manual_flush:
+            assert isinstance(
+                await asyncio.wait_for(stream.inputs.get(), 5),
+                stt.RecognizeStream._FlushSentinel,
+            )
+            assert not commit.done()
+            await recognition._on_stt_event(
+                stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[stt.SpeechData(language="en", text="hello")],
+                )
+            )
+        assert await asyncio.wait_for(commit, 5) == ("hello" if manual_flush else "")
+        if not manual_flush and audio_detached and not recent_final:
+            silence = await asyncio.wait_for(stream.inputs.get(), 5)
+            assert isinstance(silence, rtc.AudioFrame)
+            assert silence.duration == 0.2
+        recognition._push_audio(frame)
+        assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.parametrize(
+    "event_type", [stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT]
+)
+async def test_text_after_vad_eos_triggers_positive_eot_flush(event_type) -> None:
+    detector = MagicMock()
+    detector.model = "test"
+    detector.provider = "test"
+    detector.supports_language = AsyncMock(return_value=True)
+    detector.unlikely_threshold = AsyncMock(return_value=0.5)
+    detector.predict_end_of_turn = AsyncMock(return_value=0.9)
+    stt_impl = _FlushableSTT(manual_flush=True)
+    session = AgentSession(
+        stt=stt_impl,
+        vad=FakeVAD(),
+        turn_handling={
+            "turn_detection": detector,
+            "endpointing": {"min_delay": 0.01, "max_delay": 6.0},
+        },
+        session_close_transcript_timeout=0.0,
+    )
+    await session.start(_PassthroughAgent())
+    try:
+        stream = await asyncio.wait_for(stt_impl.streams.get(), 5)
+        recognition = session._activity._audio_recognition
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=0,
+                timestamp=0,
+                speech_duration=0,
+                silence_duration=0,
+            )
+        )
+        frame = rtc.AudioFrame.create(16000, 1, 160)
+        recognition._push_audio(frame)
+        await recognition._on_vad_event(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=160,
+                timestamp=0.01,
+                speech_duration=0.01,
+                silence_duration=0,
+            )
+        )
+        assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+        assert stream.inputs.empty()
+        detector.predict_end_of_turn.assert_not_called()
+        await recognition._on_stt_event(
+            stt.SpeechEvent(
+                type=event_type,
+                alternatives=[stt.SpeechData(language="en", text="hello there")],
+            )
+        )
+        assert isinstance(
+            await asyncio.wait_for(stream.inputs.get(), 1),
+            stt.RecognizeStream._FlushSentinel,
+        )
+        detector.predict_end_of_turn.assert_awaited_once()
+        detector.supports_language.assert_awaited_with("en")
+        recognition._push_audio(frame)
+        assert await asyncio.wait_for(stream.inputs.get(), 5) is frame
+    finally:
+        await session.aclose()
