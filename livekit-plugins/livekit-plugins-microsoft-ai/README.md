@@ -1,13 +1,23 @@
 # Microsoft AI speech plugin for LiveKit Agents
 
-**Azure Speech TTS is live-smoke-verified; STT is protocol-tested only.** The
-complete-text/complete-audio TTS path has been verified with MAI-Voice-2-Flash
-(Harper, PCM16 mono at 24 kHz). This is not a guarantee of access in every
-resource/region or a model-latency benchmark.
+**STT and Azure Speech TTS have bounded live smoke coverage.** The TTS path has
+been verified with MAI-Voice-2-Flash (Harper, PCM16 mono at 24 kHz), including
+playback through a local LiveKit room using the installed plugin wheel and
+released `livekit-agents==1.8.2`.
 
-Native streaming STT has hermetic coverage but still requires live endpoint
-validation, including its backend audio-tail behavior. An Azure Speech TTS
-resource/key does **not** establish access to that STT service.
+The streaming STT path has separately transcribed one short synthetic English
+utterance through the installed wheel, using the Azure GA transcription route,
+explicit `api-key` authentication, PCM16 mono at 16 kHz, and a client commit.
+The acknowledged final matched every expected word, including the last word,
+without added silence or promoting an interim hypothesis. The endpoint
+acknowledged the configured 16 kHz rate before any audio was sent.
+
+This does **not** establish access in every resource/region, recognition
+accuracy across inputs/languages, every backend tail boundary, or long-session
+and VAD-driven multi-turn behavior; those still need live validation.
+Hermetic tests cover the client lifecycle and VAD ordering. Neither result is
+a model-latency benchmark. An Azure Speech TTS resource/key does **not**
+establish access to the separate STT service.
 
 There is no LLM, speech-to-speech realtime model, Azure OpenAI convenience
 constructor, provider catalog, token minting, or OpenAI credential/model default.
@@ -98,9 +108,9 @@ uses `/openai/v1/realtime?intent=transcription`; the deployment name is sent in
 Configure the full URL in `MICROSOFT_AI_STT_URL` and the deployment in
 `MICROSOFT_AI_STT_MODEL`. The plugin sends that URL unchanged; it does not add
 the conversation API's `model=` query or preview `deployment`/`api-version`
-parameters. Do not put a key in the URL. This routing/auth documentation does
-not establish this deployment's audio rate or transcript-event compatibility:
-the MAI contract below still needs separate live validation.
+parameters. Do not put a key in the URL. This routing/auth documentation alone
+does not establish audio-rate or transcript-event compatibility for a new
+deployment; validate the MAI contract below independently.
 
 ```python
 from livekit.agents import inference
@@ -116,7 +126,7 @@ timestamps (the current bundled Silero VAD provides these), or pass `vad=None`
 and call the stream's `flush()` / `end_input()` yourself. **Configuring only
 AgentSession's VAD is insufficient:** it does not commit native STT streams.
 
-The provisional protocol is:
+The client protocol is:
 
 1. Await `session.created`, send `session.update`, await `session.updated`.
 2. Configure a transcription session with `audio.input.format` equal to
@@ -133,8 +143,9 @@ The provisional protocol is:
    authoritative `transcript`. Only this emits a LiveKit final transcript,
    followed by end-of-speech. The socket stays open for subsequent utterances.
 
-The deployment must be verified to implement these event fields and
-handshake/commit ordering. HTTP statuses are preserved; WebSocket
+New deployments must be verified to implement these event fields and
+handshake/commit ordering. A short manual-commit smoke does not exercise every
+interim revision or VAD boundary. HTTP statuses are preserved; WebSocket
 `error` / transcription `.failed` events are terminal unless a pre-audio
 transient status is supplied. The initial error mapping recognizes
 `error.status_code`, `invalid_api_key`, `rate_limit_exceeded`, `content_filter`

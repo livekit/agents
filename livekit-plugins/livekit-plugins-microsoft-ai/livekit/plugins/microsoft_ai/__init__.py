@@ -16,8 +16,8 @@
 
 """Microsoft AI STT and TTS using explicit, deployment-specific endpoints.
 
-TTS uses Azure Speech; the STT contract still needs live endpoint validation.
-See the package README before connecting.
+TTS uses Azure Speech; STT uses the transcription WebSocket API. See the package
+README for supported contracts and the limits of the bounded live smoke coverage.
 """
 
 from .stt import STT

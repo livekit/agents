@@ -126,7 +126,9 @@ class _Item:
 
 
 class STT(stt.STT):
-    """Native streaming Microsoft AI transcription using a provisional wire contract.
+    """Native streaming Microsoft AI transcription with explicit client commits.
+
+    See the package README for deployment-specific contract and validation limits.
 
     Args:
         vad: A VAD emitting ordered inference timestamps (e.g. LiveKit's Silero VAD).
