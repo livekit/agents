@@ -203,13 +203,49 @@ async def test_proactive_audio_generation_preserves_user_response_attribution(
         generations: list[llm.GenerationCreatedEvent] = []
         session.on("generation_created", generations.append)
 
-        session._user_audio_since_generation = True
+        session._note_user_audio_transcription(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text="Hello")
+                )
+            )
+        )
         session._start_new_generation()
         assert generations[-1].responds_to_user_audio
 
+        # Subsequent chunks of the same response must not arm a later proactive reply.
+        session._note_user_audio_transcription(
+            types.LiveServerMessage(
+                server_content=types.LiveServerContent(
+                    input_transcription=types.Transcription(text=" again")
+                )
+            )
+        )
+        assert not session._user_audio_since_generation
         session._mark_current_generation_done()
         session._start_new_generation()
         assert not generations[-1].responds_to_user_audio
+
+
+async def test_programmatic_interrupt_does_not_mark_proactive_reply_as_user_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_configured_session(monkeypatch, proactivity=True) as session:
+        monkeypatch.setattr(RealtimeSession, "_manual_activity_detection", property(lambda _: True))
+        generations: list[llm.GenerationCreatedEvent] = []
+        session.on("generation_created", generations.append)
+
+        session.interrupt()
+        assert session._in_user_activity
+        assert not session._user_audio_since_generation
+        session._start_new_generation()
+        assert not generations[-1].responds_to_user_audio
+
+        session.start_user_activity()
+        assert session._user_audio_since_generation
+        session._mark_current_generation_done()
+        session._start_new_generation()
+        assert generations[-1].responds_to_user_audio
 
 
 async def test_tool_call_is_delivered_without_written_call_text(

@@ -901,9 +901,12 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._manual_activity_detection:
             return
 
+        self._user_audio_since_generation = True
+        self._start_user_activity()
+
+    def _start_user_activity(self) -> None:
         if not self._in_user_activity:
             self._in_user_activity = True
-            self._user_audio_since_generation = True
             self._send_client_event(
                 types.LiveClientRealtimeInput(
                     activity_start=types.ActivityStart(),
@@ -911,15 +914,16 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def interrupt(self) -> None:
-        # Gemini Live treats activity start as interruption, so we rely on start_user_activity
-        # notifications to handle it
+        # Gemini Live treats activity start as interruption. This does not imply
+        # that new user audio was received.
         if (
             self._opts.realtime_input_config
             and self._opts.realtime_input_config.activity_handling
             == types.ActivityHandling.NO_INTERRUPTION
         ):
             return
-        self.start_user_activity()
+        if self._manual_activity_detection:
+            self._start_user_activity()
 
     def truncate(
         self,
@@ -1199,12 +1203,7 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
-                    if (sc := response.server_content) and (
-                        (sc.interim_input_transcription and sc.interim_input_transcription.text)
-                        or (sc.input_transcription and sc.input_transcription.text)
-                    ):
-                        self._user_audio_since_generation = True
-
+                    self._note_user_audio_transcription(response)
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1716,6 +1715,16 @@ class RealtimeSession(llm.RealtimeSession):
                 recoverable=recoverable,
             ),
         )
+
+    def _note_user_audio_transcription(self, response: types.LiveServerMessage) -> None:
+        if self._current_generation and not self._current_generation._done:
+            # Later transcript chunks belong to this response, not a future one.
+            return
+        if (sc := response.server_content) and (
+            (sc.interim_input_transcription and sc.interim_input_transcription.text)
+            or (sc.input_transcription and sc.input_transcription.text)
+        ):
+            self._user_audio_since_generation = True
 
     def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
         if resp.tool_call:
