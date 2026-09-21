@@ -479,6 +479,7 @@ class AgentActivity(RecognitionHooks):
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
         self._realtime_user_stopped_speaking_at: float | None = None
         self._realtime_late_input_speech_stop = False
+        self._realtime_turn_has_output = False
         self._latency_budget_recorded_user_metrics: llm.MetricsReport | None = None
 
     def _resolve_rt_turn_detection_enabled(self) -> bool:
@@ -2240,6 +2241,7 @@ class AgentActivity(RecognitionHooks):
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
         self._session._cancel_latency_budget_watch()
+        self._realtime_turn_has_output = False
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2269,6 +2271,7 @@ class AgentActivity(RecognitionHooks):
             # Keep the generation's turn anchor rather than attributing a later turn.
             self._realtime_late_input_speech_stop = False
         else:
+            self._realtime_turn_has_output = False
             self._realtime_user_stopped_speaking_at = time.time()
             self._session._start_latency_budget_watch(self._realtime_user_stopped_speaking_at)
         if self.vad is None or self.using_default_vad:
@@ -2323,7 +2326,10 @@ class AgentActivity(RecognitionHooks):
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
-        if self._realtime_user_stopped_speaking_at is None:
+        if (
+            self._realtime_user_stopped_speaking_at is None
+            and not self._realtime_turn_has_output
+        ):
             # Generation creation is the first available end-of-turn signal for
             # providers that emit input_speech_stopped only after output begins.
             self._realtime_user_stopped_speaking_at = time.time()
@@ -4470,6 +4476,7 @@ class AgentActivity(RecognitionHooks):
                     speech_id=speech_handle.id,
                 )
                 self._realtime_user_stopped_speaking_at = None
+                self._realtime_turn_has_output = True
 
             self._session._update_agent_state(
                 "speaking",
