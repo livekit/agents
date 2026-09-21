@@ -1,0 +1,32 @@
+tests/test_plugin_elevenlabs_stt_live.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 1,22-40,55-59,88-94
+livekit-agents/livekit/agents/stt/stt.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 146-148
+tests/test_audio_recognition_turn_detection.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 62-63,718-834
+livekit-agents/livekit/agents/voice/agent.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 391,552,565
+livekit-agents/livekit/agents/voice/audio_recognition.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 181,192-201,203,209-210,326,1034-1036,1080-1084,1088-1090,1413-1427,1431,1555-1565,1568-1571,1573-1574,1583,1775-1798,1813-1815
+  s_1dda5a69e136fb::t_05b2d429f9c035 1816
+tests/test_agent_stt_node.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 4-5,104-105,111,130,144,156,177-293
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_1dda5a69e136fb::t_1cc7bdf47da2e0 1697-1699
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86834e3180f174bc72c117b6303bf8a750d94b50",
+  "prompts": {},
+  "sessions": {
+    "s_1dda5a69e136fb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a4e8-4e98-7c11-bf05-2ae7db533ee9",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
