@@ -300,17 +300,19 @@ def set_content_attributes(
 def set_request_attributes(
     span: trace.Span,
     *,
-    operation: str,
+    operation: str | None,
     provider: str | None = None,
     model: str | None = None,
     stream: bool | None = None,
     output_type: str | None = None,
 ) -> None:
-    """The attributes the convention asks for at span creation time."""
+    """Request attributes, with no operation name for a delegating span."""
     if not span.is_recording():
         return
 
-    attrs: dict[str, AttributeValue] = {trace_types.ATTR_GEN_AI_OPERATION_NAME: operation}
+    attrs: dict[str, AttributeValue] = {}
+    if operation is not None:
+        attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = operation
     if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
         attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     if model:

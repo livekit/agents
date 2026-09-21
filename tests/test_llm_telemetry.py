@@ -139,18 +139,30 @@ def _forbid_content_builders(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(gen_ai, name, unexpected_builder)
 
 
+@pytest.mark.parametrize("with_fallback", [False, True], ids=["direct", "fallback"])
 async def test_llm_span_reports_cached_input_tokens(
     span_exporter: InMemorySpanExporter,
+    with_fallback: bool,
 ) -> None:
-    model = _UsageLLM()
+    model: llm.LLM = _UsageLLM()
+    if with_fallback:
+        model = llm.FallbackAdapter([model])
     chat_ctx = llm.ChatContext.empty()
     chat_ctx.add_message(role="user", content="hello")
 
-    response = await model.chat(chat_ctx=chat_ctx).collect()
+    async with model:
+        response = await model.chat(chat_ctx=chat_ctx).collect()
 
     assert response.usage is not None
     assert response.usage.prompt_cached_tokens == 80
-    spans = [span for span in span_exporter.get_finished_spans() if span.name == "llm_request"]
+    finished_spans = span_exporter.get_finished_spans()
+    inference_spans = [
+        span
+        for span in finished_spans
+        if (span.attributes or {}).get(trace_types.ATTR_GEN_AI_OPERATION_NAME) == "chat"
+    ]
+    assert [span.name for span in inference_spans] == ["llm_request"]
+    spans = [span for span in finished_spans if span.name == "llm_request"]
     assert len(spans) == 1
     assert spans[0].attributes["gen_ai.usage.input_tokens"] == 100
     assert spans[0].attributes["gen_ai.usage.cache_read.input_tokens"] == 80
