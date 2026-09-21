@@ -143,7 +143,9 @@ class STTCapabilities:
     manual_flush: bool = False
     """Whether the STT supports flushing the stream to finalize a segment.
 
-    When enabled, VAD-based turn detection automatically flushes on VAD end-of-speech.
+    When enabled, manual turn commits request a flush. With a turn detector, automatic
+    flushing occurs on positive EOT or halfway through the maximum endpointing delay
+    when EOT is negative or unavailable. Without a turn detector, VAD end-of-speech requests the flush.
     Disable this for custom STT nodes that buffer audio and manage flushing themselves.
     """
 
