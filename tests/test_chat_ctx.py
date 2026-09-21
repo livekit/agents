@@ -689,11 +689,19 @@ def test_truncate_zero_max_items_without_instruction():
     assert ctx.items == []
 
 
-def test_truncate_negative_max_items_keeps_only_instruction():
-    """A negative budget trims from the front rather than keeping nothing."""
+def test_truncate_negative_max_items_raises():
+    """A negative budget has no sensible meaning, so it is rejected rather than guessed at."""
     ctx = _make_ctx("developer", "user", "assistant", "user")
-    ctx.truncate(max_items=-2)
-    assert [item.role for item in ctx.items] == ["developer"]
+    with pytest.raises(ValueError, match="max_items must be non-negative"):
+        ctx.truncate(max_items=-2)
+
+    # the context is left untouched
+    assert [item.role for item in ctx.items] == [
+        "developer",
+        "user",
+        "assistant",
+        "user",
+    ]
 
 
 # --- remove tests ---
