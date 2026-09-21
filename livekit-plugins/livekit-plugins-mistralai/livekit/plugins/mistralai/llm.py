@@ -418,7 +418,7 @@ class LLMStream(llm.LLMStream):
                 status_code=e.status_code,
                 request_id=None,
                 body=e.body,
-                retryable=retryable and e.status_code >= 500,
+                retryable=retryable and (e.status_code in (408, 429) or e.status_code >= 500),
             ) from e
         except Exception as e:
             raise APIConnectionError(retryable=retryable) from e
