@@ -477,6 +477,8 @@ class AgentActivity(RecognitionHooks):
         # placeholder used to hold a RunResult open while waiting for a realtime
         # model to auto-generate a tool reply (auto_tool_reply_generation=True).
         self._pending_auto_tool_reply_fut: asyncio.Future[None] | None = None
+        self._realtime_auto_tool_reply_pending = False
+        self._realtime_auto_tool_reply_speech_started = False
         self._realtime_user_stopped_speaking_at: float | None = None
         self._realtime_late_input_speech_stop = False
         self._realtime_turn_has_output = False
@@ -2240,8 +2242,11 @@ class AgentActivity(RecognitionHooks):
         self._interruption_detected = False
 
     def _on_input_speech_started(self, _: llm.InputSpeechStartedEvent) -> None:
-        self._session._cancel_latency_budget_watch()
-        self._realtime_turn_has_output = False
+        if self._realtime_auto_tool_reply_pending:
+            self._realtime_auto_tool_reply_speech_started = True
+        else:
+            self._session._cancel_latency_budget_watch()
+            self._realtime_turn_has_output = False
         if self.vad is None or self.using_default_vad:
             self._session._update_user_state("speaking")
             if self._audio_recognition:
@@ -2326,10 +2331,15 @@ class AgentActivity(RecognitionHooks):
             logger.warning("skipping new realtime generation, the speech scheduling is not running")
             return
 
-        if (
-            self._realtime_user_stopped_speaking_at is None
-            and not self._realtime_turn_has_output
-        ):
+        if self._realtime_auto_tool_reply_pending:
+            self._realtime_auto_tool_reply_pending = False
+            if self._realtime_auto_tool_reply_speech_started:
+                # Google pairs its synthetic pre-generation start with a stop when
+                # the tool continuation finishes; neither marks new user speech.
+                self._realtime_late_input_speech_stop = True
+            self._realtime_auto_tool_reply_speech_started = False
+
+        if self._realtime_user_stopped_speaking_at is None and not self._realtime_turn_has_output:
             # Generation creation is the first available end-of-turn signal for
             # providers that emit input_speech_stopped only after output begins.
             self._realtime_user_stopped_speaking_at = time.time()
@@ -4846,6 +4856,12 @@ class AgentActivity(RecognitionHooks):
 
                 # if the realtime model auto-generates the tool reply, install a
                 # placeholder so the active RunResult waits for that reply
+                if (
+                    self._rt_session.capabilities.auto_tool_reply_generation
+                    and fnc_executed_ev.has_tool_reply
+                ):
+                    self._realtime_auto_tool_reply_pending = True
+                    self._realtime_auto_tool_reply_speech_started = False
                 auto_reply_fut: asyncio.Future[None] | None = None
                 if (
                     self._rt_session.capabilities.auto_tool_reply_generation

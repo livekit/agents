@@ -21,6 +21,7 @@ from livekit.agents import Agent, AgentSession, LatencyBudgetEvent, function_too
 from livekit.agents.llm import (
     FunctionCall,
     GenerationCreatedEvent,
+    InputSpeechStartedEvent,
     InputSpeechStoppedEvent,
     MessageGeneration,
 )
@@ -300,3 +301,76 @@ async def test_manual_tool_reply_keeps_realtime_latency_budget_turn() -> None:
     assert len(events) == 1
     assert events[0].level == "exceeded"
     assert events[0].speech_id is not None
+
+
+async def test_google_auto_tool_reply_does_not_restart_latency_budget() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    speeches = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("speech_created", speeches.append)
+        await session.start(ToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        first_generation = _generation(
+            response_id="first",
+            text="Let me check",
+            audio_duration=0.02,
+            function_calls=[
+                FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+            ],
+        )
+        first_generation.user_initiated = False
+        rt_session.emit("generation_created", first_generation)
+        await asyncio.wait_for(speeches[0].speech_handle.wait_for_playout(), timeout=5)
+        assert len(events) == 1
+
+        for _ in range(500):
+            if session._activity and session._activity._realtime_auto_tool_reply_pending:
+                break
+            await asyncio.sleep(0.01)
+        assert session._activity and session._activity._realtime_auto_tool_reply_pending
+
+        # Google emits a synthetic speech-start before the automatic tool generation.
+        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        tool_message_ch = utils.aio.Chan[MessageGeneration]()
+        tool_function_ch = utils.aio.Chan[FunctionCall]()
+        tool_message_ch.close()
+        tool_function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=tool_message_ch,
+                function_stream=tool_function_ch,
+                user_initiated=False,
+            ),
+        )
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.05)
+        assert len(events) == 1
+
+        # The next actual user turn must still be able to start its own watch.
+        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        assert len(events) == 2
