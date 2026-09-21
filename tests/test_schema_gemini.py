@@ -1,4 +1,5 @@
 import datetime
+from typing import Literal
 
 import pytest
 from google.genai import types
@@ -59,12 +60,14 @@ async def test_json_def_replaced():
                         "lat": {"type": types.Type.NUMBER},
                         "lng": {"type": types.Type.NUMBER},
                     },
+                    "property_ordering": ["lat", "lng"],
                     "required": ["lat"],
                     "type": types.Type.OBJECT,
                 },
                 "type": types.Type.ARRAY,
             }
         },
+        "property_ordering": ["locations"],
         "required": ["locations"],
         "type": types.Type.OBJECT,
     }
@@ -93,11 +96,13 @@ async def test_json_def_replaced_any_of():
                     "lat": {"type": types.Type.NUMBER},
                     "lng": {"type": types.Type.NUMBER},
                 },
+                "property_ordering": ["lat", "lng"],
                 "required": ["lat", "lng"],
                 "type": types.Type.OBJECT,
                 "nullable": True,
             }
         },
+        "property_ordering": ["op_location"],
         "type": types.Type.OBJECT,
     }
     assert gemini_schema == expected_gemini_schema
@@ -183,6 +188,7 @@ async def test_json_def_date():
                 "description": "my timedelta",
             },
         },
+        "property_ordering": ["d", "dt", "t", "td"],
         "required": ["d", "dt", "t", "td"],
         "type": types.Type.OBJECT,
     }
@@ -200,6 +206,16 @@ async def save_contact(fields: dict[str, str]) -> None:
 @function_tool
 async def ping() -> None:
     """A tool without parameters."""
+
+
+class DecisionDetails(BaseModel):
+    zeta: str
+    alpha: str
+
+
+@function_tool
+async def decide(reasoning: str, answer: Literal["a", "b"], details: DecisionDetails) -> None:
+    """Reason first, then answer."""
 
 
 # Test for Gemini Text API. It should emit parameters_json_schema
@@ -228,8 +244,23 @@ async def test_function_tool_uses_legacy_parameters_on_live_api():
         "type": types.Type.OBJECT,
         "properties": {"fields": {"type": types.Type.OBJECT}},
         "required": ["fields"],
+        "property_ordering": ["fields"],
     }
     types.FunctionDeclaration.model_validate(schema)
+
+
+async def test_function_tool_orders_live_api_parameters_as_declared():
+    tools, _ = utils.create_tools_config(
+        llm.ToolContext([decide]), use_parameters_json_schema=False
+    )
+
+    declarations = tools[0].function_declarations
+    assert declarations is not None
+    parameters = declarations[0].parameters
+    assert parameters is not None
+    assert parameters.property_ordering == ["reasoning", "answer", "details"]
+    assert parameters.properties is not None
+    assert parameters.properties["details"].property_ordering == ["zeta", "alpha"]
 
 
 # Test for a FunctionTool with no parameters. Both APIs should omit the schema

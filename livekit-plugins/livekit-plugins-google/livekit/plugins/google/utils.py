@@ -265,6 +265,7 @@ class _GeminiJsonSchema:
         if properties := schema.get("properties"):
             for value in properties.values():
                 self._simplify(value, refs_stack)
+            schema["property_ordering"] = list(properties)
 
     def _array(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         if prefix_items := schema.get("prefixItems"):
