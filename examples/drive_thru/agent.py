@@ -300,7 +300,7 @@ class DriveThruAgent(Agent):
             - “Just the cheeseburger, no meal”
             - “A medium Coke”
             - “Can I get some ketchup?”
-            - “Can I get a McFlurry Oreo?”
+            - “Can I get a Swirl Freeze Cookie Crumble?”
             """
             item_sizes = find_items_by_id(all_items, item_id)
             if not item_sizes:
@@ -473,13 +473,13 @@ async def drive_thru_agent(ctx: JobContext) -> None:
             language="en",
             extra_kwargs={
                 "keyterm": [
-                    "Big Mac",
-                    "McFlurry",
-                    "McCrispy",
-                    "McNuggets",
+                    "Big Stack",
+                    "Swirl Freeze",
+                    "Crispy Deluxe",
+                    "Chicken Bites",
                     "Meal",
                     "Sundae",
-                    "Oreo",
+                    "Cookie Crumble",
                     "Jalapeno Ranch",
                 ],
             },
