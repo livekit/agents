@@ -47,7 +47,7 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 - `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60).
 - `"word"`: one frame per word.
 
-Sentence mode needs no setup: the plugin uses `tokenize.blingfire.SentenceTokenizer()` unless you pass a `word_tokenizer`. It merges spans shorter than 20 characters into the sentence that follows, so a short opener such as "Got it." is sent with the next sentence. To send it on its own, pass `word_tokenizer=tokenize.blingfire.SentenceTokenizer(min_sentence_len=1, min_token_len=1)`. An overriding tokenizer must be a `SentenceTokenizer` in this mode.
+Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set), and cuts text that has no terminator, such as Thai, at a space once it passes 200 characters. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length, or any other `SentenceTokenizer` to replace it.
 
 ## TTS connections
 

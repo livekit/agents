@@ -62,6 +62,7 @@ from .gateway_adapter import (
     normalize_world_part_override,
 )
 from .log import logger
+from .sentence_tokenizer import SentenceTokenizer
 
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
@@ -476,19 +477,20 @@ class TTS(tts.TTS):
                 default applies.
             sample_rate (int): Sample rate of audio. Defaults to 24000.
             word_tokenizer: Optional tokenizer for processing text. Defaults to
-                ``tokenize.blingfire.SentenceTokenizer()`` in sentence mode and
-                ``tokenize.basic.WordTokenizer(ignore_punctuation=False)`` otherwise.
+                ``slng.SentenceTokenizer()`` in sentence mode, which splits on
+                the sentence terminators of every script with no language
+                setting, and ``tokenize.basic.WordTokenizer(ignore_punctuation=False)``
+                otherwise.
             warm_standby_enabled: Open the connection at session start
                 (``prewarm()``) and reopen it in the background if the gateway
                 closes it, so the first reply of a call is not cold. The same
                 connection is reused by every reply, and it counts as one
                 concurrent session for the whole call. Defaults to True.
             text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
-                (the default; ``"auto"`` resolves to it) sends each sentence the
-                tokenizer produces as one frame, and requires a
-                ``SentenceTokenizer``. ``"phrase"`` re-batches words at clause
-                punctuation or every ``phrase_max_chars``. ``"word"`` sends one
-                frame per word.
+                (the default; ``"auto"`` resolves to it) sends one frame per
+                sentence, in any script, and requires a ``SentenceTokenizer``.
+                ``"phrase"`` re-batches words at clause punctuation or every
+                ``phrase_max_chars``. ``"word"`` sends one frame per word.
             phrase_max_chars: In ``"phrase"`` mode, cut a frame once the buffer
                 reaches this many characters. Ignored in the other modes.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
@@ -570,7 +572,7 @@ class TTS(tts.TTS):
         )
         if not is_given(word_tokenizer):
             word_tokenizer = (
-                tokenize.blingfire.SentenceTokenizer()
+                SentenceTokenizer()
                 if resolved_chunking == "sentence"
                 else tokenize.basic.WordTokenizer(ignore_punctuation=False)
             )

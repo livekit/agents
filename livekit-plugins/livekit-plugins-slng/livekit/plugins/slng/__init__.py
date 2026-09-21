@@ -21,6 +21,7 @@ See https://docs.slng.ai/ for more information.
 
 from .connection import PluginEvent, STTConnectionConfig, TTSConnectionConfig
 from .log import logger
+from .sentence_tokenizer import SentenceTokenizer
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
@@ -30,6 +31,7 @@ __all__ = [
     "TTS",
     "PluginEvent",
     "STTConnectionConfig",
+    "SentenceTokenizer",
     "SpeechStream",
     "TTSConnectionConfig",
     "__version__",
