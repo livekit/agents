@@ -73,7 +73,7 @@ from ..types import (
     recording_enabled,
 )
 from ..utils import is_given
-from . import pii, trace_types, utils as telemetry_utils
+from . import gen_ai, pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatItem
@@ -181,8 +181,21 @@ class _DynamicTracer(Tracer):
             tracer_provider=self._tracer_provider,
         )
 
+    def _with_conversation_id(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        # a backend grouping a session by the id needs every span to carry it, not just GenAI
+        conv = gen_ai._conversation_id()
+        if conv is None:
+            return kwargs
+        attributes = kwargs.get("attributes") or {}
+        if trace_types.ATTR_GEN_AI_CONVERSATION_ID in attributes:
+            return kwargs
+        return {
+            **kwargs,
+            "attributes": {**attributes, trace_types.ATTR_GEN_AI_CONVERSATION_ID: conv},
+        }
+
     def start_span(self, *args: Any, **kwargs: Any) -> Span:
-        return self._tracer.start_span(*args, **kwargs)
+        return self._tracer.start_span(*args, **self._with_conversation_id(kwargs))
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
@@ -214,7 +227,9 @@ class _DynamicTracer(Tracer):
         it and becomes the accidental parent of unrelated spans those tasks emit for the rest
         of the session. The parent is ``context`` when given, else the ambient context; the
         exception, if any, is recorded redaction-aware and the span is ended."""
-        span = self._tracer.start_span(name, context=context, attributes=attributes)
+        span = self._tracer.start_span(
+            name, **self._with_conversation_id({"context": context, "attributes": attributes})
+        )
         try:
             yield span
         except Exception as e:
@@ -229,6 +244,9 @@ class _DynamicTracer(Tracer):
         record_exception = bound.arguments.get("record_exception", True)
         set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
         bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        bound.arguments.update(
+            self._with_conversation_id({"attributes": bound.arguments.get("attributes")})
+        )
         with self._tracer.start_as_current_span(*bound.args[1:], **bound.kwargs) as span:
             try:
                 yield span

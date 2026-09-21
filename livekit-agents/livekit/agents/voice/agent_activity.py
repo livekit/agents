@@ -3312,6 +3312,10 @@ class AgentActivity(RecognitionHooks):
             else:
                 forwarded_text = ""
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+        gen_ai_telemetry.set_content_attributes(
+            current_span,
+            output_messages=gen_ai_telemetry.to_output_messages(text=forwarded_text),
+        )
 
         assistant_metrics: llm.MetricsReport = {}
 
@@ -3501,6 +3505,13 @@ class AgentActivity(RecognitionHooks):
             chat_ctx,
             [task.ctx.function_call for task in _RunningTasks.get(self._session, {}).values()],
         )
+
+        # the turn's own input, not the whole context the `llm_request` span beneath carries
+        if new_message is not None:
+            gen_ai_telemetry.set_content_attributes(
+                current_span,
+                input_messages=gen_ai_telemetry.to_input_messages(llm.ChatContext([new_message])),
+            )
 
         tasks: list[asyncio.Task[Any]] = []
         llm_task, llm_gen_data = perform_llm_inference(
@@ -3862,6 +3873,19 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
             speech_handle._item_added([msg])
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+
+        # outside the block above: a turn that only called tools has no forwarded text
+        gen_ai_telemetry.set_content_attributes(
+            current_span,
+            output_messages=gen_ai_telemetry.to_output_messages(
+                text=forwarded_text,
+                function_calls=llm_gen_data.generated_functions,
+                finish_reason=gen_ai_telemetry.finish_reason_for(
+                    function_calls=llm_gen_data.generated_functions,
+                    interrupted=speech_handle.interrupted,
+                ),
+            ),
+        )
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:
             self._session._update_agent_state("thinking")
@@ -4557,6 +4581,17 @@ class AgentActivity(RecognitionHooks):
 
         if trace_text_parts:
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, "\n".join(trace_text_parts))
+
+        gen_ai_telemetry.set_content_attributes(
+            current_span,
+            output_messages=gen_ai_telemetry.to_output_messages(
+                text="\n".join(trace_text_parts),
+                function_calls=function_calls,
+                finish_reason=gen_ai_telemetry.finish_reason_for(
+                    function_calls=function_calls, interrupted=speech_handle.interrupted
+                ),
+            ),
+        )
 
         # sync local chat ctx to the realtime server to remove any items the
         # model added but the user never heard (interrupted before we pulled

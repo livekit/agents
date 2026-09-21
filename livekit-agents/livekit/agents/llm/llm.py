@@ -433,7 +433,9 @@ class LLMStream(ABC):
             )
 
             # the GenAI response side; the request side was recorded at span creation
-            gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
+            # a delegating span leaves the token counts to the provider call beneath it
+            if self._genai_operation_name is not None:
+                gen_ai_telemetry.set_usage_attributes(self._llm_request_span, metrics)
             finish_reason = gen_ai_telemetry.finish_reason_for(
                 function_calls=tool_calls, interrupted=metrics.cancelled
             )

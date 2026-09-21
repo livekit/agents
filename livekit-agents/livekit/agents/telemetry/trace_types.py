@@ -236,6 +236,9 @@ ATTR_GEN_AI_WORKFLOW_NAME = "gen_ai.workflow.name"
 
 ATTR_ERROR_TYPE = "error.type"
 
+# how many leading messages `gen_ai.input.messages` left out of a truncated history
+ATTR_INPUT_MESSAGES_DROPPED = "lk.gen_ai.input.messages_dropped"
+
 
 class GenAIOperationName:
     """Well-known ``gen_ai.operation.name`` values."""
@@ -258,6 +261,10 @@ class GenAIOperationName:
     DELETE_MEMORY = "delete_memory"
     CREATE_MEMORY_STORE = "create_memory_store"
     DELETE_MEMORY_STORE = "delete_memory_store"
+
+    # not in the registry, but the enum is open and a span without one is not GenAI
+    TRANSCRIBE = "transcribe"
+    SYNTHESIZE = "synthesize"
 
 
 class GenAIOutputType:

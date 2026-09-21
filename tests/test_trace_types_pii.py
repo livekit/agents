@@ -70,6 +70,8 @@ SAFE_KEYS = frozenset(
         "lk.provider_tools",
         "lk.tool_sets",
         "lk.response.ttft",
+        # a count of omitted messages, never the messages
+        "lk.gen_ai.input.messages_dropped",
         # function tool metadata
         "lk.function_tool.id",
         "lk.function_tool.name",
