@@ -805,8 +805,10 @@ class _ToolOutput:
     handoff_decision_cb: Callable[[bool], None] | None = None
 
     def interrupted_outputs(self) -> list[ToolExecutionOutput]:
-        # These deferred results have not reached the provider. Fold them into
-        # the original calls instead of committing placeholders or synthetic IDs.
+        """Fold undelivered results into their original calls for interruption persistence.
+
+        Keep one output per call and update the existing items observed by speech handles.
+        """
         late_by_id = {out.fnc_call.call_id: out for out in self.late_outputs}
         for out in self.output:
             if out.pending and (result := late_by_id.get(out.fnc_call.call_id)) is not None:
@@ -822,6 +824,7 @@ class _ToolOutput:
         return self.output
 
     def resolve_handoffs(self, accepted: bool) -> None:
+        """Apply the batch handoff decision after execution-event listeners have run."""
         if self.handoff_decision_cb is not None:
             self.handoff_decision_cb(accepted)
 
@@ -839,7 +842,8 @@ class _ToolOutput:
     def release_initial_batch(self) -> None:
         """Release ordering after initial processing, not provider acceptance.
 
-        Abandonment sets the event separately and discards buffered late output.
+        Abandonment sets the event separately; interrupted turns preserve buffered
+        results for reconciliation instead of flushing them as deferred replies.
         """
         if self.initial_batch_released.is_set():
             return
@@ -850,6 +854,8 @@ class _ToolOutput:
 
 @dataclass
 class _DependencyNode:
+    """Track one response call, its prerequisites, executor admission, and terminal state."""
+
     fnc_call: llm.FunctionCall
     executor: _ToolExecutor
     handle: _ToolExecutionHandle
@@ -889,6 +895,7 @@ def _validate_dependency_graph(
 def _pending_tool_output(
     *, fnc_call: llm.FunctionCall, after: tuple[str, ...]
 ) -> ToolExecutionOutput:
+    """Represent a queued call without requesting a reply or claiming terminal completion."""
     names = ", ".join(after)
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),
@@ -917,6 +924,7 @@ class _DependencyScheduler:
         initial_batch_released: asyncio.Event,
         abandon_delivery: Callable[[], None],
     ) -> None:
+        """Bind output, terminal, and delivery callbacks for a response graph."""
         self._output_cb = output_cb
         self._terminal_cb = terminal_cb
         self._initial_batch_released = initial_batch_released
@@ -929,6 +937,7 @@ class _DependencyScheduler:
         self._pending_handoffs: set[str] = set()
 
     def add(self, node: _DependencyNode) -> None:
+        """Register a call, admitting independent tools and parking calls with prerequisites."""
         if self._abandoned:
             self._settle_without_execution(
                 node, ToolError("tool dependency response was already abandoned")
@@ -947,7 +956,7 @@ class _DependencyScheduler:
         self._admit(node)
 
     def add_failed(self, node: _DependencyNode, error: BaseException) -> None:
-        """Register a parsed/validated call that failed before executor admission."""
+        """Register a known tool call that failed before executor admission."""
         if self._abandoned:
             self._settle_without_execution(node, error)
             return
@@ -960,10 +969,12 @@ class _DependencyScheduler:
         self._settle_without_execution(node, error)
 
     def close_stream(self) -> None:
+        """Finalize batch membership and admit calls whose prerequisites have settled."""
         self._closed = True
         self._resolve_waiting()
 
     async def wait(self) -> None:
+        """Wait until every registered call settles or the response is abandoned."""
         while True:
             if self._abandoned:
                 return
@@ -977,10 +988,11 @@ class _DependencyScheduler:
             await asyncio.sleep(0)
 
     async def abandon(self, error: BaseException) -> None:
+        """Abandon queued work and cancel eligible activity-owned executions."""
         self._abandoned = True
         self._closed = True
-        # Release waiters on abandonment, but discard buffered output below instead
-        # of flushing it into a response that will never be delivered.
+        # Release waiters without flushing deferred replies. Interrupted turns
+        # retain undelivered results for the original response's final persistence.
         self._abandon_delivery()
         self._initial_batch_released.set()
         admitted_cancellations = [
@@ -1004,9 +1016,11 @@ class _DependencyScheduler:
             await asyncio.gather(*watch_tasks, return_exceptions=True)
 
     def hold_handoff(self, call_id: str) -> None:
+        """Hold dependent admission while listeners decide a handoff request."""
         self._pending_handoffs.add(call_id)
 
     def resolve_handoff(self, call_id: str, accepted: bool) -> None:
+        """Resume admission after a veto or abandon queued work after acceptance."""
         self._pending_handoffs.discard(call_id)
         if accepted:
             self.abandon_pending(ToolError("tool handoff abandoned queued dependency work"))
@@ -1022,6 +1036,7 @@ class _DependencyScheduler:
                 self._settle_without_execution(node, error)
 
     def _matching_prerequisites(self, node: _DependencyNode) -> list[_DependencyNode]:
+        """Find other calls in this batch whose names match the prerequisites."""
         return [
             candidate
             for candidate in self._nodes.values()
@@ -1029,6 +1044,7 @@ class _DependencyScheduler:
         ]
 
     def _resolve_waiting(self) -> None:
+        """Admit eligible dependents after EOF, unless abandonment or a handoff prevents it."""
         if not self._closed or self._abandoned or self._pending_handoffs:
             return
         for node in list(self._nodes.values()):
@@ -1040,6 +1056,7 @@ class _DependencyScheduler:
             self._admit(node)
 
     def _admit(self, node: _DependencyNode) -> None:
+        """Release a call for execution and watch its terminal outcome exactly once."""
         if node.admitted or node.settled or self._abandoned:
             return
         node.admitted = True
@@ -1050,6 +1067,7 @@ class _DependencyScheduler:
         watcher.add_done_callback(self._watch_tasks.discard)
 
     async def _watch_terminal(self, node: _DependencyNode) -> None:
+        """Wait for terminal execution and dispatch before releasing downstream calls."""
         await asyncio.shield(node.handle.terminal)
         # Dispatch must observe an Agent result and hold admission before this
         # terminal can release dependents. The event listeners decide the handoff.
@@ -1059,6 +1077,7 @@ class _DependencyScheduler:
         self._resolve_waiting()
 
     def _duplicate_refusal_call(self, node: _DependencyNode) -> llm.FunctionCall:
+        """Return a refusal with a distinct identity, preserving the original call."""
         call_id = node.fnc_call.call_id
         count = self._duplicate_counts.get(call_id, 0) + 1
         self._duplicate_counts[call_id] = count
@@ -1076,6 +1095,7 @@ class _DependencyScheduler:
         *,
         fnc_call: llm.FunctionCall | None = None,
     ) -> None:
+        """Emit one failure and terminal event for a call whose body will not run."""
         if node.settled:
             return
         node.settled = True

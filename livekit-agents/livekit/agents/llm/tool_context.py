@@ -200,9 +200,11 @@ DuplicateScope = Literal["name", "name_and_args"]
 """
 
 DependencyNames = tuple[str, ...]
+"""Tool names used as prerequisites within one function-stream batch."""
 
 
 def _normalize_dependency_names(after: Sequence[str]) -> DependencyNames:
+    """Validate dependency metadata and return an immutable sequence of tool names."""
     if isinstance(after, str):
         raise TypeError("function_tool(after=...) must be a sequence of tool names")
     names = tuple(after)
@@ -219,6 +221,7 @@ class FunctionToolInfo:
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
     after: DependencyNames = ()
+    """Batch-local prerequisites; progress updates do not count as terminal completion."""
 
 
 class RawFunctionDescription(TypedDict):
@@ -245,6 +248,7 @@ class RawFunctionToolInfo:
     on_duplicate: DuplicateMode = "allow"
     duplicate_scope: DuplicateScope = "name"
     after: DependencyNames = ()
+    """Batch-local prerequisites; progress updates do not count as terminal completion."""
 
 
 CONFIRM_DUPLICATE_PARAM = "lk_agents_confirm_duplicate"

@@ -1656,6 +1656,7 @@ class AgentActivity(RecognitionHooks):
             self._agent._activity = None
 
     async def _abandon_dependency_schedulers(self) -> None:
+        """Abandon response dependency graphs before this activity finishes closing."""
         schedulers = tuple(self._dependency_schedulers)
         if not schedulers:
             return

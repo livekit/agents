@@ -250,9 +250,11 @@ class _ToolExecutionHandle:
     """
 
     def __init__(self) -> None:
+        """Create the terminal signal independently of the executor's first visible update."""
         self.terminal: asyncio.Future[None] = asyncio.get_running_loop().create_future()
 
     def set_terminal(self) -> None:
+        """Resolve terminal completion once, ignoring repeated settlement requests."""
         if not self.terminal.done():
             self.terminal.set_result(None)
 
