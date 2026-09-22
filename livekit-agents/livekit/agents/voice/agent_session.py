@@ -1650,6 +1650,25 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
+    def reset_away_timer(self) -> None:
+        """Reset the user-away timeout after activity such as a received DTMF digit.
+
+        If the user is ``"away"``, change their state to ``"listening"``.
+        Restart the full ``user_away_timeout`` when both user and agent are
+        listening. The countdown stays paused while tools are running or the
+        session is waiting for its participant.
+
+        Does nothing if away detection is disabled, the session has not started,
+        or the session is closing.
+        """
+        if not self._started or self._is_closing() or self._opts.user_away_timeout is None:
+            return
+
+        if self._user_state == "away":
+            self._update_user_state("listening")
+        elif self._user_state == "listening" and self._agent_state == "listening":
+            self._set_user_away_timer()
+
     @asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:
         """Declare a programmatic user-driven turn.
