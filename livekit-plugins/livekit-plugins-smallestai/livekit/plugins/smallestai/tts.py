@@ -375,16 +375,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                 finally:
                     await utils.aio.gracefully_cancel(send_task, recv_task)
                     if self._opts.use_continuations and ctx_state["opened"]:
+                        removed = False
                         if not ctx_state["finalized"]:
                             # Interrupted (e.g. barge-in) before the context was closed.
                             await self._try_cancel_context(ws, context_id)
                             self._tts._pool.remove(ws)
+                            removed = True
                         elif not drained_confidently:
                             # Completion was inferred, not confirmed by the server (no
                             # terminal marker exists in this protocol - see _recv_task).
                             # Don't let a possibly-still-active context leak trailing
                             # frames into the next request that reuses this connection.
                             self._tts._pool.remove(ws)
+                            removed = True
+                        if removed:
+                            # A removed connection always needs replacing. Continuations
+                            # never reuses a used socket (see above), so without this,
+                            # every turn after the first would pay a full reconnect
+                            # handshake on the next turn's critical path. Kick the
+                            # reconnect off now, in the background, so it's already warm
+                            # by the time the next segment needs a connection.
+                            self._tts._pool.prewarm()
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except aiohttp.ClientResponseError as e:
@@ -493,19 +504,29 @@ class SynthesizeStream(tts.SynthesizeStream):
         # that to finish streaming from the caller, and each received frame proves the
         # connection is still alive, so the deadline is pushed out on every frame
         # instead of being measured once from task startup.
+        #
+        # `finalized` alone isn't enough to call it done, either: a short segment can
+        # finalize within milliseconds of the first token, well before the server's
+        # TTFB. If the idle timeout fired before any `chunk` ever arrived, that's the
+        # server still warming up, not silence after completion - keep polling (bounded
+        # by the same rolling `inactivity_deadline`) until either audio shows up or the
+        # deadline raises a real timeout, instead of returning a silent empty segment.
         event_loop = asyncio.get_event_loop()
         inactivity_deadline = event_loop.time() + self._conn_options.timeout
+        received_chunk = False
         while True:
             try:
                 msg = await self._recv_one(ws, timeout=_CONTINUATIONS_IDLE_TIMEOUT)
             except asyncio.TimeoutError:
-                if ctx_state["finalized"]:
+                if ctx_state["finalized"] and received_chunk:
                     return False
                 if event_loop.time() >= inactivity_deadline:
                     raise
                 continue
             inactivity_deadline = event_loop.time() + self._conn_options.timeout
-            self._parse_status_event(msg, output_emitter)
+            status, _ = self._parse_status_event(msg, output_emitter)
+            if status == "chunk":
+                received_chunk = True
 
     async def _recv_one(
         self, ws: aiohttp.ClientWebSocketResponse, *, timeout: float
