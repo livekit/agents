@@ -238,6 +238,7 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
+    _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
     def __init__(
         self,
@@ -289,7 +290,7 @@ class LLMStream(ABC):
         """The GenAI inference span's request side, per the OTel GenAI conventions."""
         gen_ai_telemetry.set_request_attributes(
             span,
-            operation=trace_types.GenAIOperationName.CHAT,
+            operation=self._genai_operation_name,
             provider=self._llm.provider,
             model=self._llm.model,
             stream=True,

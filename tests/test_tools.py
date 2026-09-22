@@ -2201,25 +2201,34 @@ class TestToolCallEvents:
     pytestmark = pytest.mark.usefixtures("_clear_running_tasks")
 
     @pytest.mark.asyncio
-    async def test_sync_tool_started_then_done(self):
+    @pytest.mark.parametrize(
+        "output, message",
+        [
+            ("ok", "ok"),
+            (ToolResult("ok", reply_required=True), "ok"),
+            (ToolResult("ok", reply_required=False), "ok"),
+            (ToolResult(None, reply_required=False), None),
+        ],
+    )
+    async def test_sync_tool_started_then_done(self, output: Any, message: str | None):
         from livekit.agents.voice.events import ToolCallEnded, ToolCallStarted
         from livekit.agents.voice.tool_executor import _ToolExecutor
 
         @function_tool
-        async def quick_tool() -> str:
+        async def quick_tool() -> Any:
             """q"""
-            return "ok"
+            return output
 
         executor = _ToolExecutor()
         run_ctx = _make_run_context(call_id="c1", name="quick_tool")
         result = await executor.execute(tool=quick_tool, run_ctx=run_ctx, raw_arguments={})
-        assert result == "ok"
+        assert result is output
         await _drain_executor(executor)
 
         items = _emitted_items(run_ctx.session)
         assert isinstance(items[0], ToolCallStarted)
         assert items[0].function_call.call_id == "c1"
-        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message="ok", status="done")
+        assert items[1] == ToolCallEnded(id="c1", call_id="c1", message=message, status="done")
 
     @pytest.mark.asyncio
     async def test_error_before_update_uses_plain_call_id(self):

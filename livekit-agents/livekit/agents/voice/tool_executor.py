@@ -21,6 +21,7 @@ from ..llm.tool_context import (
     Tool,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
@@ -503,6 +504,9 @@ class _ToolExecutor:
 
             # one terminal entry per call; deferred entries use the _final id
             from .agent import Agent
+
+            if isinstance(output, ToolResult):
+                output = output.output
 
             status: Literal["done", "error", "cancelled"]
             message: str | None
