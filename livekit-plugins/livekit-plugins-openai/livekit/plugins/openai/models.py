@@ -110,9 +110,9 @@ CerebrasChatModels = Literal[
 ]
 
 UrunChatModels = Literal[
-    "qwen3.8-27b",
-    "agents-a1",
-    "diffusiongemma-26b",
+    "qwen3.8-27b:nvfp4",
+    "agents-a1:fp8",
+    "diffusiongemma-26b:bf16",
 ]
 
 PerplexityChatModels = Literal[

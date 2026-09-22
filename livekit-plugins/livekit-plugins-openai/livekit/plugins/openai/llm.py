@@ -948,7 +948,7 @@ class LLM(llm.LLM):
     @staticmethod
     def with_urun(
         *,
-        model: str | UrunChatModels = "qwen3.8-27b",
+        model: str | UrunChatModels = "qwen3.8-27b:nvfp4",
         api_key: str | None = None,
         base_url: str = "https://inference.urun.sh/v1",
         client: openai.AsyncClient | None = None,
