@@ -63,7 +63,7 @@ from .gateway_adapter import (
     normalize_world_part_override,
 )
 from .log import logger
-from .sentence_tokenizer import SentenceTokenizer
+from .sentence_tokenizer import SentenceTokenizer, is_partial_head
 
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
@@ -236,10 +236,13 @@ class _TextFrame(NamedTuple):
     """One text frame for the gateway. ``flush`` marks the reply's last one.
 
     The flush itself is sent as its own message straight after that frame.
+    ``partial`` marks the opening of a sentence whose remainder follows, which
+    tells the gateway to start on it without treating it as a whole utterance.
     """
 
     text: str
     flush: bool
+    partial: bool = False
 
 
 @dataclass
@@ -459,18 +462,21 @@ class _HeldConnection:
     # True once a reply wrote text on this socket. A socket the gateway closed
     # before that has nothing to show for itself, so reopening it is throttled.
     text_sent: bool = False
+    # Whether this gateway said it can take the opening of a sentence early.
+    accepts_partial_text: bool = False
     idle_reader: asyncio.Task[None] | None = None
     gateway_request_id: str | None = None
     gateway_session_id: str | None = None
 
     def note_ready(self, resp: dict[str, object]) -> None:
-        """Record the gateway ids from a `ready` frame, keeping any field it omits."""
+        """Record what a `ready` frame says, keeping any field it omits."""
         request_id = resp.get("slng_request_id")
         if isinstance(request_id, str):
             self.gateway_request_id = request_id
         session_id = resp.get("session_id")
         if isinstance(session_id, str):
             self.gateway_session_id = session_id
+        self.accepts_partial_text = resp.get("accepts_partial_text") is True
 
 
 @dataclass
@@ -729,6 +735,10 @@ class TTS(tts.TTS):
         # Bumped on every option change; a held connection opened under an older
         # epoch carries a stale init and is retired rather than reused.
         self._ws_epoch = 0
+        # What the last `ready` said about early sentence openings. None until
+        # one has been read, which with warm standby happens at session start;
+        # a reply that starts before that sends whole sentences.
+        self._partial_text_supported: bool | None = None
         # One connection per TTS instance, held across the replies of a call.
         # Deliberately not utils.ConnectionPool: that pool has no maximum size,
         # so returning the private socket a busy reply opened would leave two
@@ -836,6 +846,16 @@ class TTS(tts.TTS):
 
     def _is_ws_usable(self, ws: aiohttp.ClientWebSocketResponse) -> bool:
         return not bool(getattr(ws, "closed", False))
+
+    def _note_ready(self, conn: _HeldConnection, resp: dict[str, object]) -> None:
+        """Record a `ready` frame against the connection and the instance.
+
+        The capability is remembered on the instance because a reply's tokenizer
+        stream is created before its connection is acquired, and the stream has
+        to know then whether it may release an opening early.
+        """
+        conn.note_ready(resp)
+        self._partial_text_supported = conn.accepts_partial_text
 
     def _may_keep(self, conn: _HeldConnection) -> bool:
         """Whether this connection can stay held for the next reply.
@@ -1246,7 +1266,7 @@ class TTS(tts.TTS):
                 if not isinstance(resp, dict):
                     continue
                 if resp.get("type") == "ready":
-                    conn.note_ready(resp)
+                    self._note_ready(conn, resp)
                     self._emit_plugin_event(
                         "gateway.session",
                         gateway_request_id=conn.gateway_request_id,
@@ -1795,7 +1815,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if text_count == 1:
                         logger.debug(f"[TTS] First text received: '{the_input[:50]}...'")
                     if segment is None:
-                        segment = _SegmentInput(stream=self._opts.word_tokenizer.stream())
+                        segment = _SegmentInput(stream=self._open_tokenizer_stream())
                         self._segments_ch.send_nowait(segment)
                         logger.debug("[TTS] New token stream created")
                     segment.stream.push_text(the_input)
@@ -1841,6 +1861,22 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise APIConnectionError() from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+
+    def _open_tokenizer_stream(self) -> tokenize.WordStream | tokenize.SentenceStream:
+        """Start one reply's tokenizer stream, saying whether it may run ahead.
+
+        The plugin's own tokenizer can release the opening of a long sentence
+        before the sentence is finished, which on a model that starts on part of
+        a sentence is worth most of half a second on the first audio of a reply.
+        It is only allowed to when the gateway has said it understands such a
+        frame: one that has not would either drop it or refuse it, and sending
+        an opening as an ordinary frame is the fragment that sentence framing
+        exists to avoid.
+        """
+        tokenizer = self._opts.word_tokenizer
+        if isinstance(tokenizer, SentenceTokenizer):
+            return tokenizer.stream(partial_head=self._tts._partial_text_supported is True)
+        return tokenizer.stream()
 
     async def _run_ws(
         self,
@@ -1967,9 +2003,33 @@ class SynthesizeStream(tts.SynthesizeStream):
         async def write_pending(conn: _HeldConnection) -> None:
             """Write queued frames, dropping each only once it is on the wire."""
             while pending_frames:
-                frame, flush = pending_frames[0]
+                frame, flush, partial = pending_frames[0]
+                if partial and not conn.accepts_partial_text:
+                    # This socket has not said it can take an opening, and an
+                    # opening sent as an ordinary frame is the bare fragment
+                    # that sentence framing exists to avoid. Put it back with
+                    # the piece that finishes the sentence, which costs this
+                    # reply its head start and nothing else. Not a rare path:
+                    # a freshly opened socket has not read its `ready` yet,
+                    # because the reader waits for this sender to write first.
+                    if len(pending_frames) > 1:
+                        nxt = pending_frames[1]
+                        pending_frames[1] = _TextFrame(frame + nxt.text, nxt.flush, nxt.partial)
+                        pending_frames.pop(0)
+                        continue
+                    if not flush:
+                        return  # nothing to merge into yet; wait for the rest
+                    # The reply ends here, so this frame is the whole of it.
+                    partial = False
                 self._mark_started()
-                await guarded_send(conn, json.dumps({"type": "text", "text": frame}))
+                payload: dict[str, object] = {"type": "text", "text": frame}
+                if partial and conn.accepts_partial_text:
+                    # "more of this sentence follows", so the gateway can start
+                    # on it without hearing it as a whole utterance. Only ever
+                    # set for a gateway that said it understands the field: an
+                    # older one would drop or refuse it.
+                    payload["partial"] = True
+                await guarded_send(conn, json.dumps(payload))
                 if flush:
                     # The turn's terminator, as its own message rather than a
                     # flag on the text frame. Both forms are in the bridge
@@ -1980,7 +2040,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # turn to terminate, and saying so is a protocol violation.
                     await guarded_send(conn, self._FLUSH_MSG)
                 pending_frames.pop(0)
-                sent_frames.append(_TextFrame(frame, flush))
+                sent_frames.append(_TextFrame(frame, flush, partial))
                 mark_first_text_sent()
 
         async def send_task(conn: _HeldConnection) -> None:
@@ -2000,9 +2060,10 @@ class SynthesizeStream(tts.SynthesizeStream):
             token_count = 0
             while True:
                 try:
-                    token = (await stream.__anext__()).token
+                    data = await stream.__anext__()
                 except StopAsyncIteration:
                     break
+                token, partial = data.token, is_partial_head(data)
                 token_count += 1
                 if token_count == 1:
                     logger.debug(f"[TTS] send_task: first token '{token}'")
@@ -2011,40 +2072,49 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # reply: send its frame straight away without the flush.
                     ready_frame = batcher.push(token)
                     if ready_frame is not None:
-                        pending_frames.append(_TextFrame(ready_frame, False))
+                        pending_frames.append(_TextFrame(ready_frame, False, partial))
                         await write_pending(conn)
                     continue
 
                 # The reply's text is complete: every remaining token is already
                 # queued behind a closed channel, so draining never suspends.
                 # Batch the whole tail first so the flush lands on its last frame.
-                tail = [token]
+                tail = [(token, partial)]
                 while True:
                     try:
-                        tail.append((await stream.__anext__()).token)
+                        data = await stream.__anext__()
                     except StopAsyncIteration:
                         break
+                    tail.append((data.token, is_partial_head(data)))
                 token_count += len(tail) - 1
-                frames = [frame for frame in (batcher.push(t) for t in tail) if frame is not None]
+                frames: list[_TextFrame] = []
+                for text, tail_partial in tail:
+                    framed = batcher.push(text)
+                    if framed is not None:
+                        frames.append(_TextFrame(framed, False, tail_partial))
                 last = batcher.finish()
                 if last is not None:
-                    frames.append(last)
+                    frames.append(_TextFrame(last, False))
                 if frames:
-                    pending_frames.extend(
-                        _TextFrame(frame, index == len(frames) - 1)
-                        for index, frame in enumerate(frames)
-                    )
+                    # The reply ends here, so its last frame carries the flush
+                    # and cannot be an opening: there is no remainder to follow.
+                    frames[-1] = frames[-1]._replace(flush=True, partial=False)
+                    pending_frames.extend(frames)
                     frames_complete = True
                 await write_pending(conn)
                 break
 
             if not frames_complete:
-                # The batcher now returns a letterless tail too, so this is only
-                # reachable from a custom tokenizer that emitted everything
-                # before input_ended was observed.
                 last = batcher.finish()
                 if last is not None:
-                    pending_frames.append(_TextFrame(last, True))
+                    pending_frames.append(_TextFrame(last, False))
+                if pending_frames:
+                    # Whatever is still queued is the end of this reply: a tail
+                    # the batcher was holding, or an opening held back for a
+                    # remainder the reply turned out not to have. It carries the
+                    # terminator, and nothing follows it, so it is not an
+                    # opening any more.
+                    pending_frames[-1] = pending_frames[-1]._replace(flush=True, partial=False)
                     frames_complete = True
                     await write_pending(conn)
                 elif sent_frames:
@@ -2138,7 +2208,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     if resp.get("type") == "ready":
                         if ready_ms is None:
                             ready_ms = _elapsed_ms(segment_started_at)
-                        conn.note_ready(resp)
+                        self._tts._note_ready(conn, resp)
                         gateway_request_id = conn.gateway_request_id
                         gateway_session_id = conn.gateway_session_id
                         self._tts._emit_plugin_event(

@@ -49,7 +49,7 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 
 Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set). Any piece longer than 200 characters is cut at a space, which is what makes a script with no terminator stream at all. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length; an overriding tokenizer must be a `SentenceTokenizer` in this mode.
 
-First audio arrives once the first sentence is complete, so an opening line like `"Sure, let me check that for you."` starts the audio sooner than a long first sentence does. Text in a script with no sentence terminator stays in one frame until it reaches `max_chars`, so first audio waits for the whole reply unless you lower it.
+The plugin sends the opening of a long first sentence as soon as it exists, so a model that can start on part of a sentence begins speaking sooner, and every other model hears the sentence as before. This needs no configuration, and it happens only where the gateway supports it. Text in a script with no sentence terminator stays in one frame until it reaches `max_chars`, so first audio waits for the whole reply unless you lower it.
 
 ## TTS connections
 
