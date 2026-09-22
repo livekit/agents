@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from livekit.agents import beta
+from livekit.agents.llm.chat_context import Instructions
 
 pytestmark = pytest.mark.unit
 
@@ -27,6 +28,22 @@ async def test_email_is_spelled_once_a_confirmation_is_refused() -> None:
     assert first is not None and second is not None
     assert first != second
     assert " ".join("shayne.cole@gmail.com") in second
+
+
+@pytest.mark.asyncio
+async def test_email_with_verify_spelling_is_spelled_from_the_start() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True)
+    ctx = _audio_ctx()
+
+    first = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+    second = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+
+    assert first == second
+    assert first is not None
+    assert " ".join("shayne.cole@gmail.com") in first
+    instructions = task.instructions
+    assert isinstance(instructions, Instructions)
+    assert "spell it out character by character" in (instructions.audio or "")
 
 
 @pytest.mark.asyncio

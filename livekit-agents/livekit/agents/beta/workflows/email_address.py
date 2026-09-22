@@ -38,6 +38,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
+        verify_spelling: bool = False,
         # deprecated
         extra_instructions: str = "",
     ) -> None:
@@ -56,11 +57,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                     audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
                     text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
                 ),
+                _spelling=SPELLING_INSTRUCTION if verify_spelling else "",
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
-        self._spell_read_back = False
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -192,12 +194,17 @@ If the address looks almost correct but has minor typos (e.g. missing '@' or dom
 CONFIRMATION_INSTRUCTION = """\
 Call `confirm_email_address` after the user confirmed the email address is correct."""
 
+SPELLING_INSTRUCTION = """\
+After receiving the email address, always verify the spelling by asking the user to confirm or spell it out character by character.
+When confirming, spell out the email address character by character to the user.
+"""
+
 INSTRUCTIONS_TEMPLATE = """\
 {persona}
 
 {_modality_specific}
 
-Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+{_spelling}Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
 {_confirmation}
 If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
