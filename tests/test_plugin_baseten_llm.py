@@ -1,11 +1,11 @@
 """Baseten LLM: per-model handling of mid-conversation system messages.
 
 LiveKit appends ``generate_reply(instructions=...)`` (and the expressive TTS guide) to
-the chat context as a trailing system message. Gemma's chat template rejects any system
-turn after the first and Qwen's was not trained on one, so for those families the plugin
-inlines such messages as ``<instructions>``-wrapped user messages. OpenAI-style models
-(gpt-oss, GLM, Llama, DeepSeek, Kimi) accept system messages anywhere and must keep
-receiving the request untouched.
+the chat context as a trailing system message. Some chat templates only accept a leading
+system message, so for an explicit list of model ids the plugin inlines later system
+messages as ``<instructions>``-wrapped user messages. Every other model id, including
+other Gemma and Qwen ids, must keep receiving the request untouched unless the caller
+opts in.
 
 These tests capture the JSON body the plugin would POST, so they exercise the real
 serializer path without network access.
@@ -32,13 +32,16 @@ PREAMBLE = "You are a helpful assistant."
 INSTRUCTIONS = "Ask the caller for the year they were born."
 INLINED = f"<instructions>\n{INSTRUCTIONS}\n</instructions>"
 
-INLINE_MODELS = ["google/gemma-4-31B-it", "google/gemma-4-E4B-it", "Qwen/Qwen3.5-35B-A3B-FP8"]
+INLINE_MODELS = ["google/gemma-4-31B-it", "Qwen/Qwen3.8-27B"]
 PASSTHROUGH_MODELS = [
     "openai/gpt-oss-120b",
     "zai-org/GLM-5.2",
     "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
     "deepseek-ai/DeepSeek-V3-0324",
     "moonshotai/Kimi-K2-Instruct",
+    # same families as the opted-in ids, but not on the list
+    "google/gemma-4-E4B-it",
+    "Qwen/Qwen3.5-35B-A3B-FP8",
 ]
 
 
@@ -135,7 +138,7 @@ def _plain_ctx() -> ChatContext:
 
 
 # ---------------------------------------------------------------------------
-# Model-family detection
+# Model-id detection: an explicit allow-list, not a family match
 # ---------------------------------------------------------------------------
 
 
@@ -143,9 +146,15 @@ def _plain_ctx() -> ChatContext:
     ("model", "expected"),
     [
         ("google/gemma-4-31B-it", True),
-        ("GOOGLE/GEMMA-4-E2B-IT", True),
-        ("Qwen/Qwen3.5-122B-A10B", True),
-        ("qwen3-dedicated", True),
+        ("GOOGLE/GEMMA-4-31B-IT", True),
+        ("Qwen/Qwen3.8-27B", True),
+        ("qwen/qwen3.8-27b", True),
+        # other generations and sizes of the same families are not opted in
+        ("google/gemma-4-E4B-it", False),
+        ("google/gemma-3-27b-it", False),
+        ("Qwen/Qwen3.5-122B-A10B", False),
+        ("Qwen/Qwen3-235B-A22B-Instruct-2507", False),
+        ("qwen3-dedicated", False),
         ("openai/gpt-oss-120b", False),
         ("zai-org/GLM-5.2", False),
         ("meta-llama/Llama-4-Scout-17B-16E-Instruct", False),
@@ -157,7 +166,7 @@ def test_inline_instructions_inferred_from_model_id(model: str, expected: bool) 
 
 
 # ---------------------------------------------------------------------------
-# New behaviour: Gemma / Qwen get inlined instructions
+# New behaviour: opted-in models get inlined instructions
 # ---------------------------------------------------------------------------
 
 
@@ -203,7 +212,7 @@ async def test_empty_mid_conversation_system_message_is_dropped_when_inlining() 
 
 
 # ---------------------------------------------------------------------------
-# Regression: OpenAI-style models are untouched
+# Regression: every other model id is untouched
 # ---------------------------------------------------------------------------
 
 
@@ -237,8 +246,9 @@ async def test_conversation_without_mid_system_messages_is_identical_across_mode
 # ---------------------------------------------------------------------------
 
 
-async def test_override_enables_inlining_for_unrecognised_model() -> None:
-    messages = await _sent_messages("my-dedicated-model", _per_turn_ctx(), inline=True)
+@pytest.mark.parametrize("model", ["google/gemma-4-E4B-it", "my-dedicated-model"])
+async def test_override_enables_inlining_for_models_not_on_the_list(model: str) -> None:
+    messages = await _sent_messages(model, _per_turn_ctx(), inline=True)
 
     assert [m["role"] for m in messages] == ["system", "assistant", "user", "user"]
     assert messages[-1] == {"role": "user", "content": INLINED}

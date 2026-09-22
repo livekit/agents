@@ -22,23 +22,27 @@ from livekit.plugins.openai import LLM as OpenAILLM, LLMStream
 
 from .models import LLMModels
 
-# Model families with generations whose chat template rejects a system message that
-# appears after the first turn: Gemma 2 and 3 raise on it (Gemma 3 also requires strict
-# user/assistant alternation) and Qwen3.5 raises "System message must be at the
-# beginning". Gemma 4 and Qwen3 render a later system turn without error, but the
-# rewrite is applied to the whole family so a per-turn instruction is delivered the
-# same way regardless of which generation a deployment serves. For these, the
+# Model API ids for which mid-conversation system messages are inlined by default. The
 # per-turn instructions LiveKit appends as trailing system messages
-# (``generate_reply(instructions=...)``, expressive TTS guides) are inlined as
-# ``<instructions>``-wrapped user messages instead. Matched case-insensitively against
-# the model id so both Model API ids ("google/gemma-4-31B-it") and dedicated-deployment
-# names work; pass ``inline_mid_conversation_instructions`` to override.
-_INLINE_INSTRUCTIONS_MODEL_FAMILIES = ("gemma", "qwen")
+# (``generate_reply(instructions=...)``, expressive TTS guides) are rewritten as
+# ``<instructions>``-wrapped user messages for these models, the same treatment the
+# Gemini, Anthropic, Bedrock and Mistral serializers apply. The list is deliberately
+# explicit rather than a family match: chat-template behaviour varies by generation
+# (Gemma 2/3 and Qwen3.5 reject a later system turn, Gemma 4 and Qwen3 render it), so
+# each id is opted in once its behaviour has been checked. Any other model, including
+# other Gemma and Qwen ids and dedicated deployments, receives the request unchanged
+# unless ``inline_mid_conversation_instructions`` is passed explicitly.
+_INLINE_INSTRUCTIONS_MODELS = frozenset(
+    {
+        "google/gemma-4-31B-it",
+        "Qwen/Qwen3.8-27B",
+    }
+)
+_INLINE_INSTRUCTIONS_MODELS_LOWER = frozenset(m.lower() for m in _INLINE_INSTRUCTIONS_MODELS)
 
 
 def _needs_inline_instructions(model: str) -> bool:
-    model = model.lower()
-    return any(family in model for family in _INLINE_INSTRUCTIONS_MODEL_FAMILIES)
+    return model.lower() in _INLINE_INSTRUCTIONS_MODELS_LOWER
 
 
 class LLM(OpenAILLM):
@@ -69,12 +73,12 @@ class LLM(OpenAILLM):
         ``inline_mid_conversation_instructions`` controls how system messages that appear
         after the conversation has started (e.g. ``generate_reply(instructions=...)``) are
         sent. When ``True`` they are rewritten as ``<instructions>``-wrapped user messages,
-        which is required for models whose chat template only accepts a leading system
-        message (Gemma 2, Gemma 3, Qwen3.5) and is applied to the Gemma and Qwen families
-        as a whole. When ``False`` they are sent as-is, which is what models whose template
+        which some chat templates require because they only accept a leading system
+        message. When ``False`` they are sent as-is, which is what models whose template
         renders system turns anywhere (GLM, Llama, Kimi, DeepSeek) expect. The default is
-        inferred from ``model``; pass it explicitly for dedicated deployments whose model
-        name does not reveal the model family.
+        ``True`` only for ``google/gemma-4-31B-it`` and ``Qwen/Qwen3.8-27B`` and ``False``
+        for every other model id; pass it explicitly for other Gemma or Qwen models and for
+        dedicated deployments.
         """
         api_key = api_key if is_given(api_key) else os.environ.get("BASETEN_API_KEY", "")
         if not api_key:
