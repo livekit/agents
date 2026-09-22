@@ -1858,7 +1858,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 handoff_ctx = trace.set_span_in_context(handoff_span)
             under_handoff = (
-                tracer.use_span(handoff_span, end_on_exit=False)
+                tracer.use_span(
+                    handoff_span,
+                    end_on_exit=False,
+                    record_exception=False,
+                    set_status_on_exception=False,
+                )
                 if handoff_span is not None
                 else contextlib.nullcontext()
             )

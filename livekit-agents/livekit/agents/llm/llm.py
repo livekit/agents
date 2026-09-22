@@ -18,12 +18,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import (
-    gen_ai as gen_ai_telemetry,
-    trace_types,
-    tracer,
-    utils as telemetry_utils,
-)
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -315,9 +310,6 @@ class LLMStream(ABC):
                     self._provider_request_ids = []
                     try:
                         await self._run()
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
                     finally:
                         if self._provider_request_ids:
                             attempt_span.set_attribute(

@@ -19,7 +19,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..telemetry import trace_types, tracer, utils as telemetry_utils
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -391,11 +391,7 @@ class ChunkedStream(ABC):
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -592,11 +588,7 @@ class SynthesizeStream(ABC):
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors

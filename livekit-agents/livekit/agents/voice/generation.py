@@ -24,13 +24,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..telemetry import (
-    gen_ai as gen_ai_telemetry,
-    otel_metrics,
-    trace_types,
-    tracer,
-    utils as telemetry_utils,
-)
+from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -180,26 +174,8 @@ def perform_llm_inference(
 
 
 @utils.log_exceptions(logger=logger)
-@tracer.start_as_current_span("llm_node", record_exception=False, set_status_on_exception=False)
+@tracer.start_as_current_span("llm_node")
 async def _llm_inference_task(
-    node: io.LLMNode,
-    chat_ctx: ChatContext,
-    tool_ctx: ToolContext,
-    model_settings: ModelSettings,
-    data: _LLMGenerationData,
-    model: str | None = None,
-    provider: str | None = None,
-) -> bool:
-    try:
-        return await _llm_inference_impl(
-            node, chat_ctx, tool_ctx, model_settings, data, model, provider
-        )
-    except Exception as exc:
-        telemetry_utils.record_exception(trace.get_current_span(), exc)
-        raise
-
-
-async def _llm_inference_impl(
     node: io.LLMNode,
     chat_ctx: ChatContext,
     tool_ctx: ToolContext,

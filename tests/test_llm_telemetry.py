@@ -350,6 +350,12 @@ async def test_llm_node_records_exceptions(
         assert str(failure) not in span.to_json()
     if node_kind in ("sync", "coroutine", "close", "provider"):
         assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in attrs
+    if node_kind == "provider":
+        [attempt] = [
+            span for span in span_exporter.get_finished_spans() if span.name == "llm_request_run"
+        ]
+        [event] = [event for event in attempt.events if event.name == "exception"]
+        assert event.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == expected_message
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["coroutine", "stream"])
