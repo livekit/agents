@@ -1,0 +1,19 @@
+tests/test_room_io.py
+  s_fb688918fe4d68::t_61ef9cd2df3fca 411-477
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "238a24c661cc263bc7004927d694b3ea322b731a",
+  "prompts": {},
+  "sessions": {
+    "s_fb688918fe4d68": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c8ea-04fd-7bc2-a1cd-60d360c6b434",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
