@@ -72,7 +72,7 @@ class ResponsesConfig(BaseModel):
     parallel_tool_calls: bool | None = None
     reasoning: Reasoning | None = None
     text: ResponseTextConfigParam | None = None
-    service_tier: Literal["auto", "default", "flex", "priority"] | None = None
+    service_tier: ServiceTier | None = None
     max_output_tokens: int | None = None
 
 

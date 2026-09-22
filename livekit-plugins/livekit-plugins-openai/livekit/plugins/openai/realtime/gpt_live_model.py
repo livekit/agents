@@ -93,7 +93,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
     text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
-    service_tier: Literal["auto", "default", "flex", "priority"]
+    service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
 

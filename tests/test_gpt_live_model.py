@@ -531,6 +531,24 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         await model.aclose()
 
 
+async def test_the_backend_delegation_accepts_every_service_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gated tier the wire types don't list would raise while composing session.start."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", responses_options={"service_tier": "ultrafast"})
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.")
+        await asyncio.sleep(0.1)
+
+        assert ws.sent[0]["session"]["delegation"]["responses"]["service_tier"] == "ultrafast"
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_instructions_cannot_change_once_the_session_has_started(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
