@@ -3909,13 +3909,14 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         if speech_handle.interrupted:
+            tool_output.interrupted = True
             await utils.aio.cancel_and_wait(exe_task)
 
             # commit results of tools that finished despite the interruption (#3702), so
             # the next inference doesn't run them again
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
+            for sanitized_out in tool_output.interrupted_outputs():
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
@@ -4613,13 +4614,14 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()
 
         if speech_handle.interrupted:
+            tool_output.interrupted = True
             await utils.aio.cancel_and_wait(exe_task)
 
             # commit results of tools that finished despite the interruption, as the pipeline
             # task does. the calls are already recorded, so each one answers or the model waits
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
+            for sanitized_out in tool_output.interrupted_outputs():
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 

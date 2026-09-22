@@ -801,7 +801,25 @@ class _ToolOutput:
     late_outputs: list[ToolExecutionOutput] = field(default_factory=list)
     late_flush_cb: Callable[[], None] | None = None
     stream_closed: bool = False
+    interrupted: bool = False
     handoff_decision_cb: Callable[[bool], None] | None = None
+
+    def interrupted_outputs(self) -> list[ToolExecutionOutput]:
+        # These deferred results have not reached the provider. Fold them into
+        # the original calls instead of committing placeholders or synthetic IDs.
+        late_by_id = {out.fnc_call.call_id: out for out in self.late_outputs}
+        for out in self.output:
+            if out.pending and (result := late_by_id.get(out.fnc_call.call_id)) is not None:
+                # Mutate the existing item so SpeechHandle/RunResult observers also
+                # see its terminal result, without a second output for the call.
+                out.fnc_call_out.output = result.fnc_call_out.output
+                out.fnc_call_out.is_error = result.fnc_call_out.is_error
+                out.agent_task = result.agent_task
+                out.raw_output = result.raw_output
+                out.raw_exception = result.raw_exception
+                out.pending = result.pending
+        self.late_outputs.clear()
+        return self.output
 
     def resolve_handoffs(self, accepted: bool) -> None:
         if self.handoff_decision_cb is not None:
@@ -963,8 +981,8 @@ class _DependencyScheduler:
         self._closed = True
         # Release waiters on abandonment, but discard buffered output below instead
         # of flushing it into a response that will never be delivered.
-        self._initial_batch_released.set()
         self._abandon_delivery()
+        self._initial_batch_released.set()
         admitted_cancellations = [
             node.executor.cancel(node.fnc_call.call_id)
             for node in self._nodes.values()
@@ -1174,7 +1192,7 @@ async def _execute_tools_task(
             dependency_scheduler.hold_handoff(out.fnc_call.call_id)
         call_id = out.fnc_call.call_id
         if call_id in tool_output.first_visible_call_ids:
-            if tool_output.initial_batch_released.is_set():
+            if tool_output.initial_batch_released.is_set() and not tool_output.interrupted:
                 _deliver_late(out)
             else:
                 tool_output.late_outputs.append(out)
@@ -1316,7 +1334,12 @@ async def _execute_tools_task(
     tool_output.handoff_decision_cb = _resolve_initial_handoffs
 
     def _abandon_dependency_delivery() -> None:
-        tool_output.late_outputs.clear()
+        # Force interruption can abandon the scheduler before the reply task
+        # reaches its interruption branch. Preserve its undelivered results too.
+        if speech_handle.interrupted and not tool_output.initial_batch_released.is_set():
+            tool_output.interrupted = True
+        if not tool_output.interrupted:
+            tool_output.late_outputs.clear()
         for event in initial_delivery_events.values():
             event.set()
 
@@ -1790,10 +1813,15 @@ def make_tool_output(
 def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput:
     """The output to record for a tool that finished on an interrupted turn.
 
+    An undelivered dependency placeholder is not a successful tool result.
     A handoff answers as a failure, since the interruption left it unapplied.
     """
     fnc_call_out = out.fnc_call_out
-    if out.agent_task is not None:
+    if out.pending:
+        fnc_call_out.output = "tool execution was interrupted before completion"
+        fnc_call_out.is_error = True
+        out.pending = False
+    elif out.agent_task is not None:
         fnc_call_out.output = "the agent handoff was interrupted and did not happen"
         fnc_call_out.is_error = True
 

@@ -53,7 +53,7 @@ class _GatedRealtimeSession(FakeRealtimeSession):
             _generation(
                 response_id=f"reply-{index}",
                 text="acknowledged",
-                audio_duration=0.01,
+                audio_duration=self._model.audio_duration,
                 function_calls=self._model.calls if index == 0 else [],
             )
         )
@@ -81,6 +81,7 @@ class _GatedRealtimeSession(FakeRealtimeSession):
 class _GatedRealtimeModel(FakeRealtimeModel):
     def __init__(self, root_name: str = "save_room", dependent_name: str = "save_meal") -> None:
         super().__init__(capabilities=fake_capabilities(auto_tool_reply_generation=False))
+        self.audio_duration = 0.01
         self.calls = [
             FunctionCall(call_id="meal", name=dependent_name, arguments="{}"),
             FunctionCall(call_id="root", name=root_name, arguments="{}"),
@@ -455,4 +456,97 @@ async def test_dependency_results_honor_execution_controls(
         if realtime:
             assert len(model.active_session._reply_futs) == 1
     finally:
+        await _close(session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("realtime", [False, True], ids=["pipeline", "realtime"])
+@pytest.mark.parametrize("completed", [False, True], ids=["queued", "completed"])
+@pytest.mark.parametrize("force", [False, True], ids=["interrupt", "force_interrupt"])
+async def test_interruption_answers_each_dependency_once(
+    realtime: bool, completed: bool, force: bool
+) -> None:
+    from livekit.agents.llm import FunctionToolCall, ToolFlag
+    from livekit.agents.voice.events import ToolCallEnded
+
+    from .fake_llm import FakeLLM, FakeLLMResponse
+    from .fake_tts import FakeTTS
+    from .tool_dependency_helpers import DelayedBatchFakeLLM
+
+    root_started = asyncio.Event()
+    dependent_started = asyncio.Event()
+    release_root = asyncio.Event()
+    model = _GatedRealtimeModel()
+    model.audio_duration = 10
+    dependent_ended = asyncio.Event()
+    pipeline = DelayedBatchFakeLLM(
+        first_call=FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
+        second_call=FunctionToolCall(name="save_room", arguments="{}", call_id="root"),
+    )
+    pipeline.emit_second.set()
+    complete_model = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="batch",
+                content="Working.",
+                ttft=0,
+                duration=0,
+                tool_calls=[pipeline.first_call, pipeline.second_call],
+            )
+        ]
+    )
+    session = AgentSession(
+        llm=model if realtime else complete_model if completed else pipeline,
+        tts=None if realtime else FakeTTS(fake_audio_duration=10),
+    )
+    session.on(
+        "tool_execution_updated",
+        lambda event: (
+            dependent_ended.set()
+            if isinstance(event.update, ToolCallEnded) and event.update.call_id == "meal"
+            else None
+        ),
+    )
+    session.output.audio = FakeAudioOutput()
+
+    @function_tool(name="save_room", flags=ToolFlag.CANCELLABLE)
+    async def root(ctx: RunContext) -> str:
+        root_started.set()
+        if not completed:
+            await release_root.wait()
+        return "room saved"
+
+    @function_tool(name="save_meal", after=("save_room",))
+    async def dependent(ctx: RunContext) -> str:
+        dependent_started.set()
+        return "meal saved"
+
+    agent = Agent(instructions="booking", tools=[root, dependent])
+    try:
+        await session.start(agent)
+        if realtime:
+            model.active_session.release_initial_provider_update.set()
+        speech = session.generate_reply(user_input="batch")
+        await _wait(dependent_ended if completed else root_started)
+        await asyncio.wait_for(session.interrupt(force=force), timeout=5)
+        assert dependent_started.is_set() is completed
+        contexts = [session.history.items, agent.chat_ctx.items, speech.chat_items]
+        if realtime:
+            contexts.append(model.active_session.chat_ctx.items)
+        for context in contexts:
+            outputs = [
+                item
+                for item in context
+                if item.type == "function_call_output" and item.name == "save_meal"
+            ]
+            assert len(outputs) == 1
+            assert outputs[0].call_id == "meal"
+            assert outputs[0].is_error is (not completed)
+            if completed:
+                assert outputs[0].output == "meal saved"
+            assert not outputs[0].reply_required
+            assert "pending prerequisite" not in outputs[0].output
+    finally:
+        release_root.set()
+        pipeline.close_stream.set()
         await _close(session)
