@@ -44,7 +44,7 @@ _AVATAR_AGENT_IDENTITY = "boson-avatar-agent"
 _AVATAR_AGENT_NAME = "Boson Avatar"
 
 
-class AvatarSession(BaseAvatarSession[Any]):
+class AvatarSession(BaseAvatarSession):
     """A provider-agnostic audio session for Boson Higgs Avatar rendering."""
 
     def __init__(
@@ -139,7 +139,7 @@ class AvatarSession(BaseAvatarSession[Any]):
 
     async def start(  # type: ignore[override]
         self,
-        agent_session: AgentSession[Any],
+        agent_session: AgentSession,
         room: rtc.Room,
         *,
         livekit_url: NotGivenOr[str] = NOT_GIVEN,
@@ -384,8 +384,7 @@ class AvatarSession(BaseAvatarSession[Any]):
             task, "failed to close boson avatar after AgentSession closed"
         )
 
-    @staticmethod
-    def _consume_background_task_result(task: asyncio.Task[None], message: str) -> None:
+    def _consume_background_task_result(self, task: asyncio.Task[None], message: str) -> None:
         if task.cancelled():
             return
         error = task.exception()
@@ -515,6 +514,3 @@ def _resolve_optional_positive_int(
     if maximum is not None and value > maximum:
         raise BosonAvatarException(f"{name} must be between 1 and {maximum}")
     return value
-
-
-__all__ = ["MAX_DURATION_SECONDS", "SAMPLE_RATE", "AvatarSession"]

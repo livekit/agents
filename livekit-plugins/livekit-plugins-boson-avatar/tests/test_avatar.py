@@ -483,6 +483,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_background_task_log_does_not_expose_provider_error(self) -> None:
         provider_secret = "private-provider-response"
+        avatar = AvatarSession(avatar_id="asset-1", api_key="boson-key")
 
         async def fail() -> None:
             raise RuntimeError(provider_secret)
@@ -492,7 +493,7 @@ class AvatarSessionTest(unittest.IsolatedAsyncioTestCase):
             await task
 
         with self.assertLogs("livekit.plugins.boson_avatar", level="ERROR") as logs:
-            AvatarSession._consume_background_task_result(task, "avatar cleanup failed")
+            avatar._consume_background_task_result(task, "avatar cleanup failed")
 
         self.assertIsNone(logs.records[0].exc_info)
         self.assertEqual(logs.records[0].error_type, "RuntimeError")
