@@ -32,15 +32,15 @@ PREAMBLE = "You are a helpful assistant."
 INSTRUCTIONS = "Ask the caller for the year they were born."
 INLINED = f"<instructions>\n{INSTRUCTIONS}\n</instructions>"
 
-INLINE_MODELS = ["google/gemma-4-31B-it", "Qwen/Qwen3.8-27B"]
+INLINE_MODELS = ["Qwen/Qwen3.8-27B"]
 PASSTHROUGH_MODELS = [
     "openai/gpt-oss-120b",
     "zai-org/GLM-5.2",
     "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
     "deepseek-ai/DeepSeek-V3-0324",
     "moonshotai/Kimi-K2-Instruct",
-    # same families as the opted-in ids, but not on the list
-    "google/gemma-4-E4B-it",
+    "google/gemma-4-31B-it",
+    # same family as the opted-in id, but not on the list
     "Qwen/Qwen3.5-35B-A3B-FP8",
 ]
 
@@ -145,16 +145,13 @@ def _plain_ctx() -> ChatContext:
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
-        ("google/gemma-4-31B-it", True),
-        ("GOOGLE/GEMMA-4-31B-IT", True),
         ("Qwen/Qwen3.8-27B", True),
         ("qwen/qwen3.8-27b", True),
-        # other generations and sizes of the same families are not opted in
-        ("google/gemma-4-E4B-it", False),
-        ("google/gemma-3-27b-it", False),
+        # other generations and sizes of the same family are not opted in
         ("Qwen/Qwen3.5-122B-A10B", False),
         ("Qwen/Qwen3-235B-A22B-Instruct-2507", False),
         ("qwen3-dedicated", False),
+        ("google/gemma-4-31B-it", False),
         ("openai/gpt-oss-120b", False),
         ("zai-org/GLM-5.2", False),
         ("meta-llama/Llama-4-Scout-17B-16E-Instruct", False),
@@ -180,7 +177,7 @@ async def test_per_turn_instructions_are_inlined_for_single_system_models(model:
 
 
 async def test_inlining_preserves_tool_call_history() -> None:
-    messages = await _sent_messages("google/gemma-4-31B-it", _tool_ctx())
+    messages = await _sent_messages("Qwen/Qwen3.8-27B", _tool_ctx())
 
     assert [m["role"] for m in messages] == ["system", "user", "assistant", "tool", "user"]
     assert messages[2]["tool_calls"][0]["id"] == "call_1"
@@ -193,7 +190,7 @@ async def test_inlining_does_not_mutate_the_callers_chat_ctx() -> None:
     chat_ctx = _per_turn_ctx()
     snapshot = chat_ctx.to_dict()
 
-    await _sent_messages("google/gemma-4-31B-it", chat_ctx)
+    await _sent_messages("Qwen/Qwen3.8-27B", chat_ctx)
 
     assert chat_ctx.to_dict() == snapshot
     last = chat_ctx.items[-1]
@@ -206,7 +203,7 @@ async def test_empty_mid_conversation_system_message_is_dropped_when_inlining() 
     chat_ctx.add_message(role="user", content=["Hi!"])
     chat_ctx.add_message(role="system", content=[""])
 
-    messages = await _sent_messages("google/gemma-4-31B-it", chat_ctx)
+    messages = await _sent_messages("Qwen/Qwen3.8-27B", chat_ctx)
 
     assert [m["role"] for m in messages] == ["system", "user"]
 
@@ -234,7 +231,7 @@ async def test_tool_history_passes_through_for_openai_style_models() -> None:
 
 async def test_conversation_without_mid_system_messages_is_identical_across_models() -> None:
     # when there is nothing to inline, both code paths must produce the same request
-    inlined = await _sent_messages("google/gemma-4-31B-it", _plain_ctx())
+    inlined = await _sent_messages("Qwen/Qwen3.8-27B", _plain_ctx())
     passthrough = await _sent_messages("openai/gpt-oss-120b", _plain_ctx())
 
     assert inlined == passthrough
@@ -246,7 +243,7 @@ async def test_conversation_without_mid_system_messages_is_identical_across_mode
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model", ["google/gemma-4-E4B-it", "my-dedicated-model"])
+@pytest.mark.parametrize("model", ["google/gemma-4-31B-it", "my-dedicated-model"])
 async def test_override_enables_inlining_for_models_not_on_the_list(model: str) -> None:
     messages = await _sent_messages(model, _per_turn_ctx(), inline=True)
 
@@ -254,8 +251,8 @@ async def test_override_enables_inlining_for_models_not_on_the_list(model: str) 
     assert messages[-1] == {"role": "user", "content": INLINED}
 
 
-async def test_override_disables_inlining_for_gemma() -> None:
-    messages = await _sent_messages("google/gemma-4-31B-it", _per_turn_ctx(), inline=False)
+async def test_override_disables_inlining_for_a_listed_model() -> None:
+    messages = await _sent_messages("Qwen/Qwen3.8-27B", _per_turn_ctx(), inline=False)
 
     assert [m["role"] for m in messages] == ["system", "assistant", "user", "system"]
     assert messages[-1] == {"role": "system", "content": INSTRUCTIONS}

@@ -28,13 +28,12 @@ from .models import LLMModels
 # ``<instructions>``-wrapped user messages for these models, the same treatment the
 # Gemini, Anthropic, Bedrock and Mistral serializers apply. The list is deliberately
 # explicit rather than a family match: chat-template behaviour varies by generation
-# (Gemma 2/3 and Qwen3.5 reject a later system turn, Gemma 4 and Qwen3 render it), so
-# each id is opted in once its behaviour has been checked. Any other model, including
-# other Gemma and Qwen ids and dedicated deployments, receives the request unchanged
-# unless ``inline_mid_conversation_instructions`` is passed explicitly.
+# within a family (Qwen3.5 rejects a later system turn, Qwen3 renders it), so each id
+# is opted in once its behaviour has been checked. Any other model, including other
+# Qwen ids and dedicated deployments, receives the request unchanged unless
+# ``inline_mid_conversation_instructions`` is passed explicitly.
 _INLINE_INSTRUCTIONS_MODELS = frozenset(
     {
-        "google/gemma-4-31B-it",
         "Qwen/Qwen3.8-27B",
     }
 )
@@ -76,9 +75,8 @@ class LLM(OpenAILLM):
         which some chat templates require because they only accept a leading system
         message. When ``False`` they are sent as-is, which is what models whose template
         renders system turns anywhere (GLM, Llama, Kimi, DeepSeek) expect. The default is
-        ``True`` only for ``google/gemma-4-31B-it`` and ``Qwen/Qwen3.8-27B`` and ``False``
-        for every other model id; pass it explicitly for other Gemma or Qwen models and for
-        dedicated deployments.
+        ``True`` only for ``Qwen/Qwen3.8-27B`` and ``False`` for every other model id; pass
+        it explicitly for other models and for dedicated deployments.
         """
         api_key = api_key if is_given(api_key) else os.environ.get("BASETEN_API_KEY", "")
         if not api_key:
