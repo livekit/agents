@@ -3279,7 +3279,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.32.27" },
+    { name = "phonic", specifier = ">=0.32.34" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -4593,7 +4593,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.32.27"
+version = "0.32.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -4602,9 +4602,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/f6/20676f8034bbe856e70641b6ae98fc55ed9ba309d72c5c0e7e184fbd48d8/phonic-0.32.27.tar.gz", hash = "sha256:3141577486e978cbe4e06b2f47797fe5699ec2e86270bae35e1fdb5fd0f92631", size = 201750, upload-time = "2026-09-04T03:49:21.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/9a/a60f80b3ecefe91d87498f5683b99268e13a6109de40809b13afad7f3375/phonic-0.32.34.tar.gz", hash = "sha256:e678cd74228cbbe5c3e4915b51873ec060abf8e99f5e4cf829f3d1297b304ae7", size = 213403, upload-time = "2026-09-22T03:52:08.824Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/ac/95fb438600d1b47fd004e928ed1eafdbe08d3d0cba5ba2a0c175f7f715bb/phonic-0.32.27-py3-none-any.whl", hash = "sha256:ff264f5c515e879151442f1a36cfa66e6178d480592b8c7c2c3f85bad1ea0f8d", size = 435797, upload-time = "2026-09-04T03:49:20.404Z" },
+    { url = "https://files.pythonhosted.org/packages/54/ed/57c4dc7cdb0476561d995d0e6c7bdef1b62f1a18f94fcae30fa964dcc7d2/phonic-0.32.34-py3-none-any.whl", hash = "sha256:0e9187dc3bb5c0617c3bed209f0529f79a9a39c340cf9e2236a3a205c57c6659", size = 460677, upload-time = "2026-09-22T03:52:07.519Z" },
 ]
 
 [[package]]

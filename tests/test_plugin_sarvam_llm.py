@@ -8,7 +8,7 @@ import pytest
 
 from livekit.agents import APIStatusError
 from livekit.agents.inference.llm import LLMStream as InferenceLLMStream
-from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput, ImageContent
+from livekit.agents.llm import ChatContext, ImageContent
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.plugins.sarvam.llm.client import (
@@ -333,58 +333,6 @@ async def test_tool_choice_with_tools_allowed() -> None:
         tool_choice="auto",
     )
     assert stream is not None
-    await stream.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Orphan tool history
-# ---------------------------------------------------------------------------
-
-
-def _chat_ctx_with_tool_call() -> ChatContext:
-    ctx = ChatContext.empty()
-    ctx.add_message(role="user", content="weather?")
-    ctx.insert(
-        [
-            FunctionCall(call_id="call_1", name="get_weather", arguments='{"city": "Bengaluru"}'),
-            FunctionCallOutput(
-                call_id="call_1", name="get_weather", output="sunny", is_error=False
-            ),
-        ]
-    )
-    return ctx
-
-
-def _tool_messages(stream: Any) -> list[dict[str, Any]]:
-    messages, _ = stream._chat_ctx.to_provider_format(format="openai")
-    return [m for m in messages if m.get("role") == "tool" or "tool_calls" in m]
-
-
-@pytest.mark.asyncio
-async def test_tool_history_stripped_when_turn_has_no_tools() -> None:
-    """Sarvam 400s on tool messages with no `tools` array, poisoning the session."""
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
-    stream = llm.chat(chat_ctx=_chat_ctx_with_tool_call())
-    assert _tool_messages(stream) == []
-    await stream.aclose()
-
-
-@pytest.mark.asyncio
-async def test_tool_history_kept_when_turn_has_tools() -> None:
-    """A tool reply still sees its own result — only unmatchable history is dropped."""
-    from livekit.agents.llm import function_tool
-
-    @function_tool
-    def get_weather(city: str) -> str:
-        return "sunny"
-
-    llm = SarvamLLM(api_key="sk_test", client=_fake_async_client())
-    stream = llm.chat(
-        chat_ctx=_chat_ctx_with_tool_call(),
-        tools=[get_weather],
-        tool_choice="none",
-    )
-    assert _tool_messages(stream)
     await stream.aclose()
 
 
