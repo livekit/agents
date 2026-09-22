@@ -52,6 +52,7 @@ from .models import (
     SambaNovaChatModels,
     TelnyxChatModels,
     TogetherChatModels,
+    UrunChatModels,
     XAIChatModels,
     _supports_reasoning_effort,
 )
@@ -942,6 +943,42 @@ class LLM(llm.LLM):
             temperature=NOT_GIVEN,
             parallel_tool_calls=NOT_GIVEN,
             tool_choice=NOT_GIVEN,
+        )
+
+    @staticmethod
+    def with_urun(
+        *,
+        model: str | UrunChatModels = "qwen3.8-27b",
+        api_key: str | None = None,
+        base_url: str = "https://inference.urun.sh/v1",
+        client: openai.AsyncClient | None = None,
+        user: NotGivenOr[str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+    ) -> LLM:
+        """
+        Create a new instance of uRun LLM.
+
+        ``api_key`` must be set to your uRun API key, either using the argument or by setting
+        the ``URUN_API_KEY`` environment variable.
+        """
+
+        api_key = api_key or os.environ.get("URUN_API_KEY")
+        if api_key is None:
+            raise ValueError(
+                "uRun API key is required, either as argument or set URUN_API_KEY environment variable"  # noqa: E501
+            )
+
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            client=client,
+            user=user,
+            temperature=temperature,
+            tool_choice=tool_choice,
+            top_p=top_p,
         )
 
     def chat(
