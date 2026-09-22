@@ -92,7 +92,7 @@ class LLM(llm.LLM):
         client: Mistral | None = None,
         api_key: NotGivenOr[str] = NOT_GIVEN,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
-        api_mode: NotGivenOr[ApiMode] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
         presence_penalty: NotGivenOr[float] = NOT_GIVEN,
@@ -110,10 +110,11 @@ class LLM(llm.LLM):
             model: The Mistral AI model to use, default is
                 ``"ministral-8b-latest"``.
             api_mode: Which Mistral API to use.
-                ``ApiMode.CONVERSATIONS`` (default) uses the Conversations
-                API and supports both function tools and provider tools.
-                ``ApiMode.CHAT_COMPLETIONS`` uses the Chat Completions API
-                which only supports function tools but has lower latency.
+                ``"conversations"`` (default) uses the Conversations API
+                and supports both function tools and provider tools.
+                ``"chat_completions"`` uses the Chat Completions API which
+                only supports function tools but has lower latency.
+                Accepts an :class:`ApiMode` enum or a plain string.
             temperature: The temperature to use the LLM with.
             top_p: Nucleus sampling parameter.
             presence_penalty: Penalize new tokens based on their presence
@@ -129,7 +130,7 @@ class LLM(llm.LLM):
         super().__init__()
         self._opts = _LLMOptions(
             model=model if is_given(model) else DEFAULT_MODEL,
-            api_mode=api_mode if is_given(api_mode) else ApiMode.CONVERSATIONS,
+            api_mode=ApiMode(api_mode) if is_given(api_mode) else ApiMode.CONVERSATIONS,
             temperature=temperature if is_given(temperature) else None,
             top_p=top_p if is_given(top_p) else None,
             presence_penalty=presence_penalty if is_given(presence_penalty) else None,
@@ -161,7 +162,7 @@ class LLM(llm.LLM):
         self,
         *,
         model: NotGivenOr[ChatModels | str] = NOT_GIVEN,
-        api_mode: NotGivenOr[ApiMode] = NOT_GIVEN,
+        api_mode: NotGivenOr[ApiMode | str] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         temperature: NotGivenOr[float] = NOT_GIVEN,
         top_p: NotGivenOr[float] = NOT_GIVEN,
@@ -173,7 +174,7 @@ class LLM(llm.LLM):
         if is_given(model):
             self._opts.model = model
         if is_given(api_mode):
-            self._opts.api_mode = api_mode
+            self._opts.api_mode = ApiMode(api_mode)
         if is_given(max_completion_tokens):
             self._opts.max_completion_tokens = max_completion_tokens
         if is_given(temperature):
