@@ -283,3 +283,47 @@ async def test_push_frame_is_not_rechunked():
     # from a 20 ms first frame and hold the rest until more audio arrived
     assert events[0].frame.duration == pytest.approx(0.21)
     assert sum(ev.frame.duration for ev in events) == pytest.approx(0.22)
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("num_channels", [1, 2])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_automatic_flush_preserves_partial_pcm_sample(num_channels: int, stream: bool):
+    flushed = asyncio.Event()
+
+    class ObservedEmitter(tts.AudioEmitter):
+        def flush(self) -> None:
+            super().flush()
+            flushed.set()
+
+    dst_ch = utils.aio.Chan[tts.SynthesizedAudio]()
+    emitter = ObservedEmitter(label="partial-pcm", dst_ch=dst_ch)
+    emitter.initialize(
+        request_id="partial-pcm",
+        sample_rate=SR,
+        num_channels=num_channels,
+        mime_type="audio/pcm",
+        stream=stream,
+    )
+    pcm = (bytes(range(256)) * 375)[: SR * 2 * num_channels]
+    # Enough audio to arm the slow-generation timer, followed by half a sample.
+    split = SR * 2 * num_channels * 3 // 10 + 1
+    try:
+        if stream:
+            emitter.start_segment(segment_id="turn")
+        emitter.push(pcm[:split])
+        # Let the real emitter timer request the flush. No application flush is needed.
+        await asyncio.wait_for(flushed.wait(), timeout=2)
+        emitter.push(pcm[split:])
+        emitter.end_input()
+        await emitter.join()
+    finally:
+        await emitter.aclose()
+        dst_ch.close()
+
+    events = [event async for event in dst_ch]
+    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
+    assert sum(event.is_final for event in events) == 1
+    assert events[-1].is_final

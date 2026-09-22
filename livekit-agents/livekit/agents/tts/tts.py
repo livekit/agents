@@ -1303,7 +1303,8 @@ class AudioEmitter:
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-                            audio_byte_stream.clear()  # reset progressive for next burst
+                            # More bytes can follow this flush. Keep any partial PCM sample.
+                            audio_byte_stream.reset_progressive()
                         _flush_frame()
 
                     elif isinstance(data, AudioEmitter._EndSegment):
