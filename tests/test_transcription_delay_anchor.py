@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import stt
+from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _compute_end_of_turn_metrics,
@@ -45,6 +46,7 @@ def _make_recognition(
     """Wire the attributes ``_on_stt_event`` touches for transcript events."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._session = MagicMock()
+    ar._session._root_span_context = None
     ar._session.amd = None
     ar._session._room_io = None
     ar._hooks = MagicMock()
@@ -83,6 +85,11 @@ def _make_recognition(
     # only reached by the stt-mode END_OF_SPEECH / START_OF_SPEECH branches
     ar._user_turn_span = None
     ar._user_turn_start = None
+    ar._eou_wait_span = None
+    ar._eou_wait_started_at_ns = None
+    ar._eou_wait_rearms = 0
+    ar._eou_wait_floor_ns = None
+    ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
     ar._vad_stream = None
@@ -107,7 +114,9 @@ def _preflight_transcript(end_time: float) -> stt.SpeechEvent:
 
 
 @both_modes
-async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) -> None:
+async def test_vad_anchor_survives_a_transcript_without_timestamps(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The reported regression: with the (default) VAD anchor discarded, a
     provider that sends no timestamps anchors the turn at transcript arrival and
     transcription_delay reports ~0 instead of the actual STT latency.
@@ -116,6 +125,8 @@ async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) ->
     prefer, so the estimate would be nothing but ``now``.
     """
     now = time.time()
+    # the transcript is stamped with the same clock the anchor was derived from
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6  # VAD end-of-speech, 0.6s of transcription latency ago
     ar._last_speaking_time = vad_anchor
@@ -271,8 +282,9 @@ async def test_stt_end_of_speech_clamps_a_future_speech_end_time() -> None:
         )
     )
 
-    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
-    assert ar._last_speaking_time <= time.time()
+    # clamped to arrival time: bounded by the clock reads around the call rather than a
+    # fixed tolerance, which a loaded CI runner blows through
+    assert now <= ar._last_speaking_time <= time.time()
 
 
 async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> None:
@@ -290,7 +302,8 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
 
     await ar._on_stt_event(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH, alternatives=[]))
 
-    assert ar._last_speaking_time == pytest.approx(now, abs=0.05)
+    # the anchor moved from 0.6 s ago to arrival time (bounded by the clock reads around the call)
+    assert now <= ar._last_speaking_time <= time.time()
     assert ar._user_turn_committed is True
 
 

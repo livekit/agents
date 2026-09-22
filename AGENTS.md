@@ -88,12 +88,12 @@ make doctor           # Check development environment health
 ```
 livekit-agents/livekit/agents/
 ├── voice/              # Core voice agent: AgentSession, Agent, room I/O, transcription
-├── llm/                # LLM integration: chat context, tool definitions, MCP support
+├── llm/                # LLM and realtime engines: chat context, tools, MCP, provider protocols
 ├── stt/                # Speech-to-text with fallback and stream adapters
 ├── tts/                # Text-to-speech with fallback and stream pacing
 ├── ipc/                # Inter-process communication for distributed job execution
 ├── cli/                # CLI commands (console, dev, start, connect)
-├── inference/          # Remote model inference (LLM, STT, TTS)
+├── inference/          # Hosted model inference (LLM, STT, TTS, realtime)
 ├── telemetry/          # OpenTelemetry traces and Prometheus metrics
 └── utils/              # Audio processing, codecs, HTTP, async utilities
 

@@ -171,6 +171,11 @@ class AudioByteStream:
 
     write = push  # Alias for the push method.
 
+    @property
+    def buffered_duration(self) -> float:
+        """Seconds of audio waiting for the next frame."""
+        return len(self._buf) / self._bytes_per_sample / self._sample_rate
+
     def flush(self) -> list[rtc.AudioFrame]:
         """
         Flush the buffer and retrieve any remaining audio data as a frame.
