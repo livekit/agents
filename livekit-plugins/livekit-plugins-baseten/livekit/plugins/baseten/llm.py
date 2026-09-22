@@ -41,7 +41,7 @@ _INLINE_INSTRUCTIONS_MODELS = frozenset(
 _INLINE_INSTRUCTIONS_MODELS_LOWER = frozenset(m.lower() for m in _INLINE_INSTRUCTIONS_MODELS)
 
 
-def _needs_inline_instructions(model: str) -> bool:
+def _supports_inline_instructions(model: str) -> bool:
     return model.lower() in _INLINE_INSTRUCTIONS_MODELS_LOWER
 
 
@@ -91,7 +91,7 @@ class LLM(OpenAILLM):
                 reasoning_effort = "low"
 
         if not is_given(inline_mid_conversation_instructions):
-            inline_mid_conversation_instructions = _needs_inline_instructions(model)
+            inline_mid_conversation_instructions = _supports_inline_instructions(model)
         self._inline_mid_conversation_instructions = inline_mid_conversation_instructions
 
         super().__init__(

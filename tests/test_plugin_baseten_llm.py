@@ -24,7 +24,7 @@ import pytest
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.plugins.baseten import LLM
-from livekit.plugins.baseten.llm import _needs_inline_instructions
+from livekit.plugins.baseten.llm import _supports_inline_instructions
 
 pytestmark = pytest.mark.unit
 
@@ -162,7 +162,7 @@ def _plain_ctx() -> ChatContext:
     ],
 )
 def test_inline_instructions_inferred_from_model_id(model: str, expected: bool) -> None:
-    assert _needs_inline_instructions(model) is expected
+    assert _supports_inline_instructions(model) is expected
 
 
 # ---------------------------------------------------------------------------
