@@ -120,6 +120,7 @@ def test_record_exception_uses_resolved_redaction_state(monkeypatch: pytest.Monk
 @pytest.mark.parametrize("record_exception", [False, True])
 @pytest.mark.parametrize("set_status_on_exception", [False, True])
 @pytest.mark.parametrize("end_on_exit", [False, True])
+@pytest.mark.parametrize("call_style", ["keyword", "positional", "mixed"])
 def test_dynamic_tracer_records_exceptions_with_caller_options(
     monkeypatch: pytest.MonkeyPatch,
     use_span: bool,
@@ -127,6 +128,7 @@ def test_dynamic_tracer_records_exceptions_with_caller_options(
     record_exception: bool,
     set_status_on_exception: bool,
     end_on_exit: bool,
+    call_style: str,
 ) -> None:
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
@@ -139,11 +141,29 @@ def test_dynamic_tracer_records_exceptions_with_caller_options(
         "set_status_on_exception": set_status_on_exception,
         "end_on_exit": end_on_exit,
     }
-    manager = (
-        dynamic_tracer.use_span(dynamic_tracer.start_span("test-span"), **options)
-        if use_span
-        else dynamic_tracer.start_as_current_span("test-span", **options)
-    )
+    if call_style == "keyword":
+        manager = (
+            dynamic_tracer.use_span(dynamic_tracer.start_span("test-span"), **options)
+            if use_span
+            else dynamic_tracer.start_as_current_span("test-span", **options)
+        )
+    else:
+        args: list[Any]
+        if use_span:
+            context_manager = dynamic_tracer.use_span
+            args = [dynamic_tracer.start_span("test-span"), end_on_exit, record_exception]
+            options = {"set_status_on_exception": set_status_on_exception}
+        else:
+            context_manager = dynamic_tracer.start_as_current_span
+            args = ["test-span", None, trace.SpanKind.INTERNAL, None, None, None, record_exception]
+            options = {
+                "set_status_on_exception": set_status_on_exception,
+                "end_on_exit": end_on_exit,
+            }
+        if call_style == "positional":
+            args.extend(options.values())
+            options = {}
+        manager = context_manager(*args, **options)
     previous_span = trace.get_current_span()
     failure = RuntimeError("secret transcript")
     try:

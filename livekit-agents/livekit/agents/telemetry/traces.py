@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import inspect
 import json
 import logging
 import os
@@ -163,6 +164,10 @@ def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
     return serialized
 
 
+_USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
+_START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
+
+
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
@@ -181,10 +186,11 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        record_exception = kwargs.pop("record_exception", True)
-        set_status_on_exception = kwargs.pop("set_status_on_exception", True)
-        kwargs.update(record_exception=False, set_status_on_exception=False)
-        with trace_api.use_span(*args, **kwargs) as span:
+        bound = _USE_SPAN_SIGNATURE.bind(*args, **kwargs)
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with trace_api.use_span(*bound.args, **bound.kwargs) as span:
             try:
                 yield span
             except Exception as exc:
@@ -219,10 +225,11 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        record_exception = kwargs.pop("record_exception", True)
-        set_status_on_exception = kwargs.pop("set_status_on_exception", True)
-        kwargs.update(record_exception=False, set_status_on_exception=False)
-        with self._tracer.start_as_current_span(*args, **kwargs) as span:
+        bound = _START_AS_CURRENT_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with self._tracer.start_as_current_span(*bound.args[1:], **bound.kwargs) as span:
             try:
                 yield span
             except Exception as exc:
