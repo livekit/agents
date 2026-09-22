@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from livekit import rtc
-from livekit.agents import NOT_GIVEN, utils
+from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -34,7 +35,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurr
 
 class _FakeRoom:
     def __init__(self) -> None:
-        self._events: dict[str, list[object]] = defaultdict(list)
+        self._events: dict[str, list[Callable[..., None]]] = defaultdict(list)
         self.remote_participants: dict[str, object] = {}
         self.local_participant = SimpleNamespace(identity="local")
         self.name = "test-room"
@@ -42,14 +43,18 @@ class _FakeRoom:
         self._server_url = "wss://test.livekit.cloud"
         self.connected = True
 
-    def on(self, event: str, callback: object) -> None:
+    def on(self, event: str, callback: Callable[..., None]) -> None:
         self._events[event].append(callback)
 
-    def off(self, event: str, callback: object) -> None:
+    def off(self, event: str, callback: Callable[..., None]) -> None:
         callbacks = self._events[event]
         callbacks.remove(callback)
         if not callbacks:
             self._events.pop(event, None)
+
+    def emit(self, event: str, *args: object) -> None:
+        for callback in list(self._events.get(event, [])):
+            callback(*args)
 
     def listener_count(self, event: str) -> int:
         return len(self._events.get(event, []))
@@ -57,7 +62,7 @@ class _FakeRoom:
     def isconnected(self) -> bool:
         return self.connected
 
-    def register_text_stream_handler(self, topic: str, callback: object) -> None:
+    def register_text_stream_handler(self, topic: str, callback: Callable[..., None]) -> None:
         self.on(f"text:{topic}", callback)
 
     def unregister_text_stream_handler(self, topic: str) -> None:
@@ -316,6 +321,7 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room.on("participant_connected", room_io._on_participant_connected)
     room.on("connection_state_changed", room_io._on_connection_state_changed)
     room.on("participant_disconnected", room_io._on_participant_disconnected)
+    room.on("sip_dtmf_received", room_io._on_sip_dtmf_received)
 
     order: list[str] = []
 
@@ -342,10 +348,64 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     assert room.listener_count("participant_connected") == 0
     assert room.listener_count("connection_state_changed") == 0
     assert room.listener_count("participant_disconnected") == 0
+    assert room.listener_count("sip_dtmf_received") == 0
     assert order == ["sync", "user", "agent"]
     room_io._tr_synchronizer.aclose.assert_awaited_once()
     room_io._user_tr_output.aclose.assert_awaited_once()
     room_io._agent_tr_output.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize("event_source", ["linked", "other", "unattributed", "unlinked"])
+async def test_roomio_dtmf_resets_away_only_for_linked_participant(event_source: str) -> None:
+    room = _FakeRoom()
+    room.connected = False
+    caller = MagicMock(spec=rtc.RemoteParticipant)
+    caller.identity = "caller"
+    caller.attributes = {}
+    caller.kind = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    other = MagicMock(spec=rtc.RemoteParticipant)
+    other.identity = "other"
+
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(
+            Agent(instructions="Collect DTMF input."),
+            room=room,
+            session_host=False,
+            room_options=RoomOptions(
+                audio_input=False,
+                audio_output=False,
+                text_input=False,
+                text_output=False,
+            ),
+        )
+        if event_source != "unlinked":
+            room.emit("participant_connected", caller)
+
+        sender = (
+            None if event_source == "unattributed" else other if event_source == "other" else caller
+        )
+        digit = rtc.SipDTMF(code=1, digit="1", participant=sender)
+        assert room.listener_count("sip_dtmf_received") == 1
+
+        await asyncio.sleep(2.0)
+        room.emit("sip_dtmf_received", digit)
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("listening" if event_source == "linked" else "away")
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        room.emit("sip_dtmf_received", digit)
+        assert session.user_state == ("listening" if event_source == "linked" else "away")
+
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+        session.room_io.unset_participant()
+        room.emit("sip_dtmf_received", digit)
+        assert session.user_state == "away"
+
+    assert room.listener_count("sip_dtmf_received") == 0
 
 
 @pytest.mark.parametrize(

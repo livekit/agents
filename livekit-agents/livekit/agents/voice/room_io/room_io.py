@@ -187,6 +187,7 @@ class RoomIO:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -217,6 +218,7 @@ class RoomIO:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
+        self._room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
@@ -483,6 +485,13 @@ class RoomIO:
                 },
             )
             self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+
+    def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
+        linked = self.linked_participant
+        if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
+            return
+
+        self._agent_session.reset_away_timer()
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_ch:

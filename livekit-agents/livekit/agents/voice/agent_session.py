@@ -1651,7 +1651,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._activity.interrupt(force=force)
 
     def reset_away_timer(self) -> None:
-        """Reset the user-away timeout after activity such as a received DTMF digit.
+        """Reset the user-away timeout after external user activity.
+
+        RoomIO calls this automatically for incoming DTMF from its linked participant.
 
         If the user is ``"away"``, change their state to ``"listening"``.
         Restart the full ``user_away_timeout`` when both user and agent are
