@@ -126,27 +126,11 @@ class ToolHandlingOptions(TypedDict, total=False):
         )
 
     ``async_options`` applies to ``AgentSession``, ``Agent``, and ``AsyncToolset``.
-    ``on_dependency_error`` may be set on ``AgentSession`` or ``Agent`` only. An
-    agent inherits the session value unless it supplies its own; ``AsyncToolset``
-    does not support this policy.
     """
 
     async_options: AsyncToolOptions
     """Templates injected around async tool dispatch (``ctx.update()``, duplicate
     handling, coalesced replies). Unmentioned keys keep their defaults."""
-
-    on_dependency_error: Literal["skip", "run"]
-    """What to do when a prerequisite fails. ``"skip"`` is the default and skips
-    the dependent. ``"run"`` waits for all named prerequisites to terminate, then
-    runs the dependent despite their failures. Neither policy runs queued work after
-    cancellation, session close, or permanent handoff abandonment.
-
-    This setting is inherited from ``AgentSession`` by ``Agent`` only; an explicit
-    agent value overrides the session value. It is not an ``AsyncToolset`` policy.
-    """
-
-
-DependencyErrorPolicy = Literal["skip", "run"]
 
 
 def _render(template: str | Callable[[Any], str], args: dict[str, Any]) -> str:
@@ -172,13 +156,6 @@ def _resolve_async_tool_options(
     if config is None:
         return AsyncToolOptions(**_ASYNC_TOOL_OPTIONS_DEFAULTS)
     return AsyncToolOptions(**{**_ASYNC_TOOL_OPTIONS_DEFAULTS, **config})
-
-
-def _resolve_dependency_error_policy(config: ToolHandlingOptions | None) -> DependencyErrorPolicy:
-    policy = config.get("on_dependency_error", "skip") if config is not None else "skip"
-    if policy not in ("skip", "run"):
-        raise ValueError("tool_handling['on_dependency_error'] must be 'skip' or 'run'")
-    return policy
 
 
 # session-scoped view shared across executors, so cancel_task / get_running_tasks
@@ -263,9 +240,6 @@ def _duplicate_key(
         return (fnc_name, _canonical_args(raw))
 
 
-TerminalStatus = Literal["done", "error", "cancelled"]
-
-
 class _ToolExecutionHandle:
     """Private two-phase lifecycle for one tool call.
 
@@ -274,11 +248,11 @@ class _ToolExecutionHandle:
     """
 
     def __init__(self) -> None:
-        self.terminal: asyncio.Future[TerminalStatus] = asyncio.get_running_loop().create_future()
+        self.terminal: asyncio.Future[None] = asyncio.get_running_loop().create_future()
 
-    def set_terminal(self, status: TerminalStatus) -> None:
+    def set_terminal(self) -> None:
         if not self.terminal.done():
-            self.terminal.set_result(status)
+            self.terminal.set_result(None)
 
 
 @dataclass
@@ -357,9 +331,9 @@ class _ToolExecutor:
         info = tool.info
         handle = execution_handle
 
-        def settle_terminal(status: Literal["done", "error", "cancelled"]) -> None:
+        def settle_terminal() -> None:
             if handle is not None:
-                handle.set_terminal(status)
+                handle.set_terminal()
 
         def emit_rejected(message: str, *, status: Literal["error", "cancelled"] = "error") -> None:
             if handle is None:
@@ -401,7 +375,7 @@ class _ToolExecutor:
                 status: Literal["error", "cancelled"] = (
                     "cancelled" if isinstance(duplicate_error, asyncio.CancelledError) else "error"
                 )
-                settle_terminal(status)
+                settle_terminal()
                 emit_rejected(str(duplicate_error), status=status)
                 raise
             if duplicate_result is not None:
@@ -409,13 +383,13 @@ class _ToolExecutor:
                     "duplicate tool call rejected",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
-                settle_terminal("error")
+                settle_terminal()
                 emit_rejected(duplicate_result)
                 return duplicate_result
 
         if call_id in self._running_tasks or call_id in self._reserved_call_ids:
             error = ValueError(f"Task already running for call_id: {call_id}")
-            settle_terminal("error")
+            settle_terminal()
             emit_rejected(str(error))
             raise error
         self._reserved_call_ids.add(call_id)
@@ -549,7 +523,7 @@ class _ToolExecutor:
                     )
                 ),
             )
-            settle_terminal(status)
+            settle_terminal()
 
         exe_task.add_done_callback(_on_done)
 

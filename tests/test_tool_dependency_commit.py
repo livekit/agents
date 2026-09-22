@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 from typing import Any
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
-from livekit.agents.llm import FunctionCall
+from livekit.agents.llm import FunctionCall, RealtimeError
 
+from .fake_io import FakeAudioOutput
 from .fake_realtime import (
     FakeRealtimeModel,
     FakeRealtimeSession,
@@ -17,6 +19,7 @@ from .fake_realtime import (
 from .tool_dependency_helpers import (
     await_chain as _await_chain,
     close as _close,
+    collect_terminals,
     resolve_fake_realtime_replies as _resolve_fake_realtime_replies,
     wait as _wait,
 )
@@ -280,3 +283,102 @@ async def test_close_during_initial_provider_commit_releases_dependency_delivery
         assert not leaked_tasks, "close left tool tasks: " + ", ".join(
             f"{task.get_name()}: {_await_chain(task)}" for task in leaked_tasks
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["initial", "late", "persistent"])
+async def test_provider_commit_failure_settles_dependency_delivery(
+    failure: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    loop = asyncio.get_running_loop()
+    unhandled: list[dict[str, Any]] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, context: unhandled.append(context))
+    existing_tasks = set(asyncio.all_tasks())
+    model = _GatedRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
+    session = AgentSession(llm=model)
+    session.output.audio = FakeAudioOutput()
+    terminals = collect_terminals(session)
+    dependent_done = asyncio.Event()
+    stop = asyncio.Event()
+    resolver: asyncio.Task[None] | None = None
+    attempts = 0
+    failures = 0
+
+    @function_tool(name="root")
+    async def root(ctx: RunContext) -> str:
+        return "root done"
+
+    @function_tool(name="meal", after=("root",))
+    async def meal(ctx: RunContext) -> str:
+        try:
+            await ctx.update("meal progress")
+            return "meal final"
+        finally:
+            dependent_done.set()
+
+    try:
+        await session.start(Agent(instructions="booking", tools=[root, meal]))
+        realtime = model.active_session
+        assert isinstance(realtime, _GatedRealtimeSession)
+        realtime.release_initial_provider_update.set()
+        original_update = realtime.update_chat_ctx
+
+        async def failing_update(chat_ctx: Any) -> None:
+            nonlocal attempts, failures
+            if any(item.type == "function_call_output" for item in chat_ctx.items):
+                attempts += 1
+                if (
+                    failure == "persistent"
+                    or (failure == "initial" and attempts == 1)
+                    or (failure == "late" and attempts == 2)
+                ):
+                    failures += 1
+                    raise RealtimeError("injected provider commit failure")
+            await original_update(chat_ctx)
+
+        monkeypatch.setattr(realtime, "update_chat_ctx", failing_update)
+        speech = session.generate_reply()
+        await _wait(realtime.reply_created)
+        realtime._reply_futs[0].set_result(
+            _generation(
+                response_id="commit-failure",
+                text="checking",
+                audio_duration=0.01,
+                function_calls=[
+                    FunctionCall(call_id="meal", name="meal", arguments="{}"),
+                    FunctionCall(call_id="root", name="root", arguments="{}"),
+                ],
+            )
+        )
+        resolver = asyncio.create_task(_resolve_fake_realtime_replies(realtime, stop))
+        await _wait(dependent_done)
+        await asyncio.wait_for(speech.wait_for_playout(), timeout=5)
+        await asyncio.wait_for(session.wait_for_idle(), timeout=5)
+        assert failures > 0
+        assert len(terminals["meal"]) == 1
+        if failure == "persistent":
+            assert terminals["meal"][0].status == "error"
+            assert not any(item.type == "function_call_output" for item in realtime.chat_ctx.items)
+        else:
+            assert terminals["meal"][0].status == "done"
+            assert any(
+                item.type == "function_call_output" and item.call_id == "meal_final"
+                for item in realtime.chat_ctx.items
+            )
+        if failure != "initial":
+            assert "failed to deliver deferred tool output" in caplog.text
+    finally:
+        try:
+            await _close(session)
+        finally:
+            stop.set()
+            if resolver is not None:
+                await asyncio.wait_for(resolver, timeout=5)
+            gc.collect()
+            await asyncio.sleep(0)
+            loop.set_exception_handler(previous_handler)
+    assert not unhandled
+    assert not [
+        task for task in asyncio.all_tasks() if task not in existing_tasks and not task.done()
+    ]

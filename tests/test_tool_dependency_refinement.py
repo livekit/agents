@@ -111,7 +111,6 @@ async def test_delayed_eof_exposes_root_progress_before_dependency_admission() -
         vad=None,
         tts=None,
         turn_handling={"turn_detection": None},
-        tool_handling={"on_dependency_error": "skip"},
     )
     await session.start(Agent(instructions="booking", tools=[save_room, save_meal]))
     try:
@@ -185,7 +184,6 @@ async def test_duplicate_dependent_id_keeps_refusal_and_final_correlated() -> No
         vad=None,
         tts=None,
         turn_handling={"turn_detection": None},
-        tool_handling={"on_dependency_error": "run"},
     )
     await session.start(Agent(instructions="duplicate", tools=[root, dependent]))
 

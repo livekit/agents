@@ -835,7 +835,6 @@ class _DependencyNode:
     task: asyncio.Task[Any] | None = None
     admitted: bool = False
     settled: bool = False
-    failed: bool = False
 
 
 def _validate_dependency_graph(
@@ -890,13 +889,11 @@ class _DependencyScheduler:
     def __init__(
         self,
         *,
-        policy: Literal["skip", "run"],
         output_cb: Callable[[ToolExecutionOutput], None],
         terminal_cb: Callable[[ToolExecutionOutput, str], None],
         initial_batch_released: asyncio.Event,
         abandon_delivery: Callable[[], None],
     ) -> None:
-        self._policy = policy
         self._output_cb = output_cb
         self._terminal_cb = terminal_cb
         self._initial_batch_released = initial_batch_released
@@ -1006,15 +1003,7 @@ class _DependencyScheduler:
             prerequisites = self._matching_prerequisites(node)
             if any(not prerequisite.settled for prerequisite in prerequisites):
                 continue
-            if self._policy == "skip" and any(
-                prerequisite.failed for prerequisite in prerequisites
-            ):
-                self._settle_without_execution(
-                    node,
-                    ToolError(f"Skipped `{node.fnc_call.name}` because a prerequisite failed"),
-                )
-            else:
-                self._admit(node)
+            self._admit(node)
 
     def _admit(self, node: _DependencyNode) -> None:
         if node.admitted or node.settled or self._abandoned:
@@ -1027,9 +1016,8 @@ class _DependencyScheduler:
         watcher.add_done_callback(self._watch_tasks.discard)
 
     async def _watch_terminal(self, node: _DependencyNode) -> None:
-        outcome = await asyncio.shield(node.handle.terminal)
+        await asyncio.shield(node.handle.terminal)
         node.settled = True
-        node.failed = outcome != "done"
         self._resolve_waiting()
 
     def _duplicate_refusal_call(self, node: _DependencyNode) -> llm.FunctionCall:
@@ -1053,7 +1041,6 @@ class _DependencyScheduler:
         if node.settled:
             return
         node.settled = True
-        node.failed = True
         output = make_tool_output(
             fnc_call=fnc_call or node.fnc_call,
             output=None,
@@ -1215,6 +1202,15 @@ async def _execute_tools_task(
     run_contexts: dict[str, RunContext] = {}
     initial_delivery_events: dict[str, asyncio.Event] = {}
 
+    def _on_reply_done(task: asyncio.Task[Any]) -> None:
+        reply_tasks.discard(task)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error(
+                "failed to deliver deferred tool output",
+                exc_info=(type(error), error, error.__traceback__),
+                extra={"speech_id": speech_handle.id},
+            )
+
     def _deliver_late(out: ToolExecutionOutput) -> None:
         original_call_id = out.fnc_call.call_id
         ctx = run_contexts.get(original_call_id)
@@ -1255,7 +1251,7 @@ async def _execute_tools_task(
                 name=f"tool_dependency_reply_{out.fnc_call.name}",
             )
             reply_tasks.add(reply_task)
-            reply_task.add_done_callback(reply_tasks.discard)
+            reply_task.add_done_callback(_on_reply_done)
             if delivery_event := initial_delivery_events.get(original_call_id):
 
                 def release_initial_delivery(
@@ -1290,7 +1286,7 @@ async def _execute_tools_task(
             _deliver(), name=f"tool_dependency_reply_{out.fnc_call.name}"
         )
         reply_tasks.add(reply_task)
-        reply_task.add_done_callback(reply_tasks.discard)
+        reply_task.add_done_callback(_on_reply_done)
 
     def _flush_late_outputs() -> None:
         late_outputs = tool_output.late_outputs[:]
@@ -1321,7 +1317,6 @@ async def _execute_tools_task(
 
     if dependency_mode:
         dependency_scheduler = _DependencyScheduler(
-            policy=activity._dependency_error_policy,
             output_cb=_on_tool_output,
             terminal_cb=_dependency_terminal,
             initial_batch_released=tool_output.initial_batch_released,

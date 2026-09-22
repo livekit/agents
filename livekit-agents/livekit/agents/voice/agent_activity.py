@@ -387,11 +387,6 @@ class AgentActivity(RecognitionHooks):
         # activity-owned so close/force-interrupt can settle queued nodes before the
         # executor begins draining admitted work.
         self._dependency_schedulers: set[_DependencyScheduler] = set()
-        self._dependency_error_policy = (
-            self._agent._dependency_error_policy
-            if is_given(self._agent._dependency_error_policy)
-            else self._session._dependency_error_policy
-        )
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False

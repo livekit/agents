@@ -390,7 +390,8 @@ def function_tool(
             (EOF), while dependent calls wait until EOF before admission. If no
             matching call is present in the batch, no dependency edge is created.
             ``ctx.update()`` reports progress but does not satisfy a dependency;
-            terminal completion is required.
+            terminal completion is required. Failed or individually cancelled
+            prerequisites also satisfy the ordering constraint; dependents still run.
 
             Cycles are validated against the available tool snapshot before dispatch.
             This metadata orders execution only; it does not regenerate arguments or

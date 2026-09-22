@@ -23,19 +23,16 @@ pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 async def _start(
     agent: Agent,
     responses: list[FakeLLMResponse],
-    *,
-    policy: str = "skip",
 ) -> AgentSession:
     session = AgentSession(
         llm=FakeLLM(fake_responses=responses),
-        tool_handling={"on_dependency_error": policy},
     )
     await session.start(agent)
     return session
 
 
 @pytest.mark.asyncio
-async def test_replaced_prerequisite_failure_blocks_dependent() -> None:
+async def test_replaced_prerequisite_finishes_before_dependent() -> None:
     first_started = asyncio.Event()
     replacement_started = asyncio.Event()
     dependent_started = asyncio.Event()
@@ -86,13 +83,15 @@ async def test_replaced_prerequisite_failure_blocks_dependent() -> None:
         await asyncio.wait_for(replacement_started.wait(), timeout=5)
         assert calls == ["first", "second"]
         await asyncio.wait_for(dependent_terminal.wait(), timeout=5)
-        assert not dependent_started.is_set()
+        assert dependent_started.is_set()
+        assert [event.call_id for event in terminal_events] == [
+            "prepare-1",
+            "prepare-2",
+            "commit-call",
+        ]
         dependent_event = next(event for event in terminal_events if event.call_id == "commit-call")
         assert dependent_event.id == "commit-call"
-        assert dependent_event.status == "error"
-        assert dependent_event.message is not None
-        assert "Skipped" in dependent_event.message
-        assert "prerequisite failed" in dependent_event.message
+        assert dependent_event.status == "done"
     finally:
         await _close(session)
 
@@ -178,7 +177,7 @@ async def test_duplicate_call_id_is_one_side_effect_and_one_explicit_failure() -
 
 
 @pytest.mark.asyncio
-async def test_malformed_registered_prerequisite_is_not_absent() -> None:
+async def test_malformed_prerequisite_settles_before_dependent() -> None:
     dependent_started = asyncio.Event()
     dependent_terminal = asyncio.Event()
     terminal_events: list[ToolCallEnded] = []
@@ -214,15 +213,13 @@ async def test_malformed_registered_prerequisite_is_not_absent() -> None:
     try:
         session.generate_reply(user_input="malformed")
         await asyncio.wait_for(dependent_terminal.wait(), timeout=5)
-        assert not dependent_started.is_set()
+        assert dependent_started.is_set()
+        assert [event.call_id for event in terminal_events] == ["prepare-call", "commit-call"]
         dependent_terminals = [event for event in terminal_events if event.call_id == "commit-call"]
         assert len(dependent_terminals) == 1
         dependent_terminal_event = dependent_terminals[0]
         assert dependent_terminal_event.id == "commit-call"
-        assert dependent_terminal_event.status == "error"
-        assert dependent_terminal_event.message is not None
-        assert "Skipped" in dependent_terminal_event.message
-        assert "prerequisite failed" in dependent_terminal_event.message
+        assert dependent_terminal_event.status == "done"
 
         prerequisite_terminals = [
             event for event in terminal_events if event.call_id == "prepare-call"
@@ -237,7 +234,7 @@ async def test_malformed_registered_prerequisite_is_not_absent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_does_not_admit_pending_dependent_with_run_policy() -> None:
+async def test_close_does_not_admit_pending_dependent() -> None:
     root_started = asyncio.Event()
     dependent_started = asyncio.Event()
 
@@ -261,7 +258,6 @@ async def test_close_does_not_admit_pending_dependent_with_run_policy() -> None:
                 FunctionToolCall(name="root", arguments="{}", call_id="root"),
             )
         ],
-        policy="run",
     )
     try:
         session.generate_reply(user_input="close-run")
@@ -495,7 +491,6 @@ async def test_dependency_gate_coordinates_session_and_activity_executors() -> N
             ]
         ),
         tools=[session_tools],
-        tool_handling={"on_dependency_error": "skip"},
     )
     await session.start(Agent(instructions="workflow", tools=[activity_dependent]))
     try:
@@ -552,7 +547,6 @@ async def test_handoff_abandons_activity_dependent_but_preserves_session_root() 
             ]
         ),
         tools=[session_tools],
-        tool_handling={"on_dependency_error": "skip"},
     )
     await session.start(Agent(instructions="root", tools=[activity_dependent]))
 
@@ -632,7 +626,6 @@ async def test_late_stream_call_after_handoff_is_terminally_rejected() -> None:
     )
     session = AgentSession(
         llm=llm,
-        tool_handling={"on_dependency_error": "skip"},
     )
     await session.start(Agent(instructions="root", tools=[handoff, late_dependent]))
 
@@ -719,3 +712,11 @@ def test_dependency_metadata_is_not_exposed_in_function_or_raw_schemas() -> None
     for schema in context.parse_function_tools("openai"):
         assert "after" not in str(schema)
     assert "after" not in str(context.parse_function_tools("google"))
+
+
+def test_dependency_names_reject_a_single_string() -> None:
+    with pytest.raises(TypeError, match="sequence of tool names"):
+
+        @function_tool(after="root")  # type: ignore[arg-type]
+        async def dependent(ctx: RunContext) -> str:
+            return "dependent"

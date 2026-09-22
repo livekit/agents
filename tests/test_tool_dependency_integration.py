@@ -147,26 +147,21 @@ class _RecordingRealtimeModel(FakeRealtimeModel):
         return session
 
 
-def _new_session(llm: FakeLLM, *, on_dependency_error: str = "skip") -> AgentSession:
+def _new_session(llm: FakeLLM) -> AgentSession:
     return AgentSession(
         llm=llm,
         stt=None,
         vad=None,
         tts=None,
         turn_handling={"turn_detection": None},
-        tool_handling={"on_dependency_error": on_dependency_error},
     )
 
 
 async def _start(
     agent: Agent,
     responses: list[FakeLLMResponse],
-    *,
-    on_dependency_error: str = "skip",
 ) -> AgentSession:
-    session = _new_session(
-        FakeLLM(fake_responses=responses), on_dependency_error=on_dependency_error
-    )
+    session = _new_session(FakeLLM(fake_responses=responses))
     await session.start(agent)
     return session
 
@@ -278,8 +273,7 @@ async def test_progress_is_visible_before_dependency_terminal_and_does_not_admit
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy, should_run", [("skip", False), ("run", True)])
-async def test_terminal_predecessor_failure_obeys_policy(policy: str, should_run: bool) -> None:
+async def test_terminal_predecessor_failure_still_allows_dependent() -> None:
     trace = _Trace()
     meal_started = asyncio.Event()
 
@@ -302,18 +296,17 @@ async def test_terminal_predecessor_failure_obeys_policy(policy: str, should_run
                 FunctionToolCall(name="save_room", arguments="{}", call_id="room"),
             )
         ],
-        on_dependency_error=policy,
     )
     trace.watch(session)
     try:
         session.generate_reply(user_input="book")
         await _wait(trace.event(trace.ended, "room"))
         await _wait(trace.event(trace.ended, "meal"))
-        assert meal_started.is_set() is should_run
+        assert meal_started.is_set()
         assert len(trace.terminals["room"]) == 1
         assert len(trace.terminals["meal"]) == 1
         assert trace.terminals["room"][0].status == "error"
-        assert trace.terminals["meal"][0].status == ("done" if should_run else "error")
+        assert trace.terminals["meal"][0].status == "done"
     finally:
         await _close(session)
 
@@ -444,7 +437,7 @@ async def test_absent_registered_predecessor_is_not_a_cross_turn_wait() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_arguments_are_predecessor_failures() -> None:
+async def test_invalid_prerequisite_arguments_do_not_strand_dependent() -> None:
     trace = _Trace()
     meal_started = asyncio.Event()
 
@@ -473,15 +466,16 @@ async def test_invalid_arguments_are_predecessor_failures() -> None:
         session.generate_reply(user_input="book")
         await _wait(trace.event(trace.ended, "room-invalid"))
         await _wait(trace.event(trace.ended, "meal"))
-        assert not meal_started.is_set()
-        assert trace.terminals["meal"][0].status == "error"
+        assert meal_started.is_set()
+        assert trace.terminals["room-invalid"][0].status == "error"
+        assert trace.terminals["meal"][0].status == "done"
         assert len(trace.terminals["meal"]) == 1
     finally:
         await _close(session)
 
 
 @pytest.mark.asyncio
-async def test_duplicate_rejection_is_a_predecessor_failure() -> None:
+async def test_duplicate_refusal_finishes_before_dependent() -> None:
     trace = _Trace()
     meal_started = asyncio.Event()
     premature_meal = asyncio.Event()
@@ -522,9 +516,9 @@ async def test_duplicate_rejection_is_a_predecessor_failure() -> None:
         await _wait(trace.event(trace.ended, "room-2"))
         await _wait(trace.event(trace.ended, "meal"))
         assert not premature_meal.is_set()
-        assert not meal_started.is_set()
+        assert meal_started.is_set()
         assert trace.terminals["room-2"][0].status == "error"
-        assert trace.terminals["meal"][0].status == "error"
+        assert trace.terminals["meal"][0].status == "done"
     finally:
         release_room.set()
         await _close(session)
@@ -771,7 +765,6 @@ async def test_realtime_progress_dependency_waits_for_terminal_tool_result() -> 
     agent = Agent(instructions="booking", tools=[save_room, save_meal])
     session = AgentSession(
         llm=model,
-        tool_handling={"on_dependency_error": "skip"},
     )
     realtime_session: _RecordingRealtimeSession | None = None
     reply_resolver: asyncio.Task[None] | None = None
