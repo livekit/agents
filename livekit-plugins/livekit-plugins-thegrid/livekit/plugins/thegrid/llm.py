@@ -48,9 +48,9 @@ class LLM(OpenAILLM):
         timeout: httpx.Timeout | None = None,
     ):
         """
-        Create a new instance of The Grid LLM.
+        Create a new instance of The Grid AI LLM.
 
-        ``api_key`` must be set to your The Grid API key, either using the argument or by
+        ``api_key`` must be set to your The Grid AI API key, either using the argument or by
         setting the ``THEGRID_API_KEY`` environmental variable.
         """
         resolved_key = api_key if is_given(api_key) else os.environ.get("THEGRID_API_KEY", "")
@@ -81,4 +81,4 @@ class LLM(OpenAILLM):
 
     @property
     def provider(self) -> str:
-        return "The Grid"
+        return "The Grid AI"

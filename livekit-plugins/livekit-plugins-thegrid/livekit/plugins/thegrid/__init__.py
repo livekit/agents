@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The Grid plugin for LiveKit Agents
+"""The Grid AI plugin for LiveKit Agents
 
-Support for LLM with The Grid, an OpenAI-compatible inference marketplace.
+Support for LLM with The Grid AI, an OpenAI-compatible inference marketplace.
 """
 
 from livekit.agents import Plugin

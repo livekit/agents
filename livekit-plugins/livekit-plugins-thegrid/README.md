@@ -1,6 +1,6 @@
-# The Grid plugin for LiveKit Agents
+# The Grid AI plugin for LiveKit Agents
 
-Support for LLM with [The Grid](https://thegrid.ai/), an OpenAI-compatible inference marketplace.
+Support for LLM with [The Grid AI](https://thegrid.ai/), an OpenAI-compatible inference marketplace.
 
 See [https://docs.livekit.io/agents/integrations/llm/](https://docs.livekit.io/agents/integrations/llm/) for more information.
 
@@ -12,4 +12,4 @@ pip install livekit-plugins-thegrid
 
 ## Pre-requisites
 
-For credentials, you'll need a The Grid account and API key. Credentials can be passed directly or via `THEGRID_API_KEY` environment variable.
+For credentials, you'll need a The Grid AI account and API key. Credentials can be passed directly or via `THEGRID_API_KEY` environment variable.

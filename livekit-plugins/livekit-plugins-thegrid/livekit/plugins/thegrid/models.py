@@ -1,6 +1,6 @@
 from typing import Literal
 
-# The Grid addresses capability tiers rather than a specific lab's model name;
+# The Grid AI addresses capability tiers rather than a specific lab's model name;
 # a tier routes to a current model for that tier. The `*-latest` ids pin a
 # particular lab instead. `GET https://api.thegrid.ai/v1/models` is the
 # authoritative list.
