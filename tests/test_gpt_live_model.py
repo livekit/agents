@@ -26,6 +26,7 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveModel,
     GPTLiveSession,
 )
+from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
 
 pytestmark = pytest.mark.unit
@@ -1603,6 +1604,34 @@ async def test_openai_handshake_is_unchanged_by_azure_support(
     assert seen.headers["Authorization"] == "Bearer sk-test"
     assert "api-key" not in seen.headers
     assert seen.start["session"]["model"] == gpt_live_model.DEFAULT_MODEL
+    assert "OpenAI-Service-Tier" not in seen.headers
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.parametrize("service_tier", ["ultrafast", "priority"])
+async def test_a_service_tier_rides_on_the_connection_header(service_tier: ServiceTier) -> None:
+    """The tier is asked for at the handshake, not in the session configuration."""
+    async with _live_server() as (base, seen):
+        model = GPTLiveModel(api_key="sk-test", base_url=base, service_tier=service_tier)
+        await _connect(model, seen)
+
+    assert seen.headers["OpenAI-Service-Tier"] == service_tier
+    assert "service_tier" not in seen.start["session"]
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+async def test_azure_carries_the_service_tier_too() -> None:
+    async with _live_server() as (base, seen):
+        model = GPTLiveModel.with_azure(
+            azure_deployment="my-live",
+            azure_endpoint=base,
+            api_key="azure-key",
+            delegation="client",
+            service_tier="ultrafast",
+        )
+        await _connect(model, seen)
+
+    assert seen.headers["OpenAI-Service-Tier"] == "ultrafast"
 
 
 @pytest.mark.parametrize(
