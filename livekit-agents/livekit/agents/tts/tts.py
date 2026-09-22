@@ -253,6 +253,12 @@ class TTS(
         """Pre-warm connection to the TTS service"""
         pass
 
+    async def release(self) -> None:
+        """Close idle connections held for reuse.
+
+        The TTS stays usable and reconnects on the next request."""
+        pass
+
     async def aclose(self) -> None: ...
 
     async def __aenter__(self) -> TTS:

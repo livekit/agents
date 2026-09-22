@@ -327,6 +327,11 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
 
 
 # NOTE: AgentActivity isn't exposed to the public API
+def _log_release_tts_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        logger.debug("failed to release TTS connections", exc_info=exc)
+
+
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
@@ -1078,6 +1083,12 @@ class AgentActivity(RecognitionHooks):
                 and self.stt is new_activity.stt
             ):
                 resources.stt_pipeline = await self._audio_recognition._detach_stt()
+
+            # a TTS the new activity does not share keeps its pooled sockets open until job end
+            if self.tts is not None and self.tts is not new_activity.tts:
+                asyncio.create_task(
+                    self.tts.release(), name="AgentActivity.release_tts"
+                ).add_done_callback(_log_release_tts_failure)
 
             # reuse the stream during a handoff whenever we can
             if (

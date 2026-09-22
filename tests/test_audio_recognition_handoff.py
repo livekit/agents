@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterable
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -16,13 +17,16 @@ from livekit.agents.voice.turn import _StreamingTurnDetector
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
 
-def _make_activity(agent: Agent, stt: object, turn_detection: object = None) -> MagicMock:
+def _make_activity(
+    agent: Agent, stt: object, turn_detection: object = None, tts: object = None
+) -> MagicMock:
     act = MagicMock(spec=AgentActivity)
     act.agent = agent
     act._audio_recognition = MagicMock()
     act._audio_recognition._detach_stt = AsyncMock(return_value=MagicMock())
     act._audio_recognition._detach_turn_detector = MagicMock(return_value=MagicMock())
     type(act).stt = PropertyMock(return_value=stt)
+    type(act).tts = PropertyMock(return_value=tts)
     # turn detector reuse checks read this; None disables the reuse branch
     act._turn_detection = turn_detection
     # rt session reuse checks need these
@@ -36,6 +40,51 @@ async def _detach_stt_if_reusable(old: MagicMock, new: MagicMock) -> object | No
     """Call the real _detach_reusable_resources, return stt_pipeline."""
     resources = await AgentActivity._detach_reusable_resources(old, new)
     return resources.stt_pipeline
+
+
+# ---------------------------------------------------------------------------
+# TTS release via _detach_reusable_resources
+# ---------------------------------------------------------------------------
+
+
+def _make_tts() -> MagicMock:
+    tts = MagicMock()
+    tts.release = AsyncMock()
+    return tts
+
+
+async def test_tts_released_when_new_activity_uses_a_different_instance() -> None:
+    old_tts, new_tts = _make_tts(), _make_tts()
+    old = _make_activity(Agent(instructions="a"), None, tts=old_tts)
+    new = _make_activity(Agent(instructions="b"), None, tts=new_tts)
+
+    await AgentActivity._detach_reusable_resources(old, new)
+    await asyncio.sleep(0)
+
+    old_tts.release.assert_awaited_once()
+    new_tts.release.assert_not_awaited()
+
+
+async def test_tts_kept_when_shared() -> None:
+    shared_tts = _make_tts()
+    old = _make_activity(Agent(instructions="a"), None, tts=shared_tts)
+    new = _make_activity(Agent(instructions="b"), None, tts=shared_tts)
+
+    await AgentActivity._detach_reusable_resources(old, new)
+    await asyncio.sleep(0)
+
+    shared_tts.release.assert_not_awaited()
+
+
+async def test_tts_released_when_new_activity_has_none() -> None:
+    old_tts = _make_tts()
+    old = _make_activity(Agent(instructions="a"), None, tts=old_tts)
+    new = _make_activity(Agent(instructions="b"), None)
+
+    await AgentActivity._detach_reusable_resources(old, new)
+    await asyncio.sleep(0)
+
+    old_tts.release.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

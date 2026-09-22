@@ -585,6 +585,9 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
+    async def release(self) -> None:
+        await self._pool.aclose()
+
     def update_options(
         self,
         *,
