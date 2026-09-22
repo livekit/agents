@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import json
 import os
 import time
@@ -196,6 +197,122 @@ class _ResponseGeneration:
             self.output_text = text
 
         self.text_ch.send_nowait(text)
+
+
+def _collect_config_changes(
+    *,
+    phonic_agent: NotGivenOr[str] = NOT_GIVEN,
+    voice: NotGivenOr[str] = NOT_GIVEN,
+    welcome_message: NotGivenOr[str | None] = NOT_GIVEN,
+    generate_welcome_message: NotGivenOr[bool | None] = NOT_GIVEN,
+    project: NotGivenOr[str | None] = NOT_GIVEN,
+    default_language: NotGivenOr[str] = NOT_GIVEN,
+    additional_languages: NotGivenOr[list[str]] = NOT_GIVEN,
+    multilingual_mode: NotGivenOr[Literal["auto", "request"]] = NOT_GIVEN,
+    audio_speed: NotGivenOr[float] = NOT_GIVEN,
+    phonic_tools: NotGivenOr[list[str]] = NOT_GIVEN,
+    boosted_keywords: NotGivenOr[list[str]] = NOT_GIVEN,
+    min_words_to_interrupt: NotGivenOr[int] = NOT_GIVEN,
+    generate_no_input_poke_text: NotGivenOr[bool] = NOT_GIVEN,
+    no_input_poke_sec: NotGivenOr[float] = NOT_GIVEN,
+    no_input_poke_text: NotGivenOr[str] = NOT_GIVEN,
+    no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
+    websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
+    intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+    is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
+    vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+    vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+    vad_min_silence_duration_ms: NotGivenOr[int] = NOT_GIVEN,
+    vad_threshold: NotGivenOr[float] = NOT_GIVEN,
+    enable_assistant_backchannel: NotGivenOr[bool] = NOT_GIVEN,
+    assistant_backchannel_aggressiveness: NotGivenOr[float] = NOT_GIVEN,
+    pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]] = NOT_GIVEN,
+    template_variables: NotGivenOr[dict[str, str]] = NOT_GIVEN,
+    enable_redaction: NotGivenOr[bool] = NOT_GIVEN,
+    enable_watermarking: NotGivenOr[bool] = NOT_GIVEN,
+    mcp_servers: NotGivenOr[list[str]] = NOT_GIVEN,
+    observability_integrations: NotGivenOr[list[ObservabilityIntegration]] = NOT_GIVEN,
+    configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None] = NOT_GIVEN,
+    additional_params: NotGivenOr[dict[str, typing.Any]] = NOT_GIVEN,
+    configs_for_tools: NotGivenOr[list[PhonicToolConfig]] = NOT_GIVEN,
+    forbid_speech_after_tool_call: NotGivenOr[list[str]] = NOT_GIVEN,
+) -> dict[str, typing.Any]:
+    """Collect the config fields the caller actually passed (skipping NOT_GIVEN) into a
+    ``{field_name: value}`` dict. ``tool_choice`` is intentionally not accepted here: the base
+    ``update_options`` sends it every turn and Phonic ignores it, so it never counts as a change."""
+    return {
+        name: value
+        for name, value in (
+            ("phonic_agent", phonic_agent),
+            ("voice", voice),
+            ("welcome_message", welcome_message),
+            ("generate_welcome_message", generate_welcome_message),
+            ("project", project),
+            ("default_language", default_language),
+            ("additional_languages", additional_languages),
+            ("multilingual_mode", multilingual_mode),
+            ("audio_speed", audio_speed),
+            ("phonic_tools", phonic_tools),
+            ("boosted_keywords", boosted_keywords),
+            ("min_words_to_interrupt", min_words_to_interrupt),
+            ("generate_no_input_poke_text", generate_no_input_poke_text),
+            ("no_input_poke_sec", no_input_poke_sec),
+            ("no_input_poke_text", no_input_poke_text),
+            ("no_input_end_conversation_sec", no_input_end_conversation_sec),
+            ("websocket_timeout_sec", websocket_timeout_sec),
+            ("intelligence_level", intelligence_level),
+            ("is_welcome_message_interruptible", is_welcome_message_interruptible),
+            ("vad_prebuffer_duration_ms", vad_prebuffer_duration_ms),
+            ("vad_min_speech_duration_ms", vad_min_speech_duration_ms),
+            ("vad_min_silence_duration_ms", vad_min_silence_duration_ms),
+            ("vad_threshold", vad_threshold),
+            ("enable_assistant_backchannel", enable_assistant_backchannel),
+            ("assistant_backchannel_aggressiveness", assistant_backchannel_aggressiveness),
+            ("pronunciation_dictionary", pronunciation_dictionary),
+            ("template_variables", template_variables),
+            ("enable_redaction", enable_redaction),
+            ("enable_watermarking", enable_watermarking),
+            ("mcp_servers", mcp_servers),
+            ("observability_integrations", observability_integrations),
+            ("configuration_endpoint", configuration_endpoint),
+            ("additional_params", additional_params),
+            ("configs_for_tools", configs_for_tools),
+            ("forbid_speech_after_tool_call", forbid_speech_after_tool_call),
+        )
+        if is_given(value)
+    }
+
+
+def _apply_config_changes(opts: _RealtimeOptions, changes: dict[str, typing.Any]) -> set[str]:
+    """Apply ``changes`` (from :func:`_collect_config_changes`) onto ``opts`` in place and return the
+    set of field names whose value actually changed.
+
+    When ``default_language`` changes and ``additional_languages`` isn't passed, the previous default
+    is rotated into ``additional_languages`` (and the new default removed) so the language set stays
+    intact; the API rejects a default that also appears there. ``changes`` may be mutated to add the
+    rotated ``additional_languages``."""
+    new_default_language = changes.get("default_language")
+    if (
+        new_default_language is not None
+        and new_default_language != opts.default_language
+        and "additional_languages" not in changes
+    ):
+        previous_default_language = opts.default_language
+        merged = ([previous_default_language] if is_given(previous_default_language) else []) + (
+            list(opts.additional_languages) if is_given(opts.additional_languages) else []
+        )
+        deduped: list[str] = []
+        for lang in merged:
+            if lang != new_default_language and lang not in deduped:
+                deduped.append(lang)
+        changes["additional_languages"] = deduped
+
+    changed: set[str] = set()
+    for name, value in changes.items():
+        if getattr(opts, name) != value:
+            setattr(opts, name, value)
+            changed.add(name)
+    return changed
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -451,6 +568,49 @@ class RealtimeModel(llm.RealtimeModel):
         When ``default_language`` changes and ``additional_languages`` isn't passed, the previous
         default is rotated into ``additional_languages`` (and the new default removed) so the
         language set stays intact — the API rejects a default that also appears there."""
+        # Update the model's own _opts (the template each new session copies) so a session created
+        # after this call inherits the latest config. Each live session keeps its own _opts copy, so
+        # this does not interfere with per-session change detection in the loop below.
+        _apply_config_changes(
+            self._opts,
+            _collect_config_changes(
+                phonic_agent=phonic_agent,
+                voice=voice,
+                welcome_message=welcome_message,
+                generate_welcome_message=generate_welcome_message,
+                project=project,
+                default_language=default_language,
+                additional_languages=additional_languages,
+                multilingual_mode=multilingual_mode,
+                audio_speed=audio_speed,
+                phonic_tools=phonic_tools,
+                boosted_keywords=boosted_keywords,
+                min_words_to_interrupt=min_words_to_interrupt,
+                generate_no_input_poke_text=generate_no_input_poke_text,
+                no_input_poke_sec=no_input_poke_sec,
+                no_input_poke_text=no_input_poke_text,
+                no_input_end_conversation_sec=no_input_end_conversation_sec,
+                websocket_timeout_sec=websocket_timeout_sec,
+                intelligence_level=intelligence_level,
+                is_welcome_message_interruptible=is_welcome_message_interruptible,
+                vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
+                vad_min_speech_duration_ms=vad_min_speech_duration_ms,
+                vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+                vad_threshold=vad_threshold,
+                enable_assistant_backchannel=enable_assistant_backchannel,
+                assistant_backchannel_aggressiveness=assistant_backchannel_aggressiveness,
+                pronunciation_dictionary=pronunciation_dictionary,
+                template_variables=template_variables,
+                enable_redaction=enable_redaction,
+                enable_watermarking=enable_watermarking,
+                mcp_servers=mcp_servers,
+                observability_integrations=observability_integrations,
+                configuration_endpoint=configuration_endpoint,
+                additional_params=additional_params,
+                configs_for_tools=configs_for_tools,
+                forbid_speech_after_tool_call=forbid_speech_after_tool_call,
+            ),
+        )
         for sess in self._sessions:
             sess.update_options(
                 phonic_agent=phonic_agent,
@@ -497,7 +657,10 @@ class RealtimeModel(llm.RealtimeModel):
 class RealtimeSession(llm.RealtimeSession):
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
-        self._opts = realtime_model._opts
+        # Each session gets its own copy so its update_options change detection is independent of
+        # other live sessions. A shallow copy is safe: update_options replaces fields wholesale
+        # (setattr) and never mutates the contained lists/dicts in place.
+        self._opts = dataclasses.replace(realtime_model._opts)
         self._tools = llm.ToolContext.empty()
         self._chat_ctx = llm.ChatContext.empty()
 
@@ -898,85 +1061,53 @@ class RealtimeSession(llm.RealtimeSession):
     ) -> None:
         # tool_choice is the base update_options param (the framework sends it every turn); Phonic
         # does not support it and ignores it. Every other field is an optional config change.
-        changes: dict[str, typing.Any] = {
-            name: value
-            for name, value in (
-                ("phonic_agent", phonic_agent),
-                ("voice", voice),
-                ("welcome_message", welcome_message),
-                ("generate_welcome_message", generate_welcome_message),
-                ("project", project),
-                ("default_language", default_language),
-                ("additional_languages", additional_languages),
-                ("multilingual_mode", multilingual_mode),
-                ("audio_speed", audio_speed),
-                ("phonic_tools", phonic_tools),
-                ("boosted_keywords", boosted_keywords),
-                ("min_words_to_interrupt", min_words_to_interrupt),
-                ("generate_no_input_poke_text", generate_no_input_poke_text),
-                ("no_input_poke_sec", no_input_poke_sec),
-                ("no_input_poke_text", no_input_poke_text),
-                ("no_input_end_conversation_sec", no_input_end_conversation_sec),
-                ("websocket_timeout_sec", websocket_timeout_sec),
-                ("intelligence_level", intelligence_level),
-                ("is_welcome_message_interruptible", is_welcome_message_interruptible),
-                ("vad_prebuffer_duration_ms", vad_prebuffer_duration_ms),
-                ("vad_min_speech_duration_ms", vad_min_speech_duration_ms),
-                ("vad_min_silence_duration_ms", vad_min_silence_duration_ms),
-                ("vad_threshold", vad_threshold),
-                ("enable_assistant_backchannel", enable_assistant_backchannel),
-                ("assistant_backchannel_aggressiveness", assistant_backchannel_aggressiveness),
-                ("pronunciation_dictionary", pronunciation_dictionary),
-                ("template_variables", template_variables),
-                ("enable_redaction", enable_redaction),
-                ("enable_watermarking", enable_watermarking),
-                ("mcp_servers", mcp_servers),
-                ("observability_integrations", observability_integrations),
-                ("configuration_endpoint", configuration_endpoint),
-                ("additional_params", additional_params),
-                ("configs_for_tools", configs_for_tools),
-                ("forbid_speech_after_tool_call", forbid_speech_after_tool_call),
-            )
-            if is_given(value)
-        }
+        changes = _collect_config_changes(
+            phonic_agent=phonic_agent,
+            voice=voice,
+            welcome_message=welcome_message,
+            generate_welcome_message=generate_welcome_message,
+            project=project,
+            default_language=default_language,
+            additional_languages=additional_languages,
+            multilingual_mode=multilingual_mode,
+            audio_speed=audio_speed,
+            phonic_tools=phonic_tools,
+            boosted_keywords=boosted_keywords,
+            min_words_to_interrupt=min_words_to_interrupt,
+            generate_no_input_poke_text=generate_no_input_poke_text,
+            no_input_poke_sec=no_input_poke_sec,
+            no_input_poke_text=no_input_poke_text,
+            no_input_end_conversation_sec=no_input_end_conversation_sec,
+            websocket_timeout_sec=websocket_timeout_sec,
+            intelligence_level=intelligence_level,
+            is_welcome_message_interruptible=is_welcome_message_interruptible,
+            vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
+            vad_min_speech_duration_ms=vad_min_speech_duration_ms,
+            vad_min_silence_duration_ms=vad_min_silence_duration_ms,
+            vad_threshold=vad_threshold,
+            enable_assistant_backchannel=enable_assistant_backchannel,
+            assistant_backchannel_aggressiveness=assistant_backchannel_aggressiveness,
+            pronunciation_dictionary=pronunciation_dictionary,
+            template_variables=template_variables,
+            enable_redaction=enable_redaction,
+            enable_watermarking=enable_watermarking,
+            mcp_servers=mcp_servers,
+            observability_integrations=observability_integrations,
+            configuration_endpoint=configuration_endpoint,
+            additional_params=additional_params,
+            configs_for_tools=configs_for_tools,
+            forbid_speech_after_tool_call=forbid_speech_after_tool_call,
+        )
         if not changes:
             return
 
-        # Rotate the previous default into additional_languages when switching default_language so
-        # it stays usable (and drop the new default, which the API forbids there), unless the caller
-        # set additional_languages explicitly.
-        new_default_language = changes.get("default_language")
-        if (
-            new_default_language is not None
-            and new_default_language != self._opts.default_language
-            and "additional_languages" not in changes
-        ):
-            previous_default_language = self._opts.default_language
-            merged = (
-                [previous_default_language] if is_given(previous_default_language) else []
-            ) + (
-                list(self._opts.additional_languages)
-                if is_given(self._opts.additional_languages)
-                else []
-            )
-            deduped: list[str] = []
-            for lang in merged:
-                if lang != new_default_language and lang not in deduped:
-                    deduped.append(lang)
-            changes["additional_languages"] = deduped
-
-        changed = False
-        for name, value in changes.items():
-            if getattr(self._opts, name) != value:
-                setattr(self._opts, name, value)
-                changed = True
-
+        changed = _apply_config_changes(self._opts, changes)
         if not changed:
             return
 
         # Tool-related fields are cached in _configs_for_tools/_tool_definitions; rebuild them so the
         # reset carries the new tool behavior rather than the previously-serialized one.
-        if changes.keys() & {"configs_for_tools", "forbid_speech_after_tool_call", "phonic_tools"}:
+        if changed & {"configs_for_tools", "forbid_speech_after_tool_call", "phonic_tools"}:
             self._rebuild_tool_definitions()
 
         if not self._config_sent:
