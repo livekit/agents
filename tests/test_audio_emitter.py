@@ -290,7 +290,9 @@ async def test_push_frame_is_not_rechunked():
 @pytest.mark.virtual_time
 @pytest.mark.parametrize("num_channels", [1, 2])
 @pytest.mark.parametrize("stream", [False, True])
-async def test_automatic_flush_preserves_partial_pcm_sample(num_channels: int, stream: bool):
+async def test_automatic_flush_preserves_partial_pcm_sample(
+    num_channels: int, stream: bool, caplog: pytest.LogCaptureFixture
+):
     flushed = asyncio.Event()
 
     class ObservedEmitter(tts.AudioEmitter):
@@ -327,3 +329,21 @@ async def test_automatic_flush_preserves_partial_pcm_sample(num_channels: int, s
     assert b"".join(event.frame.data.tobytes() for event in events) == pcm
     assert sum(event.is_final for event in events) == 1
     assert events[-1].is_final
+    assert not [record for record in caplog.records if "incomplete" in record.message]
+
+
+@pytest.mark.asyncio
+@pytest.mark.no_concurrent
+async def test_segment_end_warns_on_incomplete_pcm(caplog: pytest.LogCaptureFixture):
+    pcm = bytes(range(256))
+
+    def produce(e):
+        e.push(pcm + b"\xff")
+        e.end_input()
+
+    _, events = await _run_emitter(produce)
+
+    assert b"".join(event.frame.data.tobytes() for event in events) == pcm
+    warnings = [record for record in caplog.records if "incomplete PCM" in record.message]
+    assert len(warnings) == 1
+    assert warnings[0].levelname == "WARNING"

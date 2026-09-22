@@ -1311,6 +1311,12 @@ class AudioEmitter:
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
+                            if audio_byte_stream.buffered_duration > 0:
+                                logger.warning(
+                                    "incomplete PCM sample at end of segment, "
+                                    "discarding trailing bytes",
+                                    extra={"tts": self._label, "request_id": self._request_id},
+                                )
 
                         _emit_frame(is_final=True)
                         dump_segment()
