@@ -6,7 +6,7 @@ For setup instructions and more details, see the [main examples README](../READM
 
 ## Overview
 
-This example simulates a fast food drive-thru. It is split across three files: `database.py` contains the menu and formats it as system prompt text, `order.py` holds Pydantic models for the three order types, and `agent.py` defines `DriveThruAgent` with dynamically built ordering tools.
+This example simulates a fast food drive-thru. It is split across three files in `src/`: `database.py` contains the menu and formats it as system prompt text, `order.py` holds Pydantic models for the three order types, and `agent.py` defines `DriveThruAgent` with dynamically built ordering tools.
 
 The full menu is loaded once per session and injected directly into the agent's instructions, so the LLM has menu context without needing to call a tool.
 

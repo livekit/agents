@@ -7,13 +7,13 @@ all change without dropping the call.
 
 Try it in the [LiveKit Playground](https://agents.livekit.io/?example=avatar).
 
-> **Inference variant:** [`inference_agent.py`](./inference_agent.py) is a
+> **Inference variant:** [`src/inference_agent.py`](./src/inference_agent.py) is a
 > minimal version that provisions the avatar through **LiveKit Inference**
 > instead of the BYOK plugin — no `LEMONSLICE_API_KEY` is needed; the agent
 > authenticates with your LiveKit credentials and the gateway creates the
 > provider session with LiveKit's wholesale key. Requires the
 > `avatar_lemonslice` feature flag on your project. Run with
-> `uv run inference_agent.py dev` and set `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
+> `uv run src/inference_agent.py dev` and set `LIVEKIT_URL`, `LIVEKIT_API_KEY`,
 > `LIVEKIT_API_SECRET`, and `LEMONSLICE_IMAGE_URL`.
 
 ## What's in here
@@ -44,7 +44,7 @@ Then:
 
 ```bash
 uv sync --all-extras --dev   # from the repository root
-uv run agent.py dev
+uv run src/agent.py dev
 ```
 
 Connect from any LiveKit client. The agent reads the starting persona
@@ -82,9 +82,9 @@ No reconnect, no page refresh — the same call, with a different face.
 ## Files
 
 ```
-agent.py        entry point + the set_avatar RPC
-actions.py      pose controller (opening wave + LLM tool motions)
-personas.py     the 9 personas and the shared prompt rules
-hold_music.py   the soft three-note "please wait" tone
-Dockerfile      for cloud deploys
+src/agent.py        entry point + the set_avatar RPC
+src/actions.py      pose controller (opening wave + LLM tool motions)
+src/personas.py     the 9 personas and the shared prompt rules
+src/hold_music.py   the soft three-note "please wait" tone
+Dockerfile          for cloud deploys
 ```

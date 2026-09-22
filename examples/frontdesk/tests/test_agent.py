@@ -2,11 +2,10 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from agent import FrontDeskAgent, Userdata
+from calendar_api import AvailableSlot, FakeCalendar
 
 from livekit.agents import AgentSession, beta, inference, llm
-
-from .agent import FrontDeskAgent, Userdata
-from .calendar_api import AvailableSlot, FakeCalendar
 
 TIMEZONE = "UTC"
 

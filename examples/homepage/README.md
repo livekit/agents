@@ -6,13 +6,13 @@ knowledge is loaded on demand through a generated `lookup_product` tool.
 
 ## Architecture
 
-- `agent.py` is the composition root. It contains the immutable `AgentConfig`,
+- `src/agent.py` is the composition root. It contains the immutable `AgentConfig`,
   `Assistant`, session setup, and server entrypoint.
-- `knowledge_base/` discovers one Markdown file per product and derives both the
+- `src/knowledge_base/` discovers one Markdown file per product and derives both the
   tool schema and lookup results from those files.
-- `prompts/` contains all authored agent language as Markdown templates.
-- `behaviors/` contains session event behavior and frontend integration.
-- `filters/` contains streaming voice-pipeline transformations.
+- `src/prompts/` contains all authored agent language as Markdown templates.
+- `src/behaviors/` contains session event behavior and frontend integration.
+- `src/filters/` contains streaming voice-pipeline transformations.
 - `tests/unit/` is deterministic; `tests/evals/` runs live behavioral evaluations.
 
 The voice pipeline uses LiveKit Inference with Gemma 4 31B, Deepgram Nova-3,
@@ -26,10 +26,10 @@ Install the workspace dependencies and provide LiveKit Cloud credentials in
 
 ```bash
 uv sync --all-extras --dev   # from the repository root
-uv run agent.py console
+uv run src/agent.py console
 ```
 
-Use `uv run agent.py dev` to connect the agent to LiveKit Cloud for a frontend or
+Use `uv run src/agent.py dev` to connect the agent to LiveKit Cloud for a frontend or
 telephony session.
 
 ## Tests and evals

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import pytest
+from agent import DriveThruAgent, new_userdata
 
 from livekit.agents import AgentSession, ChatContext, inference, llm
 from livekit.agents.voice.run_result import mock_tools
-
-from .agent import DriveThruAgent, new_userdata
 
 
 def _main_llm() -> llm.LLM | llm.RealtimeModel:

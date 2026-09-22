@@ -20,7 +20,7 @@ The agent registers one handler per control. All three (STT, LLM, TTS) call `upd
 
 ```bash
 uv sync --all-extras --dev   # from the repository root
-uv run agent.py dev
+uv run src/agent.py dev
 ```
 
 The model list shown in the playground is sourced from `examples/playground.yaml`. To add or remove options, edit the `controls` block on the `inference` example there.

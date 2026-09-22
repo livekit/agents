@@ -13,6 +13,7 @@ resolution-markers = [
 members = [
     "livekit-agents",
     "livekit-example-avatar",
+    "livekit-example-data-capture-sim",
     "livekit-example-drive-thru",
     "livekit-example-expressive-agent",
     "livekit-example-frontdesk",
@@ -2368,6 +2369,21 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "tzdata", specifier = ">=2024.1" },
+]
+
+[[package]]
+name = "livekit-example-data-capture-sim"
+version = "0"
+source = { virtual = "examples/data_capture_sim" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "python-dotenv" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
 [[package]]

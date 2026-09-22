@@ -55,5 +55,5 @@ jobs:
         # `uv run` puts the synced workspace venv on PATH so lk resolves the
         # local livekit-agents checkout rather than a published SDK.
         run: |
-          uv run lk agent simulate examples/data_capture_sim/agent.py \
+          uv run lk agent simulate examples/data_capture_sim/src/agent.py \
             --scenarios examples/data_capture_sim/scenarios.yaml

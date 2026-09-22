@@ -106,7 +106,7 @@ Each example directory stands on its own: copy it anywhere, and
 
 ```bash
 uv sync
-uv run agent.py console
+uv run src/agent.py console
 ```
 
 installs from PyPI without the rest of the repo. `lk agent deploy .` works the

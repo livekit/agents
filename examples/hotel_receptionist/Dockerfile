@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 # Shared Dockerfile for every example under examples/. Byte-identical
-# across the tree — each example's entry script is named `agent.py`,
+# across the tree — each example's entry script is `src/agent.py`,
 # so there's no per-example variation left.
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim AS base
@@ -35,6 +35,10 @@ RUN git lfs install --system
 WORKDIR /app
 USER appuser
 
+# The example directory is the whole build context, so pyproject.toml has to
+# resolve on its own here — no workspace, no lockfile. A deploy from this repo
+# repoints the livekit-* dependencies at the ref being deployed first:
+#   python .github/pin_example_to_ref.py examples/<name> --ref <git-ref>
 COPY pyproject.toml ./
 RUN uv sync --no-cache
 ENV PATH="/app/.venv/bin:${PATH}"
@@ -45,4 +49,4 @@ RUN python -m livekit.agents download-files
 
 COPY . .
 
-CMD ["python", "agent.py", "start"]
+CMD ["python", "src/agent.py", "start"]

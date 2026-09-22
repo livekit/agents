@@ -1,5 +1,38 @@
-fake_data/hotel.db
-fake_data/hotel.db-shm
-fake_data/hotel.db-wal
-__pycache__/
-.env.local
+# Local SQLite database written by src/fake_data/seed.py
+src/fake_data/hotel.db
+src/fake_data/hotel.db-shm
+src/fake_data/hotel.db-wal
+
+.env
+.env.*
+!.env.example
+.DS_Store
+__pycache__
+.idea
+KMS
+.venv
+.vscode
+*.egg-info
+.pytest_cache
+.ruff_cache
+
+# Claude Code
+.claude/settings.local.json
+.claude/worktrees/
+
+# OpenAI Codex
+.codex/config.local.toml
+
+# Gemini CLI
+.gemini/history/
+.gemini/tmp/
+.gemini/google_accounts.json
+.gemini/installation_id
+.gemini/oauth_creds.json
+
+# Cursor
+.cursor/chat/
+.cursor/rules/*.local.mdc
+
+# GitHub CLI
+.github/personal-instructions.md

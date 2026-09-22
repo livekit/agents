@@ -16,3 +16,9 @@ package = false
 # No [tool.uv.sources] here: the workspace root repoints the livekit-* deps at
 # the in-repo copies for members, and staying free of workspace-only references
 # is what lets a copy of this directory resolve on its own, outside the repo.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Tests import the agent's modules by their top-level names, as `python src/agent.py` does.
+pythonpath = ["src"]

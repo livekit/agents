@@ -43,7 +43,7 @@ When the success criteria for an agent is clear, using judges can complete the e
 
 ### Simulations
 
-`scenarios.yaml` contains 10 scenarios (happy paths and adversarial callers) that run the agent against a simulated user. All simulation glue lives in `simulation.py`; the agent code itself stays production-shaped.
+`scenarios.yaml` contains 10 scenarios (happy paths and adversarial callers) that run the agent against a simulated user. All simulation glue lives in `src/simulation.py`; the agent code itself stays production-shaped.
 
 Each scenario's `userdata` drives the whole run:
 

@@ -1,32 +1,38 @@
+# Project tests
+test/
+tests/
+eval/
+evals/
+
 # Python bytecode and artifacts
-**/__pycache__/
-**/*.py[cod]
-**/*.pyo
-**/*.pyd
-**/*.egg-info/
-**/dist/
-**/build/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
 
 # Virtual environments
-**/.venv/
-**/venv/
+.venv/
+venv/
 
 # Caches and test output
-**/.cache/
-**/.pytest_cache/
-**/.ruff_cache/
-**/coverage/
+.cache/
+.pytest_cache/
+.ruff_cache/
+coverage/
 
 # Logs and temp files
-**/*.log
-**/*.gz
-**/*.tgz
-**/.tmp
-**/.cache
+*.log
+*.gz
+*.tgz
+.tmp
+.cache
 
 # Environment variables
-**/.env
-**/.env.*
+.env
+.env.*
 
 # VCS, editor, OS
 .git
@@ -39,10 +45,29 @@
 
 # Project docs and misc
 README.md
+CONTRIBUTING.md
 LICENSE
 
-# Project tests
-test/
-tests/
-eval/
-evals/
+# Coding agent files
+.claude/
+.codex/
+.cursor/
+.windsurf/
+.gemini/
+.cline/
+.clinerules
+.clinerules/
+.aider*
+.cursorrules
+.cursorignore
+.cursorindexingignore
+.clineignore
+.codeiumignore
+.geminiignore
+.windsurfrules
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.github/copilot-instructions.md
+.github/personal-instructions.md
+.github/instructions/

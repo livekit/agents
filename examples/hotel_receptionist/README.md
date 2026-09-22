@@ -8,26 +8,26 @@ the playground in real time.
 ## Running
 
 ```bash
-uv run examples/hotel_receptionist/fake_data/seed.py
-uv run examples/hotel_receptionist/agent.py console
+uv run examples/hotel_receptionist/src/fake_data/seed.py
+uv run examples/hotel_receptionist/src/agent.py console
 # or, with the LiveKit playground:
-uv run examples/hotel_receptionist/agent.py dev
+uv run examples/hotel_receptionist/src/agent.py dev
 ```
 
-`fake_data/seed.py` prints sample confirmation codes you can use to try
+`src/fake_data/seed.py` prints sample confirmation codes you can use to try
 the cancellation/invoice/dispute flows immediately, e.g. `Cancel: last
 name 'Smith', code 'HTL-AB12'`.
 
 ## Architecture
 
 ```
-agent.py           — HotelReceptionistAgent + tool mixins
-tools_*.py         — Tool mixins: rooms, restaurant, services
-book_*.py          — AgentTask subclasses for booking flows
-hotel_db.py        — HotelDB (apsw) + schema + views + pricing + dispute policy
-instructions.py    — Prompt instructions and routing rules
-ui_view.py         — SQLite changeset streamer for the playground
-fake_data/seed.py  — manual seed script (writes fake_data/hotel.db)
+src/agent.py           — HotelReceptionistAgent + tool mixins
+src/tools_*.py         — Tool mixins: rooms, restaurant, services
+src/book_*.py          — AgentTask subclasses for booking flows
+src/hotel_db.py        — HotelDB (apsw) + schema + views + pricing + dispute policy
+src/instructions.py    — Prompt instructions and routing rules
+src/ui_view.py         — SQLite changeset streamer for the playground
+src/fake_data/seed.py  — manual seed script (writes src/fake_data/hotel.db)
 ```
 
 The LLM never owns money values. `book_room` computes the total

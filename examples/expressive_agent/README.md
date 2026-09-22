@@ -12,10 +12,10 @@ sounds) that the TTS renders and the transcript never shows.
 
 ## Architecture
 
-- `agent.py` is the composition root: session setup and the server entrypoint.
-- `prompt.md` holds the persona only. It steers *what* the agent says, and
+- `src/agent.py` is the composition root: session setup and the server entrypoint.
+- `src/prompt.md` holds the persona only. It steers *what* the agent says, and
   expressive mode owns *how* it sounds, so the two never restate each other.
-- `protocol.py` is the whole frontend contract: the dispatch metadata shape, the
+- `src/protocol.py` is the whole frontend contract: the dispatch metadata shape, the
   attributes echoed back, and the voice table those metadata values name.
 
 The pipeline uses LiveKit Inference with Gemma 4 31B, Assembly AI Universal-3.5 Pro, Fish
@@ -27,10 +27,10 @@ Provide LiveKit Cloud credentials in `../.env` or the environment, then:
 
 ```bash
 uv sync --all-extras --dev   # from the repository root
-uv run agent.py console
+uv run src/agent.py console
 ```
 
-Use `uv run agent.py dev` to connect the agent to LiveKit Cloud for a frontend
+Use `uv run src/agent.py dev` to connect the agent to LiveKit Cloud for a frontend
 session.
 
 ## Configuration

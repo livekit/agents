@@ -49,18 +49,17 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack
 
 import pytest
-
-from livekit.agents import Agent, AgentSession, AgentTask, inference, llm
-from livekit.agents.beta.workflows import TaskGroup
-from livekit.agents.llm import FunctionCall
-
-from .agent import (
+from agent import (
     BehavioralTask,
     CommuteTask,
     ExperienceTask,
     IntroTask,
     Userdata,
 )
+
+from livekit.agents import Agent, AgentSession, AgentTask, inference, llm
+from livekit.agents.beta.workflows import TaskGroup
+from livekit.agents.llm import FunctionCall
 
 # AgentTask transitions briefly clear `session.llm`; sleep before the first
 # `sess.run()` and between TaskGroup sub-tasks so the new sub-task can take
