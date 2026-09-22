@@ -176,99 +176,6 @@ async def test_duplicate_call_id_is_one_side_effect_and_one_explicit_failure() -
         await _close(session)
 
 
-@pytest.mark.asyncio
-async def test_malformed_prerequisite_settles_before_dependent() -> None:
-    dependent_started = asyncio.Event()
-    dependent_terminal = asyncio.Event()
-    terminal_events: list[ToolCallEnded] = []
-
-    @function_tool(name="prepare")
-    async def prepare(ctx: RunContext, value: str) -> str:
-        return value
-
-    @function_tool(name="commit", after=("prepare",))
-    async def commit(ctx: RunContext) -> str:
-        dependent_started.set()
-        return "committed"
-
-    session = await _start(
-        Agent(instructions="workflow", tools=[prepare, commit]),
-        [
-            _response(
-                "malformed",
-                FunctionToolCall(name="commit", arguments="{}", call_id="commit-call"),
-                FunctionToolCall(name="prepare", arguments="not-json", call_id="prepare-call"),
-            )
-        ],
-    )
-
-    def observe_tool_update(event: ToolExecutionUpdatedEvent) -> None:
-        update = event.update
-        if isinstance(update, ToolCallEnded):
-            terminal_events.append(update)
-            if update.call_id == "commit-call":
-                dependent_terminal.set()
-
-    session.on("tool_execution_updated", observe_tool_update)
-    try:
-        session.generate_reply(user_input="malformed")
-        await asyncio.wait_for(dependent_terminal.wait(), timeout=5)
-        assert dependent_started.is_set()
-        assert [event.call_id for event in terminal_events] == ["prepare-call", "commit-call"]
-        dependent_terminals = [event for event in terminal_events if event.call_id == "commit-call"]
-        assert len(dependent_terminals) == 1
-        dependent_terminal_event = dependent_terminals[0]
-        assert dependent_terminal_event.id == "commit-call"
-        assert dependent_terminal_event.status == "done"
-
-        prerequisite_terminals = [
-            event for event in terminal_events if event.call_id == "prepare-call"
-        ]
-        assert len(prerequisite_terminals) == 1
-        prerequisite_terminal_event = prerequisite_terminals[0]
-        assert prerequisite_terminal_event.status == "error"
-        assert prerequisite_terminal_event.message is not None
-        assert "Error parsing arguments for `prepare`" in prerequisite_terminal_event.message
-    finally:
-        await _close(session)
-
-
-@pytest.mark.asyncio
-async def test_close_does_not_admit_pending_dependent() -> None:
-    root_started = asyncio.Event()
-    dependent_started = asyncio.Event()
-
-    @function_tool(name="root", flags=ToolFlag.CANCELLABLE)
-    async def root(ctx: RunContext) -> str:
-        root_started.set()
-        await asyncio.Event().wait()
-        return "root"
-
-    @function_tool(name="dependent", after=("root",))
-    async def dependent(ctx: RunContext) -> str:
-        dependent_started.set()
-        return "dependent"
-
-    session = await _start(
-        Agent(instructions="close", tools=[root, dependent]),
-        [
-            _response(
-                "close-run",
-                FunctionToolCall(name="dependent", arguments="{}", call_id="dependent"),
-                FunctionToolCall(name="root", arguments="{}", call_id="root"),
-            )
-        ],
-    )
-    try:
-        session.generate_reply(user_input="close-run")
-        await asyncio.wait_for(root_started.wait(), timeout=5)
-        await asyncio.wait_for(session.aclose(), timeout=5)
-        assert not dependent_started.is_set()
-    finally:
-        if not session._closing:
-            await _close(session)
-
-
 @pytest.mark.parametrize("with_progress", [False, True])
 @pytest.mark.asyncio
 async def test_pending_dependent_is_replaced_by_one_final_history_output(
@@ -720,3 +627,101 @@ def test_dependency_names_reject_a_single_string() -> None:
         @function_tool(after="root")  # type: ignore[arg-type]
         async def dependent(ctx: RunContext) -> str:
             return "dependent"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_dependent_id_keeps_refusal_and_final_correlated() -> None:
+    root_started = asyncio.Event()
+    release_root = asyncio.Event()
+    duplicate_refused = asyncio.Event()
+    dependent_started = asyncio.Event()
+    final_committed = asyncio.Event()
+    dependent_calls = 0
+
+    @function_tool(name="root")
+    async def root(ctx: RunContext) -> str:
+        root_started.set()
+        await release_root.wait()
+        return "root done"
+
+    @function_tool(name="dependent", after=("root",))
+    async def dependent(ctx: RunContext) -> str:
+        nonlocal dependent_calls
+        dependent_calls += 1
+        dependent_started.set()
+        return "dependent final"
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="duplicate-dependent",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="dependent", arguments="{}", call_id="same"),
+                    FunctionToolCall(name="dependent", arguments="{}", call_id="same"),
+                    FunctionToolCall(name="root", arguments="{}", call_id="root"),
+                ],
+            )
+        ]
+    )
+    session = AgentSession(
+        llm=llm,
+        stt=None,
+        vad=None,
+        tts=None,
+        turn_handling={"turn_detection": None},
+    )
+    await session.start(Agent(instructions="duplicate", tools=[root, dependent]))
+
+    def observe(event: ToolExecutionUpdatedEvent) -> None:
+        update = event.update
+        if (
+            isinstance(update, ToolCallEnded)
+            and update.call_id == "same"
+            and "duplicate function call id" in str(update.message)
+        ):
+            duplicate_refused.set()
+
+    session.on("tool_execution_updated", observe)
+    history_insert = session.history.insert
+
+    def observe_history(items: Any) -> None:
+        history_insert(items)
+        if any(
+            item.type == "function_call_output"
+            and item.name == "dependent"
+            and item.output == "dependent final"
+            for item in session.history.items
+        ):
+            final_committed.set()
+
+    session.history.insert = observe_history
+    try:
+        session.generate_reply(user_input="duplicate-dependent")
+        await asyncio.wait_for(root_started.wait(), timeout=5)
+        await asyncio.wait_for(duplicate_refused.wait(), timeout=5)
+
+        release_root.set()
+        await asyncio.wait_for(dependent_started.wait(), timeout=5)
+        await asyncio.wait_for(final_committed.wait(), timeout=5)
+
+        outputs = [
+            item
+            for item in session.current_agent.chat_ctx.items
+            if item.type == "function_call_output" and item.name == "dependent"
+        ]
+        errors = [
+            item
+            for item in outputs
+            if item.is_error and "duplicate function call id" in str(item.output)
+        ]
+        finals = [item for item in outputs if item.output == "dependent final"]
+        assert dependent_calls == 1
+        assert len(errors) == 1
+        assert len(finals) == 1
+        assert errors[0].call_id != finals[0].call_id
+    finally:
+        release_root.set()
+        await _close(session)

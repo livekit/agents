@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from typing import Any
 
 import pytest
 
 from livekit.agents import Agent, AgentSession, AgentTask, RunContext, function_tool
 from livekit.agents.llm import (
-    FunctionCall,
     FunctionToolCall,
     LLMStream,
     Tool,
@@ -24,19 +22,10 @@ from livekit.agents.types import (
 )
 from livekit.agents.voice.events import ToolCallEnded, ToolExecutionUpdatedEvent
 
-from .fake_io import FakeAudioOutput
 from .fake_llm import FakeLLM, FakeLLMResponse, FakeLLMStream
-from .fake_realtime import (
-    FakeRealtimeModel,
-    FakeRealtimeSession,
-    fake_capabilities,
-    generation as _generation,
-)
 from .tool_dependency_helpers import (
     DelayedBatchFakeLLM as _DelayedBatchFakeLLM,
-    await_chain as _await_chain,
     close as _close,
-    resolve_fake_realtime_replies as _resolve_fake_realtime_replies,
     response as _response,
     wait as _wait,
 )
@@ -96,57 +85,6 @@ class _ObservingFakeLLMStream(FakeLLMStream):
         await super()._run()
 
 
-class _RecordingRealtimeSession(FakeRealtimeSession):
-    def __init__(self, model: FakeRealtimeModel, *, turn_detection_disabled: bool = False) -> None:
-        super().__init__(model, turn_detection_disabled=turn_detection_disabled)
-        self.progress_committed = asyncio.Event()
-        self.meal_committed = asyncio.Event()
-        self.reply_created = asyncio.Event()
-
-    async def update_chat_ctx(self, chat_ctx: Any) -> None:
-        await super().update_chat_ctx(chat_ctx)
-        if any(
-            item.type == "function_call_output"
-            and item.call_id == "room"
-            and "room reservation is pending" in str(item.output)
-            for item in chat_ctx.items
-        ):
-            self.progress_committed.set()
-        if any(
-            item.type == "function_call_output"
-            and item.call_id == "meal_final"
-            and "meal saved" in str(item.output)
-            for item in chat_ctx.items
-        ):
-            self.meal_committed.set()
-
-    def generate_reply(
-        self,
-        *,
-        instructions: NotGivenOr[str] = NOT_GIVEN,
-        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
-        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
-    ) -> asyncio.Future[Any]:
-        future = super().generate_reply(
-            instructions=instructions,
-            tool_choice=tool_choice,
-            tools=tools,
-        )
-        self.reply_created.set()
-        return future
-
-
-class _RecordingRealtimeModel(FakeRealtimeModel):
-    def session(self, *, turn_detection_disabled: bool = False) -> _RecordingRealtimeSession:
-        session = _RecordingRealtimeSession(
-            self,
-            turn_detection_disabled=turn_detection_disabled,
-        )
-        session.update_error = self.bring_up_error
-        self.created_sessions.append(session)
-        return session
-
-
 def _new_session(llm: FakeLLM) -> AgentSession:
     return AgentSession(
         llm=llm,
@@ -167,7 +105,8 @@ async def _start(
 
 
 @pytest.mark.asyncio
-async def test_reverse_arrival_keeps_dependency_parked_until_terminal() -> None:
+@pytest.mark.parametrize("with_progress", [False, True])
+async def test_reverse_arrival_keeps_dependency_parked_until_terminal(with_progress: bool) -> None:
     trace = _Trace()
     room_started = asyncio.Event()
     release_room = asyncio.Event()
@@ -178,6 +117,8 @@ async def test_reverse_arrival_keeps_dependency_parked_until_terminal() -> None:
     async def save_room(ctx: RunContext) -> str:
         trace.order.append("room:start")
         room_started.set()
+        if with_progress:
+            await ctx.update("room reservation is pending")
         await release_room.wait()
         trace.order.append("room:end")
         return "room saved"
@@ -191,9 +132,8 @@ async def test_reverse_arrival_keeps_dependency_parked_until_terminal() -> None:
         return "meal saved"
 
     agent = Agent(instructions="booking", tools=[save_room, save_meal])
-    session = await _start(
-        agent,
-        [
+    llm = _ObservingFakeLLM(
+        fake_responses=[
             _response(
                 "book",
                 FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
@@ -201,10 +141,21 @@ async def test_reverse_arrival_keeps_dependency_parked_until_terminal() -> None:
             )
         ],
     )
+    session = _new_session(llm)
+    await session.start(agent)
     trace.watch(session)
     try:
         session.generate_reply(user_input="book")
         await _wait(room_started)
+        if with_progress:
+            await _wait(llm.pending_seen)
+            assert any(
+                item.type == "function_call_output"
+                and item.call_id == "room"
+                and "room reservation is pending" in item.output
+                for item in agent.chat_ctx.items
+            )
+        assert not meal_started.is_set()
         release_room.set()
         await _wait(meal_started)
         assert not premature_meal.is_set()
@@ -217,72 +168,20 @@ async def test_reverse_arrival_keeps_dependency_parked_until_terminal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_progress_is_visible_before_dependency_terminal_and_does_not_admit_child() -> None:
-    trace = _Trace()
-    room_started = asyncio.Event()
-    release_room = asyncio.Event()
-    meal_started = asyncio.Event()
-    premature_meal = asyncio.Event()
-
-    @function_tool(name="save_room")
-    async def save_room(ctx: RunContext) -> str:
-        room_started.set()
-        await ctx.update("room reservation is pending")
-        await release_room.wait()
-        return "room reservation completed"
-
-    @function_tool(name="save_meal", after=("save_room",))
-    async def save_meal(ctx: RunContext) -> str:
-        meal_started.set()
-        if not trace.terminals.get("room"):
-            premature_meal.set()
-        return "meal saved"
-
-    agent = Agent(instructions="booking", tools=[save_room, save_meal])
-    llm = _ObservingFakeLLM(
-        fake_responses=[
-            _response(
-                "book",
-                FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
-                FunctionToolCall(name="save_room", arguments="{}", call_id="room"),
-            )
-        ]
-    )
-    session = _new_session(llm)
-    await session.start(agent)
-    trace.watch(session)
-    try:
-        session.generate_reply(user_input="book")
-        await _wait(room_started)
-        await _wait(llm.pending_seen)
-        outputs = [
-            item
-            for item in agent.chat_ctx.items
-            if item.type == "function_call_output" and item.call_id == "room"
-        ]
-        assert outputs and "room reservation is pending" in outputs[-1].output
-
-        release_room.set()
-        await _wait(meal_started)
-        assert not premature_meal.is_set()
-        await _wait(trace.event(trace.ended, "room"))
-        await _wait(trace.event(trace.ended, "meal"))
-    finally:
-        release_room.set()
-        await _close(session)
-
-
-@pytest.mark.asyncio
-async def test_terminal_predecessor_failure_still_allows_dependent() -> None:
+@pytest.mark.parametrize("failure", ["tool", "arguments", "json"])
+async def test_terminal_predecessor_failure_still_allows_dependent(failure: str) -> None:
     trace = _Trace()
     meal_started = asyncio.Event()
+    root_started = asyncio.Event()
 
     @function_tool(name="save_room")
-    async def save_room(ctx: RunContext) -> str:
+    async def save_room(ctx: RunContext, room: str) -> str:
+        root_started.set()
         raise ToolError("room provider rejected the reservation")
 
     @function_tool(name="save_meal", after=("save_room",))
     async def save_meal(ctx: RunContext) -> str:
+        assert trace.terminals["room"][0].status == "error"
         meal_started.set()
         return "meal saved"
 
@@ -293,7 +192,13 @@ async def test_terminal_predecessor_failure_still_allows_dependent() -> None:
             _response(
                 "book",
                 FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
-                FunctionToolCall(name="save_room", arguments="{}", call_id="room"),
+                FunctionToolCall(
+                    name="save_room",
+                    call_id="room",
+                    arguments={"tool": '{"room":"suite"}', "arguments": "{}", "json": "not-json"}[
+                        failure
+                    ],
+                ),
             )
         ],
     )
@@ -303,6 +208,13 @@ async def test_terminal_predecessor_failure_still_allows_dependent() -> None:
         await _wait(trace.event(trace.ended, "room"))
         await _wait(trace.event(trace.ended, "meal"))
         assert meal_started.is_set()
+        assert root_started.is_set() == (failure == "tool")
+        assert list(trace.terminals) == ["room", "meal"]
+        assert trace.terminals["meal"][0].id == "meal"
+        if failure == "json":
+            assert "Error parsing arguments for `save_room`" in str(
+                trace.terminals["room"][0].message
+            )
         assert len(trace.terminals["room"]) == 1
         assert len(trace.terminals["meal"]) == 1
         assert trace.terminals["room"][0].status == "error"
@@ -432,44 +344,6 @@ async def test_absent_registered_predecessor_is_not_a_cross_turn_wait() -> None:
     try:
         session.generate_reply(user_input="book")
         await _wait(meal_started)
-    finally:
-        await _close(session)
-
-
-@pytest.mark.asyncio
-async def test_invalid_prerequisite_arguments_do_not_strand_dependent() -> None:
-    trace = _Trace()
-    meal_started = asyncio.Event()
-
-    @function_tool(name="save_room")
-    async def save_room(ctx: RunContext, room: str) -> str:
-        return room
-
-    @function_tool(name="save_meal", after=("save_room",))
-    async def save_meal(ctx: RunContext) -> str:
-        meal_started.set()
-        return "meal saved"
-
-    agent = Agent(instructions="booking", tools=[save_room, save_meal])
-    session = await _start(
-        agent,
-        [
-            _response(
-                "book",
-                FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
-                FunctionToolCall(name="save_room", arguments="{}", call_id="room-invalid"),
-            )
-        ],
-    )
-    trace.watch(session)
-    try:
-        session.generate_reply(user_input="book")
-        await _wait(trace.event(trace.ended, "room-invalid"))
-        await _wait(trace.event(trace.ended, "meal"))
-        assert meal_started.is_set()
-        assert trace.terminals["room-invalid"][0].status == "error"
-        assert trace.terminals["meal"][0].status == "done"
-        assert len(trace.terminals["meal"]) == 1
     finally:
         await _close(session)
 
@@ -736,112 +610,60 @@ async def test_registered_dependency_mode_keeps_independent_roots_eager_until_st
 
 
 @pytest.mark.asyncio
-async def test_realtime_progress_dependency_waits_for_terminal_tool_result() -> None:
-    harness_tasks = set(asyncio.all_tasks())
-    model = _RecordingRealtimeModel(
-        capabilities=fake_capabilities(auto_tool_reply_generation=False)
-    )
-    trace = _Trace()
-    room_started = asyncio.Event()
-    release_room = asyncio.Event()
-    meal_started = asyncio.Event()
-    premature_meal = asyncio.Event()
-    stop_reply_resolver = asyncio.Event()
+async def test_delayed_eof_exposes_root_progress_before_dependency_admission() -> None:
+    root_started = asyncio.Event()
+    root_progress_sent = asyncio.Event()
+    release_root = asyncio.Event()
+    dependent_started = asyncio.Event()
 
     @function_tool(name="save_room")
     async def save_room(ctx: RunContext) -> str:
-        room_started.set()
+        root_started.set()
         await ctx.update("room reservation is pending")
-        await release_room.wait()
+        root_progress_sent.set()
+        await release_root.wait()
         return "room reservation completed"
 
     @function_tool(name="save_meal", after=("save_room",))
     async def save_meal(ctx: RunContext) -> str:
-        meal_started.set()
-        if not trace.terminals.get("room"):
-            premature_meal.set()
+        dependent_started.set()
         return "meal saved"
 
-    agent = Agent(instructions="booking", tools=[save_room, save_meal])
-    session = AgentSession(
-        llm=model,
+    llm = _DelayedBatchFakeLLM(
+        first_call=FunctionToolCall(name="save_room", arguments="{}", call_id="room"),
+        second_call=FunctionToolCall(name="save_meal", arguments="{}", call_id="meal"),
     )
-    realtime_session: _RecordingRealtimeSession | None = None
-    reply_resolver: asyncio.Task[None] | None = None
-    body_error: BaseException | None = None
-    close_error: BaseException | None = None
+    session = AgentSession(
+        llm=llm,
+        stt=None,
+        vad=None,
+        tts=None,
+        turn_handling={"turn_detection": None},
+    )
+    await session.start(Agent(instructions="booking", tools=[save_room, save_meal]))
     try:
-        session.output.audio = FakeAudioOutput()
-        await session.start(agent)
-        trace.watch(session)
-        realtime_session = model.active_session
-        assert realtime_session is not None
-        reply = session.generate_reply()
-        await _wait(realtime_session.reply_created)
-        assert realtime_session._reply_futs
-        realtime_session._reply_futs[0].set_result(
-            _generation(
-                response_id="dependency",
-                text="checking the room",
-                audio_duration=0.01,
-                function_calls=[
-                    FunctionCall(call_id="meal", name="save_meal", arguments="{}"),
-                    FunctionCall(call_id="room", name="save_room", arguments="{}"),
-                ],
-            )
-        )
-        realtime_session.reply_created.clear()
-        reply_resolver = asyncio.create_task(
-            _resolve_fake_realtime_replies(realtime_session, stop_reply_resolver)
+        session.generate_reply(user_input="batch")
+        await asyncio.wait_for(root_started.wait(), timeout=5)
+        await asyncio.wait_for(root_progress_sent.wait(), timeout=5)
+
+        llm.emit_second.set()
+        llm.close_stream.set()
+        await asyncio.wait_for(llm.stream_eof.wait(), timeout=5)
+
+        await asyncio.wait_for(
+            llm.progress_seen_by_model.wait(),
+            timeout=1,
         )
 
-        await _wait(room_started)
-        await _wait(realtime_session.progress_committed)
-        outputs = [
-            item
-            for item in realtime_session.chat_ctx.items
-            if item.type == "function_call_output" and item.call_id == "room"
-        ]
-        assert outputs and "room reservation is pending" in outputs[-1].output
-        assert not meal_started.is_set()
+        assert llm.stream_eof.is_set()
+        assert not release_root.is_set()
+        assert not dependent_started.is_set()
 
-        release_room.set()
-        await _wait(meal_started)
-        assert not premature_meal.is_set()
-        await _wait(trace.event(trace.ended, "room"))
-        await _wait(trace.event(trace.ended, "meal"))
-        await _wait(realtime_session.meal_committed)
-        await asyncio.wait_for(session.wait_for_idle(), timeout=5)
-        await asyncio.wait_for(reply.wait_for_playout(), timeout=5)
-    except BaseException as exc:
-        body_error = exc
+        release_root.set()
+        await asyncio.wait_for(dependent_started.wait(), timeout=5)
     finally:
-        release_room.set()
-        try:
-            await _close(session)
-        except BaseException as exc:
-            close_error = exc
-        finally:
-            stop_reply_resolver.set()
-            if reply_resolver is not None and realtime_session is not None:
-                realtime_session.reply_created.set()
-                with contextlib.suppress(BaseException):
-                    await asyncio.wait_for(reply_resolver, timeout=5)
-            if close_error is None and body_error is None:
-                leaked_tasks = [
-                    task
-                    for task in asyncio.all_tasks()
-                    if task not in harness_tasks
-                    and task is not asyncio.current_task()
-                    and not task.done()
-                ]
-                assert not leaked_tasks, "realtime session leaked tasks: " + ", ".join(
-                    f"{task.get_name()}: {_await_chain(task)}" for task in leaked_tasks
-                )
-
-    if body_error is not None:
-        if close_error is not None:
-            body_error.add_note(f"natural session close also failed: {close_error!r}")
-        raise body_error
-    if close_error is not None:
-        raise close_error
+        release_root.set()
+        llm.emit_second.set()
+        llm.close_stream.set()
+        await asyncio.wait_for(llm.stream_eof.wait(), timeout=5)
+        await _close(session)

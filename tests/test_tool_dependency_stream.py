@@ -96,7 +96,10 @@ async def test_malformed_default_dispatch_emits_one_error_without_starting_tool(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_function_stream_cancels_readiness_and_settles_queued_dependency() -> None:
+@pytest.mark.parametrize("error", [asyncio.CancelledError, RuntimeError])
+async def test_failed_function_stream_settles_readiness_and_queued_dependency(
+    error: type[BaseException],
+) -> None:
     root_started = asyncio.Event()
     dependent_started = asyncio.Event()
 
@@ -110,64 +113,33 @@ async def test_cancelled_function_stream_cancels_readiness_and_settles_queued_de
         dependent_started.set()
         return "must not run"
 
-    async def cancelled_stream() -> AsyncIterator[FunctionCall]:
-        root_call, dependent_call = _calls()
-        yield root_call
-        yield dependent_call
-        raise asyncio.CancelledError
-
-    session = await _new_session(Agent(instructions="test", tools=[root, dependent]))
-    terminals = collect_terminals(session)
-    execution_task, tool_output = dispatch_tool_stream(
-        session, [root, dependent], cancelled_stream()
-    )
-    assert tool_output.background_task is not None
-    try:
-        await asyncio.wait_for(tool_output.background_task, timeout=2)
-        await wait(root_started, timeout=2)
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(asyncio.shield(execution_task), timeout=0.5)
-        assert not dependent_started.is_set()
-        assert len(terminals["dependent-call"]) == 1
-        assert terminals["dependent-call"][0].status in {"error", "cancelled"}
-        assert tool_output.ready_fut is not None and tool_output.ready_fut.cancelled()
-        assert session._activity is not None
-        assert not session._activity._dependency_schedulers
-    finally:
-        await _finish(session, execution_task, tool_output.background_task)
-
-
-@pytest.mark.asyncio
-async def test_function_stream_exception_fails_readiness_and_settles_queued_dependency() -> None:
-    dependent_started = asyncio.Event()
-
-    @function_tool(name="root")
-    async def root(ctx: RunContext) -> str:
-        return "root done"
-
-    @function_tool(name="dependent", after=("root",))
-    async def dependent(ctx: RunContext) -> str:
-        dependent_started.set()
-        return "must not run"
-
     async def failing_stream() -> AsyncIterator[FunctionCall]:
         root_call, dependent_call = _calls()
         yield root_call
         yield dependent_call
-        raise RuntimeError("stream failed")
+        raise error("stream failed")
 
     session = await _new_session(Agent(instructions="test", tools=[root, dependent]))
     terminals = collect_terminals(session)
     execution_task, tool_output = dispatch_tool_stream(session, [root, dependent], failing_stream())
     assert tool_output.background_task is not None
     try:
-        with pytest.raises(RuntimeError, match="stream failed"):
+        if error is asyncio.CancelledError:
+            await asyncio.wait_for(tool_output.background_task, timeout=2)
+        with pytest.raises(error, match="stream failed" if error is RuntimeError else None):
             await asyncio.wait_for(asyncio.shield(execution_task), timeout=0.5)
         assert not dependent_started.is_set()
         assert len(terminals["dependent-call"]) == 1
-        assert terminals["dependent-call"][0].status == "error"
+        assert terminals["dependent-call"][0].status in {"error", "cancelled"}
         assert tool_output.ready_fut is not None
-        assert isinstance(tool_output.ready_fut.exception(), RuntimeError)
+        if error is asyncio.CancelledError:
+            await wait(root_started, timeout=2)
+            assert tool_output.ready_fut.cancelled()
+        else:
+            assert isinstance(tool_output.ready_fut.exception(), RuntimeError)
+            assert terminals["dependent-call"][0].status == "error"
+        assert session._activity is not None
+        assert not session._activity._dependency_schedulers
     finally:
         await _finish(session, execution_task, tool_output.background_task)
 
