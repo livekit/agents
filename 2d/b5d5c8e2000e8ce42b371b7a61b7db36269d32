@@ -1,0 +1,40 @@
+tests/test_llm_telemetry.py
+  s_f50cdb7f85c15d::t_efcce1b70fcf7f 353-358
+livekit-agents/livekit/agents/voice/generation.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 27,177
+livekit-agents/livekit/agents/llm/llm.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 21
+tests/test_telemetry_exception_redaction.py
+  s_f50cdb7f85c15d::t_81bd67116fb3ac 164
+  s_f50cdb7f85c15d::t_34ba0505c19b38 3,18,118,120-129,137-163,165-169,171-181,184,186-192,197,200-206,208-223,225-229
+livekit-agents/livekit/agents/telemetry/utils.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 69-74,76-78,88-92
+  s_f50cdb7f85c15d::t_da08cc2028c1af 93
+livekit-agents/livekit/agents/tts/tts.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 22,394,591
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 1861-1866
+tests/test_coverage_spans.py
+  s_f50cdb7f85c15d::t_efcce1b70fcf7f 34,297-325
+  s_f50cdb7f85c15d::t_455048e4aa7c50 11,18,27,184-213
+  s_f50cdb7f85c15d::t_81bd67116fb3ac 20-25
+  s_f50cdb7f85c15d::t_0b31545367a1a8 214-215,326-327
+livekit-agents/livekit/agents/telemetry/traces.py
+  s_f50cdb7f85c15d::t_fdd31a397cbba1 62,183-199,226-255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2db5d5c8e2000e8ce42b371b7a61b7db36269d32",
+  "prompts": {},
+  "sessions": {
+    "s_f50cdb7f85c15d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abca-c07b-78d0-bbbd-52575ebd6b3f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
