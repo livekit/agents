@@ -59,7 +59,7 @@ from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import Span, Tracer
 from opentelemetry.util._decorator import _agnosticcontextmanager
-from opentelemetry.util.types import Attributes, AttributeValue
+from opentelemetry.util.types import AttributeValue
 
 from livekit import api
 from livekit.protocol import metrics as proto_metrics
@@ -180,16 +180,11 @@ class _DynamicTracer(Tracer):
         return self._tracer.start_span(*args, **kwargs)
 
     @_agnosticcontextmanager
-    def use_span(
-        self,
-        span: Span,
-        end_on_exit: bool = False,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-    ) -> Iterator[Span]:
-        with trace_api.use_span(
-            span, end_on_exit=end_on_exit, record_exception=False, set_status_on_exception=False
-        ):
+    def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        record_exception = kwargs.pop("record_exception", True)
+        set_status_on_exception = kwargs.pop("set_status_on_exception", True)
+        kwargs.update(record_exception=False, set_status_on_exception=False)
+        with trace_api.use_span(*args, **kwargs) as span:
             try:
                 yield span
             except Exception as exc:
@@ -223,29 +218,11 @@ class _DynamicTracer(Tracer):
             span.end()
 
     @_agnosticcontextmanager
-    def start_as_current_span(
-        self,
-        name: str,
-        context: otel_context.Context | None = None,
-        kind: trace_api.SpanKind = trace_api.SpanKind.INTERNAL,
-        attributes: Attributes = None,
-        links: Sequence[trace_api.Link] | None = None,
-        start_time: int | None = None,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-        end_on_exit: bool = True,
-    ) -> Iterator[Span]:
-        with self._tracer.start_as_current_span(
-            name,
-            context=context,
-            kind=kind,
-            attributes=attributes,
-            links=links,
-            start_time=start_time,
-            record_exception=False,
-            set_status_on_exception=False,
-            end_on_exit=end_on_exit,
-        ) as span:
+    def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
+        record_exception = kwargs.pop("record_exception", True)
+        set_status_on_exception = kwargs.pop("set_status_on_exception", True)
+        kwargs.update(record_exception=False, set_status_on_exception=False)
+        with self._tracer.start_as_current_span(*args, **kwargs) as span:
             try:
                 yield span
             except Exception as exc:
