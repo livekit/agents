@@ -3987,6 +3987,7 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
+            tool_output.resolve_handoffs(fnc_executed_ev.has_agent_handoff)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -4702,6 +4703,7 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
+            tool_output.resolve_handoffs(fnc_executed_ev.has_agent_handoff)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:

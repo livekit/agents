@@ -29,6 +29,7 @@ from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
+    FunctionToolsExecutedEvent,
     RunContext,
     ToolCallEnded,
     ToolCallStarted,
@@ -596,6 +597,23 @@ class _ToolExecutor:
             and len(ctx._updates) > 1
         ):
             await running_task.initial_delivery.wait()
+
+        # The first dependent result is reviewed by dispatch. Later progress and
+        # final pairs must offer the same reply veto before provider/history commit.
+        if (
+            _wait_for_initial_delivery
+            and running_task is not None
+            and running_task.initial_delivery is not None
+        ):
+            ctx.session.emit(
+                "function_tools_executed",
+                FunctionToolsExecutedEvent(
+                    function_calls=[item for item in items if item.type == "function_call"],
+                    function_call_outputs=[
+                        item for item in items if item.type == "function_call_output"
+                    ],
+                ),
+            )
 
         # eager insert so a reply firing before delivery sees the items
         target = (

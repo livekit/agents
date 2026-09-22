@@ -801,6 +801,11 @@ class _ToolOutput:
     late_outputs: list[ToolExecutionOutput] = field(default_factory=list)
     late_flush_cb: Callable[[], None] | None = None
     stream_closed: bool = False
+    handoff_decision_cb: Callable[[bool], None] | None = None
+
+    def resolve_handoffs(self, accepted: bool) -> None:
+        if self.handoff_decision_cb is not None:
+            self.handoff_decision_cb(accepted)
 
     def _settle_ready(self, error: BaseException | None = None) -> None:
         """Settle dependency readiness exactly once."""
@@ -903,6 +908,7 @@ class _DependencyScheduler:
         self._closed = False
         self._abandoned = False
         self._watch_tasks: set[asyncio.Task[Any]] = set()
+        self._pending_handoffs: set[str] = set()
 
     def add(self, node: _DependencyNode) -> None:
         if self._abandoned:
@@ -979,8 +985,18 @@ class _DependencyScheduler:
         if watch_tasks:
             await asyncio.gather(*watch_tasks, return_exceptions=True)
 
+    def hold_handoff(self, call_id: str) -> None:
+        self._pending_handoffs.add(call_id)
+
+    def resolve_handoff(self, call_id: str, accepted: bool) -> None:
+        self._pending_handoffs.discard(call_id)
+        if accepted:
+            self.abandon_pending(ToolError("tool handoff abandoned queued dependency work"))
+        else:
+            self._resolve_waiting()
+
     def abandon_pending(self, error: BaseException) -> None:
-        """Reject queued nodes synchronously when a tool requests a handoff."""
+        """Reject queued nodes only after listeners accept a permanent handoff."""
         self._abandoned = True
         self._closed = True
         for node in list(self._nodes.values()):
@@ -995,7 +1011,7 @@ class _DependencyScheduler:
         ]
 
     def _resolve_waiting(self) -> None:
-        if not self._closed or self._abandoned:
+        if not self._closed or self._abandoned or self._pending_handoffs:
             return
         for node in list(self._nodes.values()):
             if node.admitted or node.settled or not node.after:
@@ -1017,6 +1033,10 @@ class _DependencyScheduler:
 
     async def _watch_terminal(self, node: _DependencyNode) -> None:
         await asyncio.shield(node.handle.terminal)
+        # Dispatch must observe an Agent result and hold admission before this
+        # terminal can release dependents. The event listeners decide the handoff.
+        if node.task is not None:
+            await asyncio.shield(node.task)
         node.settled = True
         self._resolve_waiting()
 
@@ -1132,7 +1152,7 @@ async def _execute_tools_task(
     """
 
     from .agent import _set_activity_task_info
-    from .events import RunContext
+    from .events import FunctionToolsExecutedEvent, RunContext
     from .run_result import _MockToolsContextVar, _SessionMockTools
 
     dependency_mode = any(tool.info.after for tool in tool_ctx.function_tools.values())
@@ -1150,11 +1170,8 @@ async def _execute_tools_task(
             tool_output.output.append(out)
             return
         if out.agent_task is not None and dependency_scheduler is not None:
-            # A returned Agent is a permanent handoff.  Stop old-activity admission
-            # synchronously, before the terminal watcher can resolve queued nodes.
-            dependency_scheduler.abandon_pending(
-                ToolError("tool handoff abandoned queued dependency work")
-            )
+            # An Agent return requests a handoff; listeners can still veto it.
+            dependency_scheduler.hold_handoff(out.fnc_call.call_id)
         call_id = out.fnc_call.call_id
         if call_id in tool_output.first_visible_call_ids:
             if tool_output.initial_batch_released.is_set():
@@ -1238,31 +1255,9 @@ async def _execute_tools_task(
                 raw_output=out.raw_output,
                 raw_exception=out.raw_exception,
             )
-            tool_execution_completed_cb(update)
             out = update
-            awaitable: list[llm.ChatItem] = [
-                out.fnc_call,
-                out.fnc_call_out,
-            ]
-            if out.agent_task is not None:
-                session.update_agent(out.agent_task)
-            reply_task = asyncio.create_task(
-                executor._enqueue_reply(ctx, awaitable, _wait_for_initial_delivery=False),
-                name=f"tool_dependency_reply_{out.fnc_call.name}",
-            )
-            reply_tasks.add(reply_task)
-            reply_task.add_done_callback(_on_reply_done)
-            if delivery_event := initial_delivery_events.get(original_call_id):
 
-                def release_initial_delivery(
-                    _: asyncio.Task[Any], event: asyncio.Event = delivery_event
-                ) -> None:
-                    event.set()
-
-                reply_task.add_done_callback(release_initial_delivery)
-            return
-
-        if original_call_id in tool_output.pending_call_ids and not out.pending:
+        elif original_call_id in tool_output.pending_call_ids and not out.pending:
             final_id = f"{original_call_id}_final"
             out = ToolExecutionOutput(
                 fnc_call=out.fnc_call.model_copy(
@@ -1276,17 +1271,33 @@ async def _execute_tools_task(
                 raw_exception=out.raw_exception,
             )
         tool_execution_completed_cb(out)
-
-        async def _deliver() -> None:
-            if out.agent_task is not None:
+        event = FunctionToolsExecutedEvent(
+            function_calls=[out.fnc_call], function_call_outputs=[out.fnc_call_out]
+        )
+        event._handoff_required = out.agent_task is not None
+        session.emit("function_tools_executed", event)
+        if out.agent_task is not None:
+            assert dependency_scheduler is not None
+            dependency_scheduler.resolve_handoff(original_call_id, event.has_agent_handoff)
+            if event.has_agent_handoff:
                 session.update_agent(out.agent_task)
-            await executor._enqueue_reply(ctx, [out.fnc_call, out.fnc_call_out])
 
         reply_task = asyncio.create_task(
-            _deliver(), name=f"tool_dependency_reply_{out.fnc_call.name}"
+            executor._enqueue_reply(
+                ctx, [out.fnc_call, out.fnc_call_out], _wait_for_initial_delivery=False
+            ),
+            name=f"tool_dependency_reply_{out.fnc_call.name}",
         )
         reply_tasks.add(reply_task)
         reply_task.add_done_callback(_on_reply_done)
+        if ctx._updates and (delivery_event := initial_delivery_events.get(original_call_id)):
+
+            def release_initial_delivery(
+                _: asyncio.Task[Any], event: asyncio.Event = delivery_event
+            ) -> None:
+                event.set()
+
+            reply_task.add_done_callback(release_initial_delivery)
 
     def _flush_late_outputs() -> None:
         late_outputs = tool_output.late_outputs[:]
@@ -1295,6 +1306,14 @@ async def _execute_tools_task(
             _deliver_late(out)
 
     tool_output.late_flush_cb = _flush_late_outputs
+
+    def _resolve_initial_handoffs(accepted: bool) -> None:
+        if dependency_scheduler is not None:
+            for out in tool_output.output:
+                if out.agent_task is not None:
+                    dependency_scheduler.resolve_handoff(out.fnc_call.call_id, accepted)
+
+    tool_output.handoff_decision_cb = _resolve_initial_handoffs
 
     def _abandon_dependency_delivery() -> None:
         tool_output.late_outputs.clear()

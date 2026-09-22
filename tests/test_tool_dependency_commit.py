@@ -339,3 +339,120 @@ async def test_realtime_progress_dependency_waits_for_terminal_tool_result() -> 
     assert not [
         task for task in asyncio.all_tasks() if task not in existing_tasks and not task.done()
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("realtime", [False, True], ids=["pipeline", "realtime"])
+@pytest.mark.parametrize("result", ["root_handoff", "dependent_handoff", "reply", "progress"])
+async def test_dependency_results_honor_execution_controls(
+    realtime: bool, result: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.agents.llm import FunctionToolCall
+    from livekit.agents.voice.events import FunctionToolsExecutedEvent, ToolCallEnded
+
+    from .fake_llm import FakeLLM
+    from .tool_dependency_helpers import response
+
+    committed = asyncio.Event()
+    dependent_ended = asyncio.Event()
+    seen: list[str] = []
+    handoffs: list[str] = []
+    target = Agent(instructions="target")
+    model = _GatedRealtimeModel()
+    if result == "dependent_handoff":
+        model.calls.insert(0, FunctionCall(name="audit", arguments="{}", call_id="audit"))
+    llm = (
+        model
+        if realtime
+        else FakeLLM(
+            fake_responses=[
+                response(
+                    "book",
+                    *(
+                        FunctionToolCall(name=c.name, arguments=c.arguments, call_id=c.call_id)
+                        for c in model.calls
+                    ),
+                )
+            ]
+        )
+    )
+    session = AgentSession(llm=llm)
+    session.output.audio = FakeAudioOutput()
+    terminals = collect_terminals(session)
+
+    @function_tool(name="save_room")
+    async def root(ctx: RunContext) -> Any:
+        return target if result == "root_handoff" else "room saved"
+
+    @function_tool(name="save_meal", after=("save_room",))
+    async def dependent(ctx: RunContext) -> Any:
+        if result == "progress":
+            await ctx.update("first progress")
+            await ctx.update("second progress")
+        return target if result == "dependent_handoff" else "meal saved"
+
+    @function_tool(name="audit", after=("save_meal",))
+    async def audit(ctx: RunContext) -> str:
+        assert session.current_agent is agent
+        return "audit saved"
+
+    agent = Agent(instructions="booking", tools=[root, dependent, audit])
+
+    def veto(event: FunctionToolsExecutedEvent) -> None:
+        if event.has_agent_handoff:
+            handoffs.extend(call.call_id for call in event.function_calls)
+        seen.extend(call.call_id for call in event.function_calls)
+        event.cancel_tool_reply()
+        event.cancel_agent_handoff()
+
+    session.on("function_tools_executed", veto)
+    session.on(
+        "tool_execution_updated",
+        lambda event: (
+            dependent_ended.set()
+            if isinstance(event.update, ToolCallEnded) and event.update.call_id == "meal"
+            else None
+        ),
+    )
+    insert = session.history.insert
+
+    def observe_history(items: Any) -> None:
+        insert(items)
+        if any(
+            item.type == "function_call_output"
+            and item.call_id == ("audit_final" if result == "dependent_handoff" else "meal_final")
+            for item in session.history.items
+        ):
+            committed.set()
+
+    monkeypatch.setattr(session.history, "insert", observe_history)
+    try:
+        await session.start(agent)
+        if realtime:
+            model.active_session.release_initial_provider_update.set()
+        speech = session.generate_reply(user_input="book")
+        await _wait(committed)
+        await _wait(dependent_ended)
+        await asyncio.wait_for(speech.wait_for_playout(), timeout=5)
+        await asyncio.wait_for(session.wait_for_idle(), timeout=5)
+        assert session.current_agent is agent
+        assert [event.status for event in terminals["meal"]] == ["done"]
+        outputs = [
+            item
+            for item in session.history.items
+            if item.type == "function_call_output" and item.call_id.startswith("meal_")
+        ]
+        expected = (
+            ["meal_update_0", "meal_update_1", "meal_final"]
+            if result == "progress"
+            else ["meal_final"]
+        )
+        assert [item.call_id for item in outputs] == expected
+        assert all(not item.reply_required for item in outputs)
+        assert all(seen.count(call_id) == 1 for call_id in expected)
+        if result.endswith("handoff"):
+            assert ("root" if result == "root_handoff" else "meal_final") in handoffs
+        if realtime:
+            assert len(model.active_session._reply_futs) == 1
+    finally:
+        await _close(session)
