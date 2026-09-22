@@ -25,6 +25,13 @@ from livekit.agents.tts._provider_format import (
 
 pytestmark = pytest.mark.unit
 
+# Gemini-flavored turn: free-form style labels only, lifted out into speech_metadata
+GEMINI_TURN = (
+    '<expr type="expression" label="Thoughtful, Quiet, American accent"/> Sienna? '
+    '<expr type="expression" label="Wistful, American accent"/> '
+    "What's on your mind, Comanchero?"
+)
+
 # Inworld-flavored turn: free-form expression + sound + break
 JOKE = (
     '<expr type="expression" label="say playfully"/> Why did the burger go to the gym? '
@@ -191,7 +198,7 @@ def test_split_all_markup_keeps_square_brackets() -> None:
     # path), so the transcript strip must leave markdown links and prose brackets intact
     text = 'Press [Enter], then read [the docs](https://docs.livekit.io). <sound value="sigh"/>'
     clean, tags = split_all_markup(text)
-    assert clean == "Press [Enter], then read [the docs](https://docs.livekit.io). "
+    assert clean == "Press [Enter], then read [the docs](https://docs.livekit.io)."
     assert tags == [{"type": "sound", "value": "sigh"}]
 
 
@@ -200,7 +207,8 @@ def test_expr_regex_does_not_match_native_expression_tag() -> None:
     # must keep the native Inworld tag on the generic strip path with its own type
     text = '<expression value="speak calmly"/> Hi <expr type="break" label="1s"/> there.'
     clean, tags = split_all_markup(text)
-    assert clean == " Hi there."
+    # the native tag opens the text, so its separator goes with it
+    assert clean == "Hi there."
     assert {"type": "expression", "value": "speak calmly"} in tags
     assert {"type": "break", "value": "1s"} in tags
     # conversion must also leave the native tag for the provider pipeline, not eat it
@@ -219,7 +227,7 @@ def test_transcript_stripper_streaming_chunks() -> None:
     ]:
         out += stripper.push(chunk)
     out += stripper.flush()
-    assert out == " Hello world!"
+    assert out == "Hello world!"
     assert stripper.tags[0] == {"type": "expression", "value": "say playfully"}
     assert {"type": "prosody", "value": "whisper"} in stripper.tags
 
@@ -241,9 +249,11 @@ def test_split_all_markup_removed_tag_leaves_one_space() -> None:
 
 
 def test_split_all_markup_keeps_trailing_space_for_stream() -> None:
-    # the space before a trailing marker is the separator for words still streaming in,
-    # so it survives the strip (the seam is deduped by TranscriptMarkupStripper)
-    assert strip_all_markup('Right. <expr type="sound" label="laugh"/>') == "Right. "
+    # mid-stream that space is the separator for words still arriving
+    chunk = 'Right. <expr type="sound" label="laugh"/>'
+    assert split_all_markup(chunk, whole_segment=False)[0] == "Right. "
+    # as a whole segment there is nothing still arriving, so the separator goes
+    assert strip_all_markup(chunk) == "Right."
 
 
 def test_transcript_stripper_dedups_space_across_chunks() -> None:
@@ -305,7 +315,7 @@ def test_normalize_leaves_wrapping_and_closed_tags_alone() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", ["xai", "inworld", "cartesia"])
+@pytest.mark.parametrize("provider", ["xai", "inworld", "cartesia", "gemini"])
 def test_llm_instructions_use_expr_syntax(provider: str) -> None:
     instructions = llm_instructions(provider)
     assert instructions is not None
@@ -350,6 +360,100 @@ def test_llm_instructions_xai_kinds() -> None:
     assert 'type="spell"' not in instructions
 
 
+def test_llm_instructions_gemini_kinds() -> None:
+    instructions = llm_instructions("gemini")
+    assert instructions is not None
+    # free-form style descriptors plus an accent, Gemini's own prompting vocabulary
+    assert '<expr type="expression" label="DESCRIPTORS"/>' in instructions
+    assert "free-form natural language" in instructions
+    assert '"<PLACE> accent"' in instructions
+    # discrete events are real for this voice, and land inline
+    assert 'type="sound"' in instructions
+    assert "laugh, chuckle, sigh, breath, cough, argh, gasp, giggle, cry" in instructions
+    assert 'type="break"' in instructions
+    # emphasis is the only wrapping prosody, and there is no spell marker
+    assert '<expr type="prosody" label="emphasis">' in instructions
+    assert 'type="spell"' not in instructions
+
+
+def test_gemini_lowers_events_inline_and_leaves_the_style_marker() -> None:
+    # a discrete event becomes an inline tag; the delivery marker is left standing
+    assert convert_markup("gemini", GEMINI_TURN) == GEMINI_TURN
+    turn = '<expr type="expression" label="Easygoing"/> Yeah, <expr type="sound" label="chuckle"/> I get that.'
+    assert convert_markup("gemini", turn) == (
+        '<expr type="expression" label="Easygoing"/> Yeah, <chuckle> I get that.'
+    )
+
+
+def test_gemini_pauses_and_emphasis_lower_to_native_forms() -> None:
+    # Gemini documents one pause length, so a duration is only a hint that a beat belongs
+    assert convert_markup("gemini", 'Oh no. <expr type="break" label="300ms"/> Let me look.') == (
+        "Oh no. <short pause> Let me look."
+    )
+    assert convert_markup("gemini", '<expr type="break" label="2s"/> Right.') == (
+        "<short pause> Right."
+    )
+    # its one in-text prosody control is capitalizing the word
+    assert (
+        convert_markup(
+            "gemini", 'Your code is <expr type="prosody" label="emphasis">B four</expr>.'
+        )
+        == "Your code is B FOUR."
+    )
+
+
+def test_gemini_sound_aliases_and_unknown_labels() -> None:
+    # other providers advertise "breathe"; it still lands on a tag Gemini renders
+    assert convert_markup("gemini", '<expr type="sound" label="breathe"/> Okay.') == (
+        "<breath> Okay."
+    )
+    # the general docs write these plural or gerund; they lower onto the stems
+    for written, native in (("giggles", "giggle"), ("crying", "cry"), ("sighs", "sigh")):
+        assert convert_markup("gemini", f'<expr type="sound" label="{written}"/> Okay.') == (
+            f"<{native}> Okay."
+        )
+    # a label from no vocabulary at all is dropped rather than invented into a tag
+    assert convert_markup("gemini", 'Hi <expr type="sound" label="kazoo"/> there.') == "Hi there."
+
+
+def test_gemini_native_inline_tags_are_stripped_from_transcripts() -> None:
+    # they belong in the words sent to the provider, never in what the user reads
+    clean, _ = split_all_markup("Yeah, <chuckle> I get that. <short pause> Right?")
+    assert clean == "Yeah, I get that. Right?"
+
+
+def test_gemini_sound_steering_removes_the_section() -> None:
+    off = llm_instructions("gemini", {"nonverbal_sounds": False})
+    assert off is not None and 'type="sound"' not in off
+    # ... and a single category takes only its own labels with it
+    no_laughs = llm_instructions("gemini", {"nonverbal_sounds": {"laughing": False}})
+    assert no_laughs is not None
+    assert "chuckle" not in no_laughs and "laugh" not in no_laughs
+    assert "giggle" not in no_laughs  # the whole laughter family, not just the stem
+    assert "sigh, breath, cough, argh, gasp, cry" in no_laughs
+
+
+def test_gemini_markers_strip_to_transcript_and_tags() -> None:
+    clean, tags = split_all_markup(GEMINI_TURN)
+    assert clean == "Sienna? What's on your mind, Comanchero?"
+    assert tags == [
+        {"type": "expression", "value": "Thoughtful, Quiet, American accent"},
+        {"type": "expression", "value": "Wistful, American accent"},
+    ]
+    # the free-form label still normalizes to a mood for `lk.expression`
+    attribute = expression_attribute(tags)
+    assert attribute is not None
+    assert '"expression":"Thoughtful, Quiet, American accent"' in next(iter(attribute.values()))
+
+
+def test_gemini_normalizes_an_unclosed_marker() -> None:
+    # the marker is the only thing carrying the style
+    text = '<expr type="expression" label="Warm, Welcoming"> Hey there.'
+    clean, tags = split_all_markup(normalize_markup("gemini", text))
+    assert clean == "Hey there."
+    assert tags == [{"type": "expression", "value": "Warm, Welcoming"}]
+
+
 def test_llm_instructions_none_for_unknown_provider() -> None:
     assert llm_instructions("") is None
     assert llm_instructions("openai") is None
@@ -367,7 +471,7 @@ MIXED = (
     '<expr type="prosody" label="whisper">keep it secret</expr>'
 )
 MIXED_CLEAN = (
-    " Press [Enter] to see <b>bold</b>, "
+    "Press [Enter] to see <b>bold</b>, "
     'read [the docs](https://docs.livekit.io), then 1 < 2. <break time="1s"/> '
     "keep it secret"
 )
@@ -414,3 +518,97 @@ def test_to_dict_strip_markup_is_expr_only_and_assistant_only() -> None:
     # default keeps the raw content for persistence
     items = chat_ctx.to_dict()["items"]
     assert items[1]["content"] == [MIXED]
+
+
+# ---------------------------------------------------------------------------
+# a marker opening a turn takes its separator with it
+# ---------------------------------------------------------------------------
+
+
+def test_opening_marker_leaves_no_leading_space() -> None:
+    # a marker opens every turn, with only the space after it
+    assert strip_all_markup(JOKE).startswith("Why did")
+    assert strip_expr_markup(JOKE).startswith("Why did")
+    assert split_all_markup(JOKE)[0].startswith("Why did")
+
+
+def test_closing_marker_leaves_no_trailing_space() -> None:
+    # the mirror case: a turn ending on a sound strands the space before the marker
+    turn = JOKE + " Ha!"
+    assert strip_all_markup(JOKE).endswith("better buns!")
+    assert strip_expr_markup(JOKE).endswith("better buns!")
+    assert strip_all_markup(turn).endswith("Ha!")  # a marker mid-turn keeps its separator
+
+
+def test_streamed_closing_marker_leaves_no_trailing_space() -> None:
+    stripper = TranscriptMarkupStripper()
+    chunks = ["Hi there! ", '<expr type="sound" label="laugh"/>']
+    assert "".join(stripper.push(c) for c in chunks) + stripper.flush() == "Hi there!"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        ['<expr type="expression" label="Warm"/> Hi there.'],
+        # the marker lands in a chunk of its own, so its space falls to the next one
+        ['<expr type="expression" label="Warm"/>', " Hi there."],
+        ['<expr type="expression" la', 'bel="Warm"/> Hi there.'],
+        ['  <expr type="expression" label="Warm"/> Hi there.'],
+    ],
+)
+def test_streamed_opening_marker_leaves_no_leading_space(chunks: list[str]) -> None:
+    stripper = TranscriptMarkupStripper()
+    assert "".join(stripper.push(c) for c in chunks) + stripper.flush() == "Hi there."
+
+
+def test_streamed_marker_mid_segment_does_not_glue_words() -> None:
+    # a chunk boundary is not a segment boundary
+    stripper = TranscriptMarkupStripper()
+    chunks = ["Hi there.", '<expr type="expression" label="Bright"/> Lovely day.']
+    assert "".join(stripper.push(c) for c in chunks) + stripper.flush() == "Hi there. Lovely day."
+
+
+# ---------------------------------------------------------------------------
+# a marker heading a line takes its separator with it
+# ---------------------------------------------------------------------------
+
+# one sentence per line puts every marker after the first at the head of a line
+PER_LINE = (
+    '<expr type="expression" label="Warm"/> Hi there.\n'
+    '<expr type="expression" label="Amused"/> Why so late?'
+)
+
+
+def test_line_opening_marker_leaves_no_leading_space() -> None:
+    assert strip_all_markup(PER_LINE) == "Hi there.\nWhy so late?"
+    assert strip_expr_markup(PER_LINE) == "Hi there.\nWhy so late?"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        [PER_LINE],
+        # the line break ends one chunk, so the next one has no newline of its own to see
+        [PER_LINE[: PER_LINE.index("\n") + 1], PER_LINE[PER_LINE.index("\n") + 1 :]],
+        ["Hi there.\n", '<expr type="expression" label="Amused"/> Why so late?'],
+    ],
+)
+def test_streamed_line_opening_marker_leaves_no_leading_space(chunks: list[str]) -> None:
+    stripper = TranscriptMarkupStripper()
+    out = "".join(stripper.push(c) for c in chunks) + stripper.flush()
+    assert out == "Hi there.\nWhy so late?"
+
+
+def test_streamed_chunk_starting_mid_line_keeps_its_separator() -> None:
+    # the counterpart trap: that leading space is all there is between two words
+    stripper = TranscriptMarkupStripper()
+    chunks = ['<expr type="expression" label="Warm"/> Hi', " there."]
+    assert "".join(stripper.push(c) for c in chunks) + stripper.flush() == "Hi there."
+
+
+def test_paragraph_structure_is_never_collapsed() -> None:
+    # only the horizontal run a marker stranded goes, never the line break
+    assert strip_all_markup('a\n<expr type="sound" label="laugh"/>\nb') == "a\n\nb"
+    for text in ("   Indented on purpose.  ", "a\n   indented line"):
+        assert strip_all_markup(text) == text
+        assert strip_expr_markup(text) == text

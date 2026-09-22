@@ -47,6 +47,12 @@ class StreamAdapter(TTS):
 
         self._wrapped_tts.on("metrics_collected", self._on_metrics_collected)
 
+    class Markup(TTS.Markup):
+        # a pass-through speaks whatever dialect it wraps
+        def _provider_key(self) -> str:
+            assert isinstance(self._tts, StreamAdapter)
+            return self._tts._wrapped_tts.markup._provider_key()
+
     @property
     def model(self) -> str:
         return self._wrapped_tts.model
@@ -88,6 +94,11 @@ class StreamAdapterWrapper(SynthesizeStream):
             pass
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
+        # the framework's input path for every non-streaming TTS, and the first place
+        # whole sentences exist. _expressive is fixed for this synthesis, so read it once
+        markup = self._tts._wrapped_tts.markup
+        lowering = bool(markup._provider_key()) and self._tts._wrapped_tts._expressive
+
         sent_stream = self._tts._sentence_tokenizer.stream()
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
@@ -113,7 +124,7 @@ class StreamAdapterWrapper(SynthesizeStream):
                     sent_stream.flush()
                     continue
 
-                sent_stream.push_text(data)
+                sent_stream.push_text(markup.normalize(data) if lowering else data)
 
             sent_stream.end_input()
 
@@ -128,6 +139,12 @@ class StreamAdapterWrapper(SynthesizeStream):
 
                 if not (text := ev.token.strip()):
                     continue
+
+                if lowering:
+                    # re-normalize: a marker split across two input chunks isn't caught
+                    # by the per-chunk pass above
+                    if not (text := markup.convert(markup.normalize(text)).strip()):
+                        continue
 
                 self._mark_started()
                 async with self._tts._wrapped_tts.synthesize(

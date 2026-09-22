@@ -4,8 +4,9 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference
+from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tts
 from livekit.agents.llm.chat_context import ChatContext
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.generation import (
@@ -180,3 +181,36 @@ async def test_expressive_off_turn_scrubs_history() -> None:
     assert any("[the guide](https://docs.livekit.io)" in (t or "") for t in assistant_texts)
     # and the new reply went through normally
     assert any("I'm doing well" in (t or "") for t in assistant_texts)
+
+
+def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
+    """Declaring a dialect is not enough — something has to lower the markers."""
+
+    class _Declaring(tts.TTS):
+        def __init__(self, *, streaming: bool) -> None:
+            super().__init__(
+                capabilities=tts.TTSCapabilities(streaming=streaming),
+                sample_rate=24000,
+                num_channels=1,
+            )
+
+        class Markup(tts.TTS.Markup):
+            def _provider_key(self) -> str:
+                return "gemini"
+
+        def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+            raise NotImplementedError
+
+    def resolves(tts_obj: tts.TTS) -> bool:
+        session = AgentSession(expressive=True, tts=tts_obj)
+        return (
+            AgentActivity(Agent(instructions="test"), session)._resolve_expressive_options()
+            is not None
+        )
+
+    # non-streaming: the StreamAdapter the framework wraps it in does the lowering
+    assert resolves(_Declaring(streaming=False))
+    # natively streaming: nothing in the framework can lower for it
+    assert not resolves(_Declaring(streaming=True))
+    # the gateway streams too, but lowers inside its own stream
+    assert resolves(inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake"))
