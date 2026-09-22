@@ -36,8 +36,9 @@ def _audio_headers(**overrides: str) -> dict[str, str]:
 
 
 class _Server:
-    def __init__(self, handler: Handler) -> None:
+    def __init__(self, handler: Handler, *, raise_for_status: bool = False) -> None:
         self._handler = handler
+        self._raise_for_status = raise_for_status
 
     async def __aenter__(self) -> _Server:
         app = web.Application()
@@ -48,7 +49,7 @@ class _Server:
         await self._site.start()
         port = self._runner.addresses[0][1]
         self.base_url = f"http://127.0.0.1:{port}"
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(raise_for_status=self._raise_for_status)
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -361,7 +362,10 @@ async def test_rejects_empty_or_incomplete_pcm(body: bytes) -> None:
     ("status", "expected_requests"),
     [(400, 1), (401, 1), (402, 1), (403, 1), (404, 1), (429, 3), (500, 3)],
 )
-async def test_http_error_retry_policy(status: int, expected_requests: int) -> None:
+@pytest.mark.parametrize("raise_for_status", [False, True])
+async def test_http_error_retry_policy(
+    status: int, expected_requests: int, raise_for_status: bool
+) -> None:
     from livekit.plugins.airy import TTS
 
     request_count = 0
@@ -383,7 +387,7 @@ async def test_http_error_retry_policy(status: int, expected_requests: int) -> N
             headers={"Retry-After": "0.25"},
         )
 
-    async with _Server(handler) as server:
+    async with _Server(handler, raise_for_status=raise_for_status) as server:
         synth = TTS(
             language="ko",
             api_key="test-key",
@@ -408,6 +412,63 @@ async def test_http_error_retry_policy(status: int, expected_requests: int) -> N
     assert "must not be retained" not in repr(raised.value)
     assert isinstance(raised.value.body, dict)
     assert raised.value.body["error_code"] == "test_error"
+    if status == 429:
+        assert raised.value.body["retry_after"] == "0.25"
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_requests"),
+    [(400, 1), (401, 1), (402, 1), (403, 1), (404, 1), (429, 3), (500, 3)],
+)
+@pytest.mark.parametrize("body_failure", ["timeout", "disconnect"])
+async def test_http_status_survives_error_body_failure(
+    status: int, expected_requests: int, body_failure: str
+) -> None:
+    from livekit.plugins.airy import TTS
+
+    release = asyncio.Event()
+    request_count = 0
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal request_count
+        request_count += 1
+        response = web.StreamResponse(
+            status=status,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": "1000",
+                "X-Request-Id": "req_body_failure",
+                "Retry-After": "0.25",
+            },
+        )
+        await response.prepare(request)
+        await response.write(b'{"error":')
+        if body_failure == "disconnect":
+            assert request.transport is not None
+            request.transport.close()
+        else:
+            await release.wait()
+        return response
+
+    async with _Server(handler) as server:
+        synth = TTS(
+            language="ko",
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+        )
+        try:
+            with pytest.raises(APIStatusError) as raised:
+                await _collect(synth, max_retry=2, retry_interval=0, timeout=0.05)
+        finally:
+            release.set()
+
+    assert request_count == expected_requests
+    assert raised.value.status_code == status
+    assert raised.value.request_id == "req_body_failure"
+    assert raised.value.retryable is (expected_requests > 1)
+    assert isinstance(raised.value.body, dict)
+    assert raised.value.body["status_code"] == status
     if status == 429:
         assert raised.value.body["retry_after"] == "0.25"
 
@@ -457,6 +518,44 @@ async def test_read_timeout_is_mapped() -> None:
             release.set()
 
     assert raised.value.retryable is True
+
+
+async def test_connection_pool_wait_times_out() -> None:
+    from livekit.plugins.airy import TTS
+
+    release = asyncio.Event()
+    request_count = 0
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal request_count
+        request_count += 1
+        response = web.StreamResponse(headers=_audio_headers())
+        await response.prepare(request)
+        await release.wait()
+        return response
+
+    async with (
+        _Server(handler) as server,
+        aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=1)) as session,
+    ):
+        try:
+            # Hold the only connection while synthesis waits for a slot.
+            async with session.post(f"{server.base_url}/v1/audio/speech/stream"):
+                synth = TTS(
+                    language="ko",
+                    api_key="test-key",
+                    base_url=server.base_url,
+                    http_session=session,
+                )
+                with pytest.raises(APITimeoutError) as raised:
+                    await asyncio.wait_for(_collect(synth, timeout=0.05), timeout=2)
+        finally:
+            release.set()
+
+        assert not session.closed
+
+    assert raised.value.retryable is True
+    assert request_count == 1
 
 
 async def test_timeout_after_audio_is_not_retried() -> None:

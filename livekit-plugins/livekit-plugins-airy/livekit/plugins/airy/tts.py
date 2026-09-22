@@ -115,11 +115,15 @@ def _request_id_from_payload(payload: object) -> str | None:
 
 async def _status_error(response: aiohttp.ClientResponse) -> APIStatusError:
     raw = bytearray()
-    while len(raw) <= 65536:
-        chunk = await response.content.read(min(8192, 65537 - len(raw)))
-        if not chunk:
-            break
-        raw.extend(chunk)
+    try:
+        while len(raw) <= 65536:
+            chunk = await response.content.read(min(8192, 65537 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        # The status and headers still determine retry behavior if the error body fails.
+        pass
 
     payload: object | None = None
     if len(raw) <= 65536:
@@ -316,8 +320,10 @@ class ChunkedStream(tts.ChunkedStream):
                 f"{self._opts.base_url}{_SPEECH_PATH}",
                 json=payload,
                 headers=headers,
+                raise_for_status=False,
                 timeout=aiohttp.ClientTimeout(
                     total=None,
+                    connect=self._conn_options.timeout,
                     sock_connect=self._conn_options.timeout,
                     sock_read=self._conn_options.timeout,
                 ),
