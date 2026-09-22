@@ -91,6 +91,17 @@ def _needs_reply_placeholder(model: str) -> bool:
     return not any(tag in model for tag in MODELS_WITHOUT_REPLY_PLACEHOLDER)
 
 
+# These models declare tools NON_BLOCKING unless the client says otherwise. Sending nothing
+# would leave the server async while we still treat the tools as blocking.
+MODELS_DEFAULT_NON_BLOCKING: tuple[str, ...] = ("3.8",)
+
+
+def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
+    if any(tag in model for tag in MODELS_DEFAULT_NON_BLOCKING):
+        return types.Behavior.NON_BLOCKING
+    return NOT_GIVEN
+
+
 def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     """
     Validate that the model name matches the API being used.
@@ -302,7 +313,7 @@ class RealtimeModel(llm.RealtimeModel):
             proactivity (bool, optional): Whether to enable proactive audio. Defaults to False.
             realtime_input_config (RealtimeInputConfig, optional): The configuration for realtime input. Defaults to None.
             context_window_compression (ContextWindowCompressionConfig, optional): The configuration for context window compression. Defaults to None.
-            tool_behavior (Behavior, optional): The behavior for tool call. Default behavior is BLOCK in Gemini Realtime API.
+            tool_behavior (Behavior, optional): The behavior for tool call. Defaults to NON_BLOCKING on models that declare it by default (Gemini 3.8 Live), and to the server default (BLOCKING) elsewhere.
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
@@ -412,7 +423,9 @@ class RealtimeModel(llm.RealtimeModel):
             realtime_input_config=realtime_input_config,
             context_window_compression=context_window_compression,
             api_version=api_version,
-            tool_behavior=tool_behavior,
+            tool_behavior=tool_behavior
+            if is_given(tool_behavior)
+            else _default_tool_behavior(model),
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
             http_options=http_options,
@@ -717,9 +730,9 @@ class RealtimeSession(llm.RealtimeSession):
                 ]
             ):
                 logger.warning(
-                    "a tool result wants no reply, but Gemini will answer it anyway; declare "
-                    "the tools NON_BLOCKING on the Gemini API to keep it silent. Sending it "
-                    "regardless, since an unanswered call blocks the session.",
+                    "a tool result wants no reply, but Gemini will answer it anyway; pass "
+                    "tool_behavior=NON_BLOCKING to keep it silent. Sending it regardless, "
+                    "since an unanswered call blocks the session.",
                     extra={"functions": silenced},
                 )
 
@@ -955,9 +968,9 @@ class RealtimeSession(llm.RealtimeSession):
             await self._close_active_session()
 
             self._session_should_close.clear()
-            config = self._build_connect_config()
             session = None
             try:
+                config = self._build_connect_config()
                 logger.debug("connecting to Gemini Realtime API...")
                 t0 = time.perf_counter()
                 async with self._client.aio.live.connect(

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+from typing_extensions import Self
 
 
 class Metadata(BaseModel):
@@ -54,18 +55,31 @@ class STTMetrics(_BaseMetrics):
     duration: float
     """The request duration in seconds, 0.0 if the STT is streaming."""
     audio_duration: float
-    """The duration of the pushed audio in seconds."""
-    input_tokens: int = 0
-    """Input audio tokens (for token-based billing)."""
-    output_tokens: int = 0
-    """Output text tokens (for token-based billing)."""
+    """The duration of the pushed audio in seconds, or 0.0 when unknown."""
     streamed: bool
     """Whether the STT is streaming (e.g using websocket)."""
+    input_tokens: int = 0
+    """Total input tokens, including both audio and text (for token-based billing)."""
+    output_tokens: int = 0
+    """Total output tokens (for token-based billing)."""
+    total_tokens: int = 0
+    """Sum of input and output tokens.
+
+    Defaults to ``input_tokens + output_tokens`` when omitted.
+    """
+    input_audio_tokens: int = 0
+    """Audio input tokens, a subset of input_tokens when reported by the provider."""
     acquire_time: float = 0.0
     """Time in seconds to acquire the connection. (WebSocket only)"""
     connection_reused: bool = False
     """Whether the connection was reused from a pool. (WebSocket only)"""
     metadata: Metadata | None = None
+
+    @model_validator(mode="after")
+    def _default_total_tokens(self) -> Self:
+        if "total_tokens" not in self.model_fields_set:
+            self.total_tokens = self.input_tokens + self.output_tokens
+        return self
 
 
 class TTSMetrics(_BaseMetrics):
