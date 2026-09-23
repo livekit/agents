@@ -531,6 +531,40 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
         await model.aclose()
 
 
+@pytest.mark.parametrize("delegation", ["responses", "client"])
+async def test_a_delegator_variant_goes_to_the_voice_and_the_instructions_to_the_backend(
+    monkeypatch: pytest.MonkeyPatch, delegation: str
+) -> None:
+    """Tool rules only mean something to the backend, which makes every tool call; without a
+    backend the voice keeps the full instructions."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(
+        api_key="sk-test",
+        delegation=delegation,
+        responses_options={"instructions": "Answer briefly."},
+    )
+    session = model.session()
+    try:
+        await session._update_session(
+            instructions="Call update_email.", delegator_instructions="Hand the email off."
+        )
+        await asyncio.sleep(0.1)
+
+        config = ws.sent[0]["session"]
+        if delegation == "responses":
+            assert config["instructions"] == "Hand the email off."
+            assert config["delegation"]["responses"]["instructions"] == (
+                "Answer briefly.\n\nCall update_email."
+            )
+        else:
+            assert config["instructions"] == "Call update_email."
+            assert config["delegation"] == {"type": "client"}
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_the_backend_delegation_accepts_every_service_tier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
