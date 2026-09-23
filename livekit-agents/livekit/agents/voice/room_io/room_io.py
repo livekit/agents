@@ -315,12 +315,10 @@ class RoomIO:
             self.unset_participant()
             return
 
-        if (
-            self._participant_identity is not None
-            and self._participant_identity != participant_identity
-        ):
-            # reset future if switching to a different participant
-            self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        linked = self.linked_participant
+        if linked is None or linked.identity != participant_identity:
+            if self._participant_available_fut.done():
+                self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
             self._agent_session._cancel_user_away_timer()
 
             # check if new participant is already connected

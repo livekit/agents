@@ -407,7 +407,10 @@ async def test_roomio_dtmf_resets_away_only_for_linked_participant(event_source:
     assert room.listener_count("sip_dtmf_received") == 0
 
 
-@pytest.mark.parametrize("unlinked_reason", ["before_join", "disconnect", "unset", "switch"])
+@pytest.mark.parametrize(
+    "unlinked_reason",
+    ["before_join", "disconnect", "unset", "switch", "reselect_same", "reselect_other"],
+)
 async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: str) -> None:
     room = _FakeRoom()
     room.local_participant.set_attributes = AsyncMock()
@@ -426,9 +429,13 @@ async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: s
         attributes={},
         kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
     )
-    next_participant = replacement if unlinked_reason in ("unset", "switch") else caller
+    next_participant = (
+        caller if unlinked_reason in ("before_join", "disconnect", "reselect_same") else replacement
+    )
     if unlinked_reason != "before_join":
         room.remote_participants[caller.identity] = caller
+    if unlinked_reason == "reselect_other":
+        room.remote_participants[replacement.identity] = replacement
 
     async with AgentSession(
         vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
@@ -453,7 +460,7 @@ async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: s
         if unlinked_reason == "disconnect":
             del room.remote_participants[caller.identity]
             room.emit("participant_disconnected", caller)
-        elif unlinked_reason == "unset":
+        elif unlinked_reason in ("unset", "reselect_same", "reselect_other"):
             session.room_io.unset_participant()
         elif unlinked_reason == "switch":
             session.room_io.set_participant(replacement.identity)
@@ -467,13 +474,47 @@ async def test_roomio_away_timer_waits_for_linked_participant(unlinked_reason: s
         await asyncio.sleep(4.0)
         assert session.user_state == "listening"
 
-        room.remote_participants[next_participant.identity] = next_participant
-        room.emit("participant_connected", next_participant)
+        if unlinked_reason in ("reselect_same", "reselect_other"):
+            session.room_io.set_participant(next_participant.identity)
+        else:
+            room.remote_participants[next_participant.identity] = next_participant
+            room.emit("participant_connected", next_participant)
         assert session.room_io.linked_participant is next_participant
+        await asyncio.sleep(2.0)
+        room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="1", participant=next_participant))
         await asyncio.sleep(2.0)
         assert session.user_state == "listening"
         await asyncio.sleep(2.0)
         assert session.user_state == "away"
+
+
+@pytest.mark.parametrize("initial_identity", [None, "waiting-caller"])
+async def test_roomio_set_participant_wakes_initial_waiter(initial_identity: str | None) -> None:
+    room = _FakeRoom()
+    caller = MagicMock(
+        spec=rtc.RemoteParticipant,
+        identity="caller",
+        sid="PA_caller",
+        attributes={},
+        kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+    )
+    room_io = RoomIO(
+        MagicMock(spec=AgentSession),
+        room,
+        participant=initial_identity,
+        options=RoomOptions(
+            audio_input=False, audio_output=False, text_input=False, text_output=False
+        ),
+    )
+    await room_io.start()
+    try:
+        await asyncio.sleep(0)
+        room.remote_participants[caller.identity] = caller
+        room_io.set_participant(caller.identity)
+        await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+        assert room_io.linked_participant is caller
+    finally:
+        await room_io.aclose()
 
 
 @pytest.mark.parametrize("replacement_connected", [True, False])
