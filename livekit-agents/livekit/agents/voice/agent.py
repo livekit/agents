@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+
+from typing_extensions import Self
 
 from livekit import rtc
 
@@ -37,6 +41,33 @@ if TYPE_CHECKING:
     from .audio_recognition import AudioRecognition
     from .io import TimedString
     from .turn import TurnDetectionMode
+
+
+# configuration the handler supplies on every start, not state: models, tools and turn options
+# are rebuilt from code, and the chat context is restored from its own rows
+_CONFIGURATION_PARAMETERS = frozenset(
+    {
+        "chat_ctx",
+        "tools",
+        "delegate",
+        "stt",
+        "vad",
+        "llm",
+        "tts",
+        "turn_handling",
+        "tool_handling",
+        "expressive",
+        "min_consecutive_speech_delay",
+        "use_tts_aligned_transcript",
+        "turn_detection",
+        "min_endpointing_delay",
+        "max_endpointing_delay",
+        "allow_interruptions",
+        "mcp_servers",
+        "preserve_function_call_history",
+    }
+)
+_INSTRUCTIONS_KEY = "__instructions__"
 
 
 @dataclass
@@ -508,6 +539,65 @@ class Agent:
     ):
         """A node processing the audio from the realtime LLM session before it is played out."""
         return Agent.default.realtime_audio_output_node(self, audio, model_settings)
+
+    def _snapshot_state(self) -> dict[str, Any]:
+        """JSON-serializable constructor arguments that rebuild this agent on resume.
+
+        The default reads each constructor parameter back from the same-named attribute, or
+        its underscored twin, skipping ``NOT_GIVEN`` ones and configuration. A class whose
+        constructor takes something it does not keep defines this and ``_from_state``.
+        """
+        state: dict[str, Any] = {}
+        for name, param in inspect.signature(type(self).__init__).parameters.items():
+            if (
+                name == "self"
+                or name in _CONFIGURATION_PARAMETERS
+                or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+            ):
+                continue
+            for attr in (name, f"_{name}"):
+                if hasattr(self, attr):
+                    value = getattr(self, attr)
+                    break
+            else:
+                if param.default is param.empty:
+                    raise TypeError(f"constructor parameter '{name}' has no matching attribute")
+                continue  # its default rebuilds it
+            if not is_given(value):
+                continue
+            if isinstance(value, Instructions):
+                value = {_INSTRUCTIONS_KEY: [value.common, value.audio, value.text]}
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"constructor parameter '{name}' holds a {type(value).__name__}, "
+                    "which is not JSON-serializable"
+                ) from None
+            state[name] = value
+        return state
+
+    @classmethod
+    def _from_state(cls, state: dict[str, Any]) -> Self:
+        """Rebuild an agent from what ``_snapshot_state`` returned. Default: ``cls(**state)``."""
+        kwargs: dict[str, Any] = {
+            name: Instructions(
+                value[_INSTRUCTIONS_KEY][0],
+                audio=value[_INSTRUCTIONS_KEY][1],
+                text=value[_INSTRUCTIONS_KEY][2],
+            )
+            if isinstance(value, dict) and _INSTRUCTIONS_KEY in value
+            else value
+            for name, value in state.items()
+        }
+        return cls(**kwargs)
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        # an agent pickled inside userdata is a reference to the session's instance, found by
+        # id when the session is rehydrated rather than copied
+        from .persistence import lookup_rehydrated_agent
+
+        return (lookup_rehydrated_agent, (type(self), self._id))
 
     def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
