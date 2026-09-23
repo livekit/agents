@@ -414,11 +414,12 @@ async def test_idempotent_calls_retry_5xx_then_raise(
     assert len(fake_atmee.calls("GET", get_path)) == 3
     assert got["status"] == "active"
 
-    fake_atmee.script("GET", get_path, 500, body="down", times=3)
+    # max_retry=3 means three retries after the first attempt: four calls
+    fake_atmee.script("GET", get_path, 500, body="down", times=4)
     with pytest.raises(AtmeeException) as exc:
         await api.get_avatar_session(SESSION_ID)
     assert exc.value.status_code == 500
-    assert len(fake_atmee.calls("GET", get_path)) == 6
+    assert len(fake_atmee.calls("GET", get_path)) == 7
 
 
 async def test_end_and_get_avatar_session(
@@ -539,6 +540,27 @@ async def test_create_avatar_from_url_is_json_manifest(
         "assets": {"image": {"url": "https://cdn.example/val.jpg"}},
     }
     assert info.ready and info.kind == "render_only"
+
+
+def test_plaintext_api_url_is_refused() -> None:
+    with pytest.raises(AtmeeException, match="https"):
+        AtmeeAPI(api_url="http://api.example.com")
+    AtmeeAPI(api_url="http://127.0.0.1:8080")  # loopback is fine for local development
+    AtmeeAPI(api_url="https://api.example.com")
+
+
+async def test_wait_until_ready_honours_its_timeout(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    path = f"/v1/avatars/{AVATAR_ID}"
+    fake_atmee.script("GET", path, 200, {"avatarId": AVATAR_ID, "status": "building"}, times=5)
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    with pytest.raises(AtmeeException) as exc:
+        await api.wait_until_ready(AVATAR_ID, timeout=0.2, poll_interval=30)
+    assert exc.value.code == "timeout"
+    assert loop.time() - began < 2  # the 30 s poll interval was capped by the deadline
 
 
 async def test_wait_until_ready_polls(
@@ -678,7 +700,65 @@ async def test_end_failure_never_breaks_close(
         avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
     )
     await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    fake_atmee.script("POST", END_PATH, 500, body="down")  # max_retry=1: two attempts
     await avatar.aclose()  # must not raise
+    assert len(fake_atmee.calls("POST", END_PATH)) == 2
+
+    # the failed end was not recorded as done, so a later aclose retries it
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "alreadyEnded": False})
+    await avatar.aclose()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 3
+    await avatar.aclose()  # confirmed ended: no further request
+    assert len(fake_atmee.calls("POST", END_PATH)) == 3
+
+
+async def test_end_4xx_is_final(fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _session_start_body())
+    fake_atmee.script("POST", END_PATH, 404, {"error": "not_found", "message": "gone"})
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    await avatar.aclose()
+    await avatar.aclose()  # unknown session: nothing left to end, no retry
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+
+
+async def test_start_is_one_shot(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _session_start_body())
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    with pytest.raises(AtmeeException, match="already called"):
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    # the second call never reached the API, so no second billed render
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
+
+
+async def test_start_without_session_id_is_rejected(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, {"status": "initializing"})
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    with pytest.raises(AtmeeException) as exc:
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    assert exc.value.code == "invalid_response"
+    assert avatar.session_id is None
+
+
+async def test_construct_outside_a_job_without_http_session(fake_atmee: FakeAtmee) -> None:
+    # no job context and no session passed: construction must not touch the
+    # job's http context; the client creates (and aclose releases) its own
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=SESSION_FAST)
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _session_start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    await avatar.aclose()
     assert len(fake_atmee.calls("POST", END_PATH)) == 1
 
 

@@ -29,6 +29,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -197,6 +198,7 @@ class AtmeeAPI:
             )
         self._api_key = key
         self._api_url = (api_url or os.getenv("ATMEE_API_URL") or DEFAULT_API_URL).rstrip("/")
+        _check_api_url(self._api_url)
         self._conn_options = conn_options
         self._session = session
         self._owns_session = False
@@ -256,8 +258,14 @@ class AtmeeAPI:
             retry=False,
             total_timeout=_START_TOTAL_TIMEOUT[wait_for],
         )
+        session_id = data.get("sessionId")
+        if not isinstance(session_id, str) or not session_id:
+            raise AtmeeException(
+                f"the Atmee API accepted the avatar session but returned no sessionId: {data!r}",
+                code="invalid_response",
+            )
         return AvatarSessionInfo(
-            session_id=str(data.get("sessionId", "")),
+            session_id=session_id,
             status=str(data.get("status", "")),
             avatar_participant_identity=str(data.get("avatarParticipantIdentity", "")),
             agent_identity=str(data.get("agentIdentity", "")),
@@ -346,26 +354,45 @@ class AtmeeAPI:
         return _avatar_info(data, version=avatar_version)
 
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
-        return _avatar_info(await self._request("GET", f"/v1/avatars/{avatar_id}"))
+        return await self._get_avatar(avatar_id)
+
+    async def _get_avatar(
+        self, avatar_id: str, *, total_timeout: float = _DEFAULT_TOTAL_TIMEOUT
+    ) -> AvatarInfo:
+        return _avatar_info(
+            await self._request("GET", f"/v1/avatars/{avatar_id}", total_timeout=total_timeout)
+        )
 
     async def wait_until_ready(
         self, avatar_id: str, *, timeout: float = 600.0, poll_interval: float = 5.0
     ) -> AvatarInfo:
         """Poll until the avatar reports ``ready`` (a conversational avatar
         builds asynchronously; a portrait-only one is ready immediately)."""
-        deadline = asyncio.get_running_loop().time() + timeout
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        status = "unknown"
         while True:
-            info = await self.get_avatar(avatar_id)
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise AtmeeException(
+                    f"avatar {avatar_id} not ready after {timeout:.0f}s (status {status})",
+                    code="timeout",
+                )
+            try:
+                info = await self._get_avatar(avatar_id, total_timeout=remaining)
+            except AtmeeException as e:
+                if loop.time() >= deadline and e.status_code == 0:
+                    raise AtmeeException(
+                        f"avatar {avatar_id} not ready after {timeout:.0f}s (status {status})",
+                        code="timeout",
+                    ) from e
+                raise
+            status = info.status
             if info.ready:
                 return info
             if info.status == "failed":
                 raise AtmeeException(f"avatar {avatar_id} failed to build", code="avatar_failed")
-            if asyncio.get_running_loop().time() >= deadline:
-                raise AtmeeException(
-                    f"avatar {avatar_id} not ready after {timeout:.0f}s (status {info.status})",
-                    code="timeout",
-                )
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(max(0.0, min(poll_interval, deadline - loop.time())))
 
     # --- plumbing ------------------------------------------------------------
 
@@ -405,10 +432,11 @@ class AtmeeAPI:
         total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
     ) -> dict[str, Any]:
         """One API call with the plugin's retry policy: transport errors and
-        5xx answers are retried ``conn_options.max_retry`` times; a 503
+        5xx answers are retried up to ``conn_options.max_retry`` times after the
+        first attempt; a 503
         ``no_capacity`` and every 4xx are final. ``retry=False`` for calls
         that are not idempotent (creating a session or an avatar)."""
-        attempts = max(1, self._conn_options.max_retry) if retry else 1
+        attempts = self._conn_options.max_retry + 1 if retry else 1
         last_error: Exception | None = None
         for attempt in range(attempts):
             try:
@@ -444,6 +472,23 @@ class AtmeeAPI:
                 await asyncio.sleep(self._conn_options.retry_interval)
         assert last_error is not None
         raise last_error
+
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _check_api_url(url: str) -> None:
+    """Refuse a plaintext API base: the API key and the avatar's LiveKit join
+    token travel in every request. Plain ``http`` is allowed only for a
+    loopback host (local development, tests)."""
+    parsed = urlsplit(url)
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and (parsed.hostname or "") in _LOOPBACK_HOSTS:
+        return
+    raise AtmeeException(
+        f"api_url must be an https:// URL (plain http only for localhost), got {url!r}"
+    )
 
 
 async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeException:
