@@ -38,6 +38,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
+        verify_spelling: bool = False,
         # deprecated
         extra_instructions: str = "",
     ) -> None:
@@ -47,6 +48,15 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             logger.warning("`extra_instructions` will be ignored when `instructions` is provided")
 
         if isinstance(instructions, WorkflowInstructions):
+            spelling_instructions = (
+                ""
+                if not verify_spelling
+                else (
+                    "After receiving the email, always verify the spelling by asking the user to "
+                    "confirm or spell out the email address character by character. "
+                    "When confirming, spell out each character of the email address to the user. "
+                )
+            )
             instructions = instructions.resolve(
                 template=INSTRUCTIONS_TEMPLATE,
                 default_persona=PERSONA,
@@ -56,11 +66,12 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                     audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
                     text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
                 ),
+                _spelling=spelling_instructions,
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
-        self._spell_read_back = False
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -200,6 +211,7 @@ INSTRUCTIONS_TEMPLATE = """\
 Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
 {_confirmation}
+{_spelling}
 If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.
 
 Ignore unrelated input and avoid going off-topic. Do not generate markdown, greetings, or unnecessary commentary.

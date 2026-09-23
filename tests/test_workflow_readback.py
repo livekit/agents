@@ -30,6 +30,32 @@ async def test_email_is_spelled_once_a_confirmation_is_refused() -> None:
 
 
 @pytest.mark.asyncio
+async def test_email_with_verify_spelling_is_spelled_from_the_start() -> None:
+    task = beta.workflows.GetEmailTask(verify_spelling=True)
+    ctx = _audio_ctx()
+
+    first = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+    second = await task._update_email_impl("shayne.cole@gmail.com", ctx)
+
+    assert first is not None and second is not None
+    assert first == second
+    assert " ".join("shayne.cole@gmail.com") in first
+
+
+def test_email_with_verify_spelling_instructs_spelling_in_both_modalities() -> None:
+    # Text input defaults to no confirmation, so the read-back branch never runs there;
+    # the directive has to live in the instructions for the flag to have any effect.
+    default = beta.workflows.GetEmailTask().instructions
+    spelled = beta.workflows.GetEmailTask(verify_spelling=True).instructions
+    directive = "always verify the spelling"
+
+    assert directive not in (default.audio or "")
+    assert directive not in (default.text or "")
+    assert directive in (spelled.audio or "")
+    assert directive in (spelled.text or "")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("first_name", "last_name"),
     [("Shayne", "Cole"), ("Anne-Marie", "O'Neill"), ("Ana", "García")],
