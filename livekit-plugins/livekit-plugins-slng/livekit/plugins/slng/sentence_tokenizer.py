@@ -272,9 +272,10 @@ _HEAD_MIN_CLAUSE_CHARS = 25
 
 _Span = tuple[int, int]
 
-# Set once, the first time blingfire refuses a string, to keep the warning to
-# one line per process rather than one per reply.
-_blingfire_unavailable = False
+# Set the first time blingfire refuses a string. Blingfire is still asked on
+# every later call; this only keeps the warning to one line per process rather
+# than one per reply.
+_blingfire_warned = False
 
 
 def _blingfire_ends(text: str) -> frozenset[int] | None:
@@ -287,7 +288,7 @@ def _blingfire_ends(text: str) -> frozenset[int] | None:
     ``None`` means it could not be asked, and every ASCII terminator is then
     taken at face value.
     """
-    global _blingfire_unavailable
+    global _blingfire_warned
     try:
         _, offsets = blingfire.text_to_sentences_with_offsets(text)
     except Exception:
@@ -296,11 +297,13 @@ def _blingfire_ends(text: str) -> frozenset[int] | None:
         # by splitting an emoji across two deltas, would otherwise lose the
         # whole reply and report it as a connection error. Splitting without
         # abbreviation handling is the better failure.
-        if not _blingfire_unavailable:
-            _blingfire_unavailable = True
+        if _blingfire_warned:
+            logger.debug("[TTS] sentence tokenizer could not use blingfire", exc_info=True)
+        else:
+            _blingfire_warned = True
             logger.warning(
-                "[TTS] sentence tokenizer could not use blingfire; falling back to "
-                "terminator-only splitting for the rest of this process",
+                "[TTS] sentence tokenizer could not use blingfire on this text, so it "
+                "splits it on terminators only; later failures are logged at debug",
                 exc_info=True,
             )
         return None
@@ -511,14 +514,30 @@ def _head_cut(text: str) -> int | None:
 
 @dataclass
 class _SentencePiece(TokenData):
-    """A token from this plugin's stream. ``partial`` marks an early opening."""
+    """A token from this plugin's stream. ``partial`` marks an early opening.
+
+    ``separator`` is what followed the piece in the text: for an opening, a
+    space or nothing, exactly as written, so the opening and the rest of its
+    sentence join back into the sentence the LLM wrote. Between whole
+    sentences it is always a space.
+    """
 
     partial: bool = False
+    separator: str = " "
 
 
 def is_partial_head(token: TokenData) -> bool:
     """Whether this token is the opening of a sentence that is still being written."""
     return isinstance(token, _SentencePiece) and token.partial
+
+
+def separator_after(token: TokenData) -> str:
+    """What to put between this token and the next piece of text.
+
+    A space, except after an opening that the text continued without one, as
+    after a Chinese or Japanese comma.
+    """
+    return token.separator if isinstance(token, _SentencePiece) else " "
 
 
 def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
@@ -630,15 +649,24 @@ class _SentenceStream(SentenceStream):
         cut = _head_cut(pending)
         if cut is None:
             return
-        self._emit(pending[:cut], partial=True)
+        # A cut after an ASCII mark or at a word takes the space with it, and a
+        # cut after another script's clause mark leaves any space in front of
+        # the rest; either way, emitting trims it, so say whether there was one.
+        spaced = pending[cut - 1].isspace() or pending[cut : cut + 1].isspace()
+        self._emit(pending[:cut], partial=True, separator=" " if spaced else "")
         self._handed_out += cut
         self._head_allowed = False
 
-    def _emit(self, text: str, *, partial: bool) -> None:
+    def _emit(self, text: str, *, partial: bool, separator: str = " ") -> None:
         piece = _normalize(text)
         if piece:
             self._event_ch.send_nowait(
-                _SentencePiece(token=piece, segment_id=self._segment_id, partial=partial)
+                _SentencePiece(
+                    token=piece,
+                    segment_id=self._segment_id,
+                    partial=partial,
+                    separator=separator,
+                )
             )
 
 
@@ -661,9 +689,11 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
             Defaults to 200.
         stream_context_len: Minimum buffered text before the stream looks for
             a boundary. Defaults to 10.
-        partial_head: Let a stream release the opening of a long sentence before
-            the sentence is finished, so that a model able to start on part of
-            a sentence begins speaking sooner. Defaults to True.
+        partial_head: Allow a stream to release the opening of a long sentence
+            before the sentence is finished, so that a model able to start on
+            part of a sentence begins speaking sooner. A stream still does so
+            only when ``stream(partial_head=True)`` asks for it, which the
+            plugin does when the server supports it. Defaults to True.
     """
 
     def __init__(
@@ -687,16 +717,18 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
         """Split ``text`` into sentences. ``language`` is accepted and ignored."""
         return [piece for piece, _start, _end in self._split(text)]
 
-    def stream(self, *, language: str | None = None, partial_head: bool = True) -> SentenceStream:
+    def stream(self, *, language: str | None = None, partial_head: bool = False) -> SentenceStream:
         """Incremental splitter. ``language`` is accepted and ignored.
 
         The stream holds its last sentence until the next one begins or input
         ends, like every livekit tokenizer; the plugin's sender relies on that
         to know which frame the reply's terminating flush follows.
 
-        ``partial_head`` is the caller's permission to release a long opening
-        early, which the plugin withholds when the gateway has not said it can
-        take one. The tokenizer's own setting still has to allow it.
+        ``partial_head=True`` lets the stream release a long opening early, as
+        a token marked partial that only this plugin's sender understands. So
+        it is off by default, and any other consumer, such as
+        ``tts.StreamAdapter``, only ever receives whole sentences. The
+        tokenizer's own setting still has to allow it.
         """
         return _SentenceStream(
             split=self._split,

@@ -45,9 +45,11 @@ The plugin sends only the settings you set. `encoding` (always `linear16`) and `
 
 `text_chunking` controls how LLM text is cut into frames for the gateway:
 
-- `"sentence"` (the default, and what `"auto"` resolves to): one frame per sentence.
+- `"sentence"`: one frame per sentence.
 - `"phrase"`: words re-batched at `. ! ? , ; :` or every `phrase_max_chars` (60).
 - `"word"`: one frame per word.
+
+The default, `"auto"`, is `"sentence"`, or `"phrase"` when `word_tokenizer` is a `WordTokenizer`.
 
 Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set). Any piece longer than 200 characters is cut at a space, which is what makes a script with no terminator stream at all. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length; an overriding tokenizer must be a `SentenceTokenizer` in this mode.
 
@@ -57,7 +59,7 @@ The plugin sends the opening of a long first sentence as soon as it exists, so a
 
 The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence followed by a `flush` that ends the reply, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
 
-`warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
+`warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. After five idle minutes the plugin closes it, and the next reply opens a new one; a connection open for 20 minutes is replaced between replies. Set `warm_standby_enabled=False` to open a connection for each reply and close it afterwards: nothing is held between replies, and every reply pays a connect. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
 
 ## End of turn finalization
 
@@ -121,6 +123,6 @@ Version 2.0 is a breaking change:
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
 - `api_token` still works on STT but is deprecated; use `api_key`.
 - TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.
-- TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames.
-- TTS `warm_standby_enabled` defaults to True, so the connection is open from session start and counts as one concurrent session for the whole call.
+- TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames. A `word_tokenizer` that is a `WordTokenizer` keeps the clause-sized frames.
+- TTS `warm_standby_enabled` defaults to True, so the connection is open from session start and counts as one concurrent session for the whole call. Set it to False for a connection per reply, as before.
 - `slng_base_url` has no default on STT or TTS: pass your region's host, for example `us-east.api.slng.ai`, or set `SLNG_BASE_URL`.

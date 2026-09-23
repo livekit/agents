@@ -23,7 +23,7 @@ import os
 import time
 import weakref
 from collections.abc import Coroutine
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Any, Literal, NamedTuple
 
@@ -64,7 +64,7 @@ from .gateway_adapter import (
     normalize_world_part_override,
 )
 from .log import logger
-from .sentence_tokenizer import SentenceTokenizer, is_partial_head
+from .sentence_tokenizer import SentenceTokenizer, is_partial_head, separator_after
 
 NUM_CHANNELS = 1
 WS_CLOSE_TIMEOUT_S = 1.0
@@ -72,25 +72,43 @@ WS_CLOSE_TIMEOUT_S = 1.0
 # during a long silence is otherwise invisible to the idle reader, because a
 # read on it simply never returns. Transport level, not provider specific.
 _WS_HEARTBEAT_S = 20.0
-# After an interrupt the plugin sends `clear` and waits this long for the
-# gateway to end the cancelled reply, then at least this much longer for the
-# socket to stay quiet. Anything else closes the socket, so no late audio from
-# the cancelled reply can reach the next one. The wait runs in the background,
-# so it never delays the next reply; it only decides whether this socket can be
-# reused. A second is generous on purpose: the acknowledgement arrives once the
-# provider's in-flight audio has drained, measured at 300-500 ms, and giving up
-# early throws away a socket the gateway was still happy with.
+# After an interrupt the plugin sends `clear` and waits up to this long for the
+# gateway to acknowledge it, then this much longer, counted from the
+# acknowledgement, for the socket to stay quiet. Anything else closes the
+# socket, so no late audio from the cancelled reply can reach the next one. The
+# wait runs in the background, so it never delays the next reply; it only
+# decides whether this socket can be reused. A second is generous on purpose:
+# the acknowledgement arrives once the provider's in-flight audio has drained,
+# measured at 300-500 ms, and giving up early throws away a socket the gateway
+# was still happy with. Frames arrive in order, so nothing the gateway sent
+# before its acknowledgement can arrive after it; the quiet window is only a
+# guard against a gateway that keeps sending.
 _CANCEL_SETTLE_S = 1.0
 _CANCEL_QUIET_S = 0.1
 # How long a reply will wait for an interrupt's drain to hand the held socket
-# back instead of opening a private one. The drain runs for the whole budget
-# above even when the gateway acknowledges at once, because the quiet window is
-# measured from the deadline, so a reply that arrives early in a drain would
-# wait most of a second to save one connect. It waits only when the drain is
-# this close to finishing, which is about what the connect and init it avoids
-# cost: waiting is never allowed to be more expensive than the thing it avoids.
+# back instead of opening a private one. It waits only when the drain is due to
+# finish within this long: once the gateway has acknowledged, that is always
+# the case, and before then only near the deadline. This is about what the
+# connect and init it avoids cost, so waiting is never more expensive than the
+# thing it avoids.
 _SETTLE_HANDBACK_WAIT_S = 0.15
 _PREWARM_CONNECT_TIMEOUT_S = 10.0
+# How long a reply waits for a background connect already in flight rather than
+# opening a socket of its own, counted from when that connect started. Several
+# times what a healthy connect takes, so only a stalled one is given up on, and
+# a reply never waits out the whole prewarm timeout before connecting itself.
+_PENDING_CONNECT_WAIT_S = 2.0
+# Two limits on how long the held socket lives. SLNG closes a connection that
+# reaches its maximum duration, which on some plans is 30 minutes, even in the
+# middle of a reply, and a reply cut off after its audio has started cannot be
+# retried. So a socket this old is replaced between replies, in the background.
+# And a socket idle this long is closed and not reopened: an instance nobody
+# uses any more (a TTS replaced at an agent handoff is never closed) would
+# otherwise hold a concurrent session for the rest of the call, because the
+# keepalive below stops SLNG reaping it. The next reply, if one comes, connects
+# as the first one did.
+_MAX_CONNECTION_AGE_S = 20 * 60.0
+_MAX_IDLE_S = 5 * 60.0
 # A gateway that accepts a connection and immediately closes it must not cause a
 # connect storm. Applies only to sockets that closed without serving a reply:
 # each one waits twice as long as the last, and after this many in a row the
@@ -101,6 +119,9 @@ _PREWARM_CONNECT_TIMEOUT_S = 10.0
 _BACKGROUND_CONNECT_MIN_INTERVAL_S = 2.0
 _BACKGROUND_CONNECT_MAX_INTERVAL_S = 30.0
 _MAX_BACKGROUND_REOPENS = 3
+# Reasons the plugin closes the held socket itself. Nothing failed, so these
+# reopen at once and are not counted against the limit above.
+_PLANNED_REOPENS = frozenset({"options_changed", "max_age"})
 
 # Where "phrase" mode cuts a frame, alongside `phrase_max_chars`. The other
 # modes never consult it: a sentence is a frame, and so is a word.
@@ -115,9 +136,9 @@ _WS_CLOSED_TYPES = (
     aiohttp.WSMsgType.CLOSING,
 )
 _WS_END_TYPES = (*_WS_CLOSED_TYPES, aiohttp.WSMsgType.ERROR)
-# How long the idle reader waits before sending a keepalive. The gateway's idle
-# timer counts text and binary frames only, so the transport-level ping below
-# does not hold a silent socket open.
+# How often the idle reader sends a keepalive. The gateway's idle timer counts
+# text and binary frames only, so the transport-level ping above does not hold
+# a silent socket open.
 _IDLE_KEEPALIVE_S = 20.0
 
 # How a cancelled reply ended. Only "acknowledged" lets the socket be reused,
@@ -130,6 +151,8 @@ _CancelOutcome = Literal[
     "audio_after_terminal",
     "send_failed",
     "drain_failed",
+    # A socket closed without a drain, because it could not be kept anyway.
+    "not_reusable",
 ]
 
 
@@ -171,6 +194,16 @@ def _log_ws_end(
     else:
         logger.debug("[TTS] websocket closed", extra=fields)
     return info
+
+
+async def _receive_by(ws: aiohttp.ClientWebSocketResponse, deadline: float) -> aiohttp.WSMessage:
+    """Read one frame, or raise TimeoutError at ``deadline`` (a ``perf_counter`` time).
+
+    Not ``receive(timeout=...)``: aiohttp answers pings and swallows pongs
+    inside ``receive()`` and restarts that timeout on each one, so a server that
+    pings, or this plugin's own heartbeat, can keep it from ever firing.
+    """
+    return await asyncio.wait_for(ws.receive(), timeout=max(deadline - time.perf_counter(), 0.001))
 
 
 async def _close_ws(ws: aiohttp.ClientWebSocketResponse, *, context: str) -> None:
@@ -284,9 +317,14 @@ class _FrameBatcher:
         self._buf = ""
         self._has_letter = False
 
-    def push(self, token: str) -> str | None:
-        """Add a token; return a completed frame when this token closes one."""
-        piece = f"{token} "
+    def push(self, token: str, *, separator: str = " ") -> str | None:
+        """Add a token; return a completed frame when this token closes one.
+
+        ``separator`` is what follows the token in the frame. A space, except
+        after the opening of a sentence in a script written without spaces,
+        where one would end up inside the sentence once it is joined back up.
+        """
+        piece = f"{token}{separator}"
         if self._mode == "sentence":
             self._buf += piece
             self._has_letter = self._has_letter or _contains_letter(token)
@@ -460,6 +498,8 @@ class _HeldConnection:
     in_use: bool = False
     reused: bool = False
     served_segments: int = 0
+    # When the socket was opened, for _MAX_CONNECTION_AGE_S.
+    opened_at: float = field(default_factory=time.perf_counter)
     # True once a reply wrote text on this socket. A socket the gateway closed
     # before that has nothing to show for itself, so reopening it is throttled.
     text_sent: bool = False
@@ -582,16 +622,19 @@ class TTS(tts.TTS):
                 the sentence terminators of every script with no language
                 setting, and ``tokenize.basic.WordTokenizer(ignore_punctuation=False)``
                 otherwise.
-            warm_standby_enabled: Open the connection at session start
-                (``prewarm()``) and reopen it in the background if the gateway
-                closes it, so the first reply of a call is not cold. The same
-                connection is reused by every reply, and it counts as one
-                concurrent session for the whole call. Defaults to True.
+            warm_standby_enabled: Hold one connection for the whole call: open
+                it at session start (``prewarm()``), reuse it for every reply,
+                and reopen it in the background if the gateway closes it. It
+                counts as one concurrent session for the whole call, until it
+                has been idle for five minutes. Defaults to True. False opens a
+                connection for each reply and closes it afterwards.
             text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
-                (the default; ``"auto"`` resolves to it) sends one frame per
-                sentence, in any script, and requires a ``SentenceTokenizer``.
-                ``"phrase"`` re-batches words at clause punctuation or every
-                ``phrase_max_chars``. ``"word"`` sends one frame per word.
+                sends one frame per sentence, in any script, and requires a
+                ``SentenceTokenizer``. ``"phrase"`` re-batches words at clause
+                punctuation or every ``phrase_max_chars``. ``"word"`` sends one
+                frame per word. ``"auto"``, the default, is ``"phrase"`` when
+                ``word_tokenizer`` is a ``WordTokenizer`` and ``"sentence"``
+                otherwise.
             phrase_max_chars: In ``"phrase"`` mode, cut a frame once the buffer
                 reaches this many characters. Ignored in the other modes.
             http_session (aiohttp.ClientSession): Optional aiohttp session to use for requests.
@@ -679,9 +722,16 @@ class TTS(tts.TTS):
             num_channels=NUM_CHANNELS,
         )
 
-        resolved_chunking: Literal["sentence", "word", "phrase"] = (
-            "sentence" if text_chunking == "auto" else text_chunking
-        )
+        resolved_chunking: Literal["sentence", "word", "phrase"]
+        if text_chunking != "auto":
+            resolved_chunking = text_chunking
+        elif isinstance(word_tokenizer, tokenize.WordTokenizer):
+            # "auto" meant phrase batching before sentence mode existed, and a
+            # WordTokenizer is what a caller from then passes. Keep that
+            # working rather than refusing it below.
+            resolved_chunking = "phrase"
+        else:
+            resolved_chunking = "sentence"
         if not is_given(word_tokenizer):
             word_tokenizer = (
                 SentenceTokenizer()
@@ -864,17 +914,31 @@ class TTS(tts.TTS):
     def _may_keep(self, conn: _HeldConnection) -> bool:
         """Whether this connection can stay held for the next reply.
 
-        Call it under ``_ws_lock``: it reads the held-socket bookkeeping. False
-        for a private socket, a socket whose init predates the current options,
-        a dead socket, an instance another candidate replaced, or one closing.
+        Call it under ``_ws_lock``, or with no await between the check and what
+        is done with it: it reads the held-socket bookkeeping. False for a
+        private socket, a socket whose init predates the current options, one
+        past its maximum age, a dead socket, an instance another candidate
+        replaced, or one closing.
         """
         return (
             self._held is conn
             and self._hold_allowed
             and conn.epoch == self._ws_epoch
+            and not self._past_max_age(conn)
             and self._is_ws_usable(conn.ws)
             and not self._closing
         )
+
+    def _past_max_age(self, conn: _HeldConnection) -> bool:
+        return time.perf_counter() - conn.opened_at >= _MAX_CONNECTION_AGE_S
+
+    def _reopen_reason(self, conn: _HeldConnection) -> str:
+        """Why the held socket is being replaced, which decides how its reopen is paced."""
+        if conn.epoch != self._ws_epoch:
+            return "options_changed"
+        if self._past_max_age(conn):
+            return "max_age"
+        return "reconnect"
 
     async def _connect_ws(
         self, timeout: float
@@ -967,16 +1031,21 @@ class TTS(tts.TTS):
         ``_release_connection`` or ``_release_after_cancel``. If another reply
         still owns the held socket (an interrupted reply draining, or a reply
         generated while the previous one is still speaking), this opens a
-        private socket that is never installed and is closed on release.
+        private socket that is never installed and is closed on release. So
+        is every socket when warm standby is off.
         """
         # A background connect already in flight is a latency win: wait for it
         # rather than opening a second socket alongside it. asyncio.wait keeps
-        # that task's failure, and its cancellation, out of this reply, and the
-        # caller's timeout bounds the wait so a stalled connect cannot hold the
-        # reply for the whole prewarm timeout.
+        # that task's failure, and its cancellation, out of this reply. The
+        # wait is bounded by how long that connect has already been running,
+        # so a stalled one costs this reply at most _PENDING_CONNECT_WAIT_S
+        # before it connects on its own.
         pending_connect = self._connect_task
         if pending_connect is not None and not pending_connect.done():
-            await asyncio.wait({pending_connect}, timeout=timeout)
+            started_at = self._last_background_connect_at or time.perf_counter()
+            budget = min(timeout, started_at + _PENDING_CONNECT_WAIT_S - time.perf_counter())
+            if budget > 0:
+                await asyncio.wait({pending_connect}, timeout=budget)
 
         # An interrupt's drain owns the held socket until it finishes, so a
         # reply that starts inside that window opens a private socket and pays
@@ -989,10 +1058,9 @@ class TTS(tts.TTS):
         if (
             settle is not None
             and not settle.task.done()
-            # Only the drain of the held socket can hand one back: a drain
-            # holding any other socket closes it and installs nothing, so
-            # waiting for that one would delay a reply for nothing, and the
-            # socket this reply wants may be sitting idle already.
+            # Only a drain of the socket that is still the held one can hand
+            # it back. One that aclose has since detached closes it instead,
+            # so waiting for it would delay a reply for nothing.
             and self._held is settle.conn
             and settle.conn.in_use
             and settle.ends_at - time.perf_counter() <= _SETTLE_HANDBACK_WAIT_S
@@ -1004,7 +1072,11 @@ class TTS(tts.TTS):
             held = self._held
             if held is not None and not held.in_use:
                 await self._stop_idle_reader(held)
-                if held.epoch == self._ws_epoch and self._is_ws_usable(held.ws):
+                if (
+                    held.epoch == self._ws_epoch
+                    and not self._past_max_age(held)
+                    and self._is_ws_usable(held.ws)
+                ):
                     held.in_use = True
                     held.reused = True
                     return held
@@ -1020,8 +1092,11 @@ class TTS(tts.TTS):
                 ws=ws, epoch=epoch, opened_by="segment", timing=timing, in_use=True
             )
             async with self._ws_lock:
+                # Without warm standby nothing is held between replies, so no
+                # session stays open while the call is silent.
                 if (
                     self._held is None
+                    and self.warm_standby_enabled
                     and self._hold_allowed
                     and epoch == self._ws_epoch
                     and not self._closing
@@ -1039,9 +1114,9 @@ class TTS(tts.TTS):
         """Hand a connection back after a reply.
 
         ``keep=True`` holds it for the next reply, but only when ``_may_keep``
-        still allows it; a private socket, a stale init, a dead socket, a
-        replaced candidate or a closing instance is closed here instead.
-        ``keep=False`` always closes.
+        still allows it; a private socket, a stale init, a socket past its
+        maximum age, a dead socket, a replaced candidate or a closing instance
+        is closed here instead. ``keep=False`` always closes.
         """
         async with self._ws_lock:
             conn.in_use = False
@@ -1053,10 +1128,7 @@ class TTS(tts.TTS):
                 self._held = None
         await _close_ws(conn.ws, context="release_keep" if keep else "release_error")
         if keep and current and not self._closing:
-            self._on_connection_lost(
-                conn,
-                reason="options_changed" if conn.epoch != self._ws_epoch else "reconnect",
-            )
+            self._on_connection_lost(conn, reason=self._reopen_reason(conn))
 
     def _release_after_cancel(
         self, conn: _HeldConnection, *, in_flight: bool, tasks_done: bool
@@ -1067,33 +1139,47 @@ class TTS(tts.TTS):
         gateway has to be told to cancel. ``tasks_done``: the segment's send and
         receive tasks have finished, so nobody else is inside ``ws.receive()``.
 
-        Both true: send ``cancel`` and drain, keeping the socket only if the
-        gateway ends the reply cleanly. Neither in flight nor still reading:
-        nothing of this reply reached the wire and nobody is mid-read, so the
-        socket is clean and is kept as is. Anything else leaves the socket's
-        state unknown, so it is closed.
+        Both true, on a socket that could be kept: send ``clear`` and drain,
+        keeping the socket only if the gateway ends the reply cleanly. Both
+        true on any other socket (a private one, or the held one of an instance
+        that is closing, replaced or out of date): it is closed whatever the
+        gateway answers, so it is closed at once, which stops the reply as
+        surely as ``clear`` would. Neither in flight nor still reading: nothing
+        of this reply reached the wire and nobody is mid-read, so the socket is
+        clean and is kept as is. Anything else leaves the socket's state
+        unknown, so it is closed.
         """
-        if in_flight and tasks_done:
+        if not (in_flight and tasks_done):
+            self._spawn(self._release_connection(conn, keep=not in_flight and tasks_done))
+        elif self._may_keep(conn):
+            # Retained so that a reply starting meanwhile can wait for the
+            # handback. Only the held socket's drain is recorded: no other
+            # socket can be handed back.
             self._settle = _PendingSettle(
                 task=self._spawn(self._cancel_and_settle(conn)),
                 conn=conn,
                 ends_at=time.perf_counter() + _CANCEL_SETTLE_S + _CANCEL_QUIET_S,
             )
         else:
-            self._spawn(self._release_connection(conn, keep=not in_flight and tasks_done))
+            self._spawn(self._cancel_and_settle(conn, drain=False))
 
-    async def _cancel_and_settle(self, conn: _HeldConnection) -> None:
-        """Send clear, then decide whether the socket is clean enough to keep."""
+    async def _cancel_and_settle(self, conn: _HeldConnection, *, drain: bool = True) -> None:
+        """Send clear, then decide whether the socket is clean enough to keep.
+
+        With ``drain=False`` the socket is closed without either, but goes
+        through the same bookkeeping, so the held socket is still reopened.
+        """
         started_at = time.perf_counter()
         audio_after_cancel = 0
         cancel_sent = False
-        outcome: _CancelOutcome = "send_failed"
+        outcome: _CancelOutcome = "send_failed" if drain else "not_reusable"
         try:
-            await conn.ws.send_str(SynthesizeStream._CLEAR_MSG)
-            cancel_sent = True
-            outcome, audio_after_cancel = await self._settle_cancel(
-                conn.ws, deadline=started_at + _CANCEL_SETTLE_S
-            )
+            if drain:
+                await conn.ws.send_str(SynthesizeStream._CLEAR_MSG)
+                cancel_sent = True
+                outcome, audio_after_cancel = await self._settle_cancel(
+                    conn, deadline=started_at + _CANCEL_SETTLE_S
+                )
         except BaseException:
             # A socket that was already dead when the cancel was written is a
             # different problem from one that failed while draining, so keep
@@ -1110,6 +1196,10 @@ class TTS(tts.TTS):
                     self._start_idle_reader(conn)
                 elif was_held:
                     self._held = None
+            # Only once the socket is back: a reply arriving before then still
+            # finds the drain and can wait for it.
+            if self._settle is not None and self._settle.conn is conn:
+                self._settle = None
             if not keep:
                 await _close_ws(conn.ws, context=f"cancel_{outcome}")
                 # This closed the call's held socket, so reopen it (throttled
@@ -1117,12 +1207,15 @@ class TTS(tts.TTS):
                 # instead would drop warm standby for the rest of a call whose
                 # very first reply was interrupted.
                 if was_held and not self._closing:
-                    self._on_connection_lost(conn, reason="reconnect")
-            # Only a clean acknowledgement (or a socket the gateway had
-            # already closed) is routine; the rest mean the interrupt did not
-            # go the way the code expects and the socket was thrown away.
+                    self._on_connection_lost(conn, reason=self._reopen_reason(conn))
+            # Only a clean acknowledgement, a socket the gateway had already
+            # closed, or one that was never going to be kept is routine; the
+            # rest mean the interrupt did not go the way the code expects and
+            # the socket was thrown away.
             logger.log(
-                logging.INFO if outcome in ("acknowledged", "closed") else logging.WARNING,
+                logging.INFO
+                if outcome in ("acknowledged", "closed", "not_reusable")
+                else logging.WARNING,
                 "[TTS] cancel settled",
                 extra={
                     "tts_model": self._opts.model,
@@ -1141,34 +1234,47 @@ class TTS(tts.TTS):
             )
 
     async def _settle_cancel(
-        self, ws: aiohttp.ClientWebSocketResponse, *, deadline: float
+        self, conn: _HeldConnection, *, deadline: float
     ) -> tuple[_CancelOutcome, int]:
         """Read until the cancelled reply ends and the socket goes quiet, or give up.
 
         Returns ``(outcome, audio_chunks_seen)``. Only "acknowledged" (a terminal
-        frame before the deadline, with nothing following it) means the socket
-        may be reused; every other outcome means it has to be closed. Extending
-        the deadline by ``_CANCEL_QUIET_S`` is what gives the quiet window its
-        floor: a terminal frame arriving right at the deadline still gets that
-        long behind it, and an early one gets the rest of the deadline as well.
+        frame before the deadline, then ``_CANCEL_QUIET_S`` with nothing behind
+        it) means the socket may be reused; every other outcome means it has to
+        be closed. The quiet window runs from the terminal frame, so a gateway
+        that acknowledges in 350 ms frees the socket about 100 ms later rather
+        than at the deadline.
         """
+        ws = conn.ws
         audio = 0
-        terminal_seen = False
+        quiet_until: float | None = None
+
+        def note_terminal() -> None:
+            nonlocal quiet_until
+            if quiet_until is not None:
+                return
+            quiet_until = time.perf_counter() + _CANCEL_QUIET_S
+            settle = self._settle
+            if settle is not None and settle.conn is conn:
+                # A reply waiting to reuse this socket can now tell that it
+                # is about to be handed back.
+                settle.ends_at = quiet_until
+
         while True:
-            limit = deadline + _CANCEL_QUIET_S if terminal_seen else deadline
+            limit = deadline if quiet_until is None else quiet_until
             remaining = limit - time.perf_counter()
             if remaining <= 0:
-                return ("acknowledged" if terminal_seen else "timeout"), audio
+                return ("timeout" if quiet_until is None else "acknowledged"), audio
             try:
-                msg = await ws.receive(timeout=max(remaining, 0.001))
+                msg = await _receive_by(ws, limit)
             except (TimeoutError, asyncio.TimeoutError):
-                return ("acknowledged" if terminal_seen else "timeout"), audio
+                return ("timeout" if quiet_until is None else "acknowledged"), audio
             if msg.type in _WS_END_TYPES:
                 _log_ws_end(ws, msg, context="cancel_settle", tts_model=self._opts.model)
                 return "closed", audio
             if msg.type == aiohttp.WSMsgType.BINARY:
                 audio += 1
-                if terminal_seen:
+                if quiet_until is not None:
                     return "audio_after_terminal", audio
                 continue
             if msg.type != aiohttp.WSMsgType.TEXT:
@@ -1184,11 +1290,11 @@ class TTS(tts.TTS):
                 # The acknowledgement of the `clear` sent above. `cancel` aborts
                 # the same turn but is answered with nothing at all, which is
                 # why the interrupt does not use it.
-                terminal_seen = True
+                note_terminal()
                 continue
             event = _parse_ws_event(resp)
             if event.kind == "audio_end":
-                terminal_seen = True
+                note_terminal()
                 continue
             if event.kind == "error":
                 # The gateway's own account of why the cancelled turn ended
@@ -1204,7 +1310,7 @@ class TTS(tts.TTS):
                 return "error", audio
             if event.kind == "audio_chunk" or isinstance(resp.get("audio"), str):
                 audio += 1
-                if terminal_seen:
+                if quiet_until is not None:
                     return "audio_after_terminal", audio
 
     def _start_idle_reader(self, conn: _HeldConnection) -> None:
@@ -1225,8 +1331,15 @@ class TTS(tts.TTS):
         intended exit. Without this reader a gateway close would go unnoticed
         until the next reply wrote to a dead socket, and any late frame from a
         finished reply would be read by the next one.
+
+        It also retires the socket: once it has been idle for ``_MAX_IDLE_S``,
+        with no reopen, and once it passes ``_MAX_CONNECTION_AGE_S``, with a
+        reopen in the background.
         """
         discarded = 0
+        idle_since = time.perf_counter()
+        # Why this reader retired the socket itself, if it did.
+        retire: Literal["idle", "max_age"] | None = None
 
         def note_stray(frame_type: str) -> None:
             # Between replies the gateway should send nothing. A stray frame
@@ -1244,17 +1357,29 @@ class TTS(tts.TTS):
                 )
                 self._emit_plugin_event("tts.idle_stray_frame", "warning", frame_type=frame_type)
 
+        next_keepalive_at = idle_since + _IDLE_KEEPALIVE_S
         try:
             while True:
-                try:
-                    msg = await conn.ws.receive(timeout=_IDLE_KEEPALIVE_S)
-                except (TimeoutError, asyncio.TimeoutError):
-                    # Nothing has arrived for a while, and nothing is going to:
-                    # this reader owns the socket only between replies. The
+                # Checked on every pass, so neither control traffic nor a run
+                # of stray frames can put them off.
+                now = time.perf_counter()
+                if now - idle_since >= _MAX_IDLE_S:
+                    retire = "idle"
+                    break
+                if self._past_max_age(conn):
+                    retire = "max_age"
+                    break
+                if now >= next_keepalive_at:
+                    # This reader owns the socket only between replies. The
                     # gateway's idle timer ignores transport pings, so without
                     # this frame a silent call loses its held socket on
                     # schedule and every later reply pays a reconnect.
                     await conn.ws.send_str(SynthesizeStream._KEEPALIVE_MSG)
+                    next_keepalive_at = now + _IDLE_KEEPALIVE_S
+                    continue
+                try:
+                    msg = await _receive_by(conn.ws, next_keepalive_at)
+                except (TimeoutError, asyncio.TimeoutError):
                     continue
                 if msg.type in _WS_END_TYPES:
                     _log_ws_end(conn.ws, msg, context="idle", tts_model=self._opts.model)
@@ -1316,26 +1441,48 @@ class TTS(tts.TTS):
             owned = self._held is conn and not conn.in_use
             if owned:
                 self._held = None
-        if owned:
-            await _close_ws(conn.ws, context="idle_closed")
-            if not self._closing:
-                self._on_connection_lost(conn, reason="reconnect")
+        if not owned:
+            return
+        if retire is not None:
+            # Detached above, so no reply can pick it up while this says goodbye.
+            logger.info(
+                "[TTS] retiring idle connection",
+                extra={"tts_model": self._opts.model, "reason": retire},
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    conn.ws.send_str(SynthesizeStream._CLOSE_MSG), WS_CLOSE_TIMEOUT_S
+                )
+        await _close_ws(conn.ws, context=f"idle_{retire}" if retire else "idle_closed")
+        if not self._closing and retire != "idle":
+            self._on_connection_lost(conn, reason=retire or "reconnect")
 
     def _on_connection_lost(self, conn: _HeldConnection, *, reason: str) -> None:
         # A socket the gateway closed after a reply wrote to it (which some
         # models do every time, ending the turn by closing) is reopened at
         # once, so the next reply is still warm: it demonstrably works, so the
         # backoff below starts over. One that never carried text is backed off
-        # and eventually abandoned.
+        # and eventually abandoned, unless the plugin retired it itself: a
+        # settings change is not a gateway failure.
+        planned = reason in _PLANNED_REOPENS
         if conn.text_sent:
             self._failed_reopens = 0
-        else:
+        elif not planned:
             self._failed_reopens += 1
-        self._schedule_connect(reason=reason, throttle=not conn.text_sent)
+        self._schedule_connect(reason=reason, throttle=not (conn.text_sent or planned))
 
     def _schedule_connect(self, *, reason: str, throttle: bool = False) -> None:
         """Open the held connection in the background so the next reply finds it warm."""
         if not self.warm_standby_enabled or self._closing or not self._hold_allowed:
+            return
+        if self._session is not None and self._session.closed:
+            # Nothing calls aclose on a TTS, so at the end of a job the HTTP
+            # session closes under an instance that is still open, and the
+            # held socket dies with it. A reconnect could only fail.
+            logger.debug(
+                "[TTS] background connect not scheduled: http session closed",
+                extra={"tts_model": self._opts.model, "reason": reason},
+            )
             return
         if not _has_running_loop():
             # prewarm() is synchronous, so it can be called with no running
@@ -1602,7 +1749,7 @@ class TTS(tts.TTS):
         # Open the one connection this instance reuses for the whole call, so
         # the first reply does not pay connect and init. Every later reply
         # reuses it; there is never a second socket in steady state. With
-        # warm_standby_enabled=False the first reply opens it instead.
+        # warm_standby_enabled=False nothing is held: each reply opens its own.
         self._schedule_connect(reason="prewarm")
 
     async def aclose(self) -> None:
@@ -1677,7 +1824,8 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             # Chunked synthesis always uses a dedicated connection: it is a
             # one-shot call, not part of a call's reply stream.
-            ws, _timing = await self._tts._connect_ws(timeout=self._conn_options.timeout)
+            ws, timing = await self._tts._connect_ws(timeout=self._conn_options.timeout)
+            self._acquire_time = timing.connect_total_ms / 1000
             await ws.send_str(json.dumps({"type": "text", "text": self._input_text}))
             await ws.send_str(SynthesizeStream._FLUSH_MSG)
 
@@ -1933,6 +2081,12 @@ class SynthesizeStream(tts.SynthesizeStream):
         # Text is on the wire and audio_end has not arrived: an interrupt now
         # has to tell the gateway to cancel.
         in_flight = False
+        # Whether this attempt has started writing the reply's flush, and
+        # whether the gateway ended the reply before that. An end of reply
+        # with text still to send leaves that text to start a turn nobody is
+        # reading, so the socket cannot be kept for the next reply.
+        flush_sent = False
+        ended_early = False
 
         def capture_ws_timing(conn: _HeldConnection) -> None:
             # Only meaningful when this segment opened the socket: a reused one
@@ -2006,6 +2160,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def write_pending(conn: _HeldConnection) -> None:
             """Write queued frames, dropping each only once it is on the wire."""
+            nonlocal flush_sent
             while pending_frames:
                 frame, flush, partial = pending_frames[0]
                 if partial and not conn.accepts_partial_text:
@@ -2042,13 +2197,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # to the end and then hangs until the connection times out.
                     # Never sent on its own: without preceding text there is no
                     # turn to terminate, and saying so is a protocol violation.
+                    # Marked before the write, as in guarded_send: the end of
+                    # the reply can be read before send_str returns.
+                    flush_sent = True
                     await guarded_send(conn, self._FLUSH_MSG)
                 pending_frames.pop(0)
                 sent_frames.append(_TextFrame(frame, flush, partial))
                 mark_first_text_sent()
 
         async def send_task(conn: _HeldConnection) -> None:
-            nonlocal frames_complete
+            nonlocal frames_complete, flush_sent
 
             # A reconnect starts a fresh turn on a new socket, so everything an
             # earlier attempt wrote has to go out again, ahead of whatever it
@@ -2067,35 +2225,33 @@ class SynthesizeStream(tts.SynthesizeStream):
                     data = await stream.__anext__()
                 except StopAsyncIteration:
                     break
-                token, partial = data.token, is_partial_head(data)
                 token_count += 1
                 if token_count == 1:
-                    logger.debug(f"[TTS] send_task: first token '{token}'")
+                    logger.debug(f"[TTS] send_task: first token '{data.token}'")
                 if not segment.input_ended:
                     # More text is still coming, so this token cannot close the
                     # reply: send its frame straight away without the flush.
-                    ready_frame = batcher.push(token)
+                    ready_frame = batcher.push(data.token, separator=separator_after(data))
                     if ready_frame is not None:
-                        pending_frames.append(_TextFrame(ready_frame, False, partial))
+                        pending_frames.append(_TextFrame(ready_frame, False, is_partial_head(data)))
                         await write_pending(conn)
                     continue
 
                 # The reply's text is complete: every remaining token is already
                 # queued behind a closed channel, so draining never suspends.
                 # Batch the whole tail first so the flush lands on its last frame.
-                tail = [(token, partial)]
+                tail = [data]
                 while True:
                     try:
-                        data = await stream.__anext__()
+                        tail.append(await stream.__anext__())
                     except StopAsyncIteration:
                         break
-                    tail.append((data.token, is_partial_head(data)))
                 token_count += len(tail) - 1
                 frames: list[_TextFrame] = []
-                for text, tail_partial in tail:
-                    framed = batcher.push(text)
+                for item in tail:
+                    framed = batcher.push(item.token, separator=separator_after(item))
                     if framed is not None:
-                        frames.append(_TextFrame(framed, False, tail_partial))
+                        frames.append(_TextFrame(framed, False, is_partial_head(item)))
                 last = batcher.finish()
                 if last is not None:
                     frames.append(_TextFrame(last, False))
@@ -2123,9 +2279,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await write_pending(conn)
                 elif sent_frames:
                     # Every frame is already on the wire but none of them
-                    # carried the terminator, so it goes now. Reachable only
-                    # from a custom tokenizer that emitted its last token
-                    # before input_ended was observed.
+                    # carried the terminator, so it goes now. A tokenizer that
+                    # emitted its last token before input_ended was observed
+                    # lands here, and so does a reply that ends straight after
+                    # an opening this plugin's tokenizer released (the rest was
+                    # only whitespace): the flush also completes that opening.
+                    flush_sent = True
                     await guarded_send(conn, self._FLUSH_MSG)
                     sent_frames[-1] = sent_frames[-1]._replace(flush=True)
                     frames_complete = True
@@ -2151,6 +2310,21 @@ class SynthesizeStream(tts.SynthesizeStream):
                 audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
                 in_flight = False
                 output_emitter.end_segment()
+
+            def note_reply_end() -> None:
+                # The gateway ends a turn on the flush, and when the provider
+                # behind it closes. The second can come before this reply
+                # finished writing; the reply then ends with the audio it has,
+                # and the socket is closed rather than kept.
+                nonlocal ended_early, outcome
+                if flush_sent:
+                    return
+                ended_early = True
+                outcome = "ended_before_flush"
+                logger.warning(
+                    "[TTS] gateway ended the reply before its flush; closing the connection",
+                    extra={"tts_model": self._opts.model, "segment_id": segment_id},
+                )
 
             ws = conn.ws
             await input_sent_event.wait()
@@ -2238,6 +2412,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                                 push_audio(decoded)
 
                         if is_final:
+                            note_reply_end()
                             mark_segment_end()
                             break
 
@@ -2264,6 +2439,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                         if event.audio:
                             push_audio(event.audio)
                         logger.debug(f"[TTS] recv_task: audio_end after {audio_chunks_seen} chunks")
+                        note_reply_end()
                         mark_segment_end()
                         break
 
@@ -2283,7 +2459,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # Each attempt re-runs both tasks, so the handshake between
                 # them starts clear; the replay re-queues the frames first.
                 input_sent_event.clear()
+                flush_sent = False
+                acquire_started_at = time.perf_counter()
                 conn = await self._tts._acquire_connection(timeout=self._conn_options.timeout)
+                # Reported in this reply's TTSMetrics.
+                self._acquire_time = time.perf_counter() - acquire_started_at
+                self._connection_reused = conn.reused
                 ws_source = "reused" if conn.reused else conn.opened_by
                 ws_opened_by = conn.opened_by
                 ws_first_use = conn.served_segments == 0
@@ -2319,7 +2500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
             conn.served_segments += 1
             # The socket stays open for the next reply; only the segment ends here.
-            await self._tts._release_connection(conn, keep=True)
+            await self._tts._release_connection(conn, keep=not ended_early)
             conn = None
         except asyncio.CancelledError:
             outcome = "cancelled"
