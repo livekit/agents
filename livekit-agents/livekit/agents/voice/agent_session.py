@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import copy
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from contextvars import Token
 from dataclasses import dataclass
@@ -702,6 +702,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._userdata: Userdata_T | None = userdata if is_given(userdata) else None
         self._closing_task: asyncio.Task[None] | None = None
+        self._before_first_turn_atask: asyncio.Task[None] | None = None
         self._closing: bool = False
         self._job_context_cb_registered: bool = False
 
@@ -869,6 +870,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        before_first_turn: Awaitable[None] | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -884,6 +886,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        before_first_turn: Awaitable[None] | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -898,6 +901,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+        before_first_turn: Awaitable[None] | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -919,6 +923,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
+            before_first_turn: Work the first turn depends on, such as loading caller
+                context. It runs concurrently with room connection, model prewarm and
+                track publishing, and `start` does not wait for it. `on_enter` and replies
+                to user turns wait until it finishes. If it raises, the error is logged
+                and the first turn proceeds without it.
         """
         async with self._lock:
             if self._started:
@@ -1123,6 +1132,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state = RunResult(output_type=None)
                 self._global_run_state = run_state
 
+            self._before_first_turn_atask = (
+                asyncio.create_task(
+                    self._before_first_turn_task(before_first_turn), name="_before_first_turn"
+                )
+                if before_first_turn is not None
+                else None
+            )
+
             # it is ok to await it directly, there is no previous task to drain.
             # _update_activity_task also watches on_enter on the run state: without it
             # the run completes as soon as the first speech does, dropping whatever
@@ -1309,6 +1326,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
+                if self._before_first_turn_atask is not None:
+                    await utils.aio.cancel_and_wait(self._before_first_turn_atask)
+                    self._before_first_turn_atask = None
+
                 await self._teardown_activity(reason=reason, drain=drain)
 
                 self._started = False
@@ -1941,6 +1962,20 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if wait_on_enter:
             assert self._activity._on_enter_task is not None
             await asyncio.shield(self._activity._on_enter_task)
+
+    async def _before_first_turn_task(self, before_first_turn: Awaitable[None]) -> None:
+        with tracer.start_as_current_span(
+            "before_first_turn", context=self._root_span_context
+        ) as span:
+            try:
+                await before_first_turn
+            except Exception as e:
+                trace_utils.record_exception(span, e)
+                logger.exception("error in before_first_turn, starting the first turn without it")
+
+    async def _wait_for_before_first_turn(self) -> None:
+        if (task := self._before_first_turn_atask) is not None:
+            await asyncio.shield(task)
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(

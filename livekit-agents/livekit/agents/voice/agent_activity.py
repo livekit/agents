@@ -1056,8 +1056,12 @@ class AgentActivity(RecognitionHooks):
                         if self._session._unanswered_user_metrics is entered_on:
                             self._session._unanswered_user_metrics = None
 
+                async def _on_enter_after_before_first_turn() -> None:
+                    await self._session._wait_for_before_first_turn()
+                    await _traceable_on_enter()
+
                 self._on_enter_task = task = self._create_speech_task(
-                    _traceable_on_enter(), name="AgentTask_on_enter"
+                    _on_enter_after_before_first_turn(), name="AgentTask_on_enter"
                 )
                 _set_activity_task_info(task, inline_task=True)
             finally:
@@ -2794,6 +2798,9 @@ class AgentActivity(RecognitionHooks):
                 self._agent._chat_ctx.items.append(user_message)
                 self._session._conversation_item_added(user_message)
             return
+
+        # a reply must see the context before_first_turn loads
+        await self._session._wait_for_before_first_turn()
 
         # create a temporary mutable chat context to pass to on_user_turn_completed
         # the user can edit it for the current generation, but changes will not be kept inside the

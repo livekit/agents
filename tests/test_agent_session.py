@@ -2885,3 +2885,98 @@ async def test_pipeline_multi_segment_interrupted() -> None:
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0].interrupted is True
     assert "How are you?" not in (assistant_msgs[0].text_content or "")
+
+
+class _GreetingAgent(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You are a helpful assistant.")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply()
+
+
+async def test_before_first_turn_gates_first_reply_on_loaded_context() -> None:
+    actions = FakeActions()
+    actions.add_llm("Hi Ada!", input="caller: Ada")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 3.5, "thanks")
+    actions.add_llm("Bye!")
+    actions.add_tts(0.5)
+
+    session = create_session(actions)
+    agent = _GreetingAgent()
+    started_at: list[float] = []
+    session.on(
+        "agent_state_changed",
+        lambda ev: started_at.append(time.time()) if ev.new_state == "listening" else None,
+    )
+
+    async def load_caller() -> None:
+        await asyncio.sleep(1.0)
+        chat_ctx = agent.chat_ctx.copy()
+        chat_ctx.add_message(role="system", content="caller: Ada")
+        await agent.update_chat_ctx(chat_ctx)
+
+    replies: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", replies.append)
+    t0 = time.time()
+    await asyncio.wait_for(
+        run_session(session, agent, before_first_turn=load_caller()), timeout=SESSION_TIMEOUT
+    )
+
+    # start() returned before the hook finished
+    check_timestamp(started_at[0] - t0, 0.0, max_abs_diff=0.5)
+    assistant = [e.item for e in replies if e.item.type == "message" and e.item.role == "assistant"]
+    assert [m.text_content for m in assistant] == ["Hi Ada!", "Bye!"]
+
+
+async def test_before_first_turn_failure_does_not_block_first_reply() -> None:
+    actions = FakeActions()
+    actions.add_llm("Hello!", input="instructions:say hello to the user")
+    actions.add_tts(1.0)
+    actions.add_user_speech(3.0, 3.5, "thanks")
+    actions.add_llm("Bye!")
+    actions.add_tts(0.5)
+
+    session = create_session(actions)
+
+    async def load_caller() -> None:
+        raise RuntimeError("crm unavailable")
+
+    replies: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", replies.append)
+    await asyncio.wait_for(
+        run_session(
+            session, MyAgent(generate_reply_on_enter=True), before_first_turn=load_caller()
+        ),
+        timeout=SESSION_TIMEOUT,
+    )
+
+    assistant = [e.item for e in replies if e.item.type == "message" and e.item.role == "assistant"]
+    assert [m.text_content for m in assistant] == ["Hello!", "Bye!"]
+
+
+async def test_before_first_turn_gates_reply_to_early_user_turn() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 1.0, "hello?")
+    actions.add_llm("Hi, how can I help?")
+    actions.add_tts(1.0)
+
+    session = create_session(actions)
+    loaded = False
+
+    async def load_caller() -> None:
+        nonlocal loaded
+        await asyncio.sleep(3.0)
+        loaded = True
+
+    loaded_at_reply: list[bool] = []
+    session.on(
+        "conversation_item_added",
+        lambda ev: loaded_at_reply.append(loaded) if ev.item.role == "assistant" else None,
+    )
+    await asyncio.wait_for(
+        run_session(session, MyAgent(), before_first_turn=load_caller()), timeout=SESSION_TIMEOUT
+    )
+
+    assert loaded_at_reply == [True]

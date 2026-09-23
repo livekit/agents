@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections.abc import Awaitable
 from typing import Any
 
 from livekit.agents import (
@@ -106,6 +107,7 @@ async def run_session(
     *,
     drain_delay: float = 5,
     record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+    before_first_turn: Awaitable[None] | None = None,
 ) -> float:
     stt = session.stt
     audio_input = session.input.audio
@@ -115,7 +117,7 @@ async def run_session(
     if isinstance(session.output.audio, _SyncedAudioOutput):
         transcription_sync = session.output.audio._synchronizer
 
-    await session.start(agent, record=record)
+    await session.start(agent, record=record, before_first_turn=before_first_turn)
 
     # start the fake vad and stt
     t_origin = time.time()
