@@ -93,9 +93,13 @@ def test_inline_url_carries_product_and_language_and_keeps_custom_query() -> Non
 
 
 def test_model_freezes_instructions_and_tools_and_never_reconnects() -> None:
+    inline = RealtimeModel(api_key=KEY, product="bolt")
+    assert inline.capabilities.mutable_instructions is False
+    assert inline.capabilities.mutable_tools is False
     model = RealtimeModel(api_key=KEY, agent_id=1)
-    assert model.capabilities.mutable_instructions is False
-    assert model.capabilities.mutable_tools is False
+    # a saved agent's instructions and tools are never sent: handoffs keep the call
+    assert model.capabilities.mutable_instructions is True
+    assert model.capabilities.mutable_tools is True
     assert model.capabilities.turn_detection is True
     assert model.capabilities.can_disable_turn_detection is False
     assert model._opts.conn_options.max_retry == 0

@@ -31,3 +31,7 @@ session = AgentSession(llm=thunderphone.RealtimeModel(agent_id=12))
 session = AgentSession(llm=thunderphone.RealtimeModel(product="bolt", voice="olivia"))
 await session.start(agent=Agent(instructions="You are Acme Dental's receptionist."), room=ctx.room)
 ```
+
+An inline call fixes its instructions and tools when it starts. A handoff to an `Agent` with
+different instructions or tools therefore ends that ThunderPhone call and starts a new one with
+the new configuration. With a saved agent, handoffs keep the call.
