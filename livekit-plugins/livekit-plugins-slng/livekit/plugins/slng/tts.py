@@ -179,6 +179,20 @@ def _describe_ws_end(
     }
 
 
+def _transport_failed(ws: aiohttp.ClientWebSocketResponse, msg: aiohttp.WSMessage) -> bool:
+    """Whether a read loop ended because the connection failed, not because it closed.
+
+    ERROR carries the failure itself. aiohttp reports a lost connection (a
+    reset, a heartbeat pong that never came) as CLOSED with 1006, because no
+    close frame arrived. A peer that ends a turn by closing sends one, which
+    arrives as CLOSE, and a clean end of stream is CLOSED with 1000.
+    """
+    return msg.type is aiohttp.WSMsgType.ERROR or (
+        msg.type is aiohttp.WSMsgType.CLOSED
+        and getattr(ws, "close_code", None) == aiohttp.WSCloseCode.ABNORMAL_CLOSURE
+    )
+
+
 def _log_ws_end(
     ws: aiohttp.ClientWebSocketResponse,
     msg: aiohttp.WSMessage,
@@ -1033,7 +1047,12 @@ class TTS(tts.TTS):
         generated while the previous one is still speaking), this opens a
         private socket that is never installed and is closed on release. So
         is every socket when warm standby is off.
+
+        ``timeout`` bounds the whole acquisition, waits included: every step
+        below gets what is left of it, so a reply fails on time rather than
+        after a wait and a full connect.
         """
+        deadline = time.perf_counter() + timeout
         # A background connect already in flight is a latency win: wait for it
         # rather than opening a second socket alongside it. asyncio.wait keeps
         # that task's failure, and its cancellation, out of this reply. The
@@ -1043,7 +1062,7 @@ class TTS(tts.TTS):
         pending_connect = self._connect_task
         if pending_connect is not None and not pending_connect.done():
             started_at = self._last_background_connect_at or time.perf_counter()
-            budget = min(timeout, started_at + _PENDING_CONNECT_WAIT_S - time.perf_counter())
+            budget = min(deadline, started_at + _PENDING_CONNECT_WAIT_S) - time.perf_counter()
             if budget > 0:
                 await asyncio.wait({pending_connect}, timeout=budget)
 
@@ -1064,8 +1083,12 @@ class TTS(tts.TTS):
             and self._held is settle.conn
             and settle.conn.in_use
             and settle.ends_at - time.perf_counter() <= _SETTLE_HANDBACK_WAIT_S
+            and deadline - time.perf_counter() > 0
         ):
-            await asyncio.wait({settle.task}, timeout=_SETTLE_HANDBACK_WAIT_S)
+            await asyncio.wait(
+                {settle.task},
+                timeout=min(_SETTLE_HANDBACK_WAIT_S, deadline - time.perf_counter()),
+            )
 
         stale: _HeldConnection | None = None
         async with self._ws_lock:
@@ -1086,7 +1109,10 @@ class TTS(tts.TTS):
             await _close_ws(stale.ws, context="acquire_stale")
 
         epoch = self._ws_epoch
-        ws, timing = await self._connect_ws(timeout=timeout)
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise asyncio.TimeoutError()
+        ws, timing = await self._connect_ws(timeout=remaining)
         try:
             conn = _HeldConnection(
                 ws=ws, epoch=epoch, opened_by="segment", timing=timing, in_use=True
@@ -1333,13 +1359,14 @@ class TTS(tts.TTS):
         finished reply would be read by the next one.
 
         It also retires the socket: once it has been idle for ``_MAX_IDLE_S``,
-        with no reopen, and once it passes ``_MAX_CONNECTION_AGE_S``, with a
-        reopen in the background.
+        with no reopen, and with a reopen in the background once it passes
+        ``_MAX_CONNECTION_AGE_S``, when audio arrives, or when an error arrives
+        before any reply has used it.
         """
         discarded = 0
         idle_since = time.perf_counter()
         # Why this reader retired the socket itself, if it did.
-        retire: Literal["idle", "max_age"] | None = None
+        retire: Literal["idle", "max_age", "stray_audio", "error_before_text"] | None = None
 
         def note_stray(frame_type: str) -> None:
             # Between replies the gateway should send nothing. A stray frame
@@ -1384,6 +1411,14 @@ class TTS(tts.TTS):
                 if msg.type in _WS_END_TYPES:
                     _log_ws_end(conn.ws, msg, context="idle", tts_model=self._opts.model)
                     break
+                if msg.type == aiohttp.WSMsgType.BINARY:
+                    # Audio between replies means a turn is still producing
+                    # it. Dropping this chunk does not make the socket quiet,
+                    # and the next reply to read it would play the rest as its
+                    # own, so the socket goes.
+                    note_stray(str(msg.type))
+                    retire = "stray_audio"
+                    break
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     note_stray(str(msg.type))
                     continue
@@ -1418,12 +1453,24 @@ class TTS(tts.TTS):
                         error=event.error or _extract_error_message(resp),
                         status=event.error_status,
                     )
-                    # Not a terminator: the gateway reports a bad pronunciation
-                    # reference, a not-ready backend or a failed translation on
-                    # a connection it keeps. Tearing it down here would close a
-                    # socket the gateway never closed, and a repeating error
-                    # would do it in a loop.
+                    if not conn.text_sent:
+                        # No reply has used this socket, so the session it
+                        # opened has never worked, as when the provider refuses
+                        # the voice. A reply handed it would wait out its
+                        # timeout; retiring it lets the reconnect backoff apply
+                        # and the next reply report the error itself.
+                        retire = "error_before_text"
+                        break
+                    # Otherwise not a terminator: the gateway reports a bad
+                    # pronunciation reference, a not-ready backend or a failed
+                    # translation on a connection it keeps. Tearing it down here
+                    # would close a socket the gateway never closed, and a
+                    # repeating error would do it in a loop.
                     continue
+                if event.kind == "audio_chunk" or isinstance(resp.get("audio"), str):
+                    note_stray(event.kind)
+                    retire = "stray_audio"
+                    break
                 note_stray(event.kind)
         except Exception:
             # A read failure must still clear the held socket below; letting the
@@ -1832,7 +1879,14 @@ class ChunkedStream(tts.ChunkedStream):
             while True:
                 msg = await ws.receive(timeout=self._conn_options.timeout)
                 if msg.type in _WS_END_TYPES:
-                    _log_ws_end(ws, msg, context="chunked", request_id=request_id)
+                    close_info = _log_ws_end(ws, msg, context="chunked", request_id=request_id)
+                    if audio_received and _transport_failed(ws, msg):
+                        # The audio so far is a fragment; returning it as the
+                        # whole synthesis would hide that it was cut off.
+                        raise APIConnectionError(
+                            "SLNG websocket failed partway through synthesis: "
+                            f"{close_info['ws_error'] or 'connection lost'}"
+                        )
                     # Several bridge providers (Rime, Cartesia) terminate a
                     # segment by closing the socket. Mirror the streaming path:
                     # a close after audio is a normal end-of-segment, not an
@@ -1915,7 +1969,7 @@ class ChunkedStream(tts.ChunkedStream):
                 request_id=request_id,
                 body=None,
             ) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -2007,7 +2061,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 request_id=request_id,
                 body=None,
             ) from None
-        except APIStatusError:
+        except (APIStatusError, APIConnectionError):
             raise
         except Exception as e:
             raise APIConnectionError() from e
@@ -2346,6 +2400,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if msg.type in _WS_END_TYPES:
                     close_info = _log_ws_end(ws, msg, context="segment", segment_id=segment_id)
                     ws_close_code = close_info["ws_close_code"]
+                    if audio_chunks_seen > 0 and _transport_failed(ws, msg):
+                        # The connection broke partway through the reply, so
+                        # the audio so far is a fragment. Ending the segment
+                        # here would pass it off as the whole reply.
+                        raise APIConnectionError(
+                            f"SLNG websocket failed after {audio_chunks_seen} audio chunk(s): "
+                            f"{close_info['ws_error'] or 'connection lost'}"
+                        )
                     if audio_chunks_seen > 0:
                         # No audio_end arrived, so whether the reply finished
                         # is the gateway's word against a closed socket. Some
