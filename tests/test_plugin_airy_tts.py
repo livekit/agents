@@ -127,7 +127,8 @@ def test_rejects_invalid_style(style: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "trailing_silence", [-0.01, 5.01, float("nan"), float("inf"), float("-inf"), True, "0.5"]
+    "trailing_silence",
+    [-0.01, 5.01, 10**1000, float("nan"), float("inf"), float("-inf"), True, "0.5"],
 )
 def test_rejects_invalid_trailing_silence(trailing_silence: Any) -> None:
     from livekit.plugins.airy import TTS

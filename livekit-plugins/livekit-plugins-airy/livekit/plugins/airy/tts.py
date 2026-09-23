@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import os
 import re
 from dataclasses import dataclass, replace
@@ -252,7 +251,6 @@ class TTS(tts.TTS):
         if trailing_silence is not None and (
             isinstance(trailing_silence, bool)
             or not isinstance(trailing_silence, (int, float))
-            or not math.isfinite(trailing_silence)
             or not 0 <= trailing_silence <= 5
         ):
             raise ValueError("trailing_silence must be a finite number between 0 and 5 seconds")
