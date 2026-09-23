@@ -232,6 +232,27 @@ async def test_trailing_silence_defaults_and_boundaries(trailing_silence: float 
         assert received[0]["trailing_silence"] == trailing_silence
 
 
+async def test_default_trailing_silence_is_sent() -> None:
+    from livekit.plugins.airy import TTS
+
+    received: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        received.append(await request.json())
+        return web.Response(body=_pcm(480), headers=_audio_headers())
+
+    async with _Server(handler) as server:
+        synth = TTS(
+            language="ko",
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+        )
+        await _collect(synth)
+
+    assert received[0]["trailing_silence"] == 0.3
+
+
 @pytest.mark.parametrize("text", ["가", "가" * 1280])
 async def test_accepts_unicode_text_boundaries(text: str) -> None:
     from livekit.plugins.airy import TTS

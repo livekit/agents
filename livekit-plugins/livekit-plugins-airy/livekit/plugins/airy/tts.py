@@ -222,7 +222,7 @@ class TTS(tts.TTS):
         model: str = DEFAULT_MODEL,
         voice: str = DEFAULT_VOICE,
         style: Style = DEFAULT_STYLE,
-        trailing_silence: float | None = None,
+        trailing_silence: float | None = 0.3,
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -235,7 +235,8 @@ class TTS(tts.TTS):
             voice: Airy voice identifier.
             style: Speaking style: ``normal``, ``bright``, ``calm``, or ``whisper``.
             trailing_silence: Seconds of silence appended to each utterance (0 to 5).
-                If omitted, Airy's default of 0 seconds applies.
+                Defaults to 0.3 seconds in this plugin. Set to ``None`` to use
+                Airy's API default of 0 seconds.
             api_key: Airy API key. Defaults to the ``AIRY_API_KEY`` environment variable.
             base_url: Airy API root. The plugin appends ``/v1/audio/speech/stream``.
             http_session: Optional existing aiohttp session. The plugin never closes it.
