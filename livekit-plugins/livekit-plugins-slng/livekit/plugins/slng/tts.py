@@ -22,7 +22,7 @@ import logging
 import os
 import time
 import weakref
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Any, Literal, NamedTuple
@@ -109,6 +109,13 @@ _PENDING_CONNECT_WAIT_S = 2.0
 # as the first one did.
 _MAX_CONNECTION_AGE_S = 20 * 60.0
 _MAX_IDLE_S = 5 * 60.0
+# Nothing closes a TTS that an agent handoff replaces, but its AgentSession
+# stops listening to it. An instance with no one listening for this long closes
+# its connection and stops reopening one, rather than waiting out the idle limit
+# above. A handoff that keeps the same TTS stops listening and starts again
+# with the new agent's MCP servers connecting in between, so this only has to
+# outlast that.
+_DETACH_GRACE_S = 10.0
 # A gateway that accepts a connection and immediately closes it must not cause a
 # connect storm. Applies only to sockets that closed without serving a reply:
 # each one waits twice as long as the last, and after this many in a row the
@@ -640,7 +647,8 @@ class TTS(tts.TTS):
                 it at session start (``prewarm()``), reuse it for every reply,
                 and reopen it in the background if the gateway closes it. It
                 counts as one concurrent session for the whole call, until it
-                has been idle for five minutes. Defaults to True. False opens a
+                has been idle for five minutes or no session has used the
+                instance for 10 seconds. Defaults to True. False opens a
                 connection for each reply and closes it afterwards.
             text_chunking: How LLM text is cut into gateway frames. ``"sentence"``
                 sends one frame per sentence, in any script, and requires a
@@ -834,6 +842,11 @@ class TTS(tts.TTS):
         # leave the previous candidate holding a connection for the whole call.
         self._hold_allowed = True
         self._closing = False
+        # What listens for this instance's metrics, which is how an
+        # AgentSession's activity attaches to a TTS; see _DETACH_GRACE_S.
+        self._metrics_listeners: set[Callable[..., Any]] = set()
+        self._detach_handle: asyncio.TimerHandle | None = None
+        self._detached = False
 
         if not _candidate:
             for fallback in raw_connections[1:]:
@@ -882,6 +895,73 @@ class TTS(tts.TTS):
                 self._candidate_tts.append(candidate)
                 candidate.on("metrics_collected", self._forward_metrics)
                 candidate.on("slng_event", self._forward_plugin_event)
+
+    def on(self, event: Any, callback: Callable[..., Any] | None = None) -> Callable[..., Any]:
+        registered = super().on(event, callback)
+        if event == "metrics_collected" and callback is not None and not self._is_candidate:
+            self._metrics_listeners.add(callback)
+            self._on_session_attached()
+        return registered
+
+    def off(self, event: Any, callback: Callable[..., Any]) -> None:
+        super().off(event, callback)
+        if event == "metrics_collected" and callback in self._metrics_listeners:
+            self._metrics_listeners.discard(callback)
+            if not self._metrics_listeners:
+                self._on_session_detached()
+
+    def _on_session_attached(self) -> None:
+        if self._detach_handle is not None:
+            self._detach_handle.cancel()
+            self._detach_handle = None
+        if self._detached:
+            self._detached = False
+            # The activity attaching now called prewarm() before it attached,
+            # while this instance was still refusing to hold a socket, so open
+            # the connection here instead.
+            self._candidate_tts[self._candidate_state.start()]._hold_allowed = True
+            self.prewarm()
+
+    def _on_session_detached(self) -> None:
+        if self._closing or self._detach_handle is not None or not _has_running_loop():
+            return
+        self._detach_handle = asyncio.get_running_loop().call_later(
+            _DETACH_GRACE_S, self._detach_if_unused
+        )
+
+    def _detach_if_unused(self) -> None:
+        self._detach_handle = None
+        if self._metrics_listeners or self._closing:
+            return
+        self._detached = True
+        logger.info(
+            "[TTS] no session is using this instance; closing its connection",
+            extra={"tts_model": self._opts.model},
+        )
+        # Switched off here rather than in the task below, so that nothing
+        # reopens from this point and a session attaching before that task
+        # runs is the last word. A reply still running closes its socket when
+        # it ends, and a background connect in flight declines to install
+        # its socket, unless a session attaches first, when it installs it.
+        for candidate in self._candidate_tts:
+            candidate._hold_allowed = False
+            candidate._cancel_deferred_connect()
+        self._spawn(self._release_detached())
+
+    async def _release_detached(self) -> None:
+        """Close the sockets the candidates still hold, unless the instance is in use again."""
+        for candidate in self._candidate_tts:
+            async with candidate._ws_lock:
+                # Checked under the lock, after any wait for it: a session that
+                # attached, or a stream that started, keeps what it has.
+                if not self._detached:
+                    return
+                held = candidate._held
+                if held is None or held.in_use:
+                    continue
+                candidate._held = None
+                await candidate._stop_idle_reader(held)
+            await _close_ws(held.ws, context="detached")
 
     def _forward_metrics(self, metrics: Any) -> None:
         self.emit("metrics_collected", metrics)
@@ -1329,7 +1409,8 @@ class TTS(tts.TTS):
                     "[TTS] error while settling a cancel",
                     extra={
                         "tts_model": self._opts.model,
-                        "error": event.error,
+                        # A provider's message can quote the text it refused.
+                        "lk.pii.error": event.error,
                         "error_status": event.error_status,
                     },
                 )
@@ -1443,7 +1524,8 @@ class TTS(tts.TTS):
                         "[TTS] error on idle connection",
                         extra={
                             "tts_model": self._opts.model,
-                            "error": event.error or _extract_error_message(resp),
+                            # A provider's message can quote the text it refused.
+                            "lk.pii.error": event.error or _extract_error_message(resp),
                             "error_status": event.error_status,
                         },
                     )
@@ -1624,14 +1706,22 @@ class TTS(tts.TTS):
         finally:
             if not installed:
                 await _close_ws(ws, context="background_connect_discarded")
-                if not self._closing and epoch != self._ws_epoch:
+                # Whatever refused the socket may have changed by now: new
+                # options, or a session attaching to a detached instance. A
+                # connect asked for meanwhile was turned away, because this
+                # task still counted as in flight, so ask again here.
+                if not self._closing and (
+                    epoch != self._ws_epoch or (self._hold_allowed and self._held is None)
+                ):
                     # Clear the slot first: _schedule_connect refuses to start
                     # while a connect is in flight, and that connect is this
                     # very task, so the reschedule would otherwise be dropped
                     # and the call would run cold from here on.
                     if self._connect_task is asyncio.current_task():
                         self._connect_task = None
-                    self._schedule_connect(reason="options_changed")
+                    self._schedule_connect(
+                        reason="options_changed" if epoch != self._ws_epoch else reason
+                    )
 
     async def _drop_connection(self, *, context: str) -> None:
         """Retire this candidate's socket and stop it holding or reopening one.
@@ -1661,6 +1751,9 @@ class TTS(tts.TTS):
 
     async def _drop_inactive_candidate_connections(self, active: TTS) -> None:
         """Close every other candidate's socket, so a chain holds one in steady state."""
+        # A stream is using the instance, whatever its listeners say, so a
+        # detach still being carried out stops here.
+        self._detached = False
         # A candidate the chain comes back to (the primary, after its recovery
         # cooldown) has to be allowed to hold a socket again.
         active._hold_allowed = True
@@ -1802,6 +1895,9 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         self._closing = True
         self._cancel_deferred_connect()
+        if self._detach_handle is not None:
+            self._detach_handle.cancel()
+            self._detach_handle = None
         for stream in list(self._streams):
             await stream.aclose()
 
@@ -2108,7 +2204,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         frames_complete = False
         outcome = "completed"
         # What went wrong, when something did: a segment logged with
-        # outcome="error" and no cause is a support ticket on its own.
+        # outcome="error" and no cause is a support ticket on its own. The
+        # message is kept apart from the type because it can carry a
+        # provider's message, and that can quote the text it refused.
+        error_type: str | None = None
         error_detail: str | None = None
         ws_close_code: object = None
         ws_connect_ms: float | None = None
@@ -2169,7 +2268,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "tts_endpoint": self._opts.model_endpoint,
                     "segment_id": segment_id,
                     "outcome": outcome,
-                    "error": error_detail,
+                    "error_type": error_type,
+                    "lk.pii.error": error_detail,
                     "ws_close_code": ws_close_code,
                     "ws_connect_ms": ws_connect_ms,
                     "init_send_ms": init_send_ms,
@@ -2578,7 +2678,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             raise
         except Exception as exc:
             outcome = "error"
-            error_detail = f"{type(exc).__name__}: {exc}"
+            error_type = type(exc).__name__
+            error_detail = str(exc)
             if conn is not None:
                 await self._tts._release_connection(conn, keep=False)
                 conn = None
