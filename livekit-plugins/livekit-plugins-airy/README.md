@@ -46,7 +46,8 @@ Set the Airy API key without printing it or committing it to source control:
 export AIRY_API_KEY="your-api-key"
 ```
 
-`language` is required because it controls synthesis and Airy billing. Other options use Airy's documented defaults.
+`language` is required because it controls synthesis and Airy billing. Model, voice, and style
+use Airy's documented defaults; this plugin defaults `trailing_silence` to 0.3 seconds.
 
 | Option | Default | Notes |
 | --- | --- | --- |
