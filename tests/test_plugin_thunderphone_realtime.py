@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
+import aiohttp
 import pytest
 
 from livekit.agents import utils
 from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
 from livekit.plugins.thunderphone import RealtimeModel
+from livekit.plugins.thunderphone.realtime import realtime_model as _realtime_model
 from livekit.plugins.thunderphone.realtime.realtime_model import (
     DEFAULT_BASE_URL,
     SERVER_MODEL,
@@ -38,6 +41,13 @@ def test_model_reads_key_from_env() -> None:
         model = RealtimeModel(agent_id=1)
     assert model.agent_id == "1"
     assert model.provider == "ThunderPhone"
+
+
+def test_empty_agent_id_is_rejected() -> None:
+    # the URL would drop it and start an inline call the plugin treats as a saved agent
+    for empty in ("", "  "):
+        with pytest.raises(ValueError, match="agent_id"):
+            RealtimeModel(api_key=KEY, agent_id=empty)
 
 
 def test_agent_id_excludes_inline_options() -> None:
@@ -282,6 +292,105 @@ async def test_call_events_are_emitted_and_call_ended_closes_the_session() -> No
     session._tp_on_server_event(ended)  # a duplicate must not re-emit
     assert seen[1:] == [("event", ended), ("ended", ended), ("event", ended)]
     assert session._msg_ch.closed
+
+
+class _HangUpSocket:
+    """A socket that delivers call.ended and the server's close back to back."""
+
+    def __init__(self) -> None:
+        self._inbox = [
+            aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, '{"type": "call.ended"}', None),
+            aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, None),
+        ]
+        self.deliver = asyncio.Event()
+        self.deliver.set()
+        self.send_released = asyncio.Event()
+        self.send_released.set()
+        self.sending = asyncio.Event()
+
+    async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
+        await self.deliver.wait()
+        # no suspension between messages: the receive loop reads both before
+        # the send loop runs
+        if self._inbox:
+            return self._inbox.pop(0)
+        return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSED, None, None)
+
+    async def send_str(self, data: str) -> None:
+        self.sending.set()
+        await self.send_released.wait()
+
+    async def close(self) -> bool:
+        return True
+
+
+async def _start_session(monkeypatch: pytest.MonkeyPatch, ws: _HangUpSocket) -> RealtimeSession:
+    async def connect(self: _openai.RealtimeSession) -> _HangUpSocket:
+        return ws
+
+    monkeypatch.setattr(_openai.RealtimeSession, "_create_ws_conn", connect)
+    monkeypatch.setattr(_realtime_model, "_CLOSE_GRACE_S", 0.05)
+    return RealtimeModel(api_key=KEY, agent_id=1).session()
+
+
+def _assert_ended_cleanly(session: RealtimeSession, errors: list[object]) -> None:
+    assert session._main_atask.done() and session._main_atask.exception() is None
+    assert errors == []
+
+
+async def test_server_close_after_call_ended_is_not_a_connection_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    session = await _start_session(monkeypatch, _HangUpSocket())
+    errors: list[object] = []
+    session.on("error", errors.append)
+    try:
+        await asyncio.wait_for(asyncio.shield(session._main_atask), 2)
+        assert session._tp_call_ended
+        _assert_ended_cleanly(session, errors)
+        # the send loop got there first: nothing logged either
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    finally:
+        await session.aclose()
+
+
+async def test_call_ended_with_a_stuck_send_loop_still_ends_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ws = _HangUpSocket()
+    ws.deliver.clear()
+    ws.send_released.clear()  # the send loop never returns from send_str
+    session = await _start_session(monkeypatch, ws)
+    errors: list[object] = []
+    session.on("error", errors.append)
+    try:
+        await asyncio.wait_for(ws.sending.wait(), 2)  # send loop is mid send_str
+        ws.deliver.set()
+        await asyncio.wait_for(asyncio.shield(session._main_atask), 2)
+        assert session._tp_call_ended
+        _assert_ended_cleanly(session, errors)
+    finally:
+        ws.send_released.set()
+        await session.aclose()
+
+
+async def test_aclose_racing_call_ended_closes_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    ws = _HangUpSocket()
+    ws.deliver.clear()
+    ws.send_released.clear()
+    session = await _start_session(monkeypatch, ws)
+    errors: list[object] = []
+    session.on("error", errors.append)
+    await asyncio.wait_for(ws.sending.wait(), 2)  # send loop is mid send_str
+    closing = asyncio.create_task(session.aclose())
+    await asyncio.sleep(0)
+    assert session._closing
+    # call.ended now arrives while closing (the framework drops it), then the close
+    ws.deliver.set()
+    await asyncio.sleep(0.01)
+    ws.send_released.set()
+    await asyncio.wait_for(closing, 2)
+    _assert_ended_cleanly(session, errors)
 
 
 async def test_long_function_call_ids_are_restored_on_the_output(
