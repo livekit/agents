@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
-import cv2
 import numpy as np
 from loguru import logger as _logger
 from PIL import Image
@@ -711,7 +710,7 @@ class BithumanGenerator(VideoGenerator):
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = np.ascontiguousarray(image[:, :, ::-1])  # BGR -> RGB
             return rtc.VideoFrame(
                 width=image.shape[1],
                 height=image.shape[0],
