@@ -26,6 +26,7 @@ members = [
     "livekit-plugins-anthropic",
     "livekit-plugins-assemblyai",
     "livekit-plugins-asyncai",
+    "livekit-plugins-atmee",
     "livekit-plugins-avatario",
     "livekit-plugins-avatartalk",
     "livekit-plugins-aws",
@@ -1961,6 +1962,9 @@ assemblyai = [
 asyncai = [
     { name = "livekit-plugins-asyncai" },
 ]
+atmee = [
+    { name = "livekit-plugins-atmee" },
+]
 avatario = [
     { name = "livekit-plugins-avatario" },
 ]
@@ -2194,6 +2198,7 @@ requires-dist = [
     { name = "livekit-plugins-anthropic", marker = "extra == 'anthropic'", editable = "livekit-plugins/livekit-plugins-anthropic" },
     { name = "livekit-plugins-assemblyai", marker = "extra == 'assemblyai'", editable = "livekit-plugins/livekit-plugins-assemblyai" },
     { name = "livekit-plugins-asyncai", marker = "extra == 'asyncai'", editable = "livekit-plugins/livekit-plugins-asyncai" },
+    { name = "livekit-plugins-atmee", marker = "extra == 'atmee'", editable = "livekit-plugins/livekit-plugins-atmee" },
     { name = "livekit-plugins-avatario", marker = "extra == 'avatario'", editable = "livekit-plugins/livekit-plugins-avatario" },
     { name = "livekit-plugins-avatartalk", marker = "extra == 'avatartalk'", editable = "livekit-plugins/livekit-plugins-avatartalk" },
     { name = "livekit-plugins-aws", marker = "extra == 'aws'", editable = "livekit-plugins/livekit-plugins-aws" },
@@ -2285,7 +2290,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "atmee", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2639,6 +2644,16 @@ requires-dist = [
     { name = "aiohttp" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]
+
+[[package]]
+name = "livekit-plugins-atmee"
+source = { editable = "livekit-plugins/livekit-plugins-atmee" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-avatario"
