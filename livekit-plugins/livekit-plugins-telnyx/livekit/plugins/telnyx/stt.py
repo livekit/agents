@@ -234,7 +234,14 @@ class SpeechStream(stt.RecognizeStream):
                     except Exception:
                         logger.exception("Failed to process Telnyx STT message")
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("Telnyx STT WebSocket error: %s", ws.exception())
+                    if closing_ws:
+                        return
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Raising a
+                    # retryable error here (instead of logging and waiting for the
+                    # CLOSED that follows) lets _main_task reconnect with the reason
+                    # attached; ws.exception() is the only place it survives.
+                    raise APIConnectionError("Telnyx STT connection lost") from ws.exception()
 
         ws: aiohttp.ClientWebSocketResponse | None = None
         try:
@@ -264,7 +271,15 @@ class SpeechStream(stt.RecognizeStream):
 
         try:
             ws = await asyncio.wait_for(
-                self._stt._session_manager.ensure_session().ws_connect(url, headers=headers),
+                self._stt._session_manager.ensure_session().ws_connect(
+                    url,
+                    headers=headers,
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # retry in _main_task only runs when something raises. Matches the
+                    # Deepgram and Muse STT plugins.
+                    heartbeat=30.0,
+                ),
                 self._conn_options.timeout,
             )
             logger.debug("Established Telnyx STT WebSocket connection")

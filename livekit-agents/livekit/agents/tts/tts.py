@@ -1303,13 +1303,20 @@ class AudioEmitter:
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-                            audio_byte_stream.clear()  # reset progressive for next burst
+                            # More bytes can follow this flush. Keep any partial PCM sample.
+                            audio_byte_stream.reset_progressive()
                         _flush_frame()
 
                     elif isinstance(data, AudioEmitter._EndSegment):
                         if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
+                            if audio_byte_stream.buffered_duration > 0:
+                                logger.warning(
+                                    "incomplete PCM sample at end of segment, "
+                                    "discarding trailing bytes",
+                                    extra={"tts": self._label, "request_id": self._request_id},
+                                )
 
                         _emit_frame(is_final=True)
                         dump_segment()

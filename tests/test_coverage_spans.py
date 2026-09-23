@@ -242,6 +242,7 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     # primary), response = who answered
     assert (run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == secondary.model
     request_attrs = request.attributes or {}
+    assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in request_attrs
     assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
     # the caller's span gets the same response side, per request: a concurrent request on
