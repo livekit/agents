@@ -1258,9 +1258,13 @@ class AgentActivity(RecognitionHooks):
                 reset_chat_ctx = capabilities.mutable_chat_context
                 reset_tools = capabilities.mutable_tools
 
+            instr = self._agent.instructions
             await self._rt_session._update_session(
-                instructions=self._render_realtime_instructions(self._agent.instructions)
+                instructions=self._render_realtime_instructions(instr)
                 if reset_instructions
+                else NOT_GIVEN,
+                delegator_instructions=instr.delegator
+                if reset_instructions and isinstance(instr, Instructions) and instr.delegator
                 else NOT_GIVEN,
                 chat_ctx=self._agent.chat_ctx if reset_chat_ctx else NOT_GIVEN,
                 tools=llm.ToolContext(self.tools).flatten() if reset_tools else NOT_GIVEN,
