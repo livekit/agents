@@ -32,14 +32,16 @@ knows the ThunderPhone-specific parts:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import os
-from typing import Any
+from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import aiohttp
 from pydantic import BaseModel
 
-from livekit.agents import llm, utils
+from livekit.agents import APIConnectionError, llm, utils
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.plugins.openai.realtime import realtime_model as _openai, utils as _openai_utils
@@ -137,7 +139,12 @@ class RealtimeModel(_openai.RealtimeModel):
                 "drop product/voice or drop agent_id."
             )
 
-        self._tp_agent_id = str(agent_id) if agent_id is not None else None
+        if agent_id is not None and not str(agent_id).strip():
+            # The URL would drop it and the server would start an inline call,
+            # while the plugin strips the agent's instructions and tools.
+            raise ValueError("agent_id must not be empty")
+
+        self._tp_agent_id = str(agent_id).strip() if agent_id is not None else None
         self._tp_live_transcripts = bool(live_transcripts)
 
         url = _build_url(
@@ -320,6 +327,24 @@ class RealtimeSession(_openai.RealtimeSession):
 
     # ----------------------------------------------------------- incoming
 
+    def _tp_close_expected(self) -> bool:
+        # After call.ended the server hangs up; after aclose() we do.
+        return self._tp_call_ended or self._closing
+
+    async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
+        ws = await super()._create_ws_conn()
+        return cast(aiohttp.ClientWebSocketResponse, _CallSocket(ws, self))
+
+    async def _run_ws(self, ws_conn: aiohttp.ClientWebSocketResponse) -> None:
+        try:
+            await super()._run_ws(ws_conn)
+        except APIConnectionError:
+            # The socket closed after the call ended or while closing, and our
+            # send loop did not get there first (see _CallSocket). With the
+            # outgoing channel closed the framework ends the session here.
+            if not self._tp_close_expected():
+                raise
+
     def _tp_on_server_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type == "response.created":
@@ -348,9 +373,13 @@ class RealtimeSession(_openai.RealtimeSession):
             logger.info("ThunderPhone call ended", extra={"lk.pii.event": event})
             self.emit(CALL_ENDED_EVENT, event)
             # The server closes the socket right after this event. Closing the
-            # outgoing channel first makes that close expected, so the session
-            # ends cleanly instead of being retried as a connection failure.
+            # outgoing channel ends the send loop, which closes our side and
+            # ends the session; _CallSocket holds the server's close back until
+            # then so it is not read as a connection failure. Anything still
+            # queued was meant for a call that no longer exists.
             self._msg_ch.close()
+            while not self._msg_ch.empty():
+                self._msg_ch.recv_nowait()
 
     def _tp_claim_response(self, event: dict[str, Any]) -> None:
         # generate_reply() resolves its future by the client_event_id the
@@ -372,6 +401,36 @@ class RealtimeSession(_openai.RealtimeSession):
             **(metadata if isinstance(metadata, dict) else {}),
             "client_event_id": pending,
         }
+
+
+_CLOSE_TYPES = (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED)
+_CLOSE_GRACE_S = 5.0
+
+
+class _CallSocket:
+    """The call's WebSocket, holding back an expected close for the send loop.
+
+    The framework's receive loop treats a close as expected only once its send
+    loop has seen the outgoing channel close, and the server's close after
+    ``call.ended`` can be read first. The receive loop waits here instead, so
+    the send loop finishes and the framework tears the connection down without
+    logging an error. If the send loop is stuck, the close goes through after
+    a grace period and ``RealtimeSession._run_ws`` absorbs it.
+    """
+
+    def __init__(self, ws: aiohttp.ClientWebSocketResponse, session: RealtimeSession) -> None:
+        self._ws = ws
+        self._session = session
+
+    async def receive(self, timeout: float | None = None) -> aiohttp.WSMessage:
+        msg = await self._ws.receive(timeout)
+        if msg.type in _CLOSE_TYPES and self._session._tp_close_expected():
+            # cancelled on teardown once the send loop is done
+            await asyncio.sleep(_CLOSE_GRACE_S)
+        return msg
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ws, name)
 
 
 def _build_url(base_url: str, **params: str | None) -> str:
