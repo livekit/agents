@@ -321,11 +321,13 @@ class RoomIO:
         ):
             # reset future if switching to a different participant
             self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+            self._agent_session._cancel_user_away_timer()
 
             # check if new participant is already connected
             for participant in self._room.remote_participants.values():
                 if participant.identity == participant_identity:
                     self._participant_available_fut.set_result(participant)
+                    self._agent_session._on_room_io_participant_linked(participant)
                     break
 
         # update participant identity and handlers
@@ -349,6 +351,7 @@ class RoomIO:
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
         if self._audio_input:
             self._audio_input.set_participant(None)
         if self._video_input:
@@ -466,6 +469,7 @@ class RoomIO:
             },
         )
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
 
         if (
             self._options.close_on_disconnect

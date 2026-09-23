@@ -2047,12 +2047,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a tool in flight will speak when it lands; the window restarts then (#6883)
             return
 
-        if (
-            (room_io := self._room_io)
-            and room_io.subscribed_fut
-            and not room_io.subscribed_fut.done()
+        if (room_io := self._room_io) and (
+            room_io.linked_participant is None
+            or (room_io.subscribed_fut is not None and not room_io.subscribed_fut.done())
         ):
-            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(
@@ -2074,6 +2072,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aec_warmup_timer = None
 
     def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        self.reset_away_timer()
+
         if (span := self._session_span) is not None and span.is_recording():
             span.add_event("participant_linked", trace_utils.participant_attributes(participant))
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
