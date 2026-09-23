@@ -12,11 +12,13 @@ from typing import Any, Literal, TypedDict
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
+from opentelemetry import trace
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
+from livekit.agents.telemetry import gen_ai, tracer
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -131,6 +133,26 @@ class _Speech:
 # A response completes with its calls unanswered. Each result is queued with response.item.create,
 # and one response.create runs the next response, the continuation, once every call in the session
 # has one; a partial batch is rejected. The voice model speaks the continuation's text on its own.
+
+
+@dataclass
+class _BackendResponseTrace:
+    """Completed output items for one managed backend response."""
+
+    span: trace.Span
+    record_content: bool
+    output: list[dict[str, Any]] = field(default_factory=list)
+    has_tool_calls: bool = False
+
+    def finish(self, error: str | None = None) -> None:
+        """Export the response once its terminal event arrives or the connection ends."""
+        reason = "error" if error else "tool_call" if self.has_tool_calls else "stop"
+        gen_ai.set_response_attributes(self.span, finish_reasons=[reason])
+        gen_ai.set_content_attributes(self.span, output_messages=self.output)
+        if error:
+            self.span.set_attribute("error.type", error)
+            self.span.set_status(trace.StatusCode.ERROR)
+        self.span.end()
 
 
 @dataclass
@@ -415,6 +437,7 @@ class GPTLiveSession(
         # call_ids move to the open set, and stay there until each output is sent to the backend.
         # response_pending is set once an output is sent and cleared by the response.create
         self._backend_running_responses: dict[str | None, set[str]] = {}
+        self._backend_traces: dict[str | None, _BackendResponseTrace] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
 
@@ -686,6 +709,9 @@ class GPTLiveSession(
                 await _close_ws()
         finally:
             await utils.aio.cancel_and_wait(*tasks)
+            for response_trace in self._backend_traces.values():
+                response_trace.finish("connection_closed")
+            self._backend_traces.clear()
             await ws_conn.close()
 
     async def _ws_send(
@@ -846,7 +872,87 @@ class GPTLiveSession(
                 ),
             )
 
+    def _trace_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
+        """Trace managed Responses output separately from the speaker conversation."""
+        event, d_id = envelope.event, envelope.delegation_id
+        response = event.response
+        if event.type == "response.created":
+            if previous := self._backend_traces.pop(d_id, None):
+                previous.finish("response_replaced")
+            span = tracer.start_span("llm_request", kind=trace.SpanKind.CLIENT)
+            record_content = gen_ai.capture_content_enabled() and span.is_recording()
+            self._backend_traces[d_id] = _BackendResponseTrace(span, record_content)
+            gen_ai.set_request_attributes(
+                span,
+                operation="chat",
+                provider=self._live_model.provider,
+                model=self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
+                stream=True,
+            )
+            if d_id is not None:
+                span.set_attribute("lk.delegation_id", d_id)
+            if self._session_id:
+                span.set_attribute("lk.session_id", self._session_id)
+            if record_content:
+                instructions = self._opts.responses.get("instructions")
+                gen_ai.set_content_attributes(
+                    span,
+                    system_instructions=[{"type": "text", "content": instructions}]
+                    if instructions
+                    else None,
+                    tool_definitions=gen_ai.to_tool_definitions(self._tools.flatten()),
+                )
+            # The service manages the backend input; the speaker history is not that input.
+        current = self._backend_traces.get(d_id)
+        if current is None:
+            return
+        if response is not None:
+            gen_ai.set_response_attributes(
+                current.span, response_id=response.id, model=response.model
+            )
+            if usage := response.usage:
+                gen_ai.set_usage_attributes(
+                    current.span,
+                    llm.CompletionUsage(
+                        prompt_tokens=usage.input_tokens,
+                        prompt_cached_tokens=usage.input_tokens_details.cached_tokens,
+                        cache_creation_tokens=usage.input_tokens_details.cache_write_tokens,
+                        completion_tokens=usage.output_tokens,
+                        reasoning_tokens=usage.output_tokens_details.reasoning_tokens,
+                        total_tokens=usage.total_tokens,
+                    ),
+                )
+        if event.type == "response.output_item.done" and (item := event.item) is not None:
+            current.has_tool_calls |= item.type == "function_call"
+            if current.record_content:
+                # response.completed has an empty output: retain completed items as they arrive.
+                # Reasoning items are deliberately excluded.
+                if item.type == "message":
+                    parts = [
+                        {"type": "text", "content": part.text or part.refusal}
+                        for part in item.content
+                        if part.type in ("output_text", "refusal") and (part.text or part.refusal)
+                    ]
+                    if parts:
+                        current.output.append({"role": "assistant", "parts": parts})
+                elif item.type == "function_call" and item.call_id and item.name:
+                    current.output.extend(
+                        gen_ai.to_output_messages(
+                            function_calls=[
+                                llm.FunctionCall(
+                                    call_id=item.call_id,
+                                    name=item.name,
+                                    arguments=item.arguments or "",
+                                )
+                            ]
+                        )
+                    )
+        if event.type in ("response.completed", "response.failed", "response.incomplete"):
+            self._backend_traces.pop(d_id)
+            current.finish(None if event.type == "response.completed" else event.type)
+
     def _handle_response_event(self, envelope: types.ResponseEventEnvelope) -> None:
+        self._trace_response_event(envelope)
         # the inner event carries no response id, so a delegation's responses are followed in
         # sequence: a continuation is the next response.created under the same delegation, and a
         # response the application started itself has a null delegation
