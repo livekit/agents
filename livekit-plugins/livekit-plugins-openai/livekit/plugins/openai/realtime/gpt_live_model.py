@@ -24,7 +24,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
-from openai.types.responses import ResponseTextConfigParam
+from openai.types.responses import ResponseFunctionToolCall, ResponseTextConfigParam
 from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
 
@@ -417,6 +417,9 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        # every call the backend made on this connection; a call outside it was made on an earlier
+        # connection, which the current backend never saw
+        self._backend_connection_calls: set[str] = set()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -564,6 +567,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._backend_connection_calls.clear()
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -625,6 +629,8 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
+            if self._opts.delegation == "responses":
+                self._replay_owed_results()
 
             async for msg in self._msg_ch:
                 # the protocol asks for session.started before any audio or command goes out
@@ -883,6 +889,7 @@ class GPTLiveSession(
             if item.call_id in calls:
                 return
             calls.add(item.call_id)
+            self._backend_connection_calls.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -1135,8 +1142,10 @@ class GPTLiveSession(
 
         # a system or developer message is a standing rule for the voice model, a tool result
         # answering a call the backend delegated goes back on the backend's channel, and everything
-        # else is context for the voice model, as one append
+        # else is context for the voice model, as one append. a result for a call made on an
+        # earlier connection goes back paired with its call, so the backend continues from it
         backend_outputs: list[llm.FunctionCallOutput] = []
+        replayed_calls: list[llm.FunctionCall] = []
         lines: list[str] = []
         for item in items:
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
@@ -1147,19 +1156,43 @@ class GPTLiveSession(
                 or any(item.call_id in c for c in self._backend_running_responses.values())
             ):
                 backend_outputs.append(item)
+            elif (
+                isinstance(item, llm.FunctionCallOutput)
+                and item.call_id not in self._backend_connection_calls
+                and (call := self._find_call(item.call_id)) is not None
+            ):
+                replayed_calls.append(call)
+                backend_outputs.append(item)
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
         if lines:
             self.append_thinking("\n".join(lines))
 
-        self._send_backend_outputs(backend_outputs)
+        self._send_backend_outputs(backend_outputs, replayed_calls=replayed_calls)
 
         # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
         # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
 
-    def _send_backend_outputs(self, outputs: list[llm.FunctionCallOutput]) -> None:
+    def _send_backend_outputs(
+        self,
+        outputs: list[llm.FunctionCallOutput],
+        *,
+        replayed_calls: list[llm.FunctionCall],
+    ) -> None:
+        for call in replayed_calls:
+            self.send_event(
+                types.ResponseItemCreateEvent(
+                    event_id=utils.shortuuid("tool_call_"),
+                    item=ResponseFunctionToolCall(
+                        type="function_call",
+                        call_id=call.call_id,
+                        name=call.name,
+                        arguments=call.arguments,
+                    ),
+                )
+            )
         for output in outputs:
             self.send_event(
                 types.ResponseItemCreateEvent(
@@ -1182,6 +1215,29 @@ class GPTLiveSession(
                 )
             self._backend_response_pending = True
             self._maybe_continue_response()
+
+    def _replay_owed_results(self) -> None:
+        # a result the conversation has not moved past is owed a continuation, but startup
+        # history only reaches the voice model: the backend needs it paired with its call. speech
+        # or a call still waiting on its own result means the model already acted on what preceded
+        owed: list[llm.FunctionCallOutput] = []
+        for item in reversed(self._history.items):
+            if isinstance(item, llm.ChatMessage) and item.role == "assistant":
+                break
+            if isinstance(item, llm.FunctionCall) and all(o.call_id != item.call_id for o in owed):
+                break
+            if isinstance(item, llm.FunctionCallOutput):
+                owed.insert(0, item)
+        pairs = [(call, o) for o in owed if (call := self._find_call(o.call_id)) is not None]
+        self._send_backend_outputs(
+            [o for _, o in pairs], replayed_calls=[call for call, _ in pairs]
+        )
+
+    def _find_call(self, call_id: str) -> llm.FunctionCall | None:
+        for item in self._history.items:
+            if isinstance(item, llm.FunctionCall) and item.call_id == call_id:
+                return item
+        return None
 
     def _generate_reply(
         self,
