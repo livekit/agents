@@ -18,10 +18,14 @@ Dana Whitfield <dana@example.com> is a Gold member whose Tokyo flight tomorrow i
 245 minutes, which is the interesting case: the delay is our fault, so the fee is waived and
 the seat moves for nothing. Miguel Ortiz <ortiz@example.com> is on a BASIC fare, which
 cannot be changed or refunded at all. Priya Raman <raman@example.com> holds travel credit.
+
+With agent-db configured and CONVERSATION=DB_... set, the call persists: a second console run
+on the same conversation resumes it, and its delegations reach the same desk context.
 """
 
 import json
 import logging
+import os
 
 from dotenv import load_dotenv
 
@@ -34,6 +38,7 @@ from livekit.agents import (
     RunContext,
     ToolExecutionUpdatedEvent,
     cli,
+    store,
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
@@ -47,6 +52,10 @@ load_dotenv()
 FARE_DESK_URL = "http://localhost:8321/fare-desk"
 
 server = AgentServer()
+
+# where the call persists, when agent-db is configured and the app names a conversation. A
+# real app looks the database up from a caller key such as a phone number
+STORE = store.AgentDB.from_env(lease_ttl=10) if os.environ.get("LIVEKIT_AGENTDB_URL") else None
 
 
 def _short(text: str | None, limit: int = 90) -> str:
@@ -171,7 +180,14 @@ async def entrypoint(ctx: JobContext) -> None:
             delegations.discard(update.call_id)
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
-    await session.start(agent=Receptionist(), room=ctx.room)
+    state = None
+    if STORE is not None and (conversation_id := os.environ.get("CONVERSATION")):
+        # the app picks the phone agent's session id, stable across calls
+        conversation = await STORE.conversation(conversation_id)
+        state = conversation.session("voice", kind="voice")
+    await session.start(agent=Receptionist(), room=ctx.room, state=state)
+    if state is not None and (messages := session.history.messages()):
+        logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")
 
 
 if __name__ == "__main__":

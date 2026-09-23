@@ -62,6 +62,65 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
   session closes the delegate when the call ends, which is what tells the desk to drop the
   conversation.
 
+## Persistence
+
+With agent-db configured, every conversation persists as it goes: the desk writes each item as it lands and checkpoints its mutable state (the mock airline included) when a turn ends, so a desk killed mid-conversation and restarted picks up where it was. One conversation is one agent-db database; the phone agent's session and each desk context it talked to are rows in it, the desk's under the caller's.
+
+Start agent-db locally, from `agents-private/agent-db`, and leave it running:
+
+```bash
+mage build && mage devLocal   # management :7780, data plane ws://localhost:7781/db
+```
+
+Point both processes at it. The key and secret are devLocal's own, apart from the LiveKit project's:
+
+```bash
+export LIVEKIT_AGENTDB_URL=http://localhost:7780
+export LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db
+export LIVEKIT_AGENTDB_API_KEY=devkey LIVEKIT_AGENTDB_API_SECRET=secret
+```
+
+### The crash drill, with no microphone
+
+`chat.py` is a text client over A2A. It creates a conversation database and a context, prints both, and sends each line as a person's turn.
+
+```bash
+python expert.py dev   # terminal 1
+python chat.py         # terminal 2: prints conversation DB_... and context chat-...
+```
+
+1. Ask two things that build on each other: _"Hi, I'm dana@example.com. What's the status of my flight to Tokyo tomorrow?"_, then _"What other flights could you put me on that day, and what would the change cost me?"_ The desk quotes the change and keeps the quote on the booking.
+2. Kill the desk hard: `kill -9 $(lsof -ti tcp:8321 -sTCP:LISTEN)`.
+3. Restart it: `python expert.py dev`. A turn that was mid-call when it died is still marked `running`; the next start marks it `interrupted` and tells the model the outcome is unknown. A restart inside the dead desk's 10 s lease waits the rest of it out first.
+4. In the same `chat.py`, ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated chat-...: N messages back` and rebooks from the quote it made before the crash.
+
+`chat.py --conversation DB_... --context chat-...` picks the same conversation up from a fresh client; `--delegate` sends lines as instructions, the way the phone agent asks.
+
+### Reading the rows
+
+`agentdb-console` in `agents-private/agent-db` reads the database directly; the tables are the contract a dashboard reads:
+
+```bash
+alias adb='./bin/agentdb-console -database DB_...'
+adb -q "SELECT session_id, parent_session_id, kind, current_agent_id, lease_owner FROM sessions"
+adb -q "SELECT json_extract(item_json,'$.role') AS role, substr(json_extract(item_json,'$.content[0]'),1,80) AS text
+        FROM chat_items WHERE owner = 'session' AND json_extract(item_json,'$.type') = 'message' ORDER BY created_at"
+adb -q "SELECT call_id, name, status, is_error, substr(output,1,60) AS output FROM tasks ORDER BY started_at"
+adb -q "SELECT session_id, call_id, child_session_id, task_id, status FROM delegations ORDER BY created_at"
+```
+
+`delegations` fills from the phone agent's side: each row says which desk context and task answered which delegate call.
+
+### The voice half
+
+`voice.py` persists too once it is given a conversation. The session id `voice` is the app's choice, stable across calls:
+
+```bash
+CONVERSATION=DB_... python voice.py console
+```
+
+Hang up and run it again on the same `CONVERSATION`: the call resumes with what was said before, and its delegations reach the same desk context, which rehydrates on the first one.
+
 ## Talking to the desk without a voice agent
 
 It is plain A2A, so anything that speaks it can drive the desk:
