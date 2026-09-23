@@ -446,7 +446,8 @@ class AtmeeAPI:
             if deadline is not None:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
-                    raise last_error or AtmeeException(f"{method} {path} timed out")
+                    # the budget ran out: report a timeout, keep the last failure as its cause
+                    raise AtmeeException(f"{method} {path} timed out") from last_error
                 attempt_timeout = min(total_timeout, remaining)
             try:
                 async with self._ensure_session().request(

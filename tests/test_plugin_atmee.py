@@ -620,8 +620,10 @@ async def test_wait_until_ready_deadline_bounds_retries(
     api = AtmeeAPI(session=http_session, conn_options=slow_retries)
     loop = asyncio.get_running_loop()
     began = loop.time()
-    with pytest.raises(AtmeeException):
+    with pytest.raises(AtmeeException) as exc:
         await api.wait_until_ready(AVATAR_ID, timeout=0.3, poll_interval=30)
+    # deadline expiry is a timeout, not the last 5xx seen before it
+    assert exc.value.code == "timeout"
     # the 30 s retry pauses were cut to the remaining budget
     assert loop.time() - began < 2
 
