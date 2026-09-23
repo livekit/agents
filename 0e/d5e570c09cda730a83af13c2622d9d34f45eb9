@@ -1,0 +1,122 @@
+tests/test_audio_emitter.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 286-349
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/__init__.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 6,12
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/responses/llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 50
+tests/test_gpt_live_model.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 29,534-551,1625-1652
+livekit-agents/livekit/agents/tokenize/utils.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 47
+livekit-agents/livekit/agents/voice/tool_executor.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 24,451-452
+  s_f50cdb7f85c15d::t_ff276f5708a63b 453
+livekit-agents/livekit/agents/utils/audio.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 179,181-183,185-187,189-191,196-198,203,206,209,212-219,226-227,230
+livekit-plugins/livekit-plugins-aws/livekit/plugins/aws/llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 54-60,62-63,72-76,129-130,145,232-243
+  s_f50cdb7f85c15d::t_a74269594a23e0 244
+livekit-plugins/livekit-plugins-sarvam/livekit/plugins/sarvam/llm/client.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 310,334-340
+  s_f50cdb7f85c15d::t_ec36cdd3e9a3dc 341
+README.md
+  s_f50cdb7f85c15d::t_19eacf1901f73c 149
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/utils.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 268-269
+tests/test_llm_telemetry.py
+  s_f50cdb7f85c15d::t_9d26832dd19b18 15
+  s_f50cdb7f85c15d::t_19eacf1901f73c 150,153,155-157,161-162,166-173,418-463,498-499,511-512
+tests/test_plugin_xai_stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-141
+livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 376-385,454-458
+livekit-plugins/livekit-plugins-telnyx/livekit/plugins/telnyx/stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 237-244,274-282
+tests/test_plugin_simplismart_stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 5-6,8,11,104-234
+examples/homepage/tests/unit/test_behaviors.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1,4-10,13-19,53-176
+livekit-plugins/livekit-plugins-mistralai/livekit/plugins/mistralai/llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 4,7,26,40,49-64,68,95,104,108-117,120-123,125-128,133,165,176-177,234,240-241,251,257-258,262,265-266,272-277,336-437,538-611
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 301-309,403-413,421-425,457-459,535-540
+  s_f50cdb7f85c15d::t_feda6b0435e720 541-542
+livekit-plugins/livekit-plugins-bithuman/livekit/plugins/bithuman/avatar.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 52-58,112,138-142,144-145,147-155,167,172-174,194-202,241-250,399,444-450,457,460-461,536-543,713
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/gpt_live_types.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 21-22,75
+livekit-agents/livekit/agents/llm/fallback_adapter.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 174-175
+tests/test_plugin_aws_llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 7,100-155
+livekit-agents/livekit/agents/llm/llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 236,288
+tests/test_plugin_telnyx_stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-141
+livekit-agents/livekit/agents/voice/generation.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 217,320,344,367
+examples/homepage/behaviors/scripted_questions.txt
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-56
+livekit-agents/livekit/agents/tts/tts.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1298-1299,1306-1311
+tests/test_plugin_sarvam_llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 11,339-388
+  s_f50cdb7f85c15d::t_a6dcb8194321e0 389-390
+livekit-plugins/livekit-plugins-deepgram/livekit/plugins/deepgram/stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 961,1005
+tests/test_transcription_delay_anchor.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 31,117-119,128-129
+livekit-plugins/livekit-plugins-bithuman/livekit/plugins/bithuman/version.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 15
+livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/gpt_live_model.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 96,142,161,182-184,258,282,302,335,580-581
+livekit-plugins/livekit-plugins-simplismart/livekit/plugins/simplismart/stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 388-398,450-454
+tests/test_audio_byte_stream.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-79
+examples/homepage/agent.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 5,87
+tests/test_plugin_mistralai_llm.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 8-13,18-19,41-58,60-63,65,94,122,149,171-367
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/realtime_model.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 87-88,153,228,279-281,371,436,482,849,891,933
+livekit-agents/livekit/agents/telemetry/gen_ai.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 6,54-55,59,62-64,68,70-79,85-86,316,322,326-328
+livekit-plugins/livekit-plugins-phonic/README.md
+  s_f50cdb7f85c15d::t_19eacf1901f73c 113-114
+tests/test_replace_words.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-39
+tests/test_tools.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 2202-2211,2216,2218,2223,2229
+examples/homepage/behaviors/scripted_callers.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 1-83
+livekit-plugins/livekit-plugins-phonic/livekit/plugins/phonic/realtime/__init__.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 5,17
+tests/test_coverage_spans.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 27,29,248,251,261-284,290,307,316-320
+tests/test_plugin_soniox_stt.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 217,659-747
+tests/test_schema_gemini.py
+  s_f50cdb7f85c15d::t_19eacf1901f73c 2,63,70,99,105,191,211-220,247,252-287
+  s_f50cdb7f85c15d::t_8a2c4e3e875966 288-289
+livekit-plugins/livekit-plugins-phonic/pyproject.toml
+  s_f50cdb7f85c15d::t_19eacf1901f73c 28
+uv.lock
+  s_f50cdb7f85c15d::t_8621a3346854f0 3282,4596,4605,4607
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0ed5e570c09cda730a83af13c2622d9d34f45eb9",
+  "prompts": {},
+  "sessions": {
+    "s_f50cdb7f85c15d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0abca-c07b-78d0-bbbd-52575ebd6b3f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
