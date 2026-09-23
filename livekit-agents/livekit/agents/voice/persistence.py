@@ -25,6 +25,7 @@ from ..store.session_state import (
     SessionState,
     StoredSession,
     import_qualified,
+    item_json,
     qualified_name,
 )
 from .agent import Agent, AgentTask
@@ -39,6 +40,10 @@ _REHYDRATING = contextvars.ContextVar["SessionPersistence"]("agents_rehydrating"
 # a class is checked once, the first time it starts under a persisted session: None means it
 # rebuilds, a string says why it cannot
 _REBUILD_CHECKS: dict[type[Agent], str | None] = {}
+
+
+def _fingerprint(item: llm.ChatItem) -> int:
+    return hash(item_json(item))
 
 
 def lookup_rehydrated_agent(cls: type[Agent], agent_id: str) -> Agent:
@@ -66,7 +71,9 @@ class SessionPersistence:
         self._state = state
         self._stored: StoredSession | None = None
         self._agents: dict[str, Agent] = {}
-        self._written: dict[str, set[str]] = {}
+        # per owner, the fingerprint of each item as last written: an item finalized in place,
+        # such as an interrupted message, differs from it and is written again
+        self._written: dict[str, dict[str, int]] = {}
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._checkpoint_again = False
         self._lease_lost = False
@@ -89,9 +96,11 @@ class SessionPersistence:
 
         session = self._session
         session._chat_ctx = llm.ChatContext(list(stored.history))
-        self._written[SESSION_OWNER] = {item.id for item in stored.history}
+        self._written[SESSION_OWNER] = {item.id: _fingerprint(item) for item in stored.history}
         for stored_agent in stored.agents.values():
-            self._written[stored_agent.agent_id] = {item.id for item in stored_agent.chat_items}
+            self._written[stored_agent.agent_id] = {
+                item.id: _fingerprint(item) for item in stored_agent.chat_items
+            }
 
         current = agent
         reason: str | None = None
@@ -223,17 +232,18 @@ class SessionPersistence:
             self._sync_owner(agent.id, agent._chat_ctx.items, remove=True)
 
     def _sync_owner(self, owner: str, items: list[llm.ChatItem], *, remove: bool) -> None:
-        written = self._written.setdefault(owner, set())
+        written = self._written.setdefault(owner, {})
         present = set()
         for item in items:
             present.add(item.id)
-            if item.id not in written:
+            fingerprint = _fingerprint(item)
+            if written.get(item.id) != fingerprint:
                 self._state.append(item, owner=owner)
-                written.add(item.id)
+                written[item.id] = fingerprint
         if remove:
-            for item_id in written - present:
+            for item_id in written.keys() - present:
                 self._state.remove(item_id, owner=owner)
-                written.discard(item_id)
+                del written[item_id]
 
     async def checkpoint(self) -> None:
         self._sync()

@@ -69,7 +69,8 @@ async def conversation(tmp_path: pathlib.Path) -> AsyncIterator[store.Conversati
 
 
 async def _rows(conversation: store.Conversation, sql: str) -> list[dict]:
-    return [row async for row in conversation.executor.query(sql)]
+    executor = await conversation.open()
+    return [row async for row in executor.query(sql)]
 
 
 class _RecordingLLM(_AnsweringLLM):
