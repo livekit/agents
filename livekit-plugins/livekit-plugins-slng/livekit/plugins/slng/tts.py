@@ -1128,9 +1128,11 @@ class TTS(tts.TTS):
         private socket that is never installed and is closed on release. So
         is every socket when warm standby is off.
 
-        ``timeout`` bounds the whole acquisition, waits included: every step
-        below gets what is left of it, so a reply fails on time rather than
-        after a wait and a full connect.
+        ``timeout`` bounds the whole acquisition, waits included: every wait
+        below gets what is left of it, and a stale socket is closed in the
+        background, so a reply fails on time rather than after a wait and a
+        full connect. Stopping the idle reader is the one step it does not
+        bound, as that ends at the reader's next read.
         """
         deadline = time.perf_counter() + timeout
         # A background connect already in flight is a latency win: wait for it
@@ -1171,9 +1173,16 @@ class TTS(tts.TTS):
             )
 
         stale: _HeldConnection | None = None
-        async with self._ws_lock:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise asyncio.TimeoutError()
+        await asyncio.wait_for(self._ws_lock.acquire(), timeout=remaining)
+        try:
             held = self._held
             if held is not None and not held.in_use:
+                # Not bounded by the deadline: the reader stops at its next
+                # read, and the socket must not be handed on until it has, or
+                # two readers would share it.
                 await self._stop_idle_reader(held)
                 if (
                     held.epoch == self._ws_epoch
@@ -1185,8 +1194,12 @@ class TTS(tts.TTS):
                     return held
                 self._held = None
                 stale = held
+        finally:
+            self._ws_lock.release()
         if stale is not None:
-            await _close_ws(stale.ws, context="acquire_stale")
+            # In the background: a dead socket can take the whole close
+            # timeout to give up, and this reply has nothing to wait for.
+            self._spawn(_close_ws(stale.ws, context="acquire_stale"))
 
         epoch = self._ws_epoch
         remaining = deadline - time.perf_counter()
