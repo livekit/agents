@@ -1027,3 +1027,43 @@ async def test_failed_start_releases_the_base_session_hooks(
     # and the instance stays spent
     with pytest.raises(atmee.AtmeeException, match="already called"):
         await avatar.start(agent_session, room)  # type: ignore[arg-type]
+
+
+async def test_failure_before_the_render_request_never_removes_a_participant(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The base aclose() removes the avatar identity from any room it still
+    # holds; record which room it sees on each failure path.
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    base_aclose = BaseAvatarSession.aclose
+    rooms_seen: list[Any] = []
+
+    async def recording_base_aclose(self: Any) -> None:
+        rooms_seen.append(self._room)
+        await base_aclose(self)
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", recording_base_aclose)
+
+    # 1) credentials missing: fails before Atmee is contacted
+    monkeypatch.delenv("LIVEKIT_API_SECRET")
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    room = FakeRoom()
+    with pytest.raises(atmee.AtmeeException):
+        await avatar.start(FakeAgentSession(), room)  # type: ignore[arg-type]
+    assert rooms_seen == [None]  # nothing to remove from the room
+    assert not room.handlers.get("connection_state_changed")
+    assert fake_atmee.calls("POST", SESSIONS_PATH) == []
+
+    # 2) the render request went out and failed: close fully (conservative)
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "the-developers-secret-the-developers-secret")
+    fake_atmee.script("POST", SESSIONS_PATH, 500, body="down")
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    room = FakeRoom()
+    with pytest.raises(atmee.AtmeeException):
+        await avatar.start(FakeAgentSession(), room)  # type: ignore[arg-type]
+    assert rooms_seen[-1] is room

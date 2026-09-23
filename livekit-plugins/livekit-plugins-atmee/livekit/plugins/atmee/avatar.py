@@ -143,6 +143,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         self._close_lock = asyncio.Lock()
         self._ended = False
         self._started = False
+        self._render_requested = False
         self._room_for_events: rtc.Room | None = None
         self._agent_session_for_events: AgentSession[Any] | None = None
         self._aclose_task: asyncio.Task[None] | None = None
@@ -202,12 +203,29 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
                 livekit_api_secret=livekit_api_secret,
             )
         except BaseException:
-            # Undo what super().start() set up (shutdown callback, listeners,
-            # join task) and end a session that may already exist. The
-            # instance stays spent: a session whose creation is uncertain is
-            # never retried on it.
-            await self.aclose()
+            # Undo what super().start() set up (listeners, join task). Once the
+            # render was requested its outcome is uncertain, so close fully:
+            # end a session that may exist and remove the avatar participant.
+            # Before that, no avatar of ours can be in the room, and removing
+            # the participant could disconnect another session's avatar that
+            # uses the same identity. Either way the instance stays spent.
+            if self._render_requested:
+                await self.aclose()
+            else:
+                await self._release_without_removing_participant()
             raise
+
+    async def _release_without_removing_participant(self) -> None:
+        async with self._close_lock:
+            room = self._room
+            if room is not None:
+                room.off("connection_state_changed", self._on_connection_state_changed)
+                # the base aclose() removes the avatar identity from a
+                # connected room; with no room it only drops its listener
+                # and cancels the join task
+                self._room = None
+            await super().aclose()
+            await self._api.aclose()
 
     async def _start_render(
         self,
@@ -254,6 +272,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
                 "lk.pii.room": room.name,
             },
         )
+        self._render_requested = True
         info = await self._api.create_avatar_session(
             self._avatar_id,
             livekit_url=livekit_url,
