@@ -417,7 +417,7 @@ class _ParticipantAudioInputStream(_ParticipantInputStream[rtc.AudioFrame], Audi
                     logging_extra["track_id"]
                 )
                 self._pre_connect_audio_publications.add(pre_connect_key)
-                for frame in self._resample_frames(self._apply_audio_processor(frames)):
+                for frame in self._apply_audio_processor(self._resample_frames(frames)):
                     if self._attached:
                         await self._data_ch.send(frame)
                         duration += frame.duration

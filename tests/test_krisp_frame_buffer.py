@@ -21,7 +21,10 @@ import numpy as np
 import pytest
 
 from livekit import rtc
+from livekit.agents.types import USERDATA_AUDIO_PROCESSING, USERDATA_AUDIO_RAW
+from livekit.plugins import krisp
 from livekit.plugins.krisp._krisp import _KrispLicenseFrameProcessor
+from livekit.plugins.krisp.viva_filter import VivaMode
 
 pytestmark = pytest.mark.unit
 
@@ -50,6 +53,7 @@ def _make_processor(sample_rate: int, chunk_samples: int) -> _KrispLicenseFrameP
     proc._frame_duration_ms = int(chunk_samples * 1000 / sample_rate)
     proc._in_buf = np.empty(0, dtype=np.int16)
     proc._out_buf = np.empty(0, dtype=np.int16)
+    proc._raw_out_buf = np.empty(0, dtype=np.int16)
     return proc
 
 
@@ -119,3 +123,109 @@ def test_frame_equals_chunk_is_exact_passthrough() -> None:
     proc = _make_processor(sample_rate, chunk)
     in_stream, out_stream = _feed(proc, sample_rate, [chunk] * 20)
     assert np.array_equal(out_stream, in_stream)
+
+
+@pytest.mark.parametrize("sizes", [[100] * 40, [137, 53, 200, 80, 160, 45, 300, 10, 90] * 4])
+def test_raw_audio_matches_buffered_nc_output(sizes: list[int]) -> None:
+    class InPlaceSession:
+        def process(self, chunk_in: np.ndarray, level: int) -> np.ndarray:
+            chunk_in *= -1
+            return chunk_in
+
+    proc = _make_processor(16000, 160)
+    proc._session = InPlaceSession()
+    inputs: list[np.ndarray] = []
+    raw_outputs: list[np.ndarray] = []
+    count = 1
+    for size in sizes:
+        samples = np.arange(count, count + size, dtype=np.int16)
+        count += size
+        inputs.append(samples)
+        frame = rtc.AudioFrame(bytearray(samples), 16000, 1, size, userdata={"custom": "value"})
+        output = proc._process(frame)
+        assert output.userdata["custom"] == "value"
+        assert frame.userdata == {"custom": "value"}
+        if not output.samples_per_channel:
+            assert USERDATA_AUDIO_RAW not in output.userdata
+            assert USERDATA_AUDIO_PROCESSING not in output.userdata
+            continue
+
+        raw = output.userdata[USERDATA_AUDIO_RAW]
+        assert isinstance(raw, rtc.AudioFrame)
+        assert raw.sample_rate == output.sample_rate
+        assert raw.num_channels == output.num_channels
+        assert raw.samples_per_channel == output.samples_per_channel
+        assert output.userdata[USERDATA_AUDIO_PROCESSING] == "denoised"
+        raw_samples = np.frombuffer(raw.data, dtype=np.int16).copy()
+        np.testing.assert_array_equal(raw_samples, -np.frombuffer(output.data, dtype=np.int16))
+        raw_outputs.append(raw_samples)
+        frame.data[0] = 0
+        np.testing.assert_array_equal(np.frombuffer(raw.data, dtype=np.int16), raw_samples)
+
+    raw_stream = np.concatenate(raw_outputs)
+    np.testing.assert_array_equal(raw_stream, np.concatenate(inputs)[: len(raw_stream)])
+    proc._close()
+    assert len(proc._raw_out_buf) == 0
+
+
+@pytest.mark.parametrize("enabled,channels", [(False, 1), (True, 2)])
+def test_nc_passthrough_does_not_add_metadata(enabled: bool, channels: int) -> None:
+    proc = _make_processor(16000, 160)
+    proc.enabled = enabled
+    frame = rtc.AudioFrame.create(16000, channels, 160)
+    assert proc._process(frame) is frame
+    assert frame.userdata == {}
+
+
+@pytest.mark.parametrize("mode", list(VivaMode))
+def test_vf_preserves_raw_before_in_place_processing(
+    monkeypatch: pytest.MonkeyPatch, mode: VivaMode
+) -> None:
+    class Backend:
+        enabled = True
+
+        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+            frame.data[0] = 99
+            return rtc.AudioFrame(
+                frame.data,
+                frame.sample_rate,
+                frame.num_channels,
+                frame.samples_per_channel,
+                userdata=frame.userdata,
+            )
+
+    monkeypatch.setattr(krisp.viva_filter, "_build_inner", lambda *args, **kwargs: Backend())
+    proc = krisp.KrispVivaFilterFrameProcessor(mode=mode, auth_provider=krisp.auth.livekit_cloud())
+    frame = rtc.AudioFrame(
+        bytearray(b"\x01\x00" * 160), 16000, 1, 160, userdata={"custom": "value"}
+    )
+    output = proc._process(frame)
+
+    assert output.data[0] == 99
+    assert output.userdata[USERDATA_AUDIO_PROCESSING] == "isolated"
+    assert frame.userdata == {"custom": "value"}
+    assert output.userdata["custom"] == "value"
+    raw = output.userdata[USERDATA_AUDIO_RAW]
+    assert raw.data[0] == 1
+    assert raw.samples_per_channel == output.samples_per_channel
+    assert raw.userdata == {}
+    output.data[0] = 0
+    assert raw.data[0] == 1
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_vf_passthrough_does_not_add_metadata(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    class Backend:
+        def __init__(self) -> None:
+            self.enabled = enabled
+
+        def _process(self, frame: rtc.AudioFrame) -> rtc.AudioFrame:
+            return frame
+
+    monkeypatch.setattr(krisp.viva_filter, "_build_inner", lambda *args, **kwargs: Backend())
+    proc = krisp.KrispVivaFilterFrameProcessor(auth_provider=krisp.auth.livekit_cloud())
+    frame = rtc.AudioFrame.create(16000, 1, 160)
+    assert proc._process(frame) is frame
+    assert frame.userdata == {}
