@@ -248,7 +248,13 @@ class BookRoomTask(AgentTask[RoomBooking]):
     @function_tool()
     async def open_credit_card_dialog(self) -> str:
         """Open the credit-card dialog. It collects the card number, expiry, security code, and cardholder name from the caller in one focused step."""
-        card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        try:
+            card = await GetCardTask(chat_ctx=speech_only(self.chat_ctx))
+        except ToolError as e:
+            return (
+                f"no card taken ({e}) - the booking can't be finalized without one; offer to "
+                "finish by callback once they have a card and call give_up"
+            )
         self._card_last4 = card.card_number[-4:]
         return f"card recorded (ending {self._card_last4}) | {self._status()}"
 
@@ -302,7 +308,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
 
     @function_tool(flags=ToolFlag.IGNORE_ON_ENTER)
     async def give_up(self, reason: str) -> None:
-        """Caller wants to abandon the booking.
+        """Caller wants to abandon the booking, or the booking can't be finalized because no card could be taken.
 
         Args:
             reason: short explanation.
