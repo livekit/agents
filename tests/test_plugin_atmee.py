@@ -611,6 +611,21 @@ async def test_malformed_success_is_a_typed_error(
     assert len(fake_atmee.calls("GET", get_path)) == 1  # a 2xx is never retried
 
 
+async def test_wait_until_ready_deadline_bounds_retries(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    path = f"/v1/avatars/{AVATAR_ID}"
+    fake_atmee.script("GET", path, 502, body="bad gateway", times=20)
+    slow_retries = APIConnectOptions(max_retry=5, retry_interval=30.0, timeout=5.0)
+    api = AtmeeAPI(session=http_session, conn_options=slow_retries)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    with pytest.raises(AtmeeException):
+        await api.wait_until_ready(AVATAR_ID, timeout=0.3, poll_interval=30)
+    # the 30 s retry pauses were cut to the remaining budget
+    assert loop.time() - began < 2
+
+
 # --- AvatarSession --------------------------------------------------------------
 
 END_PATH = f"/v1/avatar_sessions/{SESSION_ID}/end"
@@ -917,3 +932,60 @@ async def test_agent_session_close_ends_the_render(
     await settle()
     assert len(fake_atmee.calls("POST", END_PATH)) == 1
     assert "close" not in agent_session.handlers or not agent_session.handlers["close"]
+
+
+async def test_concurrent_aclose_never_closes_the_session_mid_end(
+    fake_atmee: FakeAtmee, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _session_start_body())
+    fake_atmee.script("POST", END_PATH, 500, body="down")
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    no_retry = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=5.0)
+    # no http_session passed: the client owns one, and aclose() closes it
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=no_retry)
+    agent_session = FakeAgentSession()
+    await avatar.start(agent_session, FakeRoom())  # type: ignore[arg-type]
+
+    # In a job the base aclose() awaits the LiveKit API to remove the avatar
+    # participant, and ending a render is a network round trip: model both,
+    # and record how many ends are in flight whenever the HTTP client closes.
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    base_aclose = BaseAvatarSession.aclose
+
+    async def slow_base_aclose(self: Any) -> None:
+        await asyncio.sleep(0.01)
+        await base_aclose(self)
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", slow_base_aclose)
+    in_flight = 0
+    in_flight_at_close: list[int] = []
+    real_end, real_close = avatar.api.end_avatar_session, avatar.api.aclose
+
+    async def slow_end(session_id: str) -> dict[str, Any]:
+        nonlocal in_flight
+        in_flight += 1
+        try:
+            await asyncio.sleep(0.05)
+            return await real_end(session_id)
+        finally:
+            in_flight -= 1
+
+    async def recording_close() -> None:
+        in_flight_at_close.append(in_flight)
+        await real_close()
+
+    monkeypatch.setattr(avatar.api, "end_avatar_session", slow_end)
+    monkeypatch.setattr(avatar.api, "aclose", recording_close)
+
+    # the agent session closes (background aclose) while the job shuts down (explicit aclose)
+    for handler in list(agent_session.handlers.get("close", [])):
+        handler(None)
+    await avatar.aclose()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if len(in_flight_at_close) >= 2:
+            break
+
+    assert in_flight_at_close and all(n == 0 for n in in_flight_at_close)
+    assert avatar._ended  # the second close retried the failed end and it went through

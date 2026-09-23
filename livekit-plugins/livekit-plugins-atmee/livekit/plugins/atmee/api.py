@@ -356,11 +356,9 @@ class AtmeeAPI:
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         return await self._get_avatar(avatar_id)
 
-    async def _get_avatar(
-        self, avatar_id: str, *, total_timeout: float = _DEFAULT_TOTAL_TIMEOUT
-    ) -> AvatarInfo:
+    async def _get_avatar(self, avatar_id: str, *, deadline: float | None = None) -> AvatarInfo:
         return _avatar_info(
-            await self._request("GET", f"/v1/avatars/{avatar_id}", total_timeout=total_timeout)
+            await self._request("GET", f"/v1/avatars/{avatar_id}", deadline=deadline)
         )
 
     async def wait_until_ready(
@@ -379,7 +377,7 @@ class AtmeeAPI:
                     code="timeout",
                 )
             try:
-                info = await self._get_avatar(avatar_id, total_timeout=remaining)
+                info = await self._get_avatar(avatar_id, deadline=deadline)
             except AtmeeException as e:
                 if loop.time() >= deadline and e.status_code == 0:
                     raise AtmeeException(
@@ -430,15 +428,26 @@ class AtmeeAPI:
         params: dict[str, str] | None = None,
         retry: bool = True,
         total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """One API call with the plugin's retry policy: transport errors and
         5xx answers are retried up to ``conn_options.max_retry`` times after the
         first attempt; a 503
         ``no_capacity`` and every 4xx are final. ``retry=False`` for calls
-        that are not idempotent (creating a session or an avatar)."""
+        that are not idempotent (creating a session or an avatar).
+
+        ``deadline`` (event-loop time) bounds the whole call, retries and the
+        pauses between them included."""
+        loop = asyncio.get_running_loop()
         attempts = self._conn_options.max_retry + 1 if retry else 1
         last_error: Exception | None = None
         for attempt in range(attempts):
+            attempt_timeout = total_timeout
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise last_error or AtmeeException(f"{method} {path} timed out")
+                attempt_timeout = min(total_timeout, remaining)
             try:
                 async with self._ensure_session().request(
                     method,
@@ -448,7 +457,7 @@ class AtmeeAPI:
                     data=data,
                     params=params,
                     timeout=aiohttp.ClientTimeout(
-                        sock_connect=self._conn_options.timeout, total=total_timeout
+                        sock_connect=self._conn_options.timeout, total=attempt_timeout
                     ),
                 ) as response:
                     if response.ok:
@@ -476,7 +485,10 @@ class AtmeeAPI:
                     "atmee api call failed; retrying",
                     extra={"path": path, "attempt": attempt + 1, "error": str(last_error)},
                 )
-                await asyncio.sleep(self._conn_options.retry_interval)
+                pause = self._conn_options.retry_interval
+                if deadline is not None:
+                    pause = min(pause, max(0.0, deadline - loop.time()))
+                await asyncio.sleep(pause)
         assert last_error is not None
         raise last_error
 

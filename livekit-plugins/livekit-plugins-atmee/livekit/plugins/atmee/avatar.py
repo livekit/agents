@@ -140,6 +140,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
         self._end_task: asyncio.Task[None] | None = None
         self._end_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
         self._ended = False
         self._started = False
         self._room_for_events: rtc.Room | None = None
@@ -326,8 +327,15 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         """End the Atmee session and remove the avatar from the room.
 
         Registered as a job shutdown callback by :meth:`start`; call it
-        yourself when running outside a job.
+        yourself when running outside a job. Safe to call more than once and
+        concurrently (the agent session's ``close`` event also triggers it):
+        calls are serialized, so the HTTP session is never closed while
+        another call is still ending the render.
         """
+        async with self._close_lock:
+            await self._aclose_locked()
+
+    async def _aclose_locked(self) -> None:
         if self._room_for_events is not None:
             self._room_for_events.off("participant_disconnected", self._on_participant_disconnected)
             self._room_for_events = None
