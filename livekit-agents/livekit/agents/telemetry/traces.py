@@ -350,26 +350,31 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    """Stamps per-job metadata on every span, resolved from the originating
-    job's context. The process-wide slot remains as a fallback for spans created
-    outside a job context (worker-level telemetry) while a job is running."""
+    """Stamps provider metadata and the current job's attributes on every span.
+
+    The last configured job's metadata is only a fallback outside a job context.
+    """
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
-        self._metadata = dict(metadata) if metadata else {}
+        self._provider_metadata = dict(metadata) if metadata else {}
+        self._fallback_metadata: dict[str, AttributeValue] = {}
 
     def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
+        """Set the fallback for spans created outside a job context."""
         # rebind rather than mutate: on_start may read it from another thread
-        self._metadata = dict(metadata)
+        self._fallback_metadata = dict(metadata)
 
     def clear_metadata(self) -> None:
-        self._metadata = {}
+        self._fallback_metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        if (attributes := _job_stamp_attributes()) is not None:
+        attributes = _job_stamp_attributes()
+        if attributes is None:
+            attributes = self._fallback_metadata
+        if self._provider_metadata:
+            attributes = {**self._provider_metadata, **attributes}
+        if attributes:
             span.set_attributes(attributes)
-            return
-        if self._metadata:
-            span.set_attributes(self._metadata)
 
 
 class _MetadataLogProcessor(LogRecordProcessor):
