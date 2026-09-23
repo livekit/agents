@@ -83,9 +83,9 @@ class RealtimeModel(_openai.RealtimeModel):
       ``storm``) and ``voice`` the ThunderPhone voice. Function tools run in
       the LiveKit agent.
 
-    Instructions and tools are frozen once the call starts (ThunderPhone
-    semantics), so the model declares them immutable and agent handoffs keep
-    the first configuration. Every call ends with ThunderPhone closing the
+    An inline call freezes its instructions and tools once it starts, so a
+    handoff to an Agent configured differently starts a new call; with a saved
+    agent, handoffs keep the call. Every call ends with ThunderPhone closing the
     socket; the session does not reconnect, because a reconnect would start a
     new, separately billed call.
     """
@@ -169,14 +169,17 @@ class RealtimeModel(_openai.RealtimeModel):
             **kwargs,
         )
         self._provider_label = "ThunderPhone"
-        # ThunderPhone freezes instructions and tools once the call starts, so a
-        # later agent handoff keeps the first configuration rather than erroring.
-        # Turn taking is ThunderPhone's and always on; the framework must not
-        # run its own VAD or turn detector against it.
+        # An inline call freezes its instructions and tools once it starts, so a
+        # handoff to an agent configured differently gets a new session (and a
+        # new call). A saved agent owns its instructions and tools and the
+        # plugin never sends them, so updates are no-ops and every handoff keeps
+        # the call. Turn taking is ThunderPhone's and always on; the framework
+        # must not run its own VAD or turn detector against it.
+        agent_mode = self._tp_agent_id is not None
         self._capabilities = dataclasses.replace(
             self._capabilities,
-            mutable_instructions=False,
-            mutable_tools=False,
+            mutable_instructions=agent_mode,
+            mutable_tools=agent_mode,
             turn_detection=True,
             can_disable_turn_detection=False,
         )
