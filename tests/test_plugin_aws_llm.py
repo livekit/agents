@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from livekit.agents import APIConnectionError
 from livekit.agents.llm import ChatContext, ToolChoice, function_tool
 from livekit.plugins.aws import LLM as BedrockLLM
 
@@ -97,6 +100,107 @@ async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
 async def test_default_model_still_receives_temperature() -> None:
     config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
     assert config["temperature"] == 0.7
+
+
+async def test_bedrock_client_is_reused_and_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = BedrockLLM(model="amazon.nova-2-lite-v1:0")
+    created = 0
+    entered = 0
+    exited = 0
+    calls = 0
+
+    class FakeClient:
+        async def converse_stream(self, **kwargs: object) -> dict:
+            nonlocal calls
+            calls += 1
+
+            async def empty_stream():
+                if False:
+                    yield {}
+
+            return {
+                "ResponseMetadata": {"RequestId": "request-id", "HTTPStatusCode": 200},
+                "stream": empty_stream(),
+            }
+
+    client = FakeClient()
+
+    class ClientContext:
+        async def __aenter__(self) -> FakeClient:
+            nonlocal entered
+            entered += 1
+            return client
+
+        async def __aexit__(self, *args: object) -> None:
+            nonlocal exited
+            exited += 1
+
+    def create_client(*args: object, **kwargs: object) -> ClientContext:
+        nonlocal created
+        created += 1
+        return ClientContext()
+
+    monkeypatch.setattr(instance._session, "create_client", create_client)
+
+    for _ in range(2):
+        await instance.chat(chat_ctx=ChatContext()).collect()
+
+    assert (created, entered, calls, exited) == (1, 1, 2, 0)
+
+    await instance.aclose()
+
+    assert exited == 1
+
+
+async def test_bedrock_client_is_not_created_when_llm_is_closed() -> None:
+    instance = BedrockLLM(model="amazon.nova-2-lite-v1:0")
+    await instance.aclose()
+
+    with pytest.raises(APIConnectionError, match="AWS Bedrock LLM is closed"):
+        await instance.chat(chat_ctx=ChatContext()).collect()
+
+
+async def test_concurrent_bedrock_turns_open_one_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = BedrockLLM(model="amazon.nova-2-lite-v1:0")
+    created = 0
+    calls = 0
+
+    class FakeClient:
+        async def converse_stream(self, **kwargs: object) -> dict:
+            nonlocal calls
+            calls += 1
+
+            async def empty_stream():
+                if False:
+                    yield {}
+
+            return {
+                "ResponseMetadata": {"RequestId": "request-id", "HTTPStatusCode": 200},
+                "stream": empty_stream(),
+            }
+
+    class ClientContext:
+        async def __aenter__(self) -> FakeClient:
+            await asyncio.sleep(0)
+            return FakeClient()
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    def create_client(*args: object, **kwargs: object) -> ClientContext:
+        nonlocal created
+        created += 1
+        return ClientContext()
+
+    monkeypatch.setattr(instance._session, "create_client", create_client)
+
+    await asyncio.gather(
+        instance.chat(chat_ctx=ChatContext()).collect(),
+        instance.chat(chat_ctx=ChatContext()).collect(),
+    )
+
+    assert (created, calls) == (1, 2)
+    await instance.aclose()
 
 
 @function_tool
