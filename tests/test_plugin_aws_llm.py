@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from botocore.exceptions import ClientError
 
+from livekit.agents import APIConnectOptions, APIError, APIStatusError
 from livekit.agents.llm import ChatContext, ToolChoice, function_tool
 from livekit.plugins.aws import LLM as BedrockLLM
 
@@ -153,3 +155,47 @@ async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureF
     assert len(warnings) == 1
     assert "claude-opus-5-5" not in warnings[0].getMessage()
     assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-5-5"
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "attempts"),
+    [
+        ("ValidationException", 400, 1),
+        ("ThrottlingException", 429, 4),
+        ("InternalServerException", 500, 4),
+    ],
+)
+async def test_bedrock_400_fails_fast_throttling_and_5xx_retried(
+    monkeypatch: pytest.MonkeyPatch, code: str, status: int, attempts: int
+) -> None:
+    # A 400 fails the same way on every retry; throttling and 5xx are still retried.
+    calls = 0
+
+    class _Client:
+        async def __aenter__(self) -> _Client:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def converse_stream(self, **kwargs: object) -> dict:
+            nonlocal calls
+            calls += 1
+            raise ClientError(
+                {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}},
+                "ConverseStream",
+            )
+
+    instance = BedrockLLM(model="us.openai.gpt-6-sol")
+    monkeypatch.setattr(instance._session, "create_client", lambda *a, **kw: _Client())
+    chat_ctx = ChatContext()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = instance.chat(chat_ctx=chat_ctx, conn_options=APIConnectOptions(retry_interval=0))
+
+    with pytest.raises(APIError) as exc_info:
+        await stream.collect()
+
+    assert calls == attempts
+    if attempts == 1:
+        assert isinstance(exc_info.value, APIStatusError)
+        assert exc_info.value.status_code == 400
