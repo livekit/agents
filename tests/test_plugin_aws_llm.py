@@ -94,6 +94,27 @@ async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
         assert "temperature" not in config
 
 
+async def test_sampling_params_omitted_for_openai_gpt_5_6_and_6() -> None:
+    # OpenAI GPT-5.6/GPT-6 reject both fields on Converse with a ValidationException
+    # ("This model doesn't support the temperature field. Remove temperature and try again.").
+    for model in (
+        "us.openai.gpt-6-sol",
+        "us.openai.gpt-6-luna",
+        "global.openai.gpt-6-sol",
+        "us.openai.gpt-5.6-sol",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.openai.gpt-6-luna",
+    ):
+        config = await _inference_config(model, temperature=0.5, top_p=0.9)
+        assert "temperature" not in config
+        assert "topP" not in config
+
+
+async def test_sampling_params_kept_for_gpt_oss() -> None:
+    # gpt-oss accepts temperature/topP, so the GPT-5.6/GPT-6 entries must not match it.
+    config = await _inference_config("openai.gpt-oss-120b-1:0", temperature=0.5, top_p=0.9)
+    assert config == {"temperature": 0.5, "topP": 0.9}
+
+
 async def test_default_model_still_receives_temperature() -> None:
     config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
     assert config["temperature"] == 0.7
