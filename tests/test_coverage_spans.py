@@ -8,17 +8,24 @@ import contextlib
 import time
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent, APIConnectionError, llm
+from livekit.agents import Agent, AgentSession, APIConnectionError, llm
 from livekit.agents.llm import ChatContext, FallbackAdapter, LLMStream, Tool
-from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import (
+    set_tracer_provider,
+    trace_types,
+    tracer,
+    utils as telemetry_utils,
+)
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.voice import generation
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.io import ModelSettings
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
@@ -26,6 +33,7 @@ from .fake_io import FakeAudioInput
 from .fake_llm import FakeLLM, FakeLLMResponse
 from .fake_session import FakeActions, create_session, run_session
 from .fake_stt import FakeSTT
+from .fake_tts import FakeTTS
 from .trace_schema import assert_trace_well_formed
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -175,6 +183,38 @@ async def test_update_agent_span_groups_the_handoff(span_exporter: InMemorySpanE
     assert_trace_well_formed(span_exporter.get_finished_spans())
 
 
+@pytest.mark.parametrize("phase", ["drain", "start"])
+@pytest.mark.parametrize("redacted", [False, True])
+async def test_update_agent_records_failure_once(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    redacted: bool,
+) -> None:
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redacted)
+    session = AgentSession()
+    failure = RuntimeError("private failure details")
+    try:
+        await session.start(_FirstAgent())
+        assert session._activity is not None
+        with monkeypatch.context() as patch:
+            if phase == "drain":
+                patch.setattr(session._activity, "drain", AsyncMock(side_effect=failure))
+            else:
+                patch.setattr(AgentActivity, "start", AsyncMock(side_effect=failure))
+            with pytest.raises(RuntimeError) as raised:
+                await session._update_activity_task(None, _SecondAgent())
+            assert raised.value is failure
+    finally:
+        await session.aclose()
+
+    [handoff] = _spans(span_exporter, "update_agent")
+    [event] = _events(handoff, "exception")
+    expected = telemetry_utils.REDACTED_EXCEPTION_MESSAGE if redacted else str(failure)
+    assert event.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == expected
+    assert handoff.status.description == expected
+
+
 # -- fallback adapter events --
 
 
@@ -280,6 +320,37 @@ async def test_llm_fallback_records_failed_and_serving_provider(
         assert caller_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     # and the adapter itself now reports who serves next
     assert adapter.model == secondary.model and adapter.provider == secondary.provider
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("redacted", [False, True])
+async def test_tts_retry_records_each_exception_once(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+    redacted: bool,
+) -> None:
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: redacted)
+    failure = APIConnectionError("private failure details")
+    async with FakeTTS(fake_exception=failure) as model:
+        conn_options = APIConnectOptions(max_retry=1, retry_interval=0)
+        if streaming:
+            stream = model.stream(conn_options=conn_options)
+            stream.push_text("hello")
+            stream.end_input()
+        else:
+            stream = model.synthesize("hello", conn_options=conn_options)
+        async with stream:
+            with pytest.raises(APIConnectionError):
+                async for _ in stream:
+                    pass
+
+    attempts = _spans(span_exporter, "tts_request_run")
+    assert len(attempts) == 2
+    for attempt in attempts:
+        [event] = _events(attempt, "exception")
+        expected = telemetry_utils.REDACTED_EXCEPTION_MESSAGE if redacted else str(failure)
+        assert event.attributes[trace_types.ATTR_EXCEPTION_MESSAGE] == expected
 
 
 def test_interrupt_source_first_wins() -> None:
