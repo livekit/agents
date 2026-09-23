@@ -522,7 +522,7 @@ async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeExcepti
     if isinstance(body, dict):
         code = body.get("error") if isinstance(body.get("error"), str) else None
         message = str(body.get("message") or body.get("detail") or message)
-    if response.status == 503 and code in (None, "no_capacity"):
+    if response.status == 503 and code == "no_capacity":
         retry_after: float | None = None
         header = response.headers.get("Retry-After")
         if header:

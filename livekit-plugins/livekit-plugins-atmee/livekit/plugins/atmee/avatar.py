@@ -193,6 +193,31 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             )
         self._started = True
         await super().start(agent_session, room)
+        try:
+            await self._start_render(
+                agent_session,
+                room,
+                livekit_url=livekit_url,
+                livekit_api_key=livekit_api_key,
+                livekit_api_secret=livekit_api_secret,
+            )
+        except BaseException:
+            # Undo what super().start() set up (shutdown callback, listeners,
+            # join task) and end a session that may already exist. The
+            # instance stays spent: a session whose creation is uncertain is
+            # never retried on it.
+            await self.aclose()
+            raise
+
+    async def _start_render(
+        self,
+        agent_session: AgentSession[Any],
+        room: rtc.Room,
+        *,
+        livekit_url: NotGivenOr[str],
+        livekit_api_key: NotGivenOr[str],
+        livekit_api_secret: NotGivenOr[str],
+    ) -> None:
 
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
         livekit_api_key = livekit_api_key or (os.getenv("LIVEKIT_API_KEY") or NOT_GIVEN)

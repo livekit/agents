@@ -628,6 +628,18 @@ async def test_wait_until_ready_deadline_bounds_retries(
     assert loop.time() - began < 2
 
 
+async def test_plain_503_is_retried_like_any_5xx(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    get_path = f"/v1/avatar_sessions/{SESSION_ID}"
+    fake_atmee.script("GET", get_path, 503, body="Service Unavailable")  # e.g. from a proxy
+    fake_atmee.script("GET", get_path, 200, {"sessionId": SESSION_ID, "status": "active"})
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    got = await api.get_avatar_session(SESSION_ID)
+    assert got["status"] == "active"
+    assert len(fake_atmee.calls("GET", get_path)) == 2
+
+
 # --- AvatarSession --------------------------------------------------------------
 
 END_PATH = f"/v1/avatar_sessions/{SESSION_ID}/end"
@@ -991,3 +1003,27 @@ async def test_concurrent_aclose_never_closes_the_session_mid_end(
 
     assert in_flight_at_close and all(n == 0 for n in in_flight_at_close)
     assert avatar._ended  # the second close retried the failed end and it went through
+
+
+async def test_failed_start_releases_the_base_session_hooks(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script(
+        "POST",
+        SESSIONS_PATH,
+        503,
+        {"error": "no_capacity", "message": "busy"},
+        headers={"Retry-After": "5"},
+    )
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    agent_session, room = FakeAgentSession(), FakeRoom()
+    with pytest.raises(atmee.AtmeeNoCapacityError):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]
+    # the listeners super().start() installed are gone again
+    assert not agent_session.handlers.get("conversation_item_added")
+    assert not room.handlers.get("connection_state_changed")
+    # and the instance stays spent
+    with pytest.raises(atmee.AtmeeException, match="already called"):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]
