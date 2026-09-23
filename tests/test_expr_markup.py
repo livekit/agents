@@ -251,7 +251,7 @@ def test_split_all_markup_removed_tag_leaves_one_space() -> None:
 def test_split_all_markup_keeps_trailing_space_for_stream() -> None:
     # mid-stream that space is the separator for words still arriving
     chunk = 'Right. <expr type="sound" label="laugh"/>'
-    assert split_all_markup(chunk, whole_segment=False)[0] == "Right. "
+    assert split_all_markup(chunk, at_line_start=False, at_text_end=False)[0] == "Right. "
     # as a whole segment there is nothing still arriving, so the separator goes
     assert strip_all_markup(chunk) == "Right."
 
@@ -612,3 +612,13 @@ def test_paragraph_structure_is_never_collapsed() -> None:
     for text in ("   Indented on purpose.  ", "a\n   indented line"):
         assert strip_all_markup(text) == text
         assert strip_expr_markup(text) == text
+
+
+def test_only_the_stranded_separator_goes() -> None:
+    # the drop happens at the removal, so whitespace on lines the marker never touched
+    # is left alone -- indented blocks survive a turn that carries markers
+    turn = '<expr type="expression" label="Warm"/> Intro:\n    indented text'
+    assert strip_all_markup(turn) == "Intro:\n    indented text"
+    assert strip_expr_markup(turn) == "Intro:\n    indented text"
+    # and a marker mid-line still leaves exactly one separator
+    assert strip_all_markup('a <expr type="sound" label="laugh"/> b') == "a b"

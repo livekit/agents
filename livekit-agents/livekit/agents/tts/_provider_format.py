@@ -25,6 +25,7 @@ from ._mood import match_mood
 from .markup_utils import (
     LEADING_WS,
     _dedup_removal_space,
+    _strip_one,
     convert_expression_tags,
     extract_and_strip,
 )
@@ -995,6 +996,8 @@ _EXPR_ATTR_RE = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 _EXPR_OPEN_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/?\s*>")
 _EXPR_CLOSE_RE = re.compile(LEADING_WS + r"</expr\s*>")
 # self-closing markers only (the trailing / is required)
+# any expr marker, opening or self-closing or closing; ``attrs`` is None for a closing one
+_EXPR_ANY_RE = re.compile(LEADING_WS + r"(?:<expr\b(?P<attrs>[^>]*?)/?\s*>|</expr\s*>)")
 _EXPR_SELF_RE = re.compile(LEADING_WS + r"<expr\b(?P<attrs>[^>]*?)/\s*>")
 # a wrapping marker (prosody/spell) and its span; non-greedy, instructed not to nest
 _EXPR_WRAP_RE = re.compile(
@@ -1037,7 +1040,7 @@ def _expr_attrs(attrs: str) -> dict[str, str]:
     return dict(_EXPR_ATTR_RE.findall(attrs))
 
 
-def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
+def _split_expr(text: str, *, at_line_start: bool = True) -> tuple[str, list[ExpressiveTag]]:
     """Strip expr markers and collect (type, label) pairs, in document order.
 
     The generic ``extract_and_strip`` pass can't produce the right ExpressiveTag for
@@ -1050,15 +1053,19 @@ def _split_expr(text: str) -> tuple[str, list[ExpressiveTag]]:
         return text, []
 
     tags: list[ExpressiveTag] = []
+    out: list[str] = ["" if at_line_start else "\u0000"]
+    pos = 0
 
-    def _repl(m: re.Match[str]) -> str:
-        attrs = _expr_attrs(m.group("attrs"))
-        tags.append({"type": attrs.get("type", ""), "value": attrs.get("label", "")})
-        return _dedup_removal_space(m, "")
+    for m in _EXPR_ANY_RE.finditer(text):
+        out.append(text[pos : m.start()])
+        pos = m.end()
+        if (attrs := m.group("attrs")) is not None:
+            marker = _expr_attrs(attrs)
+            tags.append({"type": marker.get("type", ""), "value": marker.get("label", "")})
+        pos = _strip_one(out, text, pos, m, "")
 
-    clean = _EXPR_OPEN_RE.sub(_repl, text)
-    clean = _EXPR_CLOSE_RE.sub(lambda m: _dedup_removal_space(m, ""), clean)
-    return clean, tags
+    out.append(text[pos:])
+    return "".join(out).lstrip("\u0000"), tags
 
 
 def _convert_gemini_expr(text: str) -> str:
@@ -1234,34 +1241,20 @@ _PROVIDER_MARKUP: dict[str, list[str]] = {
 _ALL_MARKUP_TAGS: list[str] = sorted({tag for tags in _PROVIDER_MARKUP.values() for tag in tags})
 
 
-_LINE_HEAD_WS_RE = re.compile(r"(?:\A|(?<=\n))[^\S\r\n]+")
-_AFTER_NEWLINE_WS_RE = re.compile(r"(?<=\n)[^\S\r\n]+")
+def _drop_trailing_separator(clean: str, stripped_any: bool) -> str:
+    """Drop the space a marker ending the text leaves with nothing to pair against.
 
-
-def _trim_marker_edges(
-    clean: str, stripped_any: bool, *, at_line_start: bool = True, at_text_end: bool = True
-) -> str:
-    """Drop the separators a stripped marker leaves with nothing to pair against.
-
-    ``_dedup_removal_space`` removes one of the two spaces a marker sat between, but only
-    when it can see both. A marker heading a line, or ending the text, has a space on one
-    side only — so nothing is removed and it is stranded. All routine: a marker opens
-    every turn, models write one sentence per line, and turns often end on a sound.
-
-    Only applied when a marker was stripped, so whitespace the LLM laid out itself
-    survives. The flags are what a chunk boundary costs a streaming caller: mid-line a
-    leading space separates two words, mid-stream a trailing one belongs to words still
-    arriving.
+    ``_split_expr`` handles the other three sides at the point of removal, where it still
+    knows whether the marker headed a line. It cannot handle this one: mid-stream a
+    trailing space is the separator for words still arriving, so only a caller holding
+    the whole segment may drop it.
     """
-    if not stripped_any:
-        return clean
-    clean = (
-        _LINE_HEAD_WS_RE.sub("", clean) if at_line_start else _AFTER_NEWLINE_WS_RE.sub("", clean)
-    )
-    return clean.rstrip(" \t") if at_text_end else clean
+    return clean.rstrip(" \t") if stripped_any else clean
 
 
-def split_all_markup(text: str, *, whole_segment: bool = True) -> tuple[str, list[ExpressiveTag]]:
+def split_all_markup(
+    text: str, *, at_line_start: bool = True, at_text_end: bool = True
+) -> tuple[str, list[ExpressiveTag]]:
     """Strip the union of every provider's expressive XML markup (provider-agnostic).
 
     The transcript sinks strip downstream, where the originating TTS/provider is no
@@ -1275,9 +1268,12 @@ def split_all_markup(text: str, *, whole_segment: bool = True) -> tuple[str, lis
 
     Args:
         text: The text to strip.
-        whole_segment: Whether *text* is a complete segment, in which case a marker at
-            either edge takes its separator along (:func:`_trim_marker_edges`). Pass
-            ``False`` per chunk, as :class:`TranscriptMarkupStripper` does.
+        at_line_start: Whether *text* begins a line, so a marker heading it takes the
+            space after it along. ``False`` for a chunk picked up mid-line, where that
+            whitespace is a real separator between two words.
+        at_text_end: Whether *text* really ends here, so a marker ending it takes the
+            space before it along (:func:`_drop_trailing_separator`). ``False``
+            mid-stream, where that whitespace belongs to words still arriving.
     """
     # every markup shape is angle-bracketed, so text without "<" cannot contain any. The
     # sinks call this per streamed chunk and expressive is off by default, making this the
@@ -1285,11 +1281,13 @@ def split_all_markup(text: str, *, whole_segment: bool = True) -> tuple[str, lis
     if "<" not in text:
         return text, []
 
-    text, expr_tags = _split_expr(text)
-    clean, raw_tags = extract_and_strip(text, xml_tags=_ALL_MARKUP_TAGS)
+    text, expr_tags = _split_expr(text, at_line_start=at_line_start)
+    clean, raw_tags = extract_and_strip(
+        text, xml_tags=_ALL_MARKUP_TAGS, at_line_start=at_line_start
+    )
     tags = expr_tags + [{"type": tag, "value": value} for tag, value in raw_tags]
-    if whole_segment:
-        clean = _trim_marker_edges(clean, bool(tags))
+    if at_text_end:
+        clean = _drop_trailing_separator(clean, bool(tags))
     return clean, tags
 
 
@@ -1306,7 +1304,7 @@ def split_expr_markup(text: str) -> tuple[str, list[ExpressiveTag]]:
     words, while the ``expression`` marker beside it has to come out.
     """
     clean, tags = _split_expr(text)
-    return _trim_marker_edges(clean, bool(tags)), tags
+    return _drop_trailing_separator(clean, bool(tags)), tags
 
 
 def strip_expr_markup(text: str) -> str:
@@ -1343,7 +1341,8 @@ class TranscriptMarkupStripper:
         self._buf = ""
         self._tags: list[ExpressiveTag] = []
         self._seam_after_strip = False
-        self._line_start = True  # the next words open the first line
+        self._eat_leading_ws = False
+        self._line_start = True  # the next words open the segment's first line
 
     def _consume(self, text: str, *, final: bool) -> str:
         """Strip *text*, record its tags, and keep a removed tag from doubling a space.
@@ -1353,29 +1352,33 @@ class TranscriptMarkupStripper:
         emitted, so a tag opening the *next* chunk is still stripped against the space
         before it; ``final`` releases the held whitespace at segment end.
         """
-        if self._seam_after_strip and text[:1] in (" ", "\t"):
+        if self._eat_leading_ws:
+            # the chunk ended on a tag that headed a line, so the space it stranded is
+            # the one this chunk starts with
+            text = text.lstrip(" \t")
+        elif self._seam_after_strip and text[:1] in (" ", "\t"):
             # a tag was stripped right at the held whitespace: collapse that whitespace
             # with the run following it, leaving the single separator the words need
             text = text[:1] + text[1:].lstrip(" \t")
 
-        clean, tags = split_all_markup(text, whole_segment=False)
+        # at_text_end is handled below against the segment's tags, not this chunk's: the
+        # flush that ends a segment often carries only held whitespace and no marker
+        clean, tags = split_all_markup(text, at_line_start=self._line_start, at_text_end=False)
         self._tags.extend(tags)
-
-        # self._tags, not tags: the marker may have arrived in an earlier chunk that
-        # emitted nothing, leaving its space to this one
-        clean = _trim_marker_edges(
-            clean, bool(self._tags), at_line_start=self._line_start, at_text_end=final
-        )
+        if final:
+            clean = _drop_trailing_separator(clean, bool(self._tags))
 
         held = "" if final else clean[len(clean.rstrip(" \t")) :]
         self._buf = held
-        # the held whitespace only abuts a removal when this chunk *ended* on a tag; a tag
-        # stripped earlier in the chunk leaves whitespace the LLM itself wrote, which is
-        # passed through rather than collapsed
-        self._seam_after_strip = bool(tags) and bool(held) and text.rstrip(" \t").endswith(">")
         out = clean[: len(clean) - len(held)]
         if out:
-            self._line_start = out.endswith("\n")  # next chunk heads a fresh line
+            self._line_start = out.endswith("\n")  # the next chunk heads a fresh line
+
+        # a tag only abuts the next chunk when this one *ended* on it; a tag stripped
+        # earlier leaves whitespace the LLM itself wrote, which is passed through
+        ended_on_tag = bool(tags) and text.rstrip(" \t").endswith(">")
+        self._seam_after_strip = ended_on_tag and bool(held)
+        self._eat_leading_ws = ended_on_tag and self._line_start
         return out
 
     def _has_open_tag(self) -> bool:

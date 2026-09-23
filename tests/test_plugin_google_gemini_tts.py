@@ -309,8 +309,9 @@ def test_multi_speaker_config_is_validated() -> None:
         with pytest.raises(ValueError, match="`speaker` is required"):
             TTS(api_key="k", model="gemini-3.8-flash-tts", speakers=speakers)
 
-        # the API rejects any count but two, a single speaker included
-        for bad in ({"Solo": "Kore"}, {"A": "Kore", "B": "Puck", "C": "Charon"}):
+        # the API rejects any count but two -- a single speaker, and an empty table
+        # that would otherwise slip past into the single-voice config
+        for bad in ({}, {"Solo": "Kore"}, {"A": "Kore", "B": "Puck", "C": "Charon"}):
             with pytest.raises(ValueError, match="exactly 2 speakers"):
                 TTS(api_key="k", model="gemini-3.8-flash-tts", speakers=bad, speaker="A")
 
@@ -397,6 +398,42 @@ async def test_speaker_and_style_travel_together(mock_genai_client_class) -> Non
                     "text": '"Sienna?"',
                     "speech_metadata": {"style": "Wistful", "speaker": "Sienna"},
                 }
+            ]
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@patch("livekit.plugins.google.beta.gemini_tts.Client")
+async def test_each_styled_sentence_gets_its_own_part(mock_genai_client_class) -> None:
+    """Gemini takes a style per part, so a style change has to open a new one.
+
+    The stream adapter normally hands over one sentence at a time, but `synthesize()` is
+    public and takes whatever it is given -- folding several styled sentences into one
+    part would speak the later ones with the first one's delivery.
+    """
+    mock_client = MagicMock()
+    mock_genai_client_class.return_value = mock_client
+    mock_stream = AsyncMock()
+    mock_client.aio.models.generate_content_stream = mock_stream
+    mock_stream.side_effect = _audio_response()
+
+    google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
+    stream = google_tts.synthesize(
+        '<expr type="expression" label="Warm"/> Hello. '
+        '<expr type="expression" label="Sad"/> <expr type="sound" label="sigh"/> Goodbye.'
+    )
+    try:
+        await stream._run(MagicMock(spec=tts.AudioEmitter))
+    finally:
+        await stream.aclose()
+
+    assert _request_body(mock_stream)["contents"] == [
+        {
+            "parts": [
+                {"text": '"Hello."', "speech_metadata": {"style": "Warm"}},
+                # the inline event stays in the words it belongs to
+                {"text": '"<sigh> Goodbye."', "speech_metadata": {"style": "Sad"}},
             ]
         }
     ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -44,6 +45,10 @@ def _styles_per_part(model: str) -> bool:
 # spell it "audio/l16"; on the wire it is an enum (AUDIO_MULAW and AUDIO_ALAW are the
 # other two) nested under a ResponseFormatConfig that the typed SDK has no field for.
 _RESPONSE_FORMAT = {"audio": {"mime_type": "AUDIO_L16"}}
+
+# where one part ends and the next begins: Gemini takes a style per part, and an
+# expression marker is the only thing that changes it
+_EXPRESSION_MARKER_RE = re.compile(r'<expr\b(?=[^>]*type="expression")[^>]*?/\s*>')
 
 
 GEMINI_VOICES = Literal[
@@ -170,7 +175,7 @@ class TTS(tts.TTS):
 
         speaker_map = dict(speakers) if is_given(speakers) else None
         current_speaker = speaker if is_given(speaker) else None
-        if speaker_map:
+        if speaker_map is not None:
             # not "up to two": the API rejects any other count outright, with
             # "the number of speaker_voice_configs must equal 2"
             if len(speaker_map) != 2:
@@ -297,18 +302,22 @@ class ChunkedStream(tts.ChunkedStream):
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
 
-    def _styled_part(self) -> dict[str, Any] | None:
-        """Build this request's part, or ``None`` if it carries nothing out of band.
+    def _styled_parts(self) -> list[dict[str, Any]] | None:
+        """Build one request part per delivery style, or ``None`` if none is carried.
 
         Discrete events are already inline Gemini tags here (``convert`` lowered them) and
-        belong in the words; the ``expression`` marker is the other channel and comes out::
+        belong in the words; the ``expression`` marker is the other channel and comes out,
+        splitting the text wherever the delivery changes::
 
-            {"parts": [{"text": "\\"<chuckle> Sienna?\\"",
-                        "speech_metadata": {"style": "Thoughtful, Quiet, American accent"}}]}
+            {"parts": [{"text": "\"<chuckle> Sienna?\"",
+                        "speech_metadata": {"style": "Thoughtful, Quiet"}},
+                       {"text": "\"What's on your mind?\"",
+                        "speech_metadata": {"style": "Wistful"}}]}
 
-        Hence ``split_expr_markup``, not ``split_all_markup`` — the latter would take the
-        inline tags out too. One request is one sentence, so one style; several markers in
-        one call means the leading one governs.
+        The agent's stream adapter hands over one sentence at a time, so a turn usually
+        makes one part; a direct ``synthesize()`` call may carry several sentences, and
+        each keeps the style that governs it. Hence ``split_expr_markup``, not
+        ``split_all_markup`` -- the latter would take the inline tags out too.
         """
         opts = self._tts._opts
         if not _styles_per_part(opts.model):
@@ -316,23 +325,30 @@ class ChunkedStream(tts.ChunkedStream):
 
         markup = self._tts.markup
         # the stream adapter has already lowered; a direct synthesize() call has not
-        text, markers = split_expr_markup(markup.convert(markup.normalize(self._input_text)))
-        marker = next((t["value"] for t in markers if t["type"] == "expression"), "")
-        style = ", ".join(part for part in (opts.instructions, marker) if part)
-        if not (text := text.strip()):
-            return None
+        text = markup.convert(markup.normalize(self._input_text))
+        # slice at each marker, keeping it at the head of its span so the shared splitter
+        # reads the label off it
+        bounds = [0, *(m.start() for m in _EXPRESSION_MARKER_RE.finditer(text)), len(text)]
+        spans = [text[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
 
-        metadata: dict[str, str] = {}
-        if style:
-            metadata["style"] = style
-        if opts.speaker:
-            # every turn of a multi-speaker request has to name its speaker, so this part
-            # is sent even when the turn carries no style of its own
-            metadata["speaker"] = opts.speaker
-        if not metadata:
-            return None  # no direction to carry
+        parts: list[dict[str, Any]] = []
+        for span in spans:
+            words, markers = split_expr_markup(span)
+            if not (words := words.strip()):
+                continue
+            marker = next((t["value"] for t in markers if t["type"] == "expression"), "")
+            metadata: dict[str, str] = {}
+            if style := ", ".join(p for p in (opts.instructions, marker) if p):
+                metadata["style"] = style
+            if opts.speaker:
+                # every turn of a multi-speaker request has to name its speaker, so a
+                # part is sent even when it carries no style of its own
+                metadata["speaker"] = opts.speaker
+            if not metadata:
+                return None  # no direction to carry, on any span
+            parts.append({"text": f'"{words}"', "speech_metadata": metadata})
 
-        return {"text": f'"{text}"', "speech_metadata": metadata}
+        return parts or None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
@@ -352,8 +368,8 @@ class ChunkedStream(tts.ChunkedStream):
             extra_body: dict[str, Any] = {}
             if _styles_per_part(opts.model):
                 extra_body["generationConfig"] = {"response_format": _RESPONSE_FORMAT}
-            if (styled_part := self._styled_part()) is not None:
-                extra_body["contents"] = [{"parts": [styled_part]}]
+            if (styled_parts := self._styled_parts()) is not None:
+                extra_body["contents"] = [{"parts": styled_parts}]
             if extra_body:
                 config.http_options = types.HttpOptions(extra_body=extra_body)
 

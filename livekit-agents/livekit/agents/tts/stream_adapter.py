@@ -53,6 +53,12 @@ class StreamAdapter(TTS):
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
 
+    def _set_expressive(self, enabled: bool) -> None:
+        # StreamAdapterWrapper reads the wrapped instance's flag, so an adapter handed
+        # straight to the session has to pass this through
+        super()._set_expressive(enabled)
+        self._wrapped_tts._set_expressive(enabled)
+
     @property
     def model(self) -> str:
         return self._wrapped_tts.model

@@ -214,3 +214,34 @@ def test_expressive_needs_a_tts_the_framework_can_lower_for() -> None:
     assert not resolves(_Declaring(streaming=True))
     # the gateway streams too, but lowers inside its own stream
     assert resolves(inference.TTS("fishaudio/s2.1-pro", api_key="fake", api_secret="fake"))
+
+
+def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
+    """A StreamAdapter is streaming only at its surface; inside is the lowering path."""
+
+    class _NonStreaming(tts.TTS):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=tts.TTSCapabilities(streaming=False),
+                sample_rate=24000,
+                num_channels=1,
+            )
+
+        class Markup(tts.TTS.Markup):
+            def _provider_key(self) -> str:
+                return "gemini"
+
+        def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+            raise NotImplementedError
+
+    wrapped = _NonStreaming()
+    adapter = tts.StreamAdapter(tts=wrapped)
+    assert adapter.capabilities.streaming  # what the old guard rejected it for
+
+    session = AgentSession(expressive=True, tts=adapter)
+    activity = AgentActivity(Agent(instructions="test"), session)
+    assert activity._resolve_expressive_options() is not None
+
+    # StreamAdapterWrapper reads the wrapped instance's flag, so it has to pass through
+    adapter._set_expressive(True)
+    assert wrapped._expressive
