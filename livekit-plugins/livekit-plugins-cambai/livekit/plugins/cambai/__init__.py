@@ -20,6 +20,7 @@ import aiohttp
 
 from livekit.agents import APIStatusError, Plugin
 
+from . import experimental
 from .log import logger
 from .tts import API_BASE_URL, API_KEY_HEADER, TTS
 from .version import __version__
@@ -95,4 +96,4 @@ class CambaiPlugin(Plugin):
 
 Plugin.register_plugin(CambaiPlugin())
 
-__all__ = ["TTS", "list_voices", "__version__"]
+__all__ = ["TTS", "experimental", "list_voices", "__version__"]
