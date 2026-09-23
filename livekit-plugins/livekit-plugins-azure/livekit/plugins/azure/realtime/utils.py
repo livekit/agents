@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
+from enum import Enum
 
 from azure.ai.voicelive.models import (
     AssistantMessageItem,
@@ -15,8 +17,13 @@ from azure.ai.voicelive.models import (
     Modality,
     OutputAudioFormat,
     OutputTextContentPart,
+    ResponseFunctionCallItem,
+    ResponseFunctionCallOutputItem,
+    ResponseItem,
+    ResponseMessageItem,
     ServerVad,
     SystemMessageItem,
+    Tool,
     ToolChoiceFunctionSelection,
     ToolChoiceLiteral,
     ToolChoiceSelection,
@@ -96,7 +103,7 @@ DEFAULT_TOOL_CHOICE: ToolChoiceLiteral | ToolChoiceSelection = ToolChoiceLiteral
 def to_azure_tool_choice(
     tool_choice: llm.ToolChoice | None,
 ) -> ToolChoiceLiteral | ToolChoiceSelection:
-    """Convert a LiveKit ToolChoice to Azure's tool_choice format."""
+    """Convert a LiveKit ToolChoice to Azure's session-level tool_choice format."""
     if isinstance(tool_choice, str):
         return ToolChoiceLiteral(tool_choice)
 
@@ -106,6 +113,21 @@ def to_azure_tool_choice(
     return DEFAULT_TOOL_CHOICE
 
 
+def to_azure_response_tool_choice(tool_choice: llm.ToolChoice | None) -> str:
+    """Convert a LiveKit ToolChoice to the tool_choice of a single response.
+
+    The response-level field is a string: a mode (``auto``, ``none``, ``required``) or the name of
+    the function the model must call.
+    """
+    if isinstance(tool_choice, str):
+        return tool_choice
+
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        return tool_choice["function"]["name"]
+
+    return ToolChoiceLiteral.AUTO.value
+
+
 def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
     """Convert LiveKit Tool to Azure FunctionTool format.
 
@@ -113,38 +135,36 @@ def livekit_tool_to_azure_tool(tool: llm.Tool) -> FunctionTool | None:
     """
     from livekit.agents.llm import utils as llm_utils
 
-    # Handle FunctionTool and RawFunctionTool
     if isinstance(tool, llm.FunctionTool):
-        # Use the build_legacy_openai_schema to get the schema
         schema = llm_utils.build_legacy_openai_schema(tool, internally_tagged=True)
-
-        parameters = schema.get("parameters", {})
-
-        azure_tool = FunctionTool(
+        return FunctionTool(
             name=schema["name"],
             description=schema.get("description", ""),
-            parameters=parameters,
+            parameters=schema.get("parameters", {}),
         )
 
-        logger.info(f"[TOOL_CONVERSION] Converted tool {schema['name']}")
-        logger.debug(f"[TOOL_CONVERSION] Schema: {schema}")
-        logger.debug(f"[TOOL_CONVERSION] Azure tool parameters: {parameters}")
-
-        return azure_tool
-    elif isinstance(tool, llm.RawFunctionTool):
-        # For RawFunctionTool, extract schema from info.raw_schema
+    if isinstance(tool, llm.RawFunctionTool):
         raw_schema = tool.info.raw_schema
-        azure_tool = FunctionTool(
+        return FunctionTool(
             name=tool.info.name,
             description=raw_schema.get("description", ""),
             parameters=raw_schema.get("parameters", {}),
         )
 
-        logger.info(f"[TOOL_CONVERSION] Converted raw tool {tool.info.name}")
-        return azure_tool
-    else:
-        logger.warning(f"[TOOL_CONVERSION] Skipping unsupported tool type: {type(tool)}")
-        return None
+    logger.warning(
+        "Azure Voice Live doesn't support this tool type, skipping it",
+        extra={"tool_type": type(tool).__name__},
+    )
+    return None
+
+
+def livekit_tools_to_azure_tools(tools: Sequence[llm.Tool]) -> list[Tool]:
+    """Convert LiveKit tools to Azure function tools, skipping unsupported tool types."""
+    azure_tools: list[Tool] = []
+    for tool in tools:
+        if (azure_tool := livekit_tool_to_azure_tool(tool)) is not None:
+            azure_tools.append(azure_tool)
+    return azure_tools
 
 
 # Type alias for Azure conversation items
@@ -156,10 +176,17 @@ AzureConversationItem = (
     | FunctionCallOutputItem
 )
 
+_CHAT_ROLES: dict[str, llm.ChatRole] = {
+    "system": "system",
+    "developer": "developer",
+    "user": "user",
+    "assistant": "assistant",
+}
+
 
 def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
     if item.type == "function_call_output":
-        return FunctionCallOutputItem(call_id=item.call_id, output=item.output)
+        return FunctionCallOutputItem(call_id=item.call_id, output=item.output, id=item.id)
 
     if item.type == "function_call":
         return FunctionCallItem(
@@ -196,4 +223,43 @@ def livekit_item_to_azure_item(item: llm.ChatItem) -> AzureConversationItem:
                     )
             return UserMessageItem(content=content_parts, id=item.id)
         raise ValueError(f"Unsupported role: {item.role}")
+    raise ValueError(f"Unsupported item type: {item.type}")
+
+
+def azure_item_to_livekit_item(item: ResponseItem) -> llm.ChatItem:
+    """Convert a conversation item created by Azure Voice Live to a LiveKit chat item."""
+    if not item.id:
+        raise ValueError("conversation item has no id")
+
+    if isinstance(item, ResponseFunctionCallItem):
+        return llm.FunctionCall(
+            id=item.id,
+            call_id=item.call_id,
+            name=item.name,
+            arguments=item.arguments or "",
+        )
+
+    if isinstance(item, ResponseFunctionCallOutputItem):
+        return llm.FunctionCallOutput(
+            id=item.id,
+            call_id=item.call_id,
+            output=item.output,
+            is_error=False,
+        )
+
+    if isinstance(item, ResponseMessageItem):
+        raw_role = item.role.value if isinstance(item.role, Enum) else item.role
+        role = _CHAT_ROLES.get(raw_role)
+        if role is None:
+            raise ValueError(f"Unsupported role: {raw_role}")
+
+        content: list[llm.ChatContent] = []
+        for part in item.content or []:
+            # text parts carry `text`, audio parts carry the `transcript` of the audio
+            text = getattr(part, "text", None) or getattr(part, "transcript", None)
+            if isinstance(text, str) and text:
+                content.append(text)
+
+        return llm.ChatMessage(id=item.id, role=role, content=content)
+
     raise ValueError(f"Unsupported item type: {item.type}")

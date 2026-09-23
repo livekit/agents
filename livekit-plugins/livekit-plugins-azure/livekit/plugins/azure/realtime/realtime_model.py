@@ -7,19 +7,44 @@ import os
 import time
 import weakref
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
-from typing import Any, Literal, cast
+from dataclasses import dataclass, field, replace
+from typing import Literal, cast
 
-from azure.ai.voicelive.aio import connect
+from azure.ai.voicelive.aio import VoiceLiveConnection, connect
 from azure.ai.voicelive.models import (
     AudioInputTranscriptionOptions,
     AzureStandardVoice,
+    ClientEvent,
+    ClientEventConversationItemCreate,
+    ClientEventConversationItemDelete,
+    ClientEventInputAudioBufferAppend,
+    ClientEventInputAudioBufferClear,
+    ClientEventInputAudioBufferCommit,
+    ClientEventResponseCancel,
+    ClientEventResponseCreate,
+    ClientEventSessionUpdate,
     InputAudioFormat,
     Modality,
     OutputAudioFormat,
     RequestSession,
-    ServerEventType,
-    Tool,
+    ResponseCreateParams,
+    ServerEvent,
+    ServerEventConversationItemCreated,
+    ServerEventConversationItemDeleted,
+    ServerEventConversationItemInputAudioTranscriptionCompleted,
+    ServerEventError,
+    ServerEventInputAudioBufferSpeechStarted,
+    ServerEventInputAudioBufferSpeechStopped,
+    ServerEventResponseAudioDelta,
+    ServerEventResponseAudioTranscriptDelta,
+    ServerEventResponseContentPartAdded,
+    ServerEventResponseCreated,
+    ServerEventResponseDone,
+    ServerEventResponseFunctionCallArgumentsDelta,
+    ServerEventResponseFunctionCallArgumentsDone,
+    ServerEventResponseOutputItemAdded,
+    ServerEventResponseTextDelta,
+    ServerEventSessionUpdated,
     TurnDetection,
 )
 from azure.core.credentials import AzureKeyCredential
@@ -27,6 +52,7 @@ from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
 from livekit.agents.metrics import RealtimeModelMetrics
+from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -34,6 +60,7 @@ from livekit.agents.types import (
     NotGivenOr,
 )
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import remove_instructions
 
 from ..log import logger
 from .utils import (
@@ -42,9 +69,12 @@ from .utils import (
     DEFAULT_MODALITIES,
     DEFAULT_OUTPUT_AUDIO_FORMAT,
     DEFAULT_TEMPERATURE,
+    AzureConversationItem,
+    azure_item_to_livekit_item,
     livekit_item_to_azure_item,
-    livekit_tool_to_azure_tool,
+    livekit_tools_to_azure_tools,
     to_audio_transcription,
+    to_azure_response_tool_choice,
     to_azure_tool_choice,
     to_turn_detection,
 )
@@ -53,6 +83,17 @@ SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 BYTES_PER_SAMPLE = NUM_CHANNELS * 2  # 2 bytes per sample for PCM16
 DEFAULT_VOICE = "en-US-AvaMultilingualNeural"  # Multilingual voice for multi-language support
+
+_OPENAI_VOICES = frozenset(
+    {"alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"}
+)
+
+# how long generate_reply waits for its response.created, including a pending (re)connection
+_GENERATE_REPLY_TIMEOUT = 10.0
+# how long update_chat_ctx waits for Azure to confirm the items it created
+_UPDATE_CHAT_CTX_TIMEOUT = 10.0
+# the input audio buffer can only be committed with at least 100ms of audio
+_MIN_COMMIT_SAMPLES = SAMPLE_RATE // 10
 
 
 @dataclass
@@ -94,13 +135,45 @@ class _FunctionCallGeneration:
 
 @dataclass
 class _ResponseGeneration:
+    response_id: str | None
     message_ch: utils.aio.Chan[llm.MessageGeneration]
     function_ch: utils.aio.Chan[llm.FunctionCall]
-    messages: dict[str, _MessageGeneration]
-    function_calls: dict[str, _FunctionCallGeneration]  # Track function calls being streamed
-    _done_fut: asyncio.Future[None]
-    _created_timestamp: float
-    _first_token_timestamp: float | None = None
+    created_timestamp: float
+    messages: dict[str, _MessageGeneration] = field(default_factory=dict)
+    function_calls: dict[str, _FunctionCallGeneration] = field(default_factory=dict)
+    first_token_timestamp: float | None = None
+
+
+@dataclass
+class _DiscardedGeneration:
+    """A response whose generate_reply timed out or was cancelled before it was created.
+
+    The response is cancelled when it arrives, its events are dropped and its items deleted.
+    """
+
+    response_id: str | None
+
+
+_ConfirmableEvent = ClientEventConversationItemCreate | ClientEventResponseCreate
+
+
+@dataclass
+class _ConnectionRequests:
+    """What was sent on a single connection, the Azure conversation of which ends with it."""
+
+    # item and response creations Azure hasn't confirmed yet, by event id in send order. They
+    # are sent again on the next connection when this one closes first
+    unconfirmed: dict[str, _ConfirmableEvent] = field(default_factory=dict)
+    # the event that created each item of this conversation, including the replayed ones
+    item_events: dict[str, str] = field(default_factory=dict)
+    # replayed conversation items by event id, so a rejected one leaves the mirror
+    replay_events: dict[str, str] = field(default_factory=dict)
+    # requests of a previous connection that couldn't be sent again before this one closed
+    unsent: list[_ConfirmableEvent] = field(default_factory=list)
+    # samples appended to the input audio buffer since it was last committed or cleared
+    input_audio_samples: int = 0
+    # whether the conversation was replayed (or didn't need to be) and the requests sent again
+    replayed: bool = False
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -123,8 +196,10 @@ class RealtimeModel(llm.RealtimeModel):
         """
         Initialize Azure Voice Live Realtime model.
 
+        Requires the optional dependencies: ``pip install 'livekit-plugins-azure[realtime]'``.
+
         Args:
-            endpoint: Azure Voice Live endpoint URL (wss://...). If None, reads from AZURE_VOICE_LIVE_ENDPOINT.
+            endpoint: Azure Voice Live endpoint URL. If None, reads from AZURE_VOICE_LIVE_ENDPOINT.
             model: Model name. If None, reads from AZURE_VOICE_LIVE_MODEL (default: "gpt-realtime").
             voice: Voice for audio responses (default: "en-US-AvaMultilingualNeural").
             input_audio_transcription: Configuration for input audio transcription. If NOT_GIVEN,
@@ -132,8 +207,9 @@ class RealtimeModel(llm.RealtimeModel):
                 Use AudioInputTranscriptionOptions to configure model and language.
             modalities: List of modalities to enable (default: ["text", "audio"]).
             turn_detection: Turn detection configuration. Accepts ServerVad, AzureSemanticVad,
-                AzureSemanticVadEn, or AzureSemanticVadMultilingual (default: ServerVad with threshold=0.5).
-            tool_choice: Tool selection policy.
+                AzureSemanticVadEn, or AzureSemanticVadMultilingual (default: ServerVad with
+                threshold=0.5).
+            tool_choice: Tool selection policy (default: "auto").
             temperature: Sampling temperature (default: 0.8).
             max_output_tokens: Maximum output tokens (default: 4096).
             api_key: Azure API key. If None, reads from AZURE_VOICE_LIVE_API_KEY.
@@ -175,16 +251,6 @@ class RealtimeModel(llm.RealtimeModel):
             else DEFAULT_MODALITIES
         )
         turn_detection_val = to_turn_detection(turn_detection)
-
-        logger.info(f"[AZURE_INIT] model: {model}")
-        logger.info(f"[AZURE_INIT] turn_detection parameter: {turn_detection}")
-        logger.info(
-            f"[AZURE_INIT] turn_detection_val after to_turn_detection: {turn_detection_val}"
-        )
-        logger.info(
-            f"[AZURE_INIT] turn_detection capability will be: {turn_detection_val is not None}"
-        )
-
         input_audio_transcription_val = to_audio_transcription(input_audio_transcription)
 
         super().__init__(
@@ -198,6 +264,7 @@ class RealtimeModel(llm.RealtimeModel):
                 mutable_chat_context=False,
                 mutable_instructions=True,
                 mutable_tools=True,
+                per_response_tool_choice=True,
             )
         )
 
@@ -255,7 +322,8 @@ class RealtimeModel(llm.RealtimeModel):
     def provider(self) -> str:
         return "azure-voicelive"
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        # manual turn-taking is unsupported (can_disable_turn_detection=False)
         sess = RealtimeSession(self)
         self._sessions.add(sess)
         return sess
@@ -279,43 +347,58 @@ class RealtimeSession(
 
     Emits additional events:
     - azure_server_event_received: Raw server events from Azure
-    - azure_client_event_sent: Raw client messages sent to Azure
+    - azure_client_event_sent: Raw client events sent to Azure
     """
 
     def __init__(self, realtime_model: RealtimeModel) -> None:
         super().__init__(realtime_model)
         self._realtime_model: RealtimeModel = realtime_model
+        # per-session copy, so update_options only affects this session
+        self._opts = replace(realtime_model._opts)
         self._tools = llm.ToolContext.empty()
         self._instructions: str | None = None
 
-        self._closing = False
-        self._reconnecting = False
-        self._connection = None
-        self._connection_ready = asyncio.Event()
-        self._main_atask = asyncio.create_task(
-            self._main_task(), name="AzureRealtimeSession._main_task"
-        )
+        # every client event goes through this channel, so they reach Azure in call order
+        self._msg_ch = utils.aio.Chan[ClientEvent]()
+        self._credential: DefaultAzureCredential | None = None
+        # set once Azure confirmed the configuration and the replayed conversation of the
+        # current connection, a connection that fails later was healthy until then
+        self._session_confirmed = False
+        self._connection_established = False
+        # the requests of the current connection, and those a lost one left unconfirmed
+        self._requests: _ConnectionRequests | None = None
+        self._resend: list[_ConfirmableEvent] = []
 
-        self._current_generation: _ResponseGeneration | None = None
+        self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
+        # items of discarded responses, deleted from the Azure conversation
+        self._dropped_item_ids: set[str] = set()
+        # requests whose errors are expected and only logged
+        self._ignored_error_event_ids: set[str] = set()
+
+        # generate_reply requests by client event id, resolved by the matching response.created
+        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        # sent generate_reply requests that timed out or were cancelled before their response
+        self._discarded_event_ids: set[str] = set()
+
+        # conversation.item.create requests of update_chat_ctx, by item id and by event id
+        self._item_create_futures: dict[str, asyncio.Future[None]] = {}
+        self._item_create_events: dict[str, str] = {}
+        self._pending_items: dict[str, llm.ChatItem] = {}
 
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
 
-        # Audio buffering for input
+        # Audio buffering for input, sent in 100ms chunks
         self._bstream = utils.audio.AudioByteStream(
             SAMPLE_RATE, NUM_CHANNELS, samples_per_channel=SAMPLE_RATE // 10
         )
         self._input_resampler: rtc.AudioResampler | None = None
-        self._pushed_duration_s: float = 0
+        self._video_warned = False
 
-        # Metrics
-        self._response_id: str | None = None
-        self._session_id: str | None = None
-
-        # Track user-initiated responses (from generate_reply calls)
-        # Maps client_event_id -> Future that resolves when response.created arrives
-        self._response_created_futures: dict[str, asyncio.Future[llm.GenerationCreatedEvent]] = {}
+        self._main_atask = asyncio.create_task(
+            self._main_task(), name="AzureRealtimeSession._main_task"
+        )
 
     @property
     def chat_ctx(self) -> llm.ChatContext:
@@ -329,724 +412,883 @@ class RealtimeSession(
     def tools_ctx(self) -> llm.ToolContext:
         return self._tools
 
+    def _send(self, event: ClientEvent) -> None:
+        with contextlib.suppress(utils.aio.channel.ChanClosed):
+            self._msg_ch.send_nowait(event)
+
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         """Main task that manages the Azure Voice Live WebSocket connection."""
         num_retries: int = 0
-        max_retries = self._realtime_model._opts.conn_options.max_retry
+        max_retries = self._opts.conn_options.max_retry
+        reconnecting = False
 
-        while True:
-            try:
-                await self._run_connection()
-                break
-            except asyncio.CancelledError:
-                if self._closing:
-                    raise
-                # Connection was cancelled externally (e.g., Azure SDK websocket drop)
-                # but session is still alive — reconnect
-                logger.warning("Azure Voice Live connection cancelled unexpectedly, reconnecting")
-                await asyncio.sleep(0.5)
-                continue
-            except APIError as e:
-                # Server disconnect (idle timeout) - always reconnect without counting retries
-                if "Server closed connection" in str(e):
-                    self._emit_error(e, recoverable=True)
-                    # Brief delay before reconnecting
-                    await asyncio.sleep(0.5)
-                    continue
+        try:
+            while not self._msg_ch.closed:
+                self._session_confirmed = False
+                self._connection_established = False
+                try:
+                    await self._run_connection(reconnecting=reconnecting)
+                except APIError as e:
+                    if self._connection_established:
+                        # the connection was healthy before it dropped (e.g. an idle timeout)
+                        num_retries = 0
 
-                if max_retries == 0 or not e.retryable:
-                    self._emit_error(e, recoverable=False)
-                    raise
-                elif num_retries >= max_retries:
-                    self._emit_error(e, recoverable=False)
-                    raise APIConnectionError(
-                        f"Azure Voice Live connection failed after {num_retries} attempts"
-                    ) from e
-                else:
+                    if max_retries == 0 or not e.retryable:
+                        self._emit_error(e, recoverable=False)
+                        logger.error("Azure Voice Live connection failed", exc_info=e)
+                        return
+
+                    if num_retries >= max_retries:
+                        self._emit_error(
+                            APIConnectionError(
+                                f"Azure Voice Live connection failed after {num_retries} attempts"
+                            ),
+                            recoverable=False,
+                        )
+                        logger.error(
+                            f"Azure Voice Live connection failed after {num_retries} attempts",
+                            exc_info=e,
+                        )
+                        return
+
                     self._emit_error(e, recoverable=True)
-                    retry_interval = self._realtime_model._opts.conn_options._interval_for_retry(
-                        num_retries
-                    )
+                    retry_interval = self._opts.conn_options._interval_for_retry(num_retries)
                     logger.warning(
                         f"Azure Voice Live connection failed, retrying in {retry_interval}s",
                         exc_info=e,
                         extra={"attempt": num_retries, "max_retries": max_retries},
                     )
                     await asyncio.sleep(retry_interval)
-                num_retries += 1
-            except Exception as e:
-                self._emit_error(e, recoverable=False)
-                raise
+                    num_retries += 1
+                except Exception as e:
+                    self._emit_error(e, recoverable=False)
+                    logger.exception("Azure Voice Live session failed")
+                    return
 
-    async def _run_connection(self) -> None:
-        """Establish connection and process events."""
-        # Create credential
-        credential: DefaultAzureCredential | AzureKeyCredential
-        if self._realtime_model._opts.use_default_credential:
-            credential = DefaultAzureCredential()
-        else:
-            api_key = self._realtime_model._opts.api_key
-            assert api_key is not None, "API key must be set when not using default credential"
-            credential = AzureKeyCredential(api_key)
+                reconnecting = True
+        finally:
+            # nothing can be sent anymore: settle everything still waiting on the connection
+            self._msg_ch.close()
+            self._close_current_generation()
+            self._fail_pending_requests("Azure Voice Live session closed")
+            if self._credential is not None:
+                with contextlib.suppress(Exception):
+                    await self._credential.close()
+                self._credential = None
+
+    def _get_credential(self) -> AzureKeyCredential | DefaultAzureCredential:
+        if self._opts.use_default_credential:
+            # one credential per session, so its token cache survives reconnections
+            if self._credential is None:
+                self._credential = DefaultAzureCredential()
+            return self._credential
+
+        assert self._opts.api_key is not None, "API key must be set when not using credentials"
+        return AzureKeyCredential(self._opts.api_key)
+
+    async def _run_connection(self, *, reconnecting: bool) -> None:
+        """Connect, configure the session, and exchange events until the connection ends."""
+        async with contextlib.AsyncExitStack() as stack:
+            try:
+                conn = await asyncio.wait_for(
+                    stack.enter_async_context(
+                        connect(
+                            endpoint=self._opts.endpoint,
+                            credential=self._get_credential(),
+                            model=self._opts.model,
+                        )
+                    ),
+                    self._opts.conn_options.timeout,
+                )
+            except asyncio.TimeoutError as e:
+                raise APIConnectionError("Azure Voice Live connection timed out") from e
+            except Exception as e:
+                raise APIConnectionError("failed to connect to Azure Voice Live") from e
+
+            requests = _ConnectionRequests()
+            self._requests = requests
+            # receive from the start, so the replay's confirmations never back up the socket
+            tasks = [
+                asyncio.create_task(self._recv_task(conn), name="AzureRealtimeSession._recv_task")
+            ]
+            try:
+                try:
+                    await self._send_direct(
+                        conn, ClientEventSessionUpdate(session=self._create_session_config())
+                    )
+                    if reconnecting:
+                        await self._replay_conversation(conn, requests)
+                except Exception as e:
+                    raise APIConnectionError(
+                        "failed to configure the Azure Voice Live session"
+                    ) from e
+
+                if reconnecting:
+                    self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+
+                requests.replayed = True
+                self._check_established()
+                tasks.append(
+                    asyncio.create_task(
+                        self._send_task(conn, requests), name="AzureRealtimeSession._send_task"
+                    )
+                )
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    if task.cancelled():
+                        raise APIConnectionError("Azure Voice Live connection was cancelled")
+                    task.result()
+            finally:
+                await utils.aio.cancel_and_wait(*tasks)
+                self._on_connection_closed(requests)
+
+    async def _send_task(self, conn: VoiceLiveConnection, requests: _ConnectionRequests) -> None:
+        async for event in self._msg_ch:
+            await self._send_event(conn, requests, event)
+
+    async def _send_event(
+        self, conn: VoiceLiveConnection, requests: _ConnectionRequests, event: ClientEvent
+    ) -> None:
+        if isinstance(event, ClientEventResponseCreate):
+            event_id = event.event_id or ""
+            reply_fut = self._response_created_futures.get(event_id)
+            if reply_fut is None or reply_fut.done():
+                # generate_reply timed out or was cancelled before it could be sent
+                self._response_created_futures.pop(event_id, None)
+                self._discarded_event_ids.discard(event_id)
+                return
+            requests.unconfirmed[event_id] = event
+        elif isinstance(event, ClientEventConversationItemCreate) and event.item and event.item.id:
+            item_id = event.item.id
+            if item_id in requests.item_events:
+                # created, or being created, in this conversation (e.g. replayed after a
+                # reconnection): the waiter is settled when that creation is confirmed or rejected
+                item_fut = self._item_create_futures.get(item_id)
+                if self._remote_chat_ctx.get(item_id) is not None and item_fut is not None:
+                    self._item_create_futures.pop(item_id, None)
+                    if not item_fut.done():
+                        item_fut.set_result(None)
+                return
+            event_id = event.event_id or ""
+            requests.item_events[item_id] = event_id
+            requests.unconfirmed[event_id] = event
+        elif isinstance(event, ClientEventInputAudioBufferAppend):
+            requests.input_audio_samples += _decoded_size(event.audio) // BYTES_PER_SAMPLE
+        elif isinstance(event, ClientEventInputAudioBufferCommit):
+            if requests.input_audio_samples < _MIN_COMMIT_SAMPLES:
+                # Azure rejects committing less than 100ms, e.g. audio lost with a connection
+                return
+            requests.input_audio_samples = 0
+        elif isinstance(event, ClientEventInputAudioBufferClear):
+            requests.input_audio_samples = 0
 
         try:
-            async with connect(
-                endpoint=self._realtime_model._opts.endpoint,
-                credential=credential,
-                model=self._realtime_model._opts.model,
-            ) as conn:
-                self._connection = conn
-
-                # Configure session
-                await self._configure_session(conn)
-
-                # On reconnection, re-send chat context to the new session
-                if self._reconnecting:
-                    await self._resync_chat_ctx(conn)
-
-                # Process events
-                async for event in conn:
-                    await self._handle_event(event)
-
-                # Server closed connection - trigger reconnect
-                logger.warning("Event loop ended - connection closed by server, will reconnect")
-                raise APIError("Server closed connection", retryable=True)
-
-        except APIError:
-            # Re-raise APIError to trigger retry logic in _main_task
-            raise
-        except asyncio.CancelledError:
-            # Re-raise CancelledError so _main_task can decide whether to reconnect
-            raise
+            await self._send_direct(conn, event)
         except Exception as e:
-            logger.error(f"Azure Voice Live connection error: {e}", exc_info=True)
-            raise APIConnectionError(f"Azure Voice Live connection error: {e}") from e
-        finally:
-            self._connection = None
-            self._connection_ready.clear()
-            self._reconnecting = True
+            raise APIConnectionError("failed to send an event to Azure Voice Live") from e
 
-    async def _resync_chat_ctx(self, conn: Any) -> None:
-        """Re-send chat context after a WebSocket reconnection.
+    async def _send_direct(self, conn: VoiceLiveConnection, event: ClientEvent) -> None:
+        await conn.send(event)
+        self.emit("azure_client_event_sent", event)
 
-        On reconnection, the new Azure session starts with an empty conversation.
-        Reset _remote_chat_ctx so compute_chat_ctx_diff sees every item as new,
-        then re-create them on the server — mirroring the OpenAI plugin's _reconnect.
+    async def _recv_task(self, conn: VoiceLiveConnection) -> None:
+        try:
+            async for event in conn:
+                self._handle_server_event(event)
+        except Exception as e:
+            raise APIConnectionError("failed to receive events from Azure Voice Live") from e
+
+        if not self._msg_ch.closed:
+            raise APIConnectionError("Azure Voice Live connection closed unexpectedly")
+
+    def _on_connection_closed(self, requests: _ConnectionRequests) -> None:
+        """Settle what the closed connection can no longer complete."""
+        self._requests = None
+        self._close_current_generation(None if self._msg_ch.closed else "connection lost")
+        # the deletions of dropped items went down with the conversation
+        self._dropped_item_ids.clear()
+        self._ignored_error_event_ids.clear()
+
+        # a new connection starts a new, empty conversation: what Azure didn't confirm is sent
+        # again once the conversation is replayed, the waiting callers are none the wiser
+        unconfirmed: list[_ConfirmableEvent] = []
+        for event_id, event in requests.unconfirmed.items():
+            if isinstance(event, ClientEventResponseCreate):
+                # a response of this conversation can't arrive anymore
+                self._discarded_event_ids.discard(event_id)
+                fut = self._response_created_futures.get(event_id)
+                if fut is not None and not fut.done():
+                    unconfirmed.append(event)
+            elif event.item and event.item.id and self._remote_chat_ctx.get(event.item.id) is None:
+                unconfirmed.append(event)
+
+        self._resend = unconfirmed + requests.unsent + self._resend
+
+    def _fail_pending_requests(self, reason: str) -> None:
+        self._resend = []
+        error = llm.RealtimeError(reason)
+        for response_fut in self._response_created_futures.values():
+            if not response_fut.done():
+                response_fut.set_exception(error)
+        self._response_created_futures.clear()
+        self._discarded_event_ids.clear()
+
+        for item_fut in self._item_create_futures.values():
+            if not item_fut.done():
+                item_fut.set_exception(error)
+        self._item_create_futures.clear()
+        self._item_create_events.clear()
+        self._pending_items.clear()
+
+    async def _replay_conversation(
+        self, conn: VoiceLiveConnection, requests: _ConnectionRequests
+    ) -> None:
+        """Re-create the conversation on a new connection, which starts empty.
+
+        Replayed items are mirrored right away, the conversation.item.created events Azure answers
+        them with are then no-ops. Requests the lost connection left unconfirmed follow them.
         """
-        old_remote_ctx = self._remote_chat_ctx
-        self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
-
-        chat_ctx = old_remote_ctx.to_chat_ctx().copy(
-            exclude_function_call=True,
-            exclude_instructions=True,
+        chat_ctx = self.chat_ctx.copy(
             exclude_empty_message=True,
             exclude_handoff=True,
             exclude_config_update=True,
         )
-
-        if not chat_ctx.items:
-            logger.info("[RESYNC] No chat context items to re-send after reconnection")
-            return
-
-        logger.info(
-            f"[RESYNC] Re-sending {len(chat_ctx.items)} chat context items after reconnection"
-        )
-        for chat_item in chat_ctx.items:
+        replayed = llm.remote_chat_context.RemoteChatContext()
+        azure_items: list[AzureConversationItem] = []
+        for item in chat_ctx.items:
+            # a function call cut off before its arguments were complete
+            if item.type == "function_call" and not item.arguments:
+                continue
             try:
-                azure_item = livekit_item_to_azure_item(chat_item)
-                await conn.conversation.item.create(item=azure_item)
+                azure_items.append(livekit_item_to_azure_item(item))
+            except ValueError:
+                continue
+            replayed.insert(replayed.tail_id, item)
 
-                prev_id = (
-                    self._remote_chat_ctx._tail.item.id if self._remote_chat_ctx._tail else None
-                )
-                self._remote_chat_ctx.insert(prev_id, chat_item)
-                logger.info(f"[RESYNC] Re-sent item type={chat_item.type}, id={chat_item.id}")
-            except Exception as e:
-                logger.error(f"[RESYNC] Failed to re-send item {chat_item.id}: {e}")
+        # the mirror is the conversation every connection starts from, a failed replay is redone
+        self._remote_chat_ctx = replayed
+        for azure_item in azure_items:
+            event_id = utils.shortuuid("replay_")
+            if azure_item.id:
+                requests.item_events[azure_item.id] = event_id
+                requests.replay_events[event_id] = azure_item.id
+            await self._send_direct(
+                conn, ClientEventConversationItemCreate(event_id=event_id, item=azure_item)
+            )
 
-        # Discard pending response futures — they belong to the old session
-        for fut in self._response_created_futures.values():
-            if not fut.done():
-                fut.set_exception(
-                    llm.RealtimeError("pending response discarded due to session reconnection")
-                )
-        self._response_created_futures.clear()
+        resend, self._resend = self._resend, []
+        for i, event in enumerate(resend):
+            # a request that fails to send is still unconfirmed, the rest is sent next time
+            requests.unsent = resend[i + 1 :]
+            await self._send_event(conn, requests, event)
+        requests.unsent = []
 
-        logger.info("[RESYNC] Chat context re-sync complete")
+    def _voice_config(self) -> str | AzureStandardVoice:
+        voice = self._opts.voice
+        # Azure voice names contain a hyphen, e.g. "en-US-AvaNeural"
+        if isinstance(voice, str) and "-" in voice and voice not in _OPENAI_VOICES:
+            transcription = self._opts.input_audio_transcription
+            language = transcription.language if transcription else None
+            # a voice can only be pinned to a single locale, a language list stays auto-detected
+            locale = language if language and "," not in language else None
+            return AzureStandardVoice(name=voice, locale=locale)
+        return voice
 
-    async def _configure_session(self, conn: Any) -> None:
-        """Configure the Azure Voice Live session with initial settings."""
-        tools_list: list[Tool] = []
-        if self._tools:
-            for tool in self._tools.flatten():
-                converted = livekit_tool_to_azure_tool(tool)
-                if converted is not None:
-                    tools_list.append(converted)
-
-        # Wrap voice name in AzureStandardVoice if it's an Azure voice name
-        voice_config: str | AzureStandardVoice = self._realtime_model._opts.voice
-        input_audio_transcription = self._realtime_model._opts.input_audio_transcription
-
-        # Extract language from input_audio_transcription for voice locale
-        language = input_audio_transcription.language if input_audio_transcription else None
-
-        if isinstance(voice_config, str):
-            # Check if it's an Azure voice name (contains hyphen like "en-US-AvaNeural")
-            if "-" in voice_config and voice_config not in [
-                "alloy",
-                "ash",
-                "ballad",
-                "coral",
-                "echo",
-                "sage",
-                "shimmer",
-                "verse",
-                "marin",
-                "cedar",
-            ]:
-                # Create AzureStandardVoice with locale if language is specified
-                voice_config = AzureStandardVoice(
-                    name=voice_config,
-                    locale=language if language else None,
-                )
-
-        session_config = RequestSession(
-            modalities=list(self._realtime_model._opts.modalities),
+    def _create_session_config(self) -> RequestSession:
+        """Configure the Azure Voice Live session with the current settings."""
+        session = RequestSession(
+            modalities=list(self._opts.modalities),
             instructions=self._instructions or "You are a helpful assistant.",
-            voice=voice_config,
-            input_audio_format=self._realtime_model._opts.input_audio_format,
-            output_audio_format=self._realtime_model._opts.output_audio_format,
-            turn_detection=self._realtime_model._opts.turn_detection,
-            input_audio_transcription=input_audio_transcription,
-            tools=tools_list if tools_list else None,
-            tool_choice=to_azure_tool_choice(self._realtime_model._opts.tool_choice),
-            temperature=self._realtime_model._opts.temperature,
-            max_response_output_tokens=self._realtime_model._opts.max_output_tokens,
+            voice=self._voice_config(),
+            input_audio_format=self._opts.input_audio_format,
+            output_audio_format=self._opts.output_audio_format,
+            turn_detection=self._opts.turn_detection,
+            input_audio_transcription=self._opts.input_audio_transcription,
+            tool_choice=to_azure_tool_choice(self._opts.tool_choice),
+            temperature=self._opts.temperature,
+            max_response_output_tokens=self._opts.max_output_tokens,
         )
+        if tools := livekit_tools_to_azure_tools(self._tools.flatten()):
+            session.tools = tools
+        return session
 
-        await conn.session.update(session=session_config)
+    def _output_modalities(self) -> list[Literal["text", "audio"]]:
+        return ["audio", "text"] if self._realtime_model.capabilities.audio_output else ["text"]
 
-    async def _handle_event(self, event: Any) -> None:
+    def _handle_server_event(self, event: ServerEvent) -> None:
         """Handle events from Azure Voice Live."""
         self.emit("azure_server_event_received", event)
 
-        event_type = event.type
+        try:
+            if isinstance(event, ServerEventSessionUpdated):
+                self._handle_session_updated(event)
+            elif isinstance(event, ServerEventInputAudioBufferSpeechStarted):
+                self._handle_input_speech_started(event)
+            elif isinstance(event, ServerEventInputAudioBufferSpeechStopped):
+                self._handle_input_speech_stopped(event)
+            elif isinstance(event, ServerEventConversationItemCreated):
+                self._handle_conversation_item_created(event)
+            elif isinstance(event, ServerEventConversationItemDeleted):
+                self._handle_conversation_item_deleted(event)
+            elif isinstance(event, ServerEventConversationItemInputAudioTranscriptionCompleted):
+                self._handle_input_audio_transcription_completed(event)
+            elif isinstance(event, ServerEventResponseCreated):
+                self._handle_response_created(event)
+            elif isinstance(event, ServerEventResponseOutputItemAdded):
+                self._handle_output_item_added(event)
+            elif isinstance(event, ServerEventResponseContentPartAdded):
+                self._handle_content_part_added(event)
+            elif isinstance(event, ServerEventResponseAudioDelta):
+                self._handle_audio_delta(event)
+            elif isinstance(event, ServerEventResponseAudioTranscriptDelta):
+                self._handle_text_delta(event, is_transcript=True)
+            elif isinstance(event, ServerEventResponseTextDelta):
+                # text-only responses (modalities=["text"])
+                self._handle_text_delta(event, is_transcript=False)
+            elif isinstance(event, ServerEventResponseFunctionCallArgumentsDelta):
+                self._handle_function_call_arguments_delta(event)
+            elif isinstance(event, ServerEventResponseFunctionCallArgumentsDone):
+                self._handle_function_call_arguments_done(event)
+            elif isinstance(event, ServerEventResponseDone):
+                self._handle_response_done(event)
+            elif isinstance(event, ServerEventError):
+                self._handle_error(event)
+        except Exception:
+            logger.exception(
+                "failed to handle Azure Voice Live event", extra={"event_type": event.type}
+            )
 
-        # Log all events for debugging (except high-frequency audio events)
-        if event_type not in (
-            ServerEventType.RESPONSE_AUDIO_DELTA,
-            ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA,
+    def _check_established(self) -> None:
+        requests = self._requests
+        if (
+            requests is not None
+            and requests.replayed
+            and not requests.replay_events
+            and self._session_confirmed
         ):
-            logger.info(f"[EVENT] Received: {event_type}")
+            self._connection_established = True
 
-        if event_type == ServerEventType.SESSION_UPDATED:
-            new_session_id = getattr(event.session, "id", None)
-            old_session_id = self._session_id
-            self._session_id = new_session_id
-            logger.info(f"[SESSION] Azure session updated: {self._session_id}")
+    def _handle_session_updated(self, event: ServerEventSessionUpdated) -> None:
+        # a session.updated only confirms a configuration change, it never means a reconnection
+        self._session_confirmed = True
+        self._check_established()
+        logger.debug(
+            "Azure Voice Live session updated",
+            extra={"session_id": getattr(event.session, "id", None)},
+        )
 
-            # Log audio configuration for debugging
-            session = event.session
-            if hasattr(session, "output_audio_format"):
-                logger.info(f"Output audio format: {session.output_audio_format}")
-            if hasattr(session, "input_audio_format"):
-                logger.info(f"Input audio format: {session.input_audio_format}")
+    def _handle_input_speech_started(self, _: ServerEventInputAudioBufferSpeechStarted) -> None:
+        # interrupting the reply is left to the agent, which knows if it can be interrupted
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
-            # Only discard pending futures on actual reconnection (new session ID),
-            # not on same-session updates (e.g. tool/instruction changes)
-            if old_session_id is not None and new_session_id != old_session_id:
-                for fut in self._response_created_futures.values():
-                    if not fut.done():
-                        fut.set_exception(
-                            llm.RealtimeError(
-                                "pending response discarded due to session reconnection"
-                            )
-                        )
-                self._response_created_futures.clear()
+    def _handle_input_speech_stopped(self, _: ServerEventInputAudioBufferSpeechStopped) -> None:
+        self.emit(
+            "input_speech_stopped",
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=self._opts.input_audio_transcription is not None
+            ),
+        )
 
-            self._connection_ready.set()
-            self.emit("session_reconnected", llm.RealtimeSessionReconnectedEvent())
+    def _handle_conversation_item_created(self, event: ServerEventConversationItemCreated) -> None:
+        item = event.item
+        if item is None or not item.id:
+            return
 
-        elif event_type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STARTED:
-            logger.info("[VAD] Speech started detected")
-            self.emit("input_speech_started", llm.InputSpeechStartedEvent())
-            if self._current_generation:
-                await self._cancel_response()
+        item_id = item.id
+        if (requests := self._requests) is not None:
+            if requests.replay_events.pop(requests.item_events.get(item_id, ""), None):
+                self._check_established()
+            # confirmed: the item doesn't need to be sent again after a reconnection
+            requests.unconfirmed.pop(requests.item_events.get(item_id, ""), None)
 
-        elif event_type == ServerEventType.INPUT_AUDIO_BUFFER_SPEECH_STOPPED:
-            logger.info("[VAD] Speech stopped detected")
+        # items of update_chat_ctx are mirrored as the caller built them
+        lk_item: llm.ChatItem | None = self._pending_items.pop(item_id, None)
+        if lk_item is None:
+            try:
+                lk_item = azure_item_to_livekit_item(item)
+            except ValueError:
+                logger.debug(
+                    "ignoring an Azure Voice Live conversation item",
+                    extra={"item_type": item.type},
+                )
+
+        if (
+            lk_item is not None
+            and item_id not in self._dropped_item_ids
+            and self._remote_chat_ctx.get(item_id) is None
+        ):
+            previous_item_id = event.previous_item_id
+            if previous_item_id is None or self._remote_chat_ctx.get(previous_item_id) is None:
+                # Azure appends an item it isn't told where to insert
+                previous_item_id = self._remote_chat_ctx.tail_id
+
+            self._remote_chat_ctx.insert(previous_item_id, lk_item)
             self.emit(
-                "input_speech_stopped",
-                llm.InputSpeechStoppedEvent(
-                    user_transcription_enabled=self._realtime_model._opts.input_audio_transcription
-                    is not None
-                ),
+                "remote_item_added",
+                llm.RemoteItemAddedEvent(previous_item_id=previous_item_id, item=lk_item),
             )
 
-        elif event_type == ServerEventType.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED:
-            item_id = getattr(event, "item_id", None) or ""
-            transcript = getattr(event, "transcript", "")
-            self.emit(
-                "input_audio_transcription_completed",
-                llm.InputTranscriptionCompleted(
-                    item_id=item_id,
-                    transcript=transcript,
-                    is_final=True,
-                ),
-            )
+        if (fut := self._item_create_futures.pop(item_id, None)) and not fut.done():
+            fut.set_result(None)
 
-        elif event_type == ServerEventType.RESPONSE_CREATED:
-            await self._handle_response_created(event)
+    def _handle_conversation_item_deleted(self, event: ServerEventConversationItemDeleted) -> None:
+        self._dropped_item_ids.discard(event.item_id)
+        if event.item_id and self._remote_chat_ctx.get(event.item_id) is not None:
+            self._remote_chat_ctx.delete(event.item_id)
 
-        elif event_type == ServerEventType.RESPONSE_OUTPUT_ITEM_ADDED:
-            await self._handle_output_item_added(event)
+    def _handle_input_audio_transcription_completed(
+        self, event: ServerEventConversationItemInputAudioTranscriptionCompleted
+    ) -> None:
+        item_id = event.item_id or ""
+        transcript = event.transcript or ""
 
-        elif event_type == ServerEventType.RESPONSE_CONTENT_PART_ADDED:
-            await self._handle_content_part_added(event)
+        remote_item = self._remote_chat_ctx.get(item_id)
+        if (
+            transcript
+            and remote_item is not None
+            and isinstance(remote_item.item, llm.ChatMessage)
+            and transcript not in remote_item.item.content
+        ):
+            remote_item.item.content.append(transcript)
 
-        elif event_type == ServerEventType.RESPONSE_AUDIO_DELTA:
-            await self._handle_audio_delta(event)
+        self.emit(
+            "input_audio_transcription_completed",
+            llm.InputTranscriptionCompleted(item_id=item_id, transcript=transcript, is_final=True),
+        )
 
-        elif event_type == ServerEventType.RESPONSE_AUDIO_TRANSCRIPT_DELTA:
-            await self._handle_text_delta(event)
+    def _close_generation(self, generation: _ResponseGeneration) -> None:
+        """Close all channels and futures of a generation, so its consumers never hang."""
+        for message in generation.messages.values():
+            if not message.modalities.done():
+                message.modalities.set_result(self._output_modalities())
+            message.text_ch.close()
+            message.audio_ch.close()
 
-        elif event_type == ServerEventType.RESPONSE_TEXT_DELTA:
-            # Handle text-only mode responses (when modalities=["text"])
-            await self._handle_text_delta(event)
+        generation.message_ch.close()
+        generation.function_ch.close()
 
-        elif event_type == ServerEventType.RESPONSE_FUNCTION_CALL_ARGUMENTS_DELTA:
-            await self._handle_function_call_arguments_delta(event)
+    def _close_current_generation(self, reason: str | None = None) -> None:
+        generation = self._current_generation
+        self._current_generation = None
+        if isinstance(generation, _ResponseGeneration):
+            self._close_generation(generation)
+            if reason:
+                logger.warning(f"in-progress Azure Voice Live generation closed due to {reason}")
 
-        elif event_type == ServerEventType.RESPONSE_FUNCTION_CALL_ARGUMENTS_DONE:
-            await self._handle_function_call_arguments_done(event)
+    def _generation_for(self, response_id: str | None) -> _ResponseGeneration | None:
+        """The current generation, if the event of `response_id` belongs to it."""
+        generation = self._current_generation
+        if not isinstance(generation, _ResponseGeneration):
+            return None
+        if response_id and generation.response_id and response_id != generation.response_id:
+            return None
+        return generation
 
-        elif event_type == ServerEventType.RESPONSE_DONE:
-            await self._handle_response_done(event)
+    def _drop_item(self, item_id: str) -> None:
+        """Remove an item of a discarded response, nobody heard it, from the conversation."""
+        self._dropped_item_ids.add(item_id)
+        if self._remote_chat_ctx.get(item_id) is not None:
+            self._remote_chat_ctx.delete(item_id)
 
-        elif event_type == ServerEventType.ERROR:
-            error_msg = getattr(event, "error", {}).get("message", "Unknown error")
-            # Suppress "no active response" errors - these are harmless race conditions
-            # that occur when a cancellation request arrives after a response completed
-            error_lower = error_msg.lower()
-            if "no active response" in error_lower or "response_cancel_not_active" in error_lower:
-                logger.debug(f"Azure Voice Live (suppressed): {error_msg}")
-                return
-            logger.error(f"Azure Voice Live error: {error_msg}")
-            self._emit_error(APIError(error_msg), recoverable=True)
+        event_id = utils.shortuuid("drop_item_")
+        # e.g. the cancelled response never kept it
+        self._ignored_error_event_ids.add(event_id)
+        self._send(ClientEventConversationItemDelete(item_id=item_id, event_id=event_id))
 
-    def _close_generation(self, gen: _ResponseGeneration) -> None:
-        """Close all channels and futures for a generation.
+    def _handle_response_created(self, event: ServerEventResponseCreated) -> None:
+        response = event.response
+        response_id = response.id if response else None
+        metadata = response.metadata if response else None
+        client_event_id = metadata.get("client_event_id") if isinstance(metadata, dict) else None
 
-        This is used both when a new response starts (to clean up any existing generation)
-        and when a response completes normally.
-        """
-        for msg_gen in gen.messages.values():
-            if not msg_gen.modalities.done():
-                msg_gen.modalities.set_result([])
-            msg_gen.text_ch.close()
-            msg_gen.audio_ch.close()
+        # never leave a previous generation open, e.g. when its response.done is still in flight
+        self._close_current_generation()
 
-        gen.message_ch.close()
-        gen.function_ch.close()
+        if client_event_id and self._requests is not None:
+            # confirmed: the request doesn't need to be sent again after a reconnection
+            self._requests.unconfirmed.pop(client_event_id, None)
 
-        if not gen._done_fut.done():
-            gen._done_fut.set_result(None)
-
-    async def _handle_response_created(self, event: Any) -> None:
-        """Handle response.created event."""
-        response_id = getattr(event.response, "id", None)
-        self._response_id = response_id
-
-        # Clean up any existing generation before starting a new one
-        if self._current_generation is not None:
+        # generate_reply tags its request with metadata that Azure echoes back, so a response
+        # created by server-side turn detection can't be mistaken for the requested one
+        fut = self._response_created_futures.pop(client_event_id, None) if client_event_id else None
+        if client_event_id and (
+            client_event_id in self._discarded_event_ids or (fut is not None and fut.done())
+        ):
+            # its generate_reply timed out or was cancelled, nobody is waiting for it anymore
+            self._discarded_event_ids.discard(client_event_id)
+            self._send(ClientEventResponseCancel(response_id=response_id))
+            self._current_generation = _DiscardedGeneration(response_id=response_id)
             logger.warning(
-                f"New response {response_id} started while previous generation was still active, "
-                "closing previous generation channels"
+                "discarding an Azure Voice Live response created after its generate_reply "
+                "timed out or was cancelled"
             )
-            self._close_generation(self._current_generation)
-            self._current_generation = None
+            return
 
-        gen = _ResponseGeneration(
+        generation = _ResponseGeneration(
+            response_id=response_id,
             message_ch=utils.aio.Chan[llm.MessageGeneration](),
             function_ch=utils.aio.Chan[llm.FunctionCall](),
-            messages={},
-            function_calls={},  # Track function calls being streamed
-            _done_fut=asyncio.Future(),
-            _created_timestamp=time.time(),
+            created_timestamp=time.time(),
         )
-        self._current_generation = gen
+        self._current_generation = generation
 
-        # Create the generation event
         generation_ev = llm.GenerationCreatedEvent(
-            message_stream=gen.message_ch,
-            function_stream=gen.function_ch,
-            user_initiated=False,  # Default to server-initiated
+            message_stream=generation.message_ch,
+            function_stream=generation.function_ch,
+            user_initiated=fut is not None,
             response_id=response_id,
         )
+        if fut is not None:
+            fut.set_result(generation_ev)
 
-        # Check if this response was triggered by generate_reply (user-initiated)
-        # Note: Azure SDK doesn't currently support metadata in response.create
-        # So we can't match by client_event_id like OpenAI does
-        # For now, check if there's ANY pending generate_reply future
-        # This is a simplified approach that works when generate_reply is called sequentially
-        if self._response_created_futures:
-            # Pop the oldest pending future (FIFO)
-            # In practice, there should only be one at a time
-            event_id, fut = next(iter(self._response_created_futures.items()))
-            self._response_created_futures.pop(event_id)
-
-            if not fut.done():
-                generation_ev.user_initiated = True
-                fut.set_result(generation_ev)
-                logger.info(
-                    f"[RESPONSE_CREATED] User-initiated response {response_id}, resolved future for event_id: {event_id}"
-                )
-            else:
-                logger.warning(
-                    f"[RESPONSE_CREATED] Future for event_id {event_id} was already done"
-                )
-
-        logger.info(
-            f"[RESPONSE_CREATED] Emitting generation_created event for response {response_id}, user_initiated={generation_ev.user_initiated}"
-        )
         self.emit("generation_created", generation_ev)
 
-    async def _handle_output_item_added(self, event: Any) -> None:
-        """Handle response.output_item.added event."""
-        if not self._current_generation:
+    def _handle_output_item_added(self, event: ServerEventResponseOutputItemAdded) -> None:
+        item = event.item
+        if item is None or not item.id:
             return
 
-        item = getattr(event, "item", None)
-        if not item:
+        discarded = self._current_generation
+        if isinstance(discarded, _DiscardedGeneration) and (
+            not event.response_id
+            or not discarded.response_id
+            or event.response_id == discarded.response_id
+        ):
+            self._drop_item(item.id)
             return
 
-        item_id = getattr(item, "id", utils.shortuuid("msg_"))
-        item_type = getattr(item, "type", None)
+        generation = self._generation_for(event.response_id)
+        if generation is None:
+            return
 
-        logger.info(f"[OUTPUT_ITEM_ADDED] item_type: {item_type}, item_id: {item_id}")
-        if item_type == "function_call":
-            # Log the raw item for debugging
-            logger.info(f"[OUTPUT_ITEM_ADDED] Raw function_call item: {item}")
-
-        if item_type == "message":
-            msg_gen = _MessageGeneration(
-                message_id=item_id,
+        if item.type == "message":
+            message = _MessageGeneration(
+                message_id=item.id,
                 text_ch=utils.aio.Chan[str](),
-                audio_ch=utils.aio.Chan[rtc.AudioFrame](maxsize=25),  # Buffer ~500ms of audio
-                modalities=asyncio.Future(),
+                # unbounded: the agent can start reading a reply only once it may be played
+                audio_ch=utils.aio.Chan[rtc.AudioFrame](),
+                modalities=asyncio.Future[list[Literal["text", "audio"]]](),
             )
-            self._current_generation.messages[item_id] = msg_gen
+            if not self._realtime_model.capabilities.audio_output:
+                message.audio_ch.close()
+                message.modalities.set_result(["text"])
 
-            logger.info(f"Sending MessageGeneration to message_ch for item {item_id}")
-            self._current_generation.message_ch.send_nowait(
+            generation.messages[item.id] = message
+            generation.message_ch.send_nowait(
                 llm.MessageGeneration(
-                    message_id=item_id,
-                    text_stream=msg_gen.text_ch,
-                    audio_stream=msg_gen.audio_ch,
-                    modalities=msg_gen.modalities,
+                    message_id=item.id,
+                    text_stream=message.text_ch,
+                    audio_stream=message.audio_ch,
+                    modalities=message.modalities,
                 )
             )
-            logger.info(f"MessageGeneration sent successfully for item {item_id}")
 
-        elif item_type == "function_call":
-            call_id = getattr(item, "call_id", "")
-            name = getattr(item, "name", "")
-
-            # Don't emit yet - arguments will be streamed via delta events
-            # Store the function call info and wait for arguments
-            fnc_call_gen = _FunctionCallGeneration(
-                item_id=item_id,
-                call_id=call_id,
-                name=name,
-                arguments="",  # Will be accumulated
-            )
-            self._current_generation.function_calls[item_id] = fnc_call_gen
-
-            logger.info(
-                f"Function call started - name: {name}, call_id: {call_id}, waiting for arguments..."
+        elif item.type == "function_call":
+            # emitted once its arguments are complete, see _handle_function_call_arguments_done
+            generation.function_calls[item.id] = _FunctionCallGeneration(
+                item_id=item.id,
+                call_id=getattr(item, "call_id", None) or "",
+                name=getattr(item, "name", None) or "",
             )
 
-    async def _handle_content_part_added(self, event: Any) -> None:
-        """Handle response.content_part.added event."""
-        if not self._current_generation:
+    def _handle_content_part_added(self, event: ServerEventResponseContentPartAdded) -> None:
+        generation = self._generation_for(event.response_id)
+        if generation is None or not (message := generation.messages.get(event.item_id)):
             return
 
-        item_id = getattr(event, "item_id", None)
-        part = getattr(event, "part", None)
-
-        if not item_id or not part or item_id not in self._current_generation.messages:
-            return
-
-        msg_gen = self._current_generation.messages[item_id]
-        part_type = getattr(part, "type", None)
-
-        # Set modalities - use contextlib.suppress to avoid InvalidStateError if already set
-        result_modalities: list[Literal["text", "audio"]]
+        part_type = getattr(event.part, "type", None)
+        modalities: list[Literal["text", "audio"]]
         if part_type == "audio":
-            result_modalities = ["audio", "text"]
+            modalities = ["audio", "text"]
         elif part_type == "text":
-            result_modalities = ["text"]
+            modalities = ["text"]
         else:
             return
 
-        logger.info(
-            f"Setting modalities for item {item_id}: {result_modalities}, part_type: {part_type}, modalities_done: {msg_gen.modalities.done()}"
-        )
+        with contextlib.suppress(asyncio.InvalidStateError):
+            message.modalities.set_result(modalities)
+
+    def _handle_audio_delta(self, event: ServerEventResponseAudioDelta) -> None:
+        generation = self._generation_for(event.response_id)
+        if generation is None or not (message := generation.messages.get(event.item_id)):
+            return
+
+        # the SDK decodes the base64 payload, accept a raw string in case it doesn't
+        data = event.delta
+        if isinstance(data, str):
+            data = base64.b64decode(data)
+        if not data or message.audio_ch.closed:
+            return
+
+        if generation.first_token_timestamp is None:
+            generation.first_token_timestamp = time.time()
 
         with contextlib.suppress(asyncio.InvalidStateError):
-            msg_gen.modalities.set_result(result_modalities)
-            logger.info(f"Modalities set successfully for item {item_id}")
+            message.modalities.set_result(["audio", "text"])
 
-    async def _handle_audio_delta(self, event: Any) -> None:
-        """Handle response.audio.delta event."""
-        if not self._current_generation:
-            return  # Skip logging in hot path
-
-        item_id = getattr(event, "item_id", None)
-        delta = getattr(event, "delta", None)
-
-        if not delta or not item_id:
-            return
-
-        # Cache message generation lookup
-        msg_gen = self._current_generation.messages.get(item_id)
-        if not msg_gen:
-            return
-
-        if self._current_generation._first_token_timestamp is None:
-            self._current_generation._first_token_timestamp = time.time()
-
-        try:
-            # Log first frame only
-            if not hasattr(self, "_logged_first_audio"):
-                self._logged_first_audio = True
-                logger.info(f"First audio delta: {len(delta)} bytes, PCM16 format")
-
-            # Create AudioFrame directly from raw bytes
-            frame = rtc.AudioFrame(
-                data=delta,
+        message.audio_ch.send_nowait(
+            rtc.AudioFrame(
+                data=data,
                 sample_rate=SAMPLE_RATE,
                 num_channels=NUM_CHANNELS,
-                samples_per_channel=len(delta) // BYTES_PER_SAMPLE,
+                samples_per_channel=len(data) // BYTES_PER_SAMPLE,
             )
+        )
 
-            msg_gen.audio_ch.send_nowait(frame)
-
-        except Exception as e:
-            logger.error(f"Failed to process audio delta: {e}")
-
-    async def _handle_text_delta(self, event: Any) -> None:
-        """Handle response.audio_transcript.delta or response.text.delta event."""
-        if not self._current_generation:
+    def _handle_text_delta(
+        self,
+        event: ServerEventResponseAudioTranscriptDelta | ServerEventResponseTextDelta,
+        *,
+        is_transcript: bool,
+    ) -> None:
+        generation = self._generation_for(event.response_id)
+        if generation is None or not (message := generation.messages.get(event.item_id)):
             return
 
-        item_id = getattr(event, "item_id", None)
-        delta = getattr(event, "delta", None)
-
-        if not delta or not item_id or item_id not in self._current_generation.messages:
+        delta = event.delta
+        if not delta or message.text_ch.closed:
             return
 
-        if self._current_generation._first_token_timestamp is None:
-            self._current_generation._first_token_timestamp = time.time()
+        # the transcript trails the audio, text only counts as first token without audio
+        if (
+            not is_transcript
+            and message.audio_ch.closed
+            and generation.first_token_timestamp is None
+        ):
+            generation.first_token_timestamp = time.time()
 
-        msg_gen = self._current_generation.messages[item_id]
-        msg_gen.text_ch.send_nowait(delta)
-        msg_gen.audio_transcript += delta
+        message.text_ch.send_nowait(delta)
+        message.audio_transcript += delta
 
-    async def _handle_function_call_arguments_delta(self, event: Any) -> None:
-        """Handle response.function_call_arguments.delta event."""
-        if not self._current_generation:
-            logger.warning("Received function call arguments delta but no current generation")
+    def _handle_function_call_arguments_delta(
+        self, event: ServerEventResponseFunctionCallArgumentsDelta
+    ) -> None:
+        generation = self._generation_for(event.response_id)
+        if generation is None or not (
+            function_call := generation.function_calls.get(event.item_id)
+        ):
             return
 
-        item_id = getattr(event, "item_id", None)
-        delta = getattr(event, "delta", None)
+        if generation.first_token_timestamp is None:
+            generation.first_token_timestamp = time.time()
 
-        if not item_id or item_id not in self._current_generation.function_calls:
+        function_call.arguments += event.delta or ""
+
+    def _handle_function_call_arguments_done(
+        self, event: ServerEventResponseFunctionCallArgumentsDone
+    ) -> None:
+        generation = self._generation_for(event.response_id)
+        if generation is None or not event.item_id:
+            return
+
+        pending = generation.function_calls.pop(event.item_id, None)
+        call_id = event.call_id or (pending.call_id if pending else "")
+        name = event.name or (pending.name if pending else "")
+        arguments = (
+            event.arguments
+            if event.arguments is not None
+            else (pending.arguments if pending else "")
+        )
+        if not call_id or not name:
             logger.warning(
-                f"Skipping function call arguments delta: item_id={item_id}, "
-                f"in_function_calls={item_id in self._current_generation.function_calls if item_id else False}"
+                "ignoring an Azure Voice Live function call without a name or call id",
+                extra={"item_id": event.item_id},
             )
             return
 
-        if self._current_generation._first_token_timestamp is None:
-            self._current_generation._first_token_timestamp = time.time()
+        remote_item = self._remote_chat_ctx.get(event.item_id)
+        if remote_item is not None and isinstance(remote_item.item, llm.FunctionCall):
+            remote_item.item.arguments = arguments
 
-        # Accumulate the arguments
-        fnc_call_gen = self._current_generation.function_calls[item_id]
-        fnc_call_gen.arguments += delta or ""
-
+        generation.function_ch.send_nowait(
+            llm.FunctionCall(id=event.item_id, call_id=call_id, name=name, arguments=arguments)
+        )
         logger.debug(
-            f"Function call arguments delta for {fnc_call_gen.name}: +{len(delta or '')} chars, "
-            f"total: {len(fnc_call_gen.arguments)} chars"
+            "Azure Voice Live function call completed",
+            extra={"function": name, "call_id": call_id},
         )
 
-    async def _handle_function_call_arguments_done(self, event: Any) -> None:
-        """Handle response.function_call_arguments.done event."""
-        if not self._current_generation:
-            logger.warning("Received function call arguments done but no current generation")
+    def _handle_response_done(self, event: ServerEventResponseDone) -> None:
+        response = event.response
+        response_id = response.id if response else None
+        generation = self._current_generation
+
+        if isinstance(generation, _DiscardedGeneration):
+            if (
+                not response_id
+                or not generation.response_id
+                or response_id == generation.response_id
+            ):
+                self._current_generation = None
             return
 
-        item_id = getattr(event, "item_id", None)
-
-        if not item_id or item_id not in self._current_generation.function_calls:
-            logger.warning(f"Skipping function call arguments done: item_id={item_id}")
+        if generation is None or (
+            response_id and generation.response_id and response_id != generation.response_id
+        ):
             return
 
-        # Get the complete function call
-        fnc_call_gen = self._current_generation.function_calls[item_id]
+        # mirror what the assistant said, so reconnections replay it
+        for item_id, message in generation.messages.items():
+            transcript = message.audio_transcript
+            remote_item = self._remote_chat_ctx.get(item_id)
+            if (
+                transcript
+                and remote_item is not None
+                and isinstance(remote_item.item, llm.ChatMessage)
+                and transcript not in remote_item.item.content
+            ):
+                remote_item.item.content.append(transcript)
 
-        # Emit the complete FunctionCall
-        function_call = llm.FunctionCall(
-            id=fnc_call_gen.item_id,
-            call_id=fnc_call_gen.call_id,
-            name=fnc_call_gen.name,
-            arguments=fnc_call_gen.arguments,
-        )
-
-        self._current_generation.function_ch.send_nowait(function_call)
-
-        logger.info(
-            f"Function call complete - name: {fnc_call_gen.name}, "
-            f"call_id: {fnc_call_gen.call_id}, "
-            f"arguments length: {len(fnc_call_gen.arguments)} chars"
-        )
-        logger.debug(f"Function call arguments: {fnc_call_gen.arguments}")
-
-    async def _handle_response_done(self, event: Any) -> None:
-        """Handle response.done event."""
-        if not self._current_generation:
-            return
-
-        # Log response status and content info
-        response = getattr(event, "response", None)
-        if response:
-            status = getattr(response, "status", "unknown")
-            status_details = getattr(response, "status_details", None)
-            output = getattr(response, "output", [])
-            logger.info(
-                f"[RESPONSE_DONE] status={status}, status_details={status_details}, output_items={len(output) if output else 0}"
-            )
-
-            # Log each output item
-            for i, item in enumerate(output or []):
-                item_type = getattr(item, "type", "unknown")
-                item_status = getattr(item, "status", "unknown")
-                content = getattr(item, "content", [])
-                logger.info(
-                    f"[RESPONSE_DONE] output[{i}]: type={item_type}, status={item_status}, content_parts={len(content) if content else 0}"
-                )
-
-                # Log content parts
-                for j, part in enumerate(content or []):
-                    part_type = getattr(part, "type", "unknown")
-                    has_audio = hasattr(part, "audio") and part.audio
-                    has_transcript = hasattr(part, "transcript") and part.transcript
-                    logger.info(
-                        f"[RESPONSE_DONE] content[{j}]: type={part_type}, has_audio={has_audio}, has_transcript={has_transcript}"
-                    )
-
-        # Close all channels to signal end of response
-        # The RESPONSE_DONE event from Azure signals that all content is complete
-        logger.info(f"Closing channels for response {self._response_id}")
-        self._close_generation(self._current_generation)
-
-        # Emit metrics
-        if self._response_id:
-            ttft = -1.0
-            if self._current_generation._first_token_timestamp:
-                ttft = (
-                    self._current_generation._first_token_timestamp
-                    - self._current_generation._created_timestamp
-                )
-
-            duration = time.time() - self._current_generation._created_timestamp
-
-            # Extract usage data from the response event
-            usage = getattr(event.response, "usage", None)
-            input_tokens = 0
-            output_tokens = 0
-            total_tokens = 0
-            input_audio_tokens = 0
-            input_text_tokens = 0
-            output_audio_tokens = 0
-            output_text_tokens = 0
-
-            if usage:
-                input_tokens = getattr(usage, "input_tokens", 0)
-                output_tokens = getattr(usage, "output_tokens", 0)
-                total_tokens = getattr(usage, "total_tokens", 0)
-
-                # Get detailed token counts
-                input_token_details = getattr(usage, "input_token_details", None)
-                if input_token_details:
-                    input_audio_tokens = getattr(input_token_details, "audio_tokens", 0)
-                    input_text_tokens = getattr(input_token_details, "text_tokens", 0)
-
-                output_token_details = getattr(usage, "output_token_details", None)
-                if output_token_details:
-                    output_audio_tokens = getattr(output_token_details, "audio_tokens", 0)
-                    output_text_tokens = getattr(output_token_details, "text_tokens", 0)
-
-            # Calculate tokens per second
-            tokens_per_second = output_tokens / duration if duration > 0 else 0
-
-            self.emit(
-                "metrics_collected",
-                RealtimeModelMetrics(
-                    timestamp=time.time(),
-                    request_id=self._response_id,
-                    ttft=ttft,
-                    duration=duration,
-                    cancelled=False,
-                    label=self.realtime_model.label,
-                    error=None,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    total_tokens=total_tokens,
-                    tokens_per_second=tokens_per_second,
-                    input_token_details=RealtimeModelMetrics.InputTokenDetails(
-                        audio_tokens=input_audio_tokens,
-                        text_tokens=input_text_tokens,
-                        image_tokens=0,
-                        cached_tokens=0,
-                        cached_tokens_details=None,
-                    ),
-                    output_token_details=RealtimeModelMetrics.OutputTokenDetails(
-                        text_tokens=output_text_tokens,
-                        audio_tokens=output_audio_tokens,
-                        image_tokens=0,
-                    ),
-                ),
-            )
-
+        self._close_generation(generation)
         self._current_generation = None
-        self._response_id = None
+
+        status = getattr(response, "status", None)
+        self._emit_response_metrics(generation, event)
+
+        if status == "failed":
+            error = getattr(getattr(response, "status_details", None), "error", None)
+            self._emit_error(
+                APIError("Azure Voice Live response failed", body=error, retryable=True),
+                recoverable=True,
+            )
+        elif status in ("cancelled", "incomplete"):
+            logger.debug(
+                f"Azure Voice Live response {status}",
+                extra={
+                    "response_id": response_id,
+                    "reason": getattr(getattr(response, "status_details", None), "reason", None),
+                },
+            )
+
+    def _emit_response_metrics(
+        self, generation: _ResponseGeneration, event: ServerEventResponseDone
+    ) -> None:
+        response = event.response
+        usage = getattr(response, "usage", None)
+        input_details = getattr(usage, "input_token_details", None)
+        output_details = getattr(usage, "output_token_details", None)
+
+        created_timestamp = generation.created_timestamp
+        ttft = (
+            generation.first_token_timestamp - created_timestamp
+            if generation.first_token_timestamp
+            else -1
+        )
+        duration = time.time() - created_timestamp
+        output_tokens = _token_count(usage, "output_tokens")
+
+        self.emit(
+            "metrics_collected",
+            RealtimeModelMetrics(
+                timestamp=created_timestamp,
+                request_id=getattr(response, "id", None) or "",
+                ttft=ttft,
+                duration=duration,
+                cancelled=getattr(response, "status", None) == "cancelled",
+                label=self._realtime_model.label,
+                input_tokens=_token_count(usage, "input_tokens"),
+                output_tokens=output_tokens,
+                total_tokens=_token_count(usage, "total_tokens"),
+                tokens_per_second=output_tokens / duration if duration > 0 else 0,
+                input_token_details=RealtimeModelMetrics.InputTokenDetails(
+                    audio_tokens=_token_count(input_details, "audio_tokens"),
+                    text_tokens=_token_count(input_details, "text_tokens"),
+                    image_tokens=_token_count(input_details, "image_tokens"),
+                    cached_tokens=_token_count(input_details, "cached_tokens"),
+                    cached_tokens_details=None,
+                ),
+                output_token_details=RealtimeModelMetrics.OutputTokenDetails(
+                    text_tokens=_token_count(output_details, "text_tokens"),
+                    audio_tokens=_token_count(output_details, "audio_tokens"),
+                    image_tokens=0,
+                ),
+                metadata=Metadata(
+                    model_name=self._realtime_model.model,
+                    model_provider=self._realtime_model.provider,
+                ),
+            ),
+        )
+
+    def _handle_error(self, event: ServerEventError) -> None:
+        error = event.error
+        message = getattr(error, "message", None) or "unknown error"
+        code = getattr(error, "code", None)
+        event_id = getattr(error, "event_id", None)
+
+        if event_id:
+            if (requests := self._requests) is not None:
+                if (replayed_id := requests.replay_events.pop(event_id, None)) is not None:
+                    requests.item_events.pop(replayed_id, None)
+                    if self._remote_chat_ctx.get(replayed_id) is not None:
+                        self._remote_chat_ctx.delete(replayed_id)
+                    logger.warning(
+                        f"Azure Voice Live rejected a replayed conversation item: {message}",
+                        extra={"item_id": replayed_id, "code": code},
+                    )
+                    self._check_established()
+                    return
+
+                # a rejected request is settled, it's never sent again after a reconnection
+                rejected = requests.unconfirmed.pop(event_id, None)
+                if (
+                    isinstance(rejected, ClientEventConversationItemCreate)
+                    and rejected.item
+                    and rejected.item.id
+                ):
+                    rejected_id = rejected.item.id
+                    # the item doesn't exist, so it can be created again
+                    requests.item_events.pop(rejected_id, None)
+                    self._item_create_events.pop(event_id, None)
+                    self._pending_items.pop(rejected_id, None)
+                    # fails whoever waits for the item now, e.g. a retry joining this creation
+                    item_fut = self._item_create_futures.pop(rejected_id, None)
+                    if item_fut is not None and not item_fut.done():
+                        item_fut.set_exception(llm.RealtimeError(message, code=code))
+                    return
+
+            if event_id in self._ignored_error_event_ids:
+                self._ignored_error_event_ids.discard(event_id)
+                logger.debug(f"Azure Voice Live (ignored): {message}")
+                return
+
+            # a rejected conversation.item.create fails its update_chat_ctx
+            if (item_id := self._item_create_events.pop(event_id, None)) is not None:
+                self._pending_items.pop(item_id, None)
+                if (fut := self._item_create_futures.pop(item_id, None)) and not fut.done():
+                    fut.set_exception(llm.RealtimeError(message, code=code))
+                return
+
+            # a rejected response.create never gets a response.created
+            if (reply_fut := self._response_created_futures.pop(event_id, None)) and not (
+                reply_fut.done()
+            ):
+                reply_fut.set_exception(llm.RealtimeError(message, code=code))
+
+        # cancelling a response that already ended is a harmless race
+        lowered = message.lower()
+        if code == "response_cancel_not_active" or "no active response" in lowered:
+            logger.debug(f"Azure Voice Live (suppressed): {message}")
+            return
+
+        logger.error(f"Azure Voice Live error: {message}", extra={"code": code})
+        self._emit_error(
+            APIError(f"Azure Voice Live error: {message}", body=error, retryable=True),
+            recoverable=True,
+        )
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         """Push audio frame to Azure Voice Live."""
-        if not self._connection:
-            if not getattr(self, "_logged_no_connection", False):
-                logger.warning("[PUSH_AUDIO] No connection, dropping audio")
-                self._logged_no_connection = True
-            return
-        elif not self._connection_ready.is_set():
-            if not getattr(self, "_logged_not_ready", False):
-                logger.warning("[PUSH_AUDIO] Connection not ready, dropping audio")
-                self._logged_not_ready = True
-            return
-        else:
-            # Reset the logging flags when connection is good
-            self._logged_no_connection = False
-            self._logged_not_ready = False
-
-        # Resample audio to target sample rate and channel count if needed
         for resampled_frame in self._resample_audio(frame):
-            # Push resampled audio through byte stream for chunking
-            for audio_frame in self._bstream.push(resampled_frame.data):
-                audio_b64 = base64.b64encode(audio_frame.data).decode("utf-8")
-                asyncio.create_task(self._push_audio_async(audio_b64))
+            for audio_frame in self._bstream.push(resampled_frame.data.tobytes()):
+                self._send_audio(audio_frame)
+
+    def _send_audio(self, frame: rtc.AudioFrame) -> None:
+        self._send(
+            ClientEventInputAudioBufferAppend(
+                audio=base64.b64encode(frame.data).decode("utf-8"),
+            )
+        )
 
     def _resample_audio(self, frame: rtc.AudioFrame) -> Iterator[rtc.AudioFrame]:
         """Resample audio to target sample rate and channel count if needed."""
@@ -1070,40 +1312,23 @@ class RealtimeSession(
         else:
             yield frame
 
-    async def _push_audio_async(self, audio_b64: str) -> None:
-        """Async helper to push audio to connection."""
-        # Double-check connection is still valid
-        if not self._connection or not self._connection_ready.is_set():
-            return
-
-        try:
-            await self._connection.input_audio_buffer.append(audio=audio_b64)
-        except Exception as e:
-            # Silently ignore errors from closed connection
-            if "closing transport" not in str(e).lower():
-                logger.error(f"Failed to push audio: {e}")
-
     def push_video(self, frame: rtc.VideoFrame) -> None:
         """Push video frame (not supported by Azure Voice Live)."""
-        logger.warning("push_video() is not supported by Azure Voice Live")
+        if not self._video_warned:
+            self._video_warned = True
+            logger.warning("push_video() is not supported by Azure Voice Live")
 
     def update_options(self, *, tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN) -> None:
         """Update session options and send session.update to Azure server."""
-        if is_given(tool_choice):
-            if self._realtime_model._opts.tool_choice != tool_choice:
-                self._realtime_model._opts.tool_choice = tool_choice
-                azure_tool_choice = to_azure_tool_choice(tool_choice)
-                session_config = RequestSession(tool_choice=azure_tool_choice)
-                asyncio.create_task(self._send_session_update(session_config))
-
-    async def _send_session_update(self, session_config: RequestSession) -> None:
-        """Send a session.update to the Azure server."""
-        if not self._connection or not self._connection_ready.is_set():
+        if not is_given(tool_choice) or tool_choice == self._opts.tool_choice:
             return
-        try:
-            await self._connection.session.update(session=session_config)
-        except Exception as e:
-            logger.error(f"Failed to send session update: {e}")
+
+        self._opts.tool_choice = tool_choice
+        self._send(
+            ClientEventSessionUpdate(
+                session=RequestSession(tool_choice=to_azure_tool_choice(tool_choice))
+            )
+        )
 
     def generate_reply(
         self,
@@ -1115,78 +1340,54 @@ class RealtimeSession(
         """Generate a reply from the model.
 
         Returns a Future that resolves to GenerationCreatedEvent when the response.created
-        event is received from Azure with matching client_event_id.
+        event carrying this request's client_event_id is received from Azure.
         """
-        # Generate unique event ID to track this response
-        event_id = utils.shortuuid("response_create_")
         fut = asyncio.Future[llm.GenerationCreatedEvent]()
+        if self._msg_ch.closed:
+            fut.set_exception(llm.RealtimeError("Azure Voice Live session is closed"))
+            return fut
 
-        # Store the future so we can resolve it when response.created arrives
+        event_id = utils.shortuuid("response_create_")
+        params = ResponseCreateParams(metadata={"client_event_id": event_id})
+        if is_given(tool_choice):
+            params.tool_choice = to_azure_response_tool_choice(tool_choice)
+        if is_given(tools):
+            params.tools = livekit_tools_to_azure_tools(tools)
+
         self._response_created_futures[event_id] = fut
-
-        # Send response.create request with event_id in metadata
-        asyncio.create_task(self._run_generate_reply(event_id, instructions))
-
-        # Set up timeout
-        def _on_timeout() -> None:
-            if fut and not fut.done():
-                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
-                self._response_created_futures.pop(event_id, None)
-
-        handle = asyncio.get_running_loop().call_later(5.0, _on_timeout)
-        fut.add_done_callback(lambda _: handle.cancel())
-
-        return fut
-
-    async def _run_generate_reply(self, event_id: str, instructions: NotGivenOr[str]) -> None:
-        """Helper to run generate_reply asynchronously."""
-        try:
-            # Wait for connection to be ready (with timeout)
-            await asyncio.wait_for(self._connection_ready.wait(), timeout=10.0)
-
-            if not self._connection:
-                if fut := self._response_created_futures.pop(event_id, None):
-                    fut.set_exception(APIError("No active connection"))
-                return
-
-            # TODO: Azure SDK doesn't support metadata in response.create yet
-            # For now, just call response.create without metadata
-            # When Azure SDK adds metadata support, add: metadata={"client_event_id": event_id}
-            await self._connection.response.create(
+        self._send(
+            ClientEventResponseCreate(
+                event_id=event_id,
+                response=params,
                 additional_instructions=instructions if is_given(instructions) else None,
             )
+        )
 
-            logger.info(f"[GENERATE_REPLY] Sent response.create with event_id: {event_id}")
-            # The generation_created event will be emitted in _handle_response_created
-            # and will resolve the future if metadata matches
-        except asyncio.TimeoutError:
-            logger.error("Timeout waiting for connection to be ready")
-            if fut := self._response_created_futures.pop(event_id, None):
-                fut.set_exception(APIError("Timeout waiting for connection"))
-        except Exception as e:
-            logger.error(f"Failed to generate reply: {e}")
-            if fut := self._response_created_futures.pop(event_id, None):
-                fut.set_exception(e)
+        def _on_timeout() -> None:
+            if not fut.done():
+                # a sent request is cancelled once Azure creates it, see _handle_response_created
+                if self._response_created_futures.pop(event_id, None) is not None:
+                    self._discarded_event_ids.add(event_id)
+                fut.set_exception(llm.RealtimeError("generate_reply timed out."))
+
+        # one deadline covers waiting for the connection, sending, and response.created
+        handle = asyncio.get_running_loop().call_later(_GENERATE_REPLY_TIMEOUT, _on_timeout)
+
+        def _on_done(_: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
+            handle.cancel()
+            # still registered: the caller cancelled it before its response.created arrived
+            if self._response_created_futures.pop(event_id, None) is not None:
+                self._discarded_event_ids.add(event_id)
+
+        fut.add_done_callback(_on_done)
+        return fut
 
     def interrupt(self) -> None:
         """Interrupt the current response."""
-        asyncio.create_task(self._cancel_response())
-
-    async def _cancel_response(self) -> None:
-        """Cancel the current response."""
-        if not self._connection or not self._current_generation:
-            return
-
-        try:
-            await self._connection.response.cancel()
-        except Exception as e:
-            # Suppress "no active response" errors - these are harmless race conditions
-            error_str = str(e).lower()
-            if (
-                "no active response" not in error_str
-                and "response_cancel_not_active" not in error_str
-            ):
-                logger.error(f"Failed to cancel response: {e}")
+        if isinstance(self._current_generation, _ResponseGeneration) or (
+            self._response_created_futures
+        ):
+            self._send(ClientEventResponseCancel())
 
     def truncate(
         self,
@@ -1202,115 +1403,133 @@ class RealtimeSession(
     async def update_instructions(self, instructions: str) -> None:
         """Update system instructions."""
         self._instructions = instructions
-        if self._connection:
-            try:
-                session_config = RequestSession(instructions=instructions)
-                await self._connection.session.update(session=session_config)
-            except Exception as e:
-                logger.error(f"Failed to update instructions: {e}")
+        self._send(ClientEventSessionUpdate(session=RequestSession(instructions=instructions)))
 
     async def update_chat_ctx(self, chat_ctx: llm.ChatContext) -> None:
-        """Update chat context by sending conversation items to Azure."""
+        """Create the new items of `chat_ctx` in the Azure conversation.
+
+        Raises:
+            llm.RealtimeError: if Azure rejects an item or doesn't confirm it in time.
+        """
         async with self._update_chat_ctx_lock:
             # Filter out internal framework items that Azure doesn't understand
             chat_ctx = chat_ctx.copy(
                 exclude_handoff=True,
                 exclude_config_update=True,
             )
-            # Remove instruction messages (already sent via _configure_session)
-            from livekit.agents.voice.generation import remove_instructions
-
+            # Remove instruction messages (already sent via the session configuration)
             remove_instructions(chat_ctx)
 
-            try:
-                await asyncio.wait_for(self._connection_ready.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
-                logger.warning("Timeout waiting for connection, cannot update chat context")
-                return
-
-            if not self._connection:
-                logger.warning("No active connection, cannot update chat context")
-                return
-
             remote_ctx = self._remote_chat_ctx.to_chat_ctx()
+            known_ids = {item.id for item in remote_ctx.items}
+            # empty messages are only placeholders, unless they already exist remotely
+            chat_ctx = llm.ChatContext(
+                [
+                    item
+                    for item in chat_ctx.items
+                    if item.type != "message" or item.content or item.id in known_ids
+                ]
+            )
             diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
-            logger.info(
-                f"[UPDATE_CHAT_CTX] Diff computed - to_create: {len(diff_ops.to_create)}, to_remove: {len(diff_ops.to_remove)}, to_update: {len(diff_ops.to_update)}"
-            )
+            # Azure manages the conversation history internally, only additions are synced
+            if diff_ops.to_remove or diff_ops.to_update:
+                logger.debug(
+                    "Azure Voice Live ignores removed and updated chat items",
+                    extra={
+                        "to_remove": len(diff_ops.to_remove),
+                        "to_update": len(diff_ops.to_update),
+                    },
+                )
 
-            # Send new items to Azure
-            for previous_msg_id, msg_id in diff_ops.to_create:
-                chat_item = chat_ctx.get_by_id(msg_id)
-                if not chat_item:
-                    logger.warning(f"Item {msg_id} not found in chat_ctx")
-                    continue
+            if not diff_ops.to_create:
+                return
 
-                logger.info(f"[UPDATE_CHAT_CTX] Creating item type={chat_item.type}, id={msg_id}")
+            if self._msg_ch.closed:
+                raise llm.RealtimeError("Azure Voice Live session is closed")
 
-                # Convert to Azure format and send
+            futs: list[asyncio.Future[None]] = []
+            event_ids: list[str] = []
+            for previous_item_id, item_id in diff_ops.to_create:
+                chat_item = chat_ctx.get_by_id(item_id)
+                assert chat_item is not None
                 try:
                     azure_item = livekit_item_to_azure_item(chat_item)
-                    await self._connection.conversation.item.create(item=azure_item)
+                except ValueError:
+                    logger.warning(
+                        "skipping a chat item Azure Voice Live doesn't support",
+                        extra={"item_type": chat_item.type},
+                    )
+                    continue
 
-                    # Update remote context to track what we've sent
-                    self._remote_chat_ctx.insert(previous_msg_id, chat_item)
-                    logger.info(f"[UPDATE_CHAT_CTX] Successfully created item {msg_id}")
-                except Exception as e:
-                    logger.error(f"Failed to create conversation item {msg_id}: {e}")
+                event_id = utils.shortuuid("chat_ctx_create_")
+                fut = asyncio.Future[None]()
+                self._item_create_futures[item_id] = fut
+                self._item_create_events[event_id] = item_id
+                self._pending_items[item_id] = chat_item
+                futs.append(fut)
+                event_ids.append(event_id)
 
-            # Note: We don't automatically trigger response.create() here
-            # The framework will call generate_reply() when appropriate based on auto_tool_reply_generation setting
+                self._send(
+                    ClientEventConversationItemCreate(
+                        event_id=event_id,
+                        # without an anchor Azure appends the item
+                        previous_item_id=previous_item_id
+                        if previous_item_id in known_ids
+                        else None,
+                        item=azure_item,
+                    )
+                )
+                known_ids.add(item_id)
 
-            # Note: We don't support deletion or updates for now
-            # Azure manages the conversation history internally
-            if diff_ops.to_remove:
-                logger.debug(f"Ignoring {len(diff_ops.to_remove)} items to remove (not supported)")
-            if diff_ops.to_update:
-                logger.debug(f"Ignoring {len(diff_ops.to_update)} items to update (not supported)")
+            if not futs:
+                return
+
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*futs, return_exceptions=True),
+                    timeout=_UPDATE_CHAT_CTX_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                raise llm.RealtimeError("update_chat_ctx timed out.") from None
+            finally:
+                for event_id in event_ids:
+                    if (pending_id := self._item_create_events.pop(event_id, None)) is not None:
+                        self._item_create_futures.pop(pending_id, None)
+                        self._pending_items.pop(pending_id, None)
+
+            if errors := [r for r in results if isinstance(r, BaseException)]:
+                raise llm.RealtimeError(
+                    f"Azure Voice Live rejected {len(errors)} of {len(results)} chat items: "
+                    f"{errors[0]}"
+                )
 
     async def update_tools(self, tools: list[llm.Tool]) -> None:
         """Update available tools."""
         async with self._update_fnc_ctx_lock:
             self._tools = llm.ToolContext(tools)
-
-            if self._connection:
-                try:
-                    tools_list: list[Tool] = []
-                    for t in tools:
-                        converted = livekit_tool_to_azure_tool(t)
-                        if converted is not None:
-                            tools_list.append(converted)
-                    session_config = RequestSession(tools=tools_list if tools_list else None)
-                    await self._connection.session.update(session=session_config)
-                except Exception as e:
-                    logger.error(f"Failed to update tools: {e}")
+            # an empty list clears the tools of the session
+            self._send(
+                ClientEventSessionUpdate(
+                    session=RequestSession(
+                        tools=livekit_tools_to_azure_tools(self._tools.flatten())
+                    )
+                )
+            )
 
     def commit_audio(self) -> None:
         """Commit the audio buffer."""
-        if self._connection:
-            asyncio.create_task(self._commit_audio_async())
+        # the buffered tail belongs to this turn, send it before the commit
+        for audio_frame in self._bstream.flush():
+            self._send_audio(audio_frame)
 
-    async def _commit_audio_async(self) -> None:
-        """Async helper for commit_audio."""
-        if self._connection:
-            try:
-                await self._connection.input_audio_buffer.commit()
-            except Exception as e:
-                logger.error(f"Failed to commit audio: {e}")
+        # skipped when sending it, if the buffer of the connection holds less than 100ms
+        self._send(ClientEventInputAudioBufferCommit())
 
     def clear_audio(self) -> None:
         """Clear the audio buffer."""
-        if self._connection:
-            asyncio.create_task(self._clear_audio_async())
-
-    async def _clear_audio_async(self) -> None:
-        """Async helper for clear_audio."""
-        if self._connection:
-            try:
-                await self._connection.input_audio_buffer.clear()
-            except Exception as e:
-                logger.error(f"Failed to clear audio: {e}")
+        self._bstream.clear()
+        self._send(ClientEventInputAudioBufferClear())
 
     def commit_user_turn(self) -> None:
         logger.warning("commit_user_turn is not supported by Azure Realtime API.")
@@ -1329,7 +1548,23 @@ class RealtimeSession(
 
     async def aclose(self) -> None:
         """Close the session."""
-        self._closing = True
-        self._main_atask.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self._main_atask
+        self._msg_ch.close()
+        await utils.aio.cancel_and_wait(self._main_atask)
+
+        # the main task may have been cancelled before it started, and couldn't clean up
+        self._close_current_generation()
+        self._fail_pending_requests("Azure Voice Live session closed")
+        if self._credential is not None:
+            with contextlib.suppress(Exception):
+                await self._credential.close()
+            self._credential = None
+
+
+def _token_count(obj: object, name: str) -> int:
+    value = getattr(obj, name, None)
+    return value if isinstance(value, int) else 0
+
+
+def _decoded_size(data: str) -> int:
+    """Size of base64 encoded `data` once decoded."""
+    return len(data) * 3 // 4 - (2 if data.endswith("==") else 1 if data.endswith("=") else 0)

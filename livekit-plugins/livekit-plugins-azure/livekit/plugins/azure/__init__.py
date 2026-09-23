@@ -12,21 +12,41 @@
 
 """Azure plugin for LiveKit Agents
 
-Support for Azure AI including Azure Speech and Azure Voice Live Realtime API. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-openai).
+Support for Azure AI including Azure Speech and optionally the Azure Voice Live Realtime API. For Azure OpenAI, see the [OpenAI plugin](https://github.com/livekit/agents/tree/main/livekit-plugins/livekit-plugins-openai).
 
 See https://docs.livekit.io/agents/integrations/azure/ for more information.
 """
 
-from . import realtime, responses
+import importlib
+import typing
+
+from . import responses
 from .stt import STT, SpeechStream
 from .tts import TTS
 from .version import __version__
+
+if typing.TYPE_CHECKING:
+    from . import realtime
 
 __all__ = ["STT", "SpeechStream", "TTS", "realtime", "responses", "__version__"]
 
 from livekit.agents import Plugin
 
 from .log import logger
+
+
+def __getattr__(name: str) -> typing.Any:
+    # the realtime module needs the optional `realtime` extra, so import it on first access
+    if name == "realtime":
+        try:
+            return importlib.import_module(f"{__name__}.realtime")
+        except ImportError as e:
+            raise ImportError(
+                "The 'realtime' module requires optional dependencies. "
+                "Please install them with: pip install 'livekit-plugins-azure[realtime]'"
+            ) from e
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class AzurePlugin(Plugin):

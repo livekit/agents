@@ -11,8 +11,14 @@ For Azure OpenAI LLM (non-realtime), see the [OpenAI plugin](https://github.com/
 
 See [https://docs.livekit.io/agents/integrations/azure/](https://docs.livekit.io/agents/integrations/azure/) for more information.
 
+## Installation
 
+```bash
+pip install livekit-plugins-azure
 
+# For the Azure Voice Live realtime model
+pip install "livekit-plugins-azure[realtime]"
+```
 
 ## Realtime Mode (Azure Voice Live)
 
@@ -23,9 +29,10 @@ For the realtime speech-to-speech model:
 ```bash
 export AZURE_VOICE_LIVE_ENDPOINT=https://<region>.api.cognitive.microsoft.com/
 export AZURE_VOICE_LIVE_API_KEY=<your-speech-key>
-export AZURE_VOICE_LIVE_MODEL=<model-name>  # e.g., gpt-4o, gpt-4o-mini, etc.
-export AZURE_VOICE_LIVE_VOICE=en-US-AvaMultilingualNeural
+export AZURE_VOICE_LIVE_MODEL=<model-name>  # e.g., gpt-realtime, gpt-4o, gpt-4o-mini, etc.
 ```
+
+To authenticate with Microsoft Entra ID instead of an API key, pass `use_default_credential=True`, which uses [`DefaultAzureCredential`](https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.aio.defaultazurecredential).
 
 To power the intelligence of your voice agent, you have flexibility and choice in the generative AI model between GPT-Realtime, GPT-5, GPT-4.1, Phi, and more options. For supported models and regions, see [Supported models and regions](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/voice-live#supported-models-and-regions).
 
@@ -36,7 +43,7 @@ Azure Voice Live provides end-to-end speech-to-speech:
 
 ```python
 from livekit import agents
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentServer, AgentSession
 from livekit.plugins import azure
 
 class Assistant(Agent):
@@ -50,10 +57,10 @@ class Assistant(Agent):
             instructions="Greet the user and offer assistance"
         )
 
-@agents.rtc_session()
-async def entrypoint(ctx: agents.JobContext):
-    await ctx.connect()
+server = AgentServer()
 
+@server.rtc_session()
+async def entrypoint(ctx: agents.JobContext):
     session = AgentSession(
         llm=azure.realtime.RealtimeModel(
             voice="en-US-AvaMultilingualNeural",
@@ -63,7 +70,7 @@ async def entrypoint(ctx: agents.JobContext):
     await session.start(room=ctx.room, agent=Assistant())
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.AgentServer())
+    agents.cli.run_app(server)
 ```
 
 ### Advanced Configuration
@@ -115,11 +122,15 @@ session = AgentSession(
 |-----------|-------------|---------|
 | `endpoint` | Azure Voice Live endpoint URL | `AZURE_VOICE_LIVE_ENDPOINT` env var |
 | `api_key` | Azure API key | `AZURE_VOICE_LIVE_API_KEY` env var |
-| `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var |
-| `voice` | Azure neural voice name | `AZURE_VOICE_LIVE_VOICE` env var |
-| `input_audio_transcription` | Audio transcription config (model, language) | `whisper-1` with auto-detect |
-| `turn_detection` | VAD configuration object | Server default |
+| `use_default_credential` | Authenticate with `DefaultAzureCredential` instead of an API key | `False` |
+| `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var, or `gpt-realtime` |
+| `voice` | Azure neural voice name | `en-US-AvaMultilingualNeural` |
+| `modalities` | Output modalities, `["text"]` for text-only responses | `["text", "audio"]` |
+| `input_audio_transcription` | Audio transcription config (model, language), `None` to disable | `whisper-1` with auto-detect |
+| `turn_detection` | VAD configuration object | `ServerVad(threshold=0.5)` |
 | `tool_choice` | Function calling mode ("auto", "none", etc.) | "auto" |
+| `temperature` | Sampling temperature | `0.8` |
+| `max_output_tokens` | Maximum output tokens per response | `4096` |
 
 ### Turn Detection Options
 
