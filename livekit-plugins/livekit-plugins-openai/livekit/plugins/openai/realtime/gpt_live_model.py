@@ -1153,7 +1153,14 @@ class GPTLiveSession(
         if lines:
             self.append_thinking("\n".join(lines))
 
-        for output in backend_outputs:
+        self._send_backend_outputs(backend_outputs)
+
+        # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
+        # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
+        # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
+
+    def _send_backend_outputs(self, outputs: list[llm.FunctionCallOutput]) -> None:
+        for output in outputs:
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -1165,8 +1172,8 @@ class GPTLiveSession(
             self._backend_open_calls.discard(output.call_id)
             for calls in self._backend_running_responses.values():
                 calls.discard(output.call_id)
-        if backend_outputs:
-            if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
+        if outputs:
+            if silenced := [o.name or o.call_id for o in outputs if not o.reply_required]:
                 logger.warning(
                     "a tool result wants no reply, but GPT Live will answer it anyway: the "
                     "backend has no way to close a call without a spoken continuation, and an "
@@ -1175,10 +1182,6 @@ class GPTLiveSession(
                 )
             self._backend_response_pending = True
             self._maybe_continue_response()
-
-        # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
-        # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
-        # A manual call to append_commentary() is the only way to answer a GPTLiveDelegation for now
 
     def _generate_reply(
         self,
