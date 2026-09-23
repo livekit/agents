@@ -80,10 +80,9 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
             state = persistence.state
             task_input.conversation_id = state.conversation.database_id
             task_input.caller_session_id = state.session_id
-            if isinstance(handler, A2ADelegate) and not handler.started:
-                # a resumed session goes back to the expert context it had, not a fresh one
-                if (child := await state.child_session(handler.url)) is not None:
-                    handler.resume(child)
+            # the session-level delegate was pointed back at its context on rehydrate; one the
+            # current agent brings is caught here, before its first send
+            await persistence.resume_delegate(handler)
 
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
@@ -107,7 +106,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                         linked = True
                         persistence.state.delegation_started(
                             call_id,
-                            endpoint=handler.url,
+                            endpoint=handler.endpoint,
                             child_session_id=handler.context_id,
                             task_id=task_id,
                         )

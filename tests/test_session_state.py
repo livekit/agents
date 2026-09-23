@@ -13,6 +13,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool, store
 from livekit.agents.beta.workflows import GetEmailTask
+from livekit.agents.delegation import Delegate
 from livekit.agents.store.session_state import INTERRUPTED_OUTPUT
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -264,3 +265,47 @@ def test_workflow_tasks_rebuild_with_the_default() -> None:
     rebuilt = GetEmailTask._from_state(state)
     assert rebuilt._require_confirmation is False
     assert rebuilt.instructions == task.instructions
+
+
+class _Remembering(Delegate):
+    """A delegate with an address and no a2a: all a resumed session needs from it."""
+
+    def __init__(self, endpoint: str) -> None:
+        self._endpoint = endpoint
+        self.resumed: list[str] = []
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
+
+    def resume(self, context_id: str) -> bool:
+        self.resumed.append(context_id)
+        return True
+
+    def submit(self, task_input: Any) -> Any:
+        raise AssertionError("nothing is delegated here")
+
+
+async def test_a_resumed_session_points_its_delegate_back_at_its_context(
+    conversation: store.Conversation,
+) -> None:
+    earlier = conversation.session("voice", kind="voice")
+    await earlier.load()
+    earlier.delegation_started("c1", endpoint="https://desk", child_session_id="ctx-9", task_id="t")
+    earlier.delegation_started(
+        "c2", endpoint="https://other", child_session_id="ctx-2", task_id="u"
+    )
+    await earlier.release()
+
+    delegate = _Remembering("https://desk")
+    session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), delegate=delegate)
+    await session.start(agent=Agent(instructions="voice"), state=conversation.session("voice"))
+    assert delegate.resumed == ["ctx-9"]
+    await session.aclose()
+
+    # a new session has nothing to go back to, and a delegate without an address is left alone
+    fresh = _Remembering("https://desk")
+    session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), delegate=fresh)
+    await session.start(agent=Agent(instructions="voice"), state=conversation.session("new"))
+    assert fresh.resumed == []
+    await session.aclose()

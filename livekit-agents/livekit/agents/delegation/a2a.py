@@ -58,15 +58,14 @@ class A2ADelegate(Delegate):
         return self._client.context_id if self._client is not None else self._context_id
 
     @property
-    def started(self) -> bool:
-        """Whether anything has been sent, which fixes the context."""
-        return self._client is not None
+    def endpoint(self) -> str:
+        return self._url
 
-    def resume(self, context_id: str) -> None:
-        """Continue an earlier conversation with the endpoint instead of opening a new one."""
+    def resume(self, context_id: str) -> bool:
         if self._client is not None:
-            raise RuntimeError("the delegate has already fixed its context")
+            return False
         self._context_id = context_id
+        return True
 
     def submit(self, task_input: TaskInput) -> DelegateStream:
         return self.client.send(task_input)

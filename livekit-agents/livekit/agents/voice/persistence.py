@@ -33,6 +33,7 @@ from .events import AgentStateChangedEvent, ConversationItemAddedEvent, ToolExec
 from .tool_executor import _RunningTasks
 
 if TYPE_CHECKING:
+    from ..delegation.delegate import Delegate
     from .agent_session import AgentSession
 
 _REHYDRATING = contextvars.ContextVar["SessionPersistence"]("agents_rehydrating")
@@ -78,6 +79,7 @@ class SessionPersistence:
         self._checkpoint_again = False
         self._lease_lost = False
         self._closed = False
+        self._delegates_resumed: set[Delegate] = set()
 
     @property
     def state(self) -> SessionState:
@@ -143,6 +145,10 @@ class SessionPersistence:
                     },
                 )
         self._agents[current.id] = current
+        # resolved the way the activity will resolve it, so the delegate names its context
+        # before anything is sent
+        delegation = session._opts.delegation | current._delegation
+        await self.resume_delegate(delegation.get("delegate"))
 
         own = stored.agents.get(current.id)
         if reason is None and own is not None and own.chat_items:
@@ -197,6 +203,23 @@ class SessionPersistence:
         self._check_rebuild(current)
         self._sync()
         return current
+
+    async def resume_delegate(self, delegate: Delegate | None) -> None:
+        """Point a delegate back at the conversation this session last had with its endpoint.
+
+        Once per delegate: the first send fixes its context, and a new one needs no lookup.
+        """
+        if delegate is None or delegate in self._delegates_resumed:
+            return
+        self._delegates_resumed.add(delegate)
+        if (endpoint := delegate.endpoint) is None:
+            return
+        child = await self._state.child_session(endpoint)
+        if child is not None and delegate.resume(child):
+            logger.debug(
+                "resuming the delegate's earlier conversation",
+                extra={"endpoint": endpoint, "context_id": child},
+            )
 
     def _check_rebuild(self, agent: Agent) -> str | None:
         """Why the agent's class cannot be rebuilt from its row, or None when it can."""

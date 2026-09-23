@@ -49,6 +49,21 @@ class Delegate(ABC):
     def submit(self, task_input: TaskInput) -> DelegateStream:
         """Start one delegation and hand back the stream of its updates."""
 
+    @property
+    def endpoint(self) -> str | None:
+        """Where the far side lives, stable across restarts, or None when it has no address.
+
+        A persisted session finds the conversation it last had there by this.
+        """
+        return None
+
+    def resume(self, context_id: str) -> bool:
+        """Continue an earlier conversation on the far side instead of opening a new one.
+
+        Returns False, changing nothing, once this delegate has fixed a context of its own.
+        """
+        return False
+
     async def aclose(self) -> None:  # noqa: B027
         """Release what the delegate holds. Called by whatever it is attached to."""
 

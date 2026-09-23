@@ -363,6 +363,7 @@ async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
     sqlite = store.SQLite(tmp_path)
     conversation = await sqlite.create_conversation()
     seen: list[tuple[str, str | None, str | None]] = []
+    named_at_start: list[str | None] = []
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
         seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
@@ -382,6 +383,8 @@ async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
         await session.start(
             agent=Agent(instructions="voice"), state=conversation.session("voice", kind="voice")
         )
+        # a resumed session names the stored context before its first delegation
+        named_at_start.append(delegate.context_id)
         session.generate_reply(user_input="how much is it")
         answers: list[str] = []
         for _ in range(100):
@@ -406,6 +409,7 @@ async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
 
     # the restarted caller reached the same expert context, and the expert heard where to write
     assert first.context_id == second.context_id
+    assert named_at_start == [None, first.context_id]
     assert seen == [(first.context_id, conversation.database_id, "voice")] * 2
 
     executor = await conversation.open()
