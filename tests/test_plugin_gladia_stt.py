@@ -98,9 +98,10 @@ class _HeartbeatTimeoutSocket:
 class _FakeResponse:
     """The `POST /v2/live` response that hands out the session URL."""
 
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.status = 201
+    def __init__(self, payload: dict[str, Any], status: int = 201) -> None:
+        # the one-shot path checks `status`, the streaming path calls `raise_for_status`
         self._payload = payload
+        self.status = status
 
     async def __aenter__(self) -> _FakeResponse:
         return self
@@ -150,6 +151,12 @@ class _FakeSession:
         self.closed = True
 
 
+def _stt(session: _FakeSession):
+    from livekit.plugins.gladia import STT
+
+    return STT(api_key="test-key", http_session=session)  # type: ignore[arg-type]
+
+
 def _stream(session: _FakeSession):
     from livekit.plugins.gladia import STT
 
@@ -182,3 +189,48 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert session.sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+class _SilentlyClosedSocket:
+    """The one-shot path's view of a heartbeat timeout.
+
+    aiohttp sets the socket closed itself when a ping goes unanswered, so the next
+    `receive()` returns WS_CLOSED_MESSAGE and `__anext__` raises StopAsyncIteration.
+    The ERROR branch never runs, and the reason lives only on `exception()`.
+    """
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def send_str(self, data: str) -> None:
+        pass
+
+    async def send_bytes(self, data: bytes) -> None:
+        pass
+
+    def exception(self) -> BaseException:
+        return aiohttp.ServerTimeoutError("No PONG received after 30.0 seconds")
+
+    def __aiter__(self) -> _SilentlyClosedSocket:
+        return self
+
+    async def __anext__(self) -> aiohttp.WSMessage:
+        raise StopAsyncIteration
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_recognize_raises_when_the_socket_dies_before_the_final_transcript():
+    """Adding a heartbeat means a dead socket now ends the `async for` on CLOSED
+    instead of expiring ws_receive. Without an explicit check the one-shot path
+    returns an empty transcript, which is quieter than the timeout it replaced."""
+    from livekit.agents import APIConnectionError
+    from livekit.rtc import AudioFrame
+
+    session = _FakeSession(_SilentlyClosedSocket)
+    stt_instance = _stt(session)
+    frame = AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=1600)
+
+    with pytest.raises(APIConnectionError):
+        await stt_instance.recognize(buffer=frame, conn_options=_FAST_RETRY)

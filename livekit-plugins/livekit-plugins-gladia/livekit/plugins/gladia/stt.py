@@ -394,6 +394,7 @@ class STT(stt.STT):
 
                 # Wait for final transcript
                 utterances = []
+                got_final = False
 
                 # Receive messages until we get the post_final_transcript message
                 try:
@@ -411,6 +412,7 @@ class STT(stt.STT):
                             ):
                                 pass
                             elif data["type"] == "post_final_transcript":
+                                got_final = True
                                 break
                             elif data["type"] == "error":
                                 raise APIConnectionError(
@@ -441,6 +443,19 @@ class STT(stt.STT):
                         raise APITimeoutError(
                             f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
                         ) from None
+
+                if not got_final:
+                    # aiohttp closes the socket itself when a heartbeat ping goes unanswered, so
+                    # `async for` ends on WSMsgType.CLOSED before the ERROR branch above runs.
+                    # Without this the caller gets an empty transcript instead of a retryable
+                    # error, which is what the ws_receive timeout used to raise.
+                    exc = ws.exception()
+                    if exc is not None:
+                        raise APIConnectionError("Gladia connection lost") from exc
+                    if not utterances:
+                        raise APIConnectionError(
+                            "Gladia socket closed before the final transcript arrived"
+                        )
 
                 # Create a speech event from the collected final utterances
                 return self._create_speech_event(
