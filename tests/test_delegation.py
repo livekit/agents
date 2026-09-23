@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import pathlib
 from typing import Any
 
 import pytest
@@ -20,7 +21,7 @@ from .test_a2a_server import _drain_sse_watcher, _serving
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
-def _voice_llm(*, instruction: str = "what is the fare") -> FakeLLM:
+def _voice_llm(*, instruction: str = "what is the fare", call_id: str = "d1") -> FakeLLM:
     return _AnsweringLLM(
         fake_responses=[
             _says(
@@ -31,7 +32,7 @@ def _voice_llm(*, instruction: str = "what is the fare") -> FakeLLM:
                         type="function",
                         name=DELEGATE_TOOL_NAME,
                         arguments=f'{{"task": "{instruction}"}}',
-                        call_id="d1",
+                        call_id=call_id,
                     )
                 ],
             )
@@ -349,3 +350,79 @@ async def test_an_update_carrying_only_an_item_is_not_relayed() -> None:
         assert len(_outputs(session)) == 2
     finally:
         await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
+async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
+    tmp_path: pathlib.Path,
+) -> None:
+    from livekit.agents import store
+    from livekit.agents.a2a import A2ASessionContext
+
+    from .test_a2a_server import _fare_desk_llm, _Served, check_fares
+
+    sqlite = store.SQLite(tmp_path)
+    conversation = await sqlite.create_conversation()
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
+        seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
+        assert ctx.conversation_id is not None
+        opened = await sqlite.conversation(ctx.conversation_id)
+        session: AgentSession = AgentSession(llm=_fare_desk_llm())
+        await session.start(
+            agent=Agent(instructions="fare desk", tools=[check_fares]),
+            state=opened.session(ctx.context_id, kind="a2a", parent=ctx.caller_session_id),
+        )
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async def call(url: str, call_id: str) -> A2ADelegate:
+        delegate = A2ADelegate(url)
+        session: AgentSession = AgentSession(llm=_voice_llm(call_id=call_id), delegate=delegate)
+        await session.start(
+            agent=Agent(instructions="voice"), state=conversation.session("voice", kind="voice")
+        )
+        session.generate_reply(user_input="how much is it")
+        answers: list[str] = []
+        for _ in range(100):
+            answers = [
+                i.output
+                for i in session.history.items
+                if i.type == "function_call_output" and i.call_id == f"{call_id}_final"
+            ]
+            if answers:
+                break
+            await asyncio.sleep(0.1)
+        assert answers == ["It is 240 USD."]
+        # closing says goodbye to the expert, which drops and persists its side
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+        return delegate
+
+    async with _serving(handler=persisted) as served:
+        url = f"{served.base_url}/fare-desk"
+        first = await call(url, "d1")
+        second = await call(url, "d2")
+    await _drain_sse_watcher()
+
+    # the restarted caller reached the same expert context, and the expert heard where to write
+    assert first.context_id == second.context_id
+    assert seen == [(first.context_id, conversation.database_id, "voice")] * 2
+
+    executor = await conversation.open()
+    links = [row async for row in executor.query("SELECT * FROM delegations ORDER BY call_id")]
+    assert [(r["call_id"], r["child_session_id"], r["status"]) for r in links] == [
+        ("d1", first.context_id, "completed"),
+        ("d2", first.context_id, "completed"),
+    ]
+    assert all(r["endpoint"] == url and r["task_id"] for r in links)
+    tree = [
+        row
+        async for row in executor.query(
+            "SELECT session_id, parent_session_id, kind FROM sessions ORDER BY kind"
+        )
+    ]
+    assert tree == [
+        {"session_id": first.context_id, "parent_session_id": "voice", "kind": "a2a"},
+        {"session_id": "voice", "parent_session_id": None, "kind": "voice"},
+    ]
+    await sqlite.aclose()

@@ -8,6 +8,7 @@ from ..llm.tool_context import FunctionTool, ToolError, function_tool
 # imported at runtime: the tool's signature is resolved with get_type_hints() when a call
 # arrives, so RunContext has to be a real name by then
 from ..voice.events import RunContext
+from .a2a import A2ADelegate
 from .delegate import DELEGATE_TOOL_NAME
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
@@ -71,47 +72,80 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
             metadata=dict(activity._delegation["metadata"]),
         )
 
+        call_id = ctx.function_call.call_id
+        linked = False
+        ended = "failed"
+        if (persistence := session._persistence) is not None:
+            # the expert joins this conversation's database, under this session
+            state = persistence.state
+            task_input.conversation_id = state.conversation.database_id
+            task_input.caller_session_id = state.session_id
+            if isinstance(handler, A2ADelegate) and not handler.started:
+                # a resumed session goes back to the expert context it had, not a fresh one
+                if (child := await state.child_session(handler.url)) is not None:
+                    handler.resume(child)
+
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
         async with handler.submit(task_input) as stream:
-            while True:
-                try:
-                    update: TaskUpdate = await anext(stream)
-                except StopAsyncIteration:
-                    # the stream ended without declaring a state, which is how a delegation
-                    # that died mid-flight reaches the caller
-                    raise ToolError("the delegation ended without an answer") from None
-                if update.state == "working":
-                    if not update.text:
+            try:
+                while True:
+                    try:
+                        update: TaskUpdate = await anext(stream)
+                    except StopAsyncIteration:
+                        # the stream ended without declaring a state, which is how a
+                        # delegation that died mid-flight reaches the caller
+                        raise ToolError("the delegation ended without an answer") from None
+                    if (
+                        persistence is not None
+                        and not linked
+                        and isinstance(handler, A2ADelegate)
+                        and (task_id := getattr(stream, "task_id", ""))
+                    ):
+                        # which expert task answered which call, for a dashboard to join
+                        linked = True
+                        persistence.state.delegation_started(
+                            call_id,
+                            endpoint=handler.url,
+                            child_session_id=handler.context_id,
+                            task_id=task_id,
+                        )
+                    if update.state == "working":
+                        if not update.text:
+                            continue
+                        if update.verbatim:
+                            # said as written, once, rather than handed to the model to phrase
+                            session.say(update.text)
+                        else:
+                            await ctx.update(update.text)
                         continue
-                    if update.verbatim:
-                        # said as written, once, rather than handed to the model to phrase
-                        session.say(update.text)
-                    else:
-                        await ctx.update(update.text)
-                    continue
-                if update.state == "failed":
-                    raise ToolError(update.text or "the delegation failed")
-                if update.directive is not None:
-                    from ..voice.events import DirectiveReceivedEvent
+                    ended = update.state
+                    if update.state == "failed":
+                        raise ToolError(update.text or "the delegation failed")
+                    if update.directive is not None:
+                        from ..voice.events import DirectiveReceivedEvent
 
-                    session.emit(
-                        "directive_received",
-                        DirectiveReceivedEvent(
-                            kind=update.directive.kind,
-                            reason=update.directive.reason,
-                            call_id=ctx.function_call.call_id,
-                        ),
-                    )
-                if update.verbatim:
-                    # said as written, then kept to the model: no return, so no reply repeats it
-                    session.say(update.text)
-                    await ctx.update(update.text, silent=True)
-                    return None
-                # completed, canceled and input-required all answer: a cancelled delegation
-                # still says what happened, side effects included, and a question is what the
-                # conversation relays to the user
-                return update.text
+                        session.emit(
+                            "directive_received",
+                            DirectiveReceivedEvent(
+                                kind=update.directive.kind,
+                                reason=update.directive.reason,
+                                call_id=ctx.function_call.call_id,
+                            ),
+                        )
+                    if update.verbatim:
+                        # said as written, then kept to the model: no return, so no reply
+                        # repeats it
+                        session.say(update.text)
+                        await ctx.update(update.text, silent=True)
+                        return None
+                    # completed, canceled and input-required all answer: a cancelled
+                    # delegation still says what happened, side effects included, and a
+                    # question is what the conversation relays to the user
+                    return update.text
+            finally:
+                if linked and persistence is not None:
+                    persistence.state.delegation_ended(call_id, status=ended)
 
     # not CANCELLABLE, since the expert owns its work. duplicates are allowed because the
     # check keys on the function name, which would make every delegation a duplicate of every

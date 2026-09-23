@@ -17,23 +17,60 @@ class A2ADelegate(Delegate):
     One delegate is one conversation, so give each session its own::
 
         AgentSession(llm=realtime_model, delegate=A2ADelegate("http://localhost:8080/fare-desk"))
+
+    A session persisted with ``start(state=...)`` resumes the conversation it last had with
+    this endpoint, so the expert picks up where it left off.
     """
 
     def __init__(
         self,
         url: str,
         *,
+        context_id: str | None = None,
         headers: dict[str, str] | None = None,
         httpx_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._client = A2AClient(url, headers=headers, httpx_client=httpx_client)
+        self._url = url
+        self._context_id = context_id
+        self._headers = headers
+        self._httpx_client = httpx_client
+        # made on the first send, so a resumed session can still say which context it is
+        self._client: A2AClient | None = None
+
+    @property
+    def url(self) -> str:
+        return self._url
 
     @property
     def client(self) -> A2AClient:
+        if self._client is None:
+            self._client = A2AClient(
+                self._url,
+                context_id=self._context_id,
+                headers=self._headers,
+                httpx_client=self._httpx_client,
+            )
         return self._client
 
+    @property
+    def context_id(self) -> str:
+        """The conversation with the endpoint, minted on first use unless one was given."""
+        return self.client.context_id
+
+    @property
+    def started(self) -> bool:
+        """Whether a context has been fixed, by a send or by reading ``context_id``."""
+        return self._client is not None
+
+    def resume(self, context_id: str) -> None:
+        """Continue an earlier conversation with the endpoint instead of opening a new one."""
+        if self._client is not None:
+            raise RuntimeError("the delegate has already fixed its context")
+        self._context_id = context_id
+
     def submit(self, task_input: TaskInput) -> DelegateStream:
-        return self._client.send(task_input)
+        return self.client.send(task_input)
 
     async def aclose(self) -> None:
-        await self._client.aclose()
+        if self._client is not None:
+            await self._client.aclose()
