@@ -88,6 +88,7 @@ uv run python livekit-plugins/livekit-plugins-airy/examples/agent.py dev
 
 - Each synthesized sentence must contain 1–1,280 Unicode characters. The plugin rejects empty, whitespace-only, and oversized input without truncating or splitting it.
 - `streaming=False` describes text input. The HTTP audio response is still delivered progressively.
+- Redirects are not followed; a 3xx response keeps its original status and is not retried.
 - HTTP 400, 401, 402, 403, and 404 responses are not retried. Rate limits, server errors, timeouts, and connection failures may use LiveKit's retry policy before audio arrives.
 - After any PCM bytes arrive, a timeout or connection failure is not retried. This avoids joining partial audio to a repeated synthesis and reduces duplicate billing risk.
 - Airy's `Retry-After` header is retained as error metadata, but LiveKit's current retry scheduler does not dynamically honor it.

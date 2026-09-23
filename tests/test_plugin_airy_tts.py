@@ -553,6 +553,38 @@ async def test_non_json_error_does_not_expose_response_body() -> None:
     assert "private upstream response" not in repr(raised.value)
 
 
+@pytest.mark.parametrize("status", [300, 302, 307])
+async def test_redirect_preserves_status_without_following(status: int) -> None:
+    from livekit.plugins.airy import TTS
+
+    request_count = 0
+
+    async def handler(request: web.Request) -> web.Response:
+        nonlocal request_count
+        request_count += 1
+        return web.Response(
+            status=status,
+            text="unexpected redirect",
+            headers={"Location": "/redirect-target", "X-Request-Id": "req_redirect"},
+        )
+
+    async with _Server(handler) as server:
+        synth = TTS(
+            language="ko",
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+        )
+        with pytest.raises(APIStatusError) as raised:
+            await _collect(synth, max_retry=2, retry_interval=0)
+
+    assert request_count == 1
+    assert raised.value.status_code == status
+    assert raised.value.request_id == "req_redirect"
+    assert raised.value.retryable is False
+    assert raised.value.body == {"status_code": status}
+
+
 async def test_read_timeout_is_mapped() -> None:
     from livekit.plugins.airy import TTS
 

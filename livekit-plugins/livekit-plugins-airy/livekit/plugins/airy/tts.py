@@ -162,6 +162,7 @@ async def _status_error(response: aiohttp.ClientResponse) -> APIStatusError:
         status_code=response.status,
         request_id=request_id,
         body=safe_body,
+        retryable=False if 300 <= response.status < 400 else None,
     )
 
 
@@ -334,6 +335,7 @@ class ChunkedStream(tts.ChunkedStream):
                 f"{self._opts.base_url}{_SPEECH_PATH}",
                 json=payload,
                 headers=headers,
+                allow_redirects=False,
                 raise_for_status=False,
                 timeout=aiohttp.ClientTimeout(
                     total=None,
@@ -342,7 +344,7 @@ class ChunkedStream(tts.ChunkedStream):
                     sock_read=self._conn_options.timeout,
                 ),
             ) as response:
-                if response.status >= 400:
+                if not 200 <= response.status < 300:
                     raise await _status_error(response)
 
                 provider_request_id = _safe_request_id(response.headers.get("X-Request-Id"))
