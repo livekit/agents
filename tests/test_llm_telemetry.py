@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 
-from livekit.agents import llm
+from livekit.agents import APIConnectionError, llm
 from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -261,6 +261,52 @@ async def test_llm_stream_skips_content_builders_for_nonrecording_span(
     assert response.usage.prompt_tokens == 100
 
 
+@pytest.mark.parametrize("fails", [False, True], ids=["success", "failure"])
+async def test_llm_node_preserves_model_identity(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    fails: bool,
+) -> None:
+    if fails:
+
+        async def fail(stream: _UsageLLMStream) -> None:
+            raise APIConnectionError("provider unavailable")
+
+        monkeypatch.setattr(_UsageLLMStream, "_run", fail)
+
+    async with _UsageLLM() as model:
+
+        async def node(
+            chat_ctx: llm.ChatContext, tools: list[llm.Tool], model_settings: ModelSettings
+        ) -> AsyncIterator[llm.ChatChunk]:
+            with tracer.start_as_current_span("custom_llm_wrapper"):
+                async with model.chat(
+                    chat_ctx=chat_ctx, tools=tools, conn_options=APIConnectOptions(max_retry=0)
+                ) as stream:
+                    async for chunk in stream:
+                        yield chunk
+
+        task, _ = generation.perform_llm_inference(
+            node=node,
+            chat_ctx=llm.ChatContext.empty(),
+            tool_ctx=llm.ToolContext([]),
+            model_settings=ModelSettings(),
+            model=model.model,
+            provider=model.provider,
+        )
+        if fails:
+            with pytest.raises(APIConnectionError):
+                await task
+        else:
+            assert await task is True
+
+    [span] = [span for span in span_exporter.get_finished_spans() if span.name == "llm_node"]
+    assert span.attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == model.model
+    assert span.attributes[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == model.provider
+    assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in span.attributes
+    assert trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS not in span.attributes
+
+
 async def test_llm_node_skips_payloads_for_nonrecording_span(
     nonrecording_tracer_provider: None,
     monkeypatch: pytest.MonkeyPatch,
@@ -295,6 +341,8 @@ async def test_llm_node_preserves_noncontent_attributes_when_capture_is_disabled
             chat_ctx=llm.ChatContext.empty(),
             tool_ctx=llm.ToolContext([]),
             model_settings=ModelSettings(),
+            model="unused-model",
+            provider="unused-provider",
         )
         assert await task is True
     finally:
@@ -306,3 +354,5 @@ async def test_llm_node_preserves_noncontent_attributes_when_capture_is_disabled
     assert spans[0].attributes[trace_types.ATTR_GEN_AI_OPERATION_NAME] == "chat"
     assert trace_types.ATTR_GEN_AI_INPUT_MESSAGES not in spans[0].attributes
     assert trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes
+    assert trace_types.ATTR_GEN_AI_REQUEST_MODEL not in spans[0].attributes
+    assert trace_types.ATTR_GEN_AI_PROVIDER_NAME not in spans[0].attributes
