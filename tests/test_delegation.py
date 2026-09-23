@@ -55,6 +55,10 @@ class _ScriptedStream:
     def __init__(self, updates: list[TaskUpdate]) -> None:
         self._updates = updates
 
+    @property
+    def task_id(self) -> str:
+        return ""
+
     async def __aenter__(self) -> Any:
         return self
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import weakref
+
 from ..a2a import TaskInput, TaskUpdate
 from ..llm.tool_context import FunctionTool, ToolError, function_tool
 
@@ -9,7 +11,7 @@ from ..llm.tool_context import FunctionTool, ToolError, function_tool
 # arrives, so RunContext has to be a real name by then
 from ..voice.events import RunContext
 from .a2a import A2ADelegate
-from .delegate import DELEGATE_TOOL_NAME
+from .delegate import DELEGATE_TOOL_NAME, Delegate
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
 
@@ -44,6 +46,10 @@ DISPATCHED = (
 )
 
 
+# delegates already pointed back at their stored context, so each is looked up once
+_RESUME_CHECKED: weakref.WeakSet[Delegate] = weakref.WeakSet()
+
+
 def build_delegate_tool(description: str | None = None, *, announce: bool = True) -> FunctionTool:
     """Build the tool that reaches whichever delegate is in force."""
 
@@ -75,14 +81,18 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
         call_id = ctx.function_call.call_id
         linked = False
         ended = "failed"
-        if (persistence := session._persistence) is not None:
+        if (state := session.state) is not None:
             # the expert joins this conversation's database, under this session
-            state = persistence.state
             task_input.conversation_id = state.conversation.database_id
             task_input.caller_session_id = state.session_id
             # the session-level delegate was pointed back at its context on rehydrate; one the
             # current agent brings is caught here, before its first send
-            await persistence.resume_delegate(handler)
+            if handler not in _RESUME_CHECKED:
+                _RESUME_CHECKED.add(handler)
+                if (endpoint := handler.endpoint) is not None and (
+                    child := await state.child_session(endpoint)
+                ) is not None:
+                    handler.resume(child)
 
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
@@ -96,19 +106,19 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                         # delegation that died mid-flight reaches the caller
                         raise ToolError("the delegation ended without an answer") from None
                     if (
-                        persistence is not None
+                        state is not None
                         and not linked
                         and isinstance(handler, A2ADelegate)
                         and handler.context_id is not None
-                        and (task_id := getattr(stream, "task_id", ""))
+                        and stream.task_id
                     ):
                         # which expert task answered which call, for a dashboard to join
                         linked = True
-                        persistence.state.delegation_started(
+                        state.delegation_started(
                             call_id,
                             endpoint=handler.endpoint,
                             child_session_id=handler.context_id,
-                            task_id=task_id,
+                            task_id=stream.task_id,
                         )
                     if update.state == "working":
                         if not update.text:
@@ -144,8 +154,8 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                     # question is what the conversation relays to the user
                     return update.text
             finally:
-                if linked and persistence is not None:
-                    persistence.state.delegation_ended(call_id, status=ended)
+                if linked and state is not None:
+                    state.delegation_ended(call_id, status=ended)
 
     # not CANCELLABLE, since the expert owns its work. duplicates are allowed because the
     # check keys on the function name, which would make every delegation a duplicate of every

@@ -821,6 +821,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._chat_ctx
 
     @property
+    def state(self) -> SessionState | None:
+        """The rows this session persists to, as passed to ``start(state=...)``; None if none."""
+        return self._persistence.state if self._persistence is not None else None
+
+    @property
     def keyterms(self) -> list[str]:
         """The effective keyterms (user-defined + auto-detected) currently applied to the STT."""
         return self._keyterm_detector.keyterms
