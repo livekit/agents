@@ -922,31 +922,21 @@ class GPTLiveSession(
                         total_tokens=usage.total_tokens,
                     ),
                 )
-        if event.type == "response.output_item.done" and (item := event.item) is not None:
-            current.has_tool_calls |= item.type == "function_call"
-            if current.record_content:
-                # response.completed has an empty output: retain completed items as they arrive.
-                # Reasoning items are deliberately excluded.
-                if item.type == "message":
-                    parts = [
-                        {"type": "text", "content": part.text or part.refusal}
-                        for part in item.content
-                        if part.type in ("output_text", "refusal") and (part.text or part.refusal)
-                    ]
-                    if parts:
-                        current.output.append({"role": "assistant", "parts": parts})
-                elif item.type == "function_call" and item.call_id and item.name:
-                    current.output.extend(
-                        gen_ai.to_output_messages(
-                            function_calls=[
-                                llm.FunctionCall(
-                                    call_id=item.call_id,
-                                    name=item.name,
-                                    arguments=item.arguments or "",
-                                )
-                            ]
-                        )
-                    )
+        if (
+            event.type == "response.output_item.done"
+            and (item := event.item) is not None
+            and item.status == "completed"
+            and item.type == "message"
+            and current.record_content
+        ):
+            # The terminal snapshot has empty output; retain completed public text only.
+            parts = [
+                {"type": "text", "content": part.text or part.refusal}
+                for part in item.content
+                if part.type in ("output_text", "refusal") and (part.text or part.refusal)
+            ]
+            if parts:
+                current.output.append({"role": "assistant", "parts": parts})
         if event.type in ("response.completed", "response.failed", "response.incomplete"):
             self._backend_traces.pop(d_id)
             current.finish(None if event.type == "response.completed" else event.type)
@@ -997,6 +987,11 @@ class GPTLiveSession(
                 arguments=item.arguments,
             )
             self._history.insert(fnc_call)
+            # Trace only calls accepted by the same validation and deduplication as dispatch.
+            if current := self._backend_traces.get(d_id):
+                current.has_tool_calls = True
+                if current.record_content:
+                    current.output.extend(gen_ai.to_output_messages(function_calls=[fnc_call]))
             self.emit("function_call", fnc_call)
 
         elif event.type == "response.completed":
