@@ -6,6 +6,7 @@ import pytest
 
 from livekit.agents.llm import ChatContext, ToolChoice, function_tool
 from livekit.plugins.aws import LLM as BedrockLLM
+from livekit.plugins.aws.llm import LLMStream
 
 pytestmark = pytest.mark.unit
 
@@ -97,6 +98,17 @@ async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
 async def test_default_model_still_receives_temperature() -> None:
     config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
     assert config["temperature"] == 0.7
+
+
+def test_reasoning_deltas_skipped_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    # OpenAI GPT-6 streams reasoning as redactedContent bytes; gpt-oss and Claude thinking
+    # stream text (and signature). None is surfaced, so none should log "unknown chunk type".
+    for reasoning in ({"redactedContent": b"rsn_abc"}, {"text": "hmm"}, {"signature": "sig"}):
+        chunk = {"contentBlockDelta": {"delta": {"reasoningContent": reasoning}}}
+        with caplog.at_level("WARNING"):
+            assert LLMStream._parse_chunk(object.__new__(LLMStream), "req-1", chunk) is None
+
+    assert not [r for r in caplog.records if "unknown chunk type" in r.getMessage()]
 
 
 @function_tool

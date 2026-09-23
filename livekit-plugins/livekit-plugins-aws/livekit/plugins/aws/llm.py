@@ -364,6 +364,11 @@ class LLMStream(llm.LLMStream):
                     id=request_id,
                     delta=llm.ChoiceDelta(content=delta["text"], role="assistant"),
                 )
+            elif "reasoningContent" in delta:
+                # Reasoning deltas (text/signature, or the redactedContent OpenAI GPT-6
+                # streams) are not surfaced; skip them quietly, as the anthropic plugin
+                # does for thinking deltas.
+                pass
             else:
                 logger.warning("aws bedrock llm: unknown chunk type", extra={"lk.pii.chunk": chunk})
 
