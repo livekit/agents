@@ -24,7 +24,9 @@ from livekit.agents.telemetry import (
     utils as telemetry_utils,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.voice import generation
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.io import ModelSettings
 from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
 from .fake_io import FakeAudioInput
@@ -243,8 +245,10 @@ class _FailingLLM(FakeLLM):
         )
 
 
+@pytest.mark.parametrize("through_node", [False, True], ids=["stream", "llm_node"])
 async def test_llm_fallback_records_failed_and_serving_provider(
     span_exporter: InMemorySpanExporter,
+    through_node: bool,
 ) -> None:
     primary = _FailingLLM()
     secondary = FakeLLM(
@@ -254,18 +258,36 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     chat_ctx = ChatContext()
     chat_ctx.add_message(role="user", content="hi")
     try:
-        # the span the request is made under (llm_node in the pipeline, open until the
-        # stream is consumed) is told who served
-        with tracer.start_as_current_span("caller") as caller:
-            stream = adapter.chat(chat_ctx=chat_ctx)
-            chunks = [chunk async for chunk in stream]
-            await stream.aclose()
+        if through_node:
+
+            def node(
+                chat_ctx: ChatContext, tools: list[Tool], model_settings: ModelSettings
+            ) -> LLMStream:
+                return adapter.chat(chat_ctx=chat_ctx, tools=tools)
+
+            task, data = generation.perform_llm_inference(
+                node=node,
+                chat_ctx=chat_ctx,
+                tool_ctx=llm.ToolContext([]),
+                model_settings=ModelSettings(),
+                model=adapter.model,
+                provider=adapter.provider,
+            )
+            assert await task is True
+            response = data.generated_text
+            [caller] = _spans(span_exporter, "llm_node")
+        else:
+            with tracer.start_as_current_span("caller") as caller:
+                stream = adapter.chat(chat_ctx=chat_ctx)
+                chunks = [chunk async for chunk in stream]
+                await stream.aclose()
+            response = "".join(c.delta.content or "" for c in chunks if c.delta)
     finally:
         await adapter.aclose()
         await primary.aclose()
         await secondary.aclose()
 
-    assert "".join(c.delta.content or "" for c in chunks if c.delta) == "hello"
+    assert response == "hello"
 
     # the adapter's request span nests the attempt span that ran the fallback loop
     [request] = _spans(span_exporter, "llm_fallback_adapter")
@@ -282,6 +304,7 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     # primary), response = who answered
     assert (run.attributes or {})[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == secondary.model
     request_attrs = request.attributes or {}
+    assert trace_types.ATTR_GEN_AI_OPERATION_NAME not in request_attrs
     assert request_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     assert request_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
     # the caller's span gets the same response side, per request: a concurrent request on
@@ -290,6 +313,11 @@ async def test_llm_fallback_records_failed_and_serving_provider(
     assert isinstance(caller, ReadableSpan)
     caller_attrs = caller.attributes or {}
     assert caller_attrs[trace_types.ATTR_GEN_AI_RESPONSE_MODEL] == secondary.model
+    assert caller_attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] == trace_types.gen_ai_provider_name(
+        secondary.provider
+    )
+    if through_node:
+        assert caller_attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == primary.model
     # and the adapter itself now reports who serves next
     assert adapter.model == secondary.model and adapter.provider == secondary.provider
 
