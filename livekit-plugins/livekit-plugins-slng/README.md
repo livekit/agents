@@ -12,7 +12,7 @@ pip install livekit-plugins-slng
 
 ## Pre-requisites
 
-You'll need an API key from SLNG. It can be set as an environment variable: `SLNG_API_KEY`
+You'll need an API key from SLNG and the host of the SLNG region you connect to, such as `us-east.api.slng.ai`. Set them as the environment variables `SLNG_API_KEY` and `SLNG_BASE_URL`, or pass them as `api_key` and `slng_base_url`. There is no default region.
 
 ## Usage
 
@@ -24,11 +24,13 @@ from livekit.plugins import slng
 stt = slng.STT(
     model="deepgram/nova:3",
     language="en",
+    slng_base_url="us-east.api.slng.ai",  # your region's host, or set SLNG_BASE_URL
 )
 
 tts = slng.TTS(
     model="deepgram/aura:2",
     voice="aura-2-thalia-en",  # provider voice ID, required
+    slng_base_url="us-east.api.slng.ai",
     # language="en",           # optional; omit to use the model's catalog default
 )
 ```
@@ -54,8 +56,6 @@ The plugin sends the opening of a long first sentence as soon as it exists, so a
 ## TTS connections
 
 The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence followed by a `flush` that ends the reply, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
-
-The regional `<region>.api.slng.ai` hosts keep that socket open across replies, so prefer them; they need a new API key. The default `api.slng.ai` works, but several models end a reply by closing the socket there, and the plugin reconnects for the next one.
 
 `warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. Set `warm_standby_enabled=False` to connect on the first reply instead. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
 
@@ -123,3 +123,4 @@ Version 2.0 is a breaking change:
 - TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.
 - TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames.
 - TTS `warm_standby_enabled` defaults to True, so the connection is open from session start and counts as one concurrent session for the whole call.
+- `slng_base_url` has no default on STT or TTS: pass your region's host, for example `us-east.api.slng.ai`, or set `SLNG_BASE_URL`.

@@ -52,6 +52,7 @@ from .connection import (
     TTSConnectionConfig,
     bridge_endpoint,
     bridge_model,
+    resolve_base_url,
 )
 from .gateway_adapter import (
     build_external_tracking_headers,
@@ -524,7 +525,7 @@ class TTS(tts.TTS):
         model_endpoint: str | None = None,
         provider_api_key: str | None = None,
         voice: str,
-        slng_base_url: str = "api.slng.ai",
+        slng_base_url: str | None = None,
         region_override: str | list[str] | None = None,
         world_part_override: str | None = None,
         external_agent_id: str | None = None,
@@ -555,7 +556,9 @@ class TTS(tts.TTS):
             connections: Ordered model, endpoint, typed config, or SLNG TTS candidates.
             provider_api_key: Optional BYOK provider credential, sent as the
                 ``X-Slng-Provider-Key`` header (external providers only).
-            slng_base_url (str): Gateway host. Defaults to "api.slng.ai".
+            slng_base_url: Host of your SLNG region, for example
+                "us-east.api.slng.ai". Falls back to the ``SLNG_BASE_URL`` env
+                var. Required unless every connection is a full endpoint URL.
             region_override: Optional gateway region override, sent as the
                 ``X-Region-Override`` header. Accepts a single region or a list
                 of preferred regions in priority order.
@@ -602,6 +605,7 @@ class TTS(tts.TTS):
         resolved_key = api_key or os.environ.get("SLNG_API_KEY")
         if not resolved_key:
             raise ValueError("api_key is required, or set the SLNG_API_KEY environment variable")
+        slng_base_url = resolve_base_url(slng_base_url)
 
         if not voice.strip():
             raise ValueError("voice is required")
