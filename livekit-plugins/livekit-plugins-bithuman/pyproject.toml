@@ -27,7 +27,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.8.2",
+    "livekit-agents>=1.8.3",
     "bithuman>=0.5.25,<3",
     "pillow>=10.3.0",
 ]
