@@ -209,10 +209,14 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             # Before that, no avatar of ours can be in the room, and removing
             # the participant could disconnect another session's avatar that
             # uses the same identity. Either way the instance stays spent.
-            if self._render_requested:
-                await self.aclose()
-            else:
-                await self._release_without_removing_participant()
+            try:
+                if self._render_requested:
+                    await self.aclose()
+                else:
+                    await self._release_without_removing_participant()
+            except Exception:
+                # never let a teardown error replace the real start failure
+                logger.warning("cleanup after a failed atmee avatar start failed", exc_info=True)
             raise
 
     async def _release_without_removing_participant(self) -> None:
