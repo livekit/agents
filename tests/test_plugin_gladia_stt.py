@@ -99,6 +99,7 @@ class _FakeResponse:
     """The `POST /v2/live` response that hands out the session URL."""
 
     def __init__(self, payload: dict[str, Any]) -> None:
+        self.status = 201
         self._payload = payload
 
     async def __aenter__(self) -> _FakeResponse:
