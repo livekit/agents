@@ -327,6 +327,9 @@ class ChunkedStream(tts.ChunkedStream):
         markup = self._tts.markup
         # the stream adapter has already lowered; a direct synthesize() call has not
         text = markup.convert(markup.normalize(self._input_text))
+        # whatever `convert` lowered only exists here, so these parts are the only copy
+        # of it -- handing back None would send the raw input, markers and all
+        lowered = text != self._input_text
         # slice at each marker, keeping it at the head of its span so the shared splitter
         # reads the label off it
         bounds = [0, *(m.start() for m in _EXPRESSION_MARKER_RE.finditer(text)), len(text)]
@@ -353,9 +356,10 @@ class ChunkedStream(tts.ChunkedStream):
             parts.append(part)
 
         # a span with no direction is still a part: dropping the whole request over it
-        # would send the raw text, markers and all, for Gemini to read out. Only hand
-        # back None when nothing has to travel out of band at all.
-        if not parts or not (stripped_a_marker or any("speech_metadata" in p for p in parts)):
+        # would send the raw text for Gemini to read out. Only hand back None when the
+        # input carried no markup at all, where the plain prompt says the same thing.
+        carries_markup = lowered or stripped_a_marker
+        if not parts or not (carries_markup or any("speech_metadata" in p for p in parts)):
             return None
         return parts
 

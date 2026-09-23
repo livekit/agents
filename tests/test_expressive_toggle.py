@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tts
+from livekit.agents import Agent, AgentSession, ExpressiveOptions, inference, tokenize, tts
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit.agents.utils import is_given
@@ -283,4 +283,53 @@ async def test_stream_adapter_snapshots_expressive_per_stream() -> None:
         assert wrapped._expressive is False
     finally:
         await stream.aclose()
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_adapter_tokenizes_xml_aware_while_lowering() -> None:
+    """A marker split across two tokens would be lowered as two halves.
+
+    Labels are free-form English and may contain a period, which an unguarded sentence
+    tokenizer treats as a boundary. The framework passes an xml-aware tokenizer when it
+    builds the adapter; a caller using the default has to get one too.
+    """
+    marked = '<expr type="expression" label="Calm. Steady"/> All set.'
+
+    async def tokens(tokenizer: tokenize.SentenceTokenizer) -> list[str]:
+        stream = tokenizer.stream()
+        stream.push_text(marked)
+        stream.end_input()
+        out = [ev.token async for ev in stream]
+        await stream.aclose()
+        return out
+
+    class _NonStreaming(tts.TTS):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=tts.TTSCapabilities(streaming=False),
+                sample_rate=24000,
+                num_channels=1,
+            )
+
+        class Markup(tts.TTS.Markup):
+            def _provider_key(self) -> str:
+                return "gemini"
+
+        def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+            raise NotImplementedError
+
+    adapter = tts.StreamAdapter(tts=_NonStreaming())
+    try:
+        assert await tokens(adapter._tokenizer_for(lowering=True)) == [marked]
+        # the default splits it mid-tag, which is why lowering needs its own
+        assert await tokens(adapter._tokenizer_for(lowering=False)) != [marked]
+        # one tokenizer, reused across syntheses
+        assert adapter._tokenizer_for(lowering=True) is adapter._tokenizer_for(lowering=True)
+
+        mine = tokenize.blingfire.SentenceTokenizer(retain_format=True)
+        explicit = tts.StreamAdapter(tts=_NonStreaming(), sentence_tokenizer=mine)
+        assert explicit._tokenizer_for(lowering=True) is mine  # never second-guessed
+        await explicit.aclose()
+    finally:
         await adapter.aclose()

@@ -468,3 +468,38 @@ async def test_an_unstyled_span_does_not_sink_the_request(mock_genai_client_clas
             ]
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("written", "spoken"),
+    [
+        ('Hello <expr type="sound" label="laugh"/> there.', '"Hello <laugh> there."'),
+        ('Hello <expr type="break" label="300ms"/> there.', '"Hello <short pause> there."'),
+        ('Say <expr type="prosody" label="emphasis">this</expr> now.', '"Say THIS now."'),
+    ],
+)
+@patch("livekit.plugins.google.beta.gemini_tts.Client")
+async def test_lowered_markup_travels_even_without_a_style(
+    mock_genai_client_class, written, spoken
+) -> None:
+    """Conversion happens here, so these parts are the only copy of its result.
+
+    A direct `synthesize()` gets text the stream adapter never lowered. Falling back to
+    the plain prompt would send the raw input and let Gemini read the markup out loud.
+    """
+    mock_client = MagicMock()
+    mock_genai_client_class.return_value = mock_client
+    mock_stream = AsyncMock()
+    mock_client.aio.models.generate_content_stream = mock_stream
+    mock_stream.side_effect = _audio_response()
+
+    google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
+    stream = google_tts.synthesize(written)
+    try:
+        await stream._run(MagicMock(spec=tts.AudioEmitter))
+    finally:
+        await stream.aclose()
+
+    # no style to carry, so no speech_metadata -- but the lowered words still travel
+    assert _request_body(mock_stream)["contents"] == [{"parts": [{"text": spoken}]}]

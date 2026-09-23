@@ -36,9 +36,11 @@ class StreamAdapter(TTS):
             num_channels=tts.num_channels,
         )
         self._wrapped_tts = tts
+        self._explicit_tokenizer = bool(sentence_tokenizer)
         self._sentence_tokenizer = sentence_tokenizer or tokenize.blingfire.SentenceTokenizer(
             retain_format=True
         )
+        self._markup_tokenizer: tokenize.SentenceTokenizer | None = None
         self._stream_pacer: SentenceStreamPacer | None = None
         if text_pacing is True:
             self._stream_pacer = SentenceStreamPacer()
@@ -52,6 +54,25 @@ class StreamAdapter(TTS):
         def _provider_key(self) -> str:
             assert isinstance(self._tts, StreamAdapter)
             return self._tts._wrapped_tts.markup._provider_key()
+
+    def _tokenizer_for(self, *, lowering: bool) -> tokenize.SentenceTokenizer:
+        """The sentence tokenizer for one synthesis.
+
+        A marker must never be split across two tokens -- the sentence-level lowering in
+        :class:`StreamAdapterWrapper` would see half a tag and send the halves on as
+        words. A label is free-form English and may well contain a period, so an
+        unguarded tokenizer really does split them. The framework passes an xml-aware
+        tokenizer when it builds the adapter itself; a caller relying on the default gets
+        one here, and only while markup is actually flowing, so a plain turn never pays
+        the stray-``<`` stall.
+        """
+        if not lowering or self._explicit_tokenizer:
+            return self._sentence_tokenizer
+        if self._markup_tokenizer is None:
+            self._markup_tokenizer = tokenize.blingfire.SentenceTokenizer(
+                retain_format=True, xml_aware=True
+            )
+        return self._markup_tokenizer
 
     def _set_expressive(self, enabled: bool) -> None:
         # StreamAdapterWrapper reads the wrapped instance's flag, so an adapter handed
@@ -110,7 +131,7 @@ class StreamAdapterWrapper(SynthesizeStream):
         markup = self._tts._wrapped_tts.markup
         lowering = bool(markup._provider_key()) and self._expressive
 
-        sent_stream = self._tts._sentence_tokenizer.stream()
+        sent_stream = self._tts._tokenizer_for(lowering=lowering).stream()
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
                 sent_stream=sent_stream,
