@@ -33,6 +33,10 @@ TaskOrigin = Literal["llm", "code"]
 SESSION_OWNER = "session"
 """The ``chat_items.owner`` of the session's own history, as opposed to an agent's context."""
 
+LEASE_TTL = 30.0
+"""How long a session stays claimed without a checkpoint renewing it. A worker restarted
+after a crash waits at most this long before it can take the session back."""
+
 INTERRUPTED_OUTPUT = "the call was interrupted before it finished; its outcome is unknown"
 
 _ITEM_ADAPTER: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
@@ -85,8 +89,9 @@ class StoredSession:
     endpoint: str | None
     current_agent_id: str | None
     userdata: Any
-    """Decoded into its class when that class still imports, else plain JSON."""
-    has_userdata: bool
+    """Decoded into its class when that class still imports, else plain JSON. Pickled
+    userdata stays bytes here: it may name agents, which the session rebuilds first."""
+    userdata_encoding: str | None
     tools: list[str] | None
     history: list[ChatItem]
     agents: dict[str, AgentRecord]
@@ -284,7 +289,7 @@ class SessionState:
             endpoint=_text(session.get("endpoint")),
             current_agent_id=_text(session.get("current_agent_id")),
             userdata=userdata,
-            has_userdata=has_userdata,
+            userdata_encoding=_text(session.get("userdata_encoding")) if has_userdata else None,
             tools=_json(session.get("tools_json")),
             history=history,
             agents=agents,
@@ -297,8 +302,7 @@ class SessionState:
         if raw is None:
             return None, False
         if session.get("userdata_encoding") == "pickle":
-            assert isinstance(raw, bytes)
-            return pickle.loads(raw), True
+            return raw, True
 
         data = json.loads(str(raw))
         cls_name = (_json(session.get("extra")) or {}).get("userdata_cls")
@@ -506,6 +510,7 @@ def _json(value: Value | None) -> Any:
 
 __all__ = [
     "INTERRUPTED_OUTPUT",
+    "LEASE_TTL",
     "SESSION_OWNER",
     "AgentRecord",
     "LeaseHeldError",

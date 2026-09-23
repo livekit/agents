@@ -445,6 +445,18 @@ class _ToolExecutor:
             await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
             return output
 
+        session = run_ctx.session
+        if (persistence := session._persistence) is not None:
+            # written before the body runs, so a crash mid-call leaves a row saying so
+            try:
+                await persistence.state.task_started(
+                    call_id, name=fnc_name, arguments=run_ctx.function_call.arguments
+                )
+            except Exception:
+                logger.warning(
+                    "could not record the tool call", extra={"call_id": call_id}, exc_info=True
+                )
+
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
         from .agent import _pass_through_activity_task_info
 
@@ -459,7 +471,6 @@ class _ToolExecutor:
         )
         self._running_tasks[call_id] = running_task
 
-        session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
 
         session._tool_execution_updated(
@@ -498,6 +509,11 @@ class _ToolExecutor:
                 status, message = "done", None
             else:
                 status, message = "done", str(output)
+
+            if (persistence := session._persistence) is not None:
+                persistence.state.task_ended(
+                    call_id, status=status, output=message, is_error=status == "error"
+                )
 
             entry_id = call_id + "_final" if run_ctx._updates else call_id
             session._tool_execution_updated(

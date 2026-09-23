@@ -112,6 +112,8 @@ if TYPE_CHECKING:
     from ..delegation import Delegate
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
+    from ..store import SessionState
+    from .persistence import SessionPersistence
     from .transcription.text_transforms import TextTransforms
 
 
@@ -702,6 +704,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
+        self._persistence: SessionPersistence | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -881,6 +884,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        state: SessionState | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -896,6 +900,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        state: SessionState | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -910,6 +915,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+        state: SessionState | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -931,12 +937,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
+            state: This session's rows in a conversation database, from
+                ``Conversation.session()``. A stored session is restored into ``agent`` and the
+                session before it starts, a new one is created, and either is kept current
+                until the session closes. Without it nothing is persisted.
         """
         async with self._lock:
             if self._started:
                 return None
 
             self._started_at = time.time()
+
+            if state is not None:
+                # imported here: a session that persists nothing never loads the store
+                from .persistence import SessionPersistence
+
+                self._persistence = SessionPersistence(self, state)
+                agent = await self._persistence.rehydrate(agent)
 
             # configure observability first
             record_is_given = is_given(record)
@@ -1322,6 +1339,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
                 await self._teardown_activity(reason=reason, drain=drain)
+
+                if self._persistence is not None:
+                    # after the drain, so the last turn is in the checkpoint
+                    await self._persistence.aclose()
+                    self._persistence = None
 
                 # the agent's own delegate goes with its activity; this one is the session's
                 if self._delegate is not None:
