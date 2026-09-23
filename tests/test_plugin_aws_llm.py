@@ -203,6 +203,54 @@ async def test_concurrent_bedrock_turns_open_one_client(monkeypatch: pytest.Monk
     await instance.aclose()
 
 
+async def test_cancelled_bedrock_turn_closes_response_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = BedrockLLM(model="amazon.nova-2-lite-v1:0")
+    stream_started = asyncio.Event()
+    stream_closed = False
+
+    class ResponseStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> dict:
+            stream_started.set()
+            await asyncio.Future()
+
+        def close(self) -> None:
+            nonlocal stream_closed
+            stream_closed = True
+
+    response_stream = ResponseStream()
+
+    class FakeClient:
+        async def converse_stream(self, **kwargs: object) -> dict:
+            return {
+                "ResponseMetadata": {"RequestId": "request-id", "HTTPStatusCode": 200},
+                "stream": response_stream,
+            }
+
+    class ClientContext:
+        async def __aenter__(self) -> FakeClient:
+            return FakeClient()
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr(instance._session, "create_client", lambda *args, **kwargs: ClientContext())
+
+    stream = instance.chat(chat_ctx=ChatContext())
+    collect_task = asyncio.create_task(stream.collect())
+    await stream_started.wait()
+
+    await stream.aclose()
+
+    await collect_task
+    assert stream_closed
+    await instance.aclose()
+
+
 @function_tool
 async def get_weather(city: str) -> str:
     """Look up the weather."""

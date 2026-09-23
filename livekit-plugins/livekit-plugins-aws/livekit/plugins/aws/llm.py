@@ -344,9 +344,11 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        response_stream: Any | None = None
         try:
             client = await self._llm._get_client()
             response = await client.converse_stream(**self._opts)
+            response_stream = response["stream"]
             request_id = response["ResponseMetadata"]["RequestId"]
             if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                 raise APIStatusError(
@@ -358,7 +360,7 @@ class LLMStream(llm.LLMStream):
                     request_id=request_id,
                 )
 
-            async for chunk in response["stream"]:
+            async for chunk in response_stream:
                 chat_chunk = self._parse_chunk(request_id, chunk)
                 if chat_chunk is not None:
                     retryable = False
@@ -369,6 +371,15 @@ class LLMStream(llm.LLMStream):
                 f"aws bedrock llm: error generating content: {e}",
                 retryable=retryable,
             ) from e
+        finally:
+            if response_stream is not None:
+                try:
+                    response_stream.close()
+                except Exception as e:
+                    logger.warning(
+                        "aws bedrock llm: failed to close response stream",
+                        extra={"error": str(e)},
+                    )
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
