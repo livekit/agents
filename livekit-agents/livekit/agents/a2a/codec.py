@@ -16,6 +16,8 @@ from ..utils import shortuuid
 from ..voice.served_request import Directive
 from .extension import (
     ANSWER_ARTIFACT_NAME,
+    CALLER,
+    CONVERSATION,
     DIRECTIVE,
     KIND,
     KIND_CHAT_CTX,
@@ -97,10 +99,17 @@ def to_a2a_request(
         parts=parts,
         reference_task_ids=list(reference_task_ids),
     )
+    metadata: dict[str, Any] = {}
     if task_input.closing:
-        message.metadata.CopyFrom(struct({KIND: KIND_CLOSE}))
+        metadata[KIND] = KIND_CLOSE
     elif task_input.is_delegation:
-        message.metadata.CopyFrom(struct({KIND: KIND_DELEGATION}))
+        metadata[KIND] = KIND_DELEGATION
+    if task_input.conversation_id:
+        metadata[CONVERSATION] = task_input.conversation_id
+    if task_input.caller_session_id:
+        metadata[CALLER] = task_input.caller_session_id
+    if metadata:
+        message.metadata.CopyFrom(struct(metadata))
 
     return pb.SendMessageRequest(
         message=message,
@@ -125,7 +134,8 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
         chat_ctx = ChatContext.from_dict(as_dict(part.data))
 
     body = text_of(message.parts)
-    kind = as_dict(message.metadata).get(KIND)
+    message_metadata = as_dict(message.metadata)
+    kind = message_metadata.get(KIND)
     delegation = kind == KIND_DELEGATION
     return TaskInput(
         text=None if delegation else body,
@@ -133,6 +143,8 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
         chat_ctx=chat_ctx,
         metadata=as_dict(request.metadata),
         closing=kind == KIND_CLOSE,
+        conversation_id=message_metadata.get(CONVERSATION),
+        caller_session_id=message_metadata.get(CALLER),
     )
 
 

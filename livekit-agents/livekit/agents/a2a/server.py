@@ -18,7 +18,7 @@ from ..utils import aio, shortuuid
 from .codec import from_a2a_request, to_a2a_events
 from .extension import EXTENSION_URI, REASON, agent_card, pb, struct
 from .runner import RequestRun, SessionRunner
-from .types import TaskUpdate
+from .types import TaskInput, TaskUpdate
 
 try:
     from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -59,14 +59,38 @@ class A2ASessionContext:
             ctx.attach(session)
     """
 
-    def __init__(self, context_id: str) -> None:
+    def __init__(
+        self,
+        context_id: str,
+        *,
+        conversation_id: str | None = None,
+        caller_session_id: str | None = None,
+    ) -> None:
         self._context_id = context_id
+        self._conversation_id = conversation_id
+        self._caller_session_id = caller_session_id
         self._runner: SessionRunner | None = None
 
     @property
     def context_id(self) -> str:
         """The conversation. The same handler run answers every request carrying it."""
         return self._context_id
+
+    @property
+    def conversation_id(self) -> str | None:
+        """The conversation database the caller persists into, when it sent one.
+
+        Open it and bind this context's session to it, so both halves land in one database::
+
+            conversation = await STORE.conversation(ctx.conversation_id)
+            state = conversation.session(ctx.context_id, kind="a2a", parent=ctx.caller_session_id)
+        """
+        return self._conversation_id
+
+    @property
+    def caller_session_id(self) -> str | None:
+        """The caller's own session in that database, which this one is the child of."""
+        return self._caller_session_id
 
     def attach(self, session: AgentSession) -> None:
         """Hand the started session to this conversation's runner."""
@@ -81,14 +105,18 @@ A2ASessionHandler = Callable[[A2ASessionContext], Coroutine[Any, Any, None]]
 class _Conversation:
     """One context id: the handler run that owns its session, and the requests in flight.
 
-    Held until the caller says goodbye or it goes idle.
+    Held until the caller says goodbye or it goes idle. Closing it closes the session, which
+    checkpoints a persisted one and lets its lease go, so the next request on the context
+    rehydrates it rather than starting over.
     """
 
-    # TODO(v1): with a session store, an idle conversation persists what it holds and the
-    # next request on that context rehydrates it, which is what moves it into a job process
-
-    def __init__(self, context_id: str, handler: A2ASessionHandler) -> None:
-        self._ctx = A2ASessionContext(context_id)
+    def __init__(self, context_id: str, handler: A2ASessionHandler, first_input: TaskInput) -> None:
+        # the first request of a context says where it persists, and the handler runs on it
+        self._ctx = A2ASessionContext(
+            context_id,
+            conversation_id=first_input.conversation_id,
+            caller_session_id=first_input.caller_session_id,
+        )
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
         self.runs: dict[str, RequestRun] = {}
@@ -134,9 +162,9 @@ class _SessionExecutor(AgentExecutor):
         self._sweeper: asyncio.Task[None] | None = None
         self._binding: DefaultRequestHandler | None = None
 
-    def _conversation(self, context_id: str) -> _Conversation:
+    def _conversation(self, context_id: str, task_input: TaskInput) -> _Conversation:
         if context_id not in self._conversations:
-            self._conversations[context_id] = _Conversation(context_id, self._handler)
+            self._conversations[context_id] = _Conversation(context_id, self._handler, task_input)
         if self._sweeper is None and self._idle_timeout is not None:
             self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
         conversation = self._conversations[context_id]
@@ -183,7 +211,7 @@ class _SessionExecutor(AgentExecutor):
             request.metadata.CopyFrom(struct(dict(context.metadata)))
         task_input = from_a2a_request(request)
 
-        conversation = self._conversation(context_id)
+        conversation = self._conversation(context_id, task_input)
         if task_input.closing:
             # the caller is done, so the conversation goes now rather than when it times out
             self._conversations.pop(context_id, None)

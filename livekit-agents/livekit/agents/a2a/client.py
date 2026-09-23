@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import AsyncGenerator, AsyncIterator
 from types import TracebackType
 from typing import Any, cast
@@ -75,8 +76,14 @@ class TaskStream:
         await self._client._turn.acquire()
         self._holds_turn = True
         try:
+            task_input = self._input
+            if not self._client.extension_active:
+                # the database id is ours to share only with an endpoint that joins it
+                task_input = dataclasses.replace(
+                    task_input, conversation_id=None, caller_session_id=None
+                )
             request = to_a2a_request(
-                self._input,
+                task_input,
                 context_id=self._client.context_id,
                 reference_task_ids=self._client._take_open_questions(),
             )

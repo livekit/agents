@@ -31,6 +31,8 @@ def test_the_extension_names_itself_and_its_keys() -> None:
     assert VERBATIM == "https://livekit.io/a2a/ext/agent-session/v1/verbatim"
     assert DIRECTIVE == "https://livekit.io/a2a/ext/agent-session/v1/directive"
     assert a2a.REASON == "https://livekit.io/a2a/ext/agent-session/v1/reason"
+    assert a2a.CONVERSATION == "https://livekit.io/a2a/ext/agent-session/v1/conversation"
+    assert a2a.CALLER == "https://livekit.io/a2a/ext/agent-session/v1/caller"
 
 
 def test_a_card_offers_the_extension_without_requiring_it() -> None:
@@ -109,6 +111,27 @@ def test_request_carries_the_extension_keys() -> None:
     data_parts = [p for p in request.message.parts if p.WhichOneof("content") == "data"]
     assert [p.text for p in text_parts] == ["find it"]
     assert [as_dict(p.metadata)[KIND] for p in data_parts] == [KIND_CHAT_CTX]
+
+
+def test_the_persistence_keys_round_trip_beside_the_kind() -> None:
+    task_input = a2a.TaskInput(
+        instruction="find it", conversation_id="DB_abc", caller_session_id="voice"
+    )
+    request = a2a.to_a2a_request(task_input, context_id="sess-1")
+
+    assert as_dict(request.message.metadata) == {
+        KIND: KIND_DELEGATION,
+        a2a.CONVERSATION: "DB_abc",
+        a2a.CALLER: "voice",
+    }
+    back = a2a.from_a2a_request(request)
+    assert (back.conversation_id, back.caller_session_id) == ("DB_abc", "voice")
+
+    # a person's turn carries them too, and a request without them reads as None
+    turn = a2a.to_a2a_request(a2a.TaskInput(text="hi", conversation_id="DB_abc"), context_id="s")
+    assert as_dict(turn.message.metadata) == {a2a.CONVERSATION: "DB_abc"}
+    plain = a2a.from_a2a_request(a2a.to_a2a_request(a2a.TaskInput(text="hi"), context_id="s"))
+    assert (plain.conversation_id, plain.caller_session_id) == (None, None)
 
 
 def test_a_persons_turn_is_not_tagged_a_delegation() -> None:

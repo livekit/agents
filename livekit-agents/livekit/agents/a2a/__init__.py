@@ -19,6 +19,8 @@ from .codec import (
 )
 from .extension import (
     ANSWER_ARTIFACT_NAME,
+    CALLER,
+    CONVERSATION,
     DIRECTIVE,
     EXTENSION_URI,
     KIND,
@@ -32,6 +34,8 @@ from .types import TaskInput, TaskState, TaskUpdate
 
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
+    "CALLER",
+    "CONVERSATION",
     "DIRECTIVE",
     "EXTENSION_URI",
     "KIND",

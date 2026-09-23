@@ -19,6 +19,8 @@ except ImportError as e:
 
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
+    "CALLER",
+    "CONVERSATION",
     "DIRECTIVE",
     "EXTENSION_DESCRIPTION",
     "EXTENSION_URI",
@@ -67,6 +69,13 @@ DIRECTIVE = _key("directive")
 
 REASON = _key("reason")
 """On a ``CancelTaskRequest``: why the caller is stopping the task."""
+
+CONVERSATION = _key("conversation")
+"""On a message: the conversation database the caller persists into, which the expert
+writes its own session into as well. Sent only where the card offered the profile."""
+
+CALLER = _key("caller")
+"""On a message: the caller's session id, which the expert's session names as its parent."""
 
 KIND_DELEGATION = "delegation"
 KIND_CLOSE = "close"

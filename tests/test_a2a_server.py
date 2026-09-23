@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import pathlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -73,12 +73,18 @@ class _Served:
 
 @contextlib.asynccontextmanager
 async def _serving(
-    endpoint: str = "fare-desk", *, idle_timeout: float | None = None
+    endpoint: str = "fare-desk",
+    *,
+    idle_timeout: float | None = None,
+    handler: Callable[[A2ASessionContext, _Served], Awaitable[None]] | None = None,
 ) -> AsyncIterator[_Served]:
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known
 
     async def fare_desk(ctx: A2ASessionContext) -> None:
+        if handler is not None:
+            await handler(ctx, served)
+            return
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(
             agent=Agent(instructions="fare desk", tools=[check_fares, say_goodbye, hold_seat])
@@ -386,3 +392,139 @@ async def test_the_typed_item_rides_beside_the_relayed_text() -> None:
     assert set(kinds) == {"chat_item"}
     # the report names the call it reports for, and travels whether or not it is said
     assert any(d.get("update_of") == "cf1" for d in data_parts)
+
+
+async def test_a_stock_client_hands_the_handler_where_to_persist() -> None:
+    """The keys are plain message metadata, so any A2A client can send them."""
+    from a2a.client import ClientConfig, ClientFactory
+    from a2a.client.card_resolver import A2ACardResolver
+    from a2a.types import a2a_pb2 as pb
+    from a2a.utils.constants import TransportProtocol
+
+    from livekit.agents.a2a import CALLER, CONVERSATION
+    from livekit.agents.a2a.extension import struct
+
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    async def recording(ctx: A2ASessionContext, served: _Served) -> None:
+        seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk"))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async with _serving(handler=recording) as served, httpx.AsyncClient(timeout=30.0) as http:
+        card = await A2ACardResolver(http, f"{served.base_url}/fare-desk").get_agent_card()
+        client = ClientFactory(
+            ClientConfig(
+                httpx_client=http,
+                streaming=True,
+                supported_protocol_bindings=[TransportProtocol.HTTP_JSON],
+                accepted_output_modes=["text/plain"],
+            )
+        ).create(card)
+        request = pb.SendMessageRequest(
+            message=pb.Message(
+                message_id="m1",
+                context_id="ctx-stock",
+                role=pb.Role.ROLE_USER,
+                parts=[pb.Part(text="what is the change fee")],
+                metadata=struct({CONVERSATION: "DB_stock", CALLER: "voice"}),
+            )
+        )
+        _ = [event async for event in client.send_message(request)]
+        await client.close()
+
+    assert seen == [("ctx-stock", "DB_stock", "voice")]
+
+
+async def test_the_keys_stay_home_when_the_card_does_not_offer_the_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A database id is ours to share only with an endpoint that joins it."""
+    from livekit.agents.a2a import A2AClient, client as client_module
+
+    seen: list[tuple[str | None, str | None]] = []
+
+    async def recording(ctx: A2ASessionContext, served: _Served) -> None:
+        seen.append((ctx.conversation_id, ctx.caller_session_id))
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk"))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    monkeypatch.setattr(client_module, "offers_extension", lambda card: False)
+    async with _serving(handler=recording) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            await _collect(
+                client,
+                TaskInput(
+                    instruction="what is the change fee",
+                    conversation_id="DB_secret",
+                    caller_session_id="voice",
+                ),
+            )
+        finally:
+            await client.aclose()
+
+    assert client.extension_active is False
+    assert seen == [(None, None)]
+
+
+async def test_a_dropped_conversation_rehydrates_on_the_next_request(
+    tmp_path: pathlib.Path,
+) -> None:
+    from livekit.agents import store
+    from livekit.agents.a2a import A2AClient
+
+    sqlite = store.SQLite(tmp_path)
+    conversation = await sqlite.create_conversation()
+
+    async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
+        assert ctx.conversation_id is not None
+        opened = await sqlite.conversation(ctx.conversation_id)
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(
+            agent=Agent(instructions="fare desk", tools=[check_fares]),
+            state=opened.session(ctx.context_id, kind="a2a", parent=ctx.caller_session_id),
+        )
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    delegation = {"conversation_id": conversation.database_id, "caller_session_id": "voice"}
+    async with _serving(handler=persisted) as served:
+        first = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
+        await _collect(first, TaskInput(instruction="what is the change fee", **delegation))
+        # the goodbye drops the conversation: its session checkpoints and lets the lease go,
+        # and with the last session of it released, the database connection closes
+        await first.aclose()
+        assert served.executor._conversations == {}
+        with pytest.raises(store.StoreError):
+            _ = conversation.executor
+
+        second = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
+        try:
+            await _collect(second, TaskInput(instruction="what is the fare", **delegation))
+            resumed = served.sessions[-1]
+            texts = [m.text_content for m in resumed.history.messages()]
+        finally:
+            await second.aclose()
+    await sqlite.aclose()
+
+    assert len(served.sessions) == 2
+    # the second handler run starts where the first one stopped
+    assert "what is the change fee" in texts and "The change fee is $75." in texts
+    assert texts[-1] == "It is 240 USD."
+
+    reopened = await store.SQLite(tmp_path).conversation(conversation.database_id)
+    rows = [
+        row
+        async for row in reopened.executor.query(
+            "SELECT session_id, parent_session_id, kind, lease_owner FROM sessions"
+        )
+    ]
+    assert rows == [
+        {"session_id": "ctx-1", "parent_session_id": "voice", "kind": "a2a", "lease_owner": None}
+    ]
+    await reopened.aclose()
