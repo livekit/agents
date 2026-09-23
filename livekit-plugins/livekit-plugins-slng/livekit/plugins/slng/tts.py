@@ -536,6 +536,10 @@ class _HeldConnection:
     # True once a reply wrote text on this socket. A socket the gateway closed
     # before that has nothing to show for itself, so reopening it is throttled.
     text_sent: bool = False
+    # Set by the idle reader the moment it decides to close this socket, before
+    # it waits for the lock to detach it. A reply that holds the lock and stops
+    # the reader in that window must not be handed the socket.
+    retired: bool = False
     # Whether this gateway said it can take the opening of a sentence early.
     accepts_partial_text: bool = False
     idle_reader: asyncio.Task[None] | None = None
@@ -1023,8 +1027,8 @@ class TTS(tts.TTS):
         Call it under ``_ws_lock``, or with no await between the check and what
         is done with it: it reads the held-socket bookkeeping. False for a
         private socket, a socket whose init predates the current options, one
-        past its maximum age, a dead socket, an instance another candidate
-        replaced, or one closing.
+        past its maximum age, a dead or retired socket, an instance another
+        candidate replaced, or one closing.
         """
         return (
             self._held is conn
@@ -1032,6 +1036,7 @@ class TTS(tts.TTS):
             and conn.epoch == self._ws_epoch
             and not self._past_max_age(conn)
             and self._is_ws_usable(conn.ws)
+            and not conn.retired
             and not self._closing
         )
 
@@ -1206,6 +1211,7 @@ class TTS(tts.TTS):
                     held.epoch == self._ws_epoch
                     and not self._past_max_age(held)
                     and self._is_ws_usable(held.ws)
+                    and not held.retired
                 ):
                     held.in_use = True
                     held.reused = True
@@ -1597,6 +1603,12 @@ class TTS(tts.TTS):
 
         if discarded:
             logger.debug("[TTS] discarded %d frame(s) on idle connection", discarded)
+        if retire != "idle":
+            # Marked before the wait for the lock: a reply may hold it now and
+            # stop this reader there, and would otherwise take a socket that
+            # is still producing audio, refused its session, or failed a read.
+            # Only an idle timeout leaves a socket that is fine to use.
+            conn.retired = True
         async with self._ws_lock:
             owned = self._held is conn and not conn.in_use
             if owned:

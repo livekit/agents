@@ -272,6 +272,12 @@ _HEAD_MIN_CLAUSE_CHARS = 25
 
 _Span = tuple[int, int]
 
+# Lone surrogates, which a streaming LLM produces by splitting an emoji across
+# two deltas. Blingfire is a native extension and refuses text it cannot encode
+# to UTF-8, so each one is swapped for U+FFFD before it is asked: one code point
+# for one, so its offsets still index the original text.
+_SURROGATES = re.compile("[\ud800-\udfff]")
+
 # Set the first time blingfire refuses a string. Blingfire is still asked on
 # every later call; this only keeps the warning to one line per process rather
 # than one per reply.
@@ -285,18 +291,16 @@ def _blingfire_ends(text: str) -> frozenset[int] | None:
     a sentence end. It has no opinion on the danda or the ideographic full stop,
     so those are decided by the terminator scan instead.
 
-    ``None`` means it could not be asked, and every ASCII terminator is then
-    taken at face value.
+    ``None`` means it could not be asked, and an ASCII terminator then ends a
+    sentence only where whitespace follows it.
     """
     global _blingfire_warned
     try:
-        _, offsets = blingfire.text_to_sentences_with_offsets(text)
+        _, offsets = blingfire.text_to_sentences_with_offsets(_SURROGATES.sub("�", text))
     except Exception:
-        # A native extension, so text it cannot encode to UTF-8 raises instead
-        # of returning: one unpaired surrogate, which a streaming LLM produces
-        # by splitting an emoji across two deltas, would otherwise lose the
-        # whole reply and report it as a connection error. Splitting without
-        # abbreviation handling is the better failure.
+        # Anything else it refuses would otherwise lose the whole reply and
+        # report it as a connection error. Splitting without abbreviation
+        # handling is the better failure.
         if _blingfire_warned:
             logger.debug("[TTS] sentence tokenizer could not use blingfire", exc_info=True)
         else:
@@ -343,10 +347,36 @@ def _boundaries(text: str) -> list[int]:
                 # A quotation closing mid-sentence, as in 「はい。」と言った。
                 # Breaking here would put a pause inside one sentence.
                 pass
-            elif non_ascii or ends is None or j in ends:
+            elif non_ascii:
+                cuts.append(j)
+            elif _is_title_shaped(text[cuts[-1] if cuts else 0 : j]):
+                pass
+            elif j in ends if ends is not None else text[j].isspace():
+                # Without blingfire, a stop followed by more of the same word
+                # ("3.14", "example.com") is not taken for a sentence end.
                 cuts.append(j)
         i = j
     return cuts
+
+
+def _is_title_shaped(piece: str) -> bool:
+    """Whether a would-be sentence is one short capitalised word and a full stop.
+
+    Such as "Dr." or "Mrs.": blingfire takes one for a whole sentence when it
+    opens a new one ("... called. Dr. Who ..."), and sent alone it is spoken as
+    a sentence, with a closing intonation and a pause. So the cut after it is
+    skipped. A real one-word sentence of that shape ("No.", "Hi.") then joins
+    the sentence after it, which costs only the wait for that one.
+    """
+    word = piece.strip()
+    stem = word[:-1]
+    return (
+        word.endswith(".")
+        and 1 <= len(stem) <= 4
+        and stem.isalpha()
+        and stem[0].isupper()
+        and (len(stem) == 1 or stem[1:].islower())
+    )
 
 
 def _binds_to_previous(char: str) -> bool:
@@ -626,18 +656,24 @@ class _SentenceStream(SentenceStream):
         self._do_close()
 
     def _emit_sentences(self) -> None:
-        """Emit every sentence that is certainly finished, holding the last."""
-        while True:
-            spans = self._split_fnc(self._buf)
-            if len(spans) <= 1:
-                return
-            end = spans[0][2]
+        """Emit every sentence that is certainly finished, holding the last.
+
+        One split serves them all. Splitting the rest of the buffer again after
+        each sentence would make a single large push, such as ``say()`` with a
+        long text, quadratic in its length.
+        """
+        spans = self._split_fnc(self._buf)
+        if len(spans) <= 1:
+            return
+        start = 0
+        for _piece, _start, end in spans[:-1]:
             # min() and max() carry an opening that reached past this boundary:
             # nothing already handed out is sent twice, and nothing is dropped.
-            self._emit(self._buf[min(self._handed_out, end) : end], partial=False)
-            self._buf = self._buf[end:]
-            self._handed_out = max(0, self._handed_out - end)
-            self._head_allowed = False
+            self._emit(self._buf[max(start, min(self._handed_out, end)) : end], partial=False)
+            start = end
+        self._buf = self._buf[start:]
+        self._handed_out = max(0, self._handed_out - start)
+        self._head_allowed = False
 
     def _maybe_emit_head(self) -> None:
         """Release the opening of the sentence being written, once per segment."""
