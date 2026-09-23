@@ -53,13 +53,13 @@ class A2ADelegate(Delegate):
         return self._client
 
     @property
-    def context_id(self) -> str:
-        """The conversation with the endpoint, minted on first use unless one was given."""
-        return self.client.context_id
+    def context_id(self) -> str | None:
+        """The conversation with the endpoint: the one given, else minted on the first send."""
+        return self._client.context_id if self._client is not None else self._context_id
 
     @property
     def started(self) -> bool:
-        """Whether a context has been fixed, by a send or by reading ``context_id``."""
+        """Whether anything has been sent, which fixes the context."""
         return self._client is not None
 
     def resume(self, context_id: str) -> None:

@@ -100,6 +100,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                         persistence is not None
                         and not linked
                         and isinstance(handler, A2ADelegate)
+                        and handler.context_id is not None
                         and (task_id := getattr(stream, "task_id", ""))
                     ):
                         # which expert task answered which call, for a dashboard to join
