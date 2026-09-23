@@ -15,6 +15,8 @@ from collections.abc import AsyncIterator
 import pytest
 
 from livekit.agents import store
+from livekit.agents.store import agentdb as agentdb_client
+from livekit.agents.store.executor import Row
 
 from .test_store import LEASE_TTL, StoreSuite
 
@@ -54,17 +56,17 @@ async def test_a_query_streams_many_batches(
         "CASE i % 3 WHEN 0 THEN NULL WHEN 1 THEN i * 1.5 ELSE 'text' END FROM n",
         rows,
     )
-    assert isinstance(executor, store.AgentDBExecutor)
+    assert isinstance(executor, agentdb_client.AgentDBExecutor)
 
     batches = 0
-    original = store.agentdb._decode_batch
+    original = agentdb_client._decode_batch
 
-    def counting(names: list[str], batch: object) -> list[store.Row]:
+    def counting(names: list[str], batch: object) -> list[Row]:
         nonlocal batches
         batches += 1
         return original(names, batch)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(store.agentdb, "_decode_batch", counting)
+    monkeypatch.setattr(agentdb_client, "_decode_batch", counting)
     seen = [row async for row in executor.query("SELECT * FROM t ORDER BY id")]
     assert batches > 1
     assert len(seen) == rows
@@ -83,7 +85,7 @@ async def test_a_query_streams_many_batches(
 async def test_reconnects_after_the_socket_is_severed(agentdb: store.AgentDB) -> None:
     conversation = await agentdb.create_conversation(ttl_seconds=3600)
     executor = conversation.executor
-    assert isinstance(executor, store.AgentDBExecutor)
+    assert isinstance(executor, agentdb_client.AgentDBExecutor)
     state = conversation.session("s1")
     await state.load()
 

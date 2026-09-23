@@ -15,7 +15,9 @@ import pytest
 
 from livekit.agents import store
 from livekit.agents.llm import ChatMessage, FunctionCall
-from livekit.agents.store.schema import migrate
+from livekit.agents.store.executor import SQLiteExecutor, Value
+from livekit.agents.store.schema import SCHEMA_VERSION, migrate
+from livekit.agents.store.session_state import INTERRUPTED_OUTPUT, AgentRecord
 
 pytestmark = pytest.mark.unit
 
@@ -34,7 +36,7 @@ class Userdata:
     bookings: list[Booking] = field(default_factory=list)
 
 
-async def _rows(conversation: store.Conversation, sql: str, *params: store.Value) -> list[dict]:
+async def _rows(conversation: store.Conversation, sql: str, *params: Value) -> list[dict]:
     return [row async for row in conversation.executor.query(sql, *params)]
 
 
@@ -46,13 +48,13 @@ class StoreSuite:
         names = {row["name"] for row in tables}
         assert {"_meta", "sessions", "chat_items", "agents", "tasks", "delegations"} <= names
         version = await _rows(conversation, "SELECT value FROM _meta WHERE key = 'schema_version'")
-        assert version == [{"value": str(store.SCHEMA_VERSION)}]
+        assert version == [{"value": str(SCHEMA_VERSION)}]
 
         # migrating again is a no-op, and a database from a newer framework is refused
-        assert await migrate(conversation.executor) == store.SCHEMA_VERSION
+        assert await migrate(conversation.executor) == SCHEMA_VERSION
         await conversation.executor.exec(
             "UPDATE _meta SET value = ? WHERE key = 'schema_version'",
-            str(store.SCHEMA_VERSION + 1),
+            str(SCHEMA_VERSION + 1),
         )
         with pytest.raises(store.SchemaVersionError):
             await migrate(conversation.executor)
@@ -86,7 +88,7 @@ class StoreSuite:
         await state.checkpoint(
             current_agent_id="agent_1",
             userdata={"step": 1},
-            agents=[store.AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={})],
+            agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={})],
         )
         await conversation.executor.exec(
             "UPDATE agents SET durable_state = ? WHERE agent_id = 'agent_1'", b"frame"
@@ -95,8 +97,8 @@ class StoreSuite:
             current_agent_id="agent_2",
             userdata={"step": 2},
             agents=[
-                store.AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={"n": 1}),
-                store.AgentRecord(
+                AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={"n": 1}),
+                AgentRecord(
                     agent_id="agent_2", cls="app:Rebook", parent_agent_id="agent_1", state={}
                 ),
             ],
@@ -134,7 +136,7 @@ class StoreSuite:
             current_agent_id="agent_1",
             userdata=userdata,
             agents=[
-                store.AgentRecord(
+                AgentRecord(
                     agent_id="agent_1", cls="app:FareDesk", state={"tier": "gold"}, tools=["x"]
                 )
             ],
@@ -170,7 +172,7 @@ class StoreSuite:
             await first.checkpoint(
                 current_agent_id="stale",
                 userdata=None,
-                agents=[store.AgentRecord(agent_id="stale", cls="app:Stale")],
+                agents=[AgentRecord(agent_id="stale", cls="app:Stale")],
             )
         (session,) = await _rows(conversation, "SELECT current_agent_id, lease_owner FROM sessions")
         assert session == {"current_agent_id": "a", "lease_owner": second.lease_owner}
@@ -203,7 +205,7 @@ class StoreSuite:
             '{"flight": "NW812"}',
         )
         assert task.status == "interrupted" and task.is_error
-        assert task.output == store.INTERRUPTED_OUTPUT
+        assert task.output == INTERRUPTED_OUTPUT
         rows = await _rows(
             conversation, "SELECT call_id, status, idempotency_key, origin FROM tasks ORDER BY 1"
         )
@@ -288,7 +290,7 @@ async def test_sqlite_reopens_a_conversation_by_id(tmp_path: pathlib.Path) -> No
 
 
 async def test_memory_executor_batch_is_atomic() -> None:
-    executor = store.SQLiteExecutor()
+    executor = SQLiteExecutor()
     await executor.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)")
     with pytest.raises(store.StoreError):
         await executor.batch(("INSERT INTO t VALUES (1)", ()), ("INSERT INTO nope VALUES (1)", ()))

@@ -16,11 +16,7 @@ from ..utils import shortuuid
 from .agentdb import TOKEN_TTL, AgentDBExecutor, AgentDBService, access_token
 from .executor import Executor, SQLiteExecutor, StoreError
 from .schema import migrate
-from .session_state import SessionKind, SessionState
-
-LEASE_TTL = 30.0
-"""How long a session stays claimed without a checkpoint renewing it. A worker restarted
-after a crash waits at most this long before it can take the session back."""
+from .session_state import LEASE_TTL, SessionKind, SessionState
 
 
 class Conversation:
@@ -205,4 +201,4 @@ class AgentDB:
             self._service = None
 
 
-__all__ = ["LEASE_TTL", "AgentDB", "Conversation", "SQLite", "Store"]
+__all__ = ["AgentDB", "Conversation", "SQLite", "Store"]
