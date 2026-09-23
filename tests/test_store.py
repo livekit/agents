@@ -37,7 +37,8 @@ class Userdata:
 
 
 async def _rows(conversation: store.Conversation, sql: str, *params: Value) -> list[dict]:
-    return [row async for row in conversation.executor.query(sql, *params)]
+    executor = await conversation.open()
+    return [row async for row in executor.query(sql, *params)]
 
 
 class StoreSuite:
@@ -261,6 +262,25 @@ class StoreSuite:
             {"session_id": "ctx-1", "parent_session_id": "voice"},
             {"session_id": "voice", "parent_session_id": None},
         ]
+
+    async def test_the_connection_closes_with_its_last_session(
+        self, conversation: store.Conversation
+    ) -> None:
+        first, second = conversation.session("a"), conversation.session("b")
+        await first.load()
+        await second.load()
+        await first.release()
+        await first.release()  # a second release is a no-op, not a second let-go
+        assert conversation.executor is not None
+        await second.release()
+        with pytest.raises(store.StoreError):
+            _ = conversation.executor
+
+        # the next session opens it again
+        again = conversation.session("a")
+        assert await again.load() is not None
+        assert conversation.executor is not None
+        await again.release()
 
 
 class TestSQLiteStore(StoreSuite):

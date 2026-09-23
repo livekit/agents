@@ -7,8 +7,10 @@ conversation is one socket for the agent and one query for a dashboard.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -20,12 +22,26 @@ from .session_state import LEASE_TTL, SessionKind, SessionState
 
 
 class Conversation:
-    """One conversation database, migrated and open. Sessions are made from it."""
+    """One conversation database. Sessions are made from it.
 
-    def __init__(self, database_id: str, executor: Executor, *, lease_ttl: float) -> None:
+    Its connection opens on first use and closes when the last session bound to it lets go,
+    so a server that has answered many conversations holds sockets only for the live ones;
+    the next session opens it again.
+    """
+
+    def __init__(
+        self,
+        database_id: str,
+        *,
+        connect: Callable[[], Awaitable[Executor]],
+        lease_ttl: float,
+    ) -> None:
         self._database_id = database_id
-        self._executor = executor
+        self._connect = connect
         self._lease_ttl = lease_ttl
+        self._executor: Executor | None = None
+        self._open_lock = asyncio.Lock()
+        self._sessions = 0
 
     @property
     def database_id(self) -> str:
@@ -33,7 +49,23 @@ class Conversation:
 
     @property
     def executor(self) -> Executor:
+        """The open connection. Raises while closed; ``open()`` reopens it."""
+        if self._executor is None:
+            raise StoreError("closed", f"conversation {self._database_id} is not open")
         return self._executor
+
+    async def open(self) -> Executor:
+        """Connect and migrate, unless already open."""
+        async with self._open_lock:
+            if self._executor is None:
+                executor = await self._connect()
+                try:
+                    await migrate(executor)
+                except BaseException:
+                    await executor.aclose()
+                    raise
+                self._executor = executor
+            return self._executor
 
     def session(
         self,
@@ -45,8 +77,10 @@ class Conversation:
     ) -> SessionState:
         """A handle on one session of this conversation; ``AgentSession.start`` loads it.
 
-        ``parent`` is the session that delegated to this one, when there is one.
+        ``parent`` is the session that delegated to this one, when there is one. The
+        conversation stays open until every handle made here is released.
         """
+        self._sessions += 1
         return SessionState(
             self,
             session_id,
@@ -56,8 +90,17 @@ class Conversation:
             lease_ttl=self._lease_ttl,
         )
 
+    async def _session_released(self) -> None:
+        self._sessions -= 1
+        if self._sessions <= 0:
+            self._sessions = 0
+            await self.aclose()
+
     async def aclose(self) -> None:
-        await self._executor.aclose()
+        async with self._open_lock:
+            if self._executor is not None:
+                executor, self._executor = self._executor, None
+                await executor.aclose()
 
 
 class Store(Protocol):
@@ -79,23 +122,28 @@ class SQLite:
         self._open: dict[str, Conversation] = {}
 
     async def conversation(self, database_id: str) -> Conversation:
+        path = self._directory / f"{database_id}.sqlite"
         if database_id not in self._open:
-            path = self._directory / f"{database_id}.sqlite"
             if not path.exists():
                 raise StoreError("not_found", f"no conversation database at {path}")
-            await self._attach(database_id, path)
-        return self._open[database_id]
+            self._open[database_id] = self._conversation(database_id, path)
+        conversation = self._open[database_id]
+        await conversation.open()
+        return conversation
 
     async def create_conversation(self) -> Conversation:
         self._directory.mkdir(parents=True, exist_ok=True)
         database_id = shortuuid("DB_")
-        await self._attach(database_id, self._directory / f"{database_id}.sqlite")
-        return self._open[database_id]
+        path = self._directory / f"{database_id}.sqlite"
+        conversation = self._open[database_id] = self._conversation(database_id, path)
+        await conversation.open()
+        return conversation
 
-    async def _attach(self, database_id: str, path: Path) -> None:
-        executor = SQLiteExecutor(str(path))
-        await migrate(executor)
-        self._open[database_id] = Conversation(database_id, executor, lease_ttl=self._lease_ttl)
+    def _conversation(self, database_id: str, path: Path) -> Conversation:
+        async def connect() -> Executor:
+            return SQLiteExecutor(str(path))
+
+        return Conversation(database_id, connect=connect, lease_ttl=self._lease_ttl)
 
     async def aclose(self) -> None:
         for conversation in self._open.values():
@@ -106,7 +154,7 @@ class SQLite:
 class AgentDB:
     """Conversations in agent-db: its management API mints them, its data plane serves them.
 
-    Keeps one socket per conversation it has opened, until ``aclose``.
+    One socket per open conversation, closed when its last session is released.
     """
 
     def __init__(
@@ -175,17 +223,20 @@ class AgentDB:
 
     async def conversation(self, database_id: str) -> Conversation:
         if database_id not in self._open:
-            executor = AgentDBExecutor(
-                ws_url=self._ws_url, database_id=database_id, token=self._token
+
+            async def connect() -> Executor:
+                executor = AgentDBExecutor(
+                    ws_url=self._ws_url, database_id=database_id, token=self._token
+                )
+                await executor.connect()
+                return executor
+
+            self._open[database_id] = Conversation(
+                database_id, connect=connect, lease_ttl=self._lease_ttl
             )
-            await executor.connect()
-            try:
-                await migrate(executor)
-            except BaseException:
-                await executor.aclose()
-                raise
-            self._open[database_id] = Conversation(database_id, executor, lease_ttl=self._lease_ttl)
-        return self._open[database_id]
+        conversation = self._open[database_id]
+        await conversation.open()
+        return conversation
 
     async def create_conversation(self, *, ttl_seconds: int = 0) -> Conversation:
         """Mint a new database. ``ttl_seconds`` unset means it never expires."""

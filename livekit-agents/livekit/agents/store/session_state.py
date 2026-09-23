@@ -116,7 +116,8 @@ def import_qualified(name: str) -> Any:
     return target
 
 
-def _item_json(item: ChatItem) -> str:
+def item_json(item: ChatItem) -> str:
+    """One chat item as its row stores it: ``ChatContext.to_dict()``, no audio or images."""
     data = ChatContext([item]).to_dict(exclude_timestamp=False)["items"][0]
     return json.dumps(data)
 
@@ -147,6 +148,7 @@ class SessionState:
         self._pending: list[Statement] = []
         self._writer: asyncio.Task[None] | None = None
         self._pickle_warned = False
+        self._released = False
 
     @property
     def conversation(self) -> Conversation:
@@ -169,7 +171,7 @@ class SessionState:
 
         Waits out a previous owner's lease, which is what a restart after a crash meets.
         """
-        executor = self._conversation.executor
+        executor = await self._conversation.open()
         now = time.time()
         created = await executor.exec(
             "INSERT INTO sessions (session_id, parent_session_id, kind, endpoint, created_at, "
@@ -341,7 +343,7 @@ class SessionState:
         self._enqueue(
             "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item_json, "
             "created_at) VALUES (?, ?, ?, ?, ?)",
-            (self._session_id, owner, item.id, _item_json(item), item.created_at),
+            (self._session_id, owner, item.id, item_json(item), item.created_at),
         )
 
     def remove(self, item_id: str, *, owner: str) -> None:
@@ -466,15 +468,24 @@ class SessionState:
             raise
 
     async def release(self) -> None:
-        """Flush what is queued and let the session go, so the next worker need not wait."""
-        await self.flush()
-        await self._conversation.executor.exec(
-            "UPDATE sessions SET lease_owner = NULL, lease_expires_at = NULL, closed_at = ? "
-            "WHERE session_id = ? AND lease_owner = ?",
-            time.time(),
-            self._session_id,
-            self._lease_owner,
-        )
+        """Flush what is queued and let the session go, so the next worker need not wait.
+
+        The last session of a conversation to be released closes its connection.
+        """
+        if self._released:
+            return
+        self._released = True
+        try:
+            await self.flush()
+            await self._conversation.executor.exec(
+                "UPDATE sessions SET lease_owner = NULL, lease_expires_at = NULL, closed_at = ? "
+                "WHERE session_id = ? AND lease_owner = ?",
+                time.time(),
+                self._session_id,
+                self._lease_owner,
+            )
+        finally:
+            await self._conversation._session_released()
 
     async def flush(self) -> None:
         """Wait for every queued write to land."""
@@ -522,5 +533,6 @@ __all__ = [
     "TaskRecord",
     "TaskStatus",
     "import_qualified",
+    "item_json",
     "qualified_name",
 ]
