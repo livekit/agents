@@ -11,6 +11,7 @@ from ...types import NOT_GIVEN, NotGivenOr
 from ...utils import is_given
 from ...voice.agent import AgentTask
 from ...voice.events import RunContext
+from .utils import DELEGATOR_CONFIRMATION
 
 if TYPE_CHECKING:
     from ...voice.audio_recognition import TurnDetectionMode
@@ -29,6 +30,12 @@ Ignore unrelated input and avoid going off-topic. Do not generate markdown, gree
 Avoid verbosity by not sharing example phone numbers or formats unless prompted to do so. Do not deviate from the goal of collecting the user's phone number.
 Always explicitly invoke a tool when applicable. Do not simulate tool usage, no real action is taken unless the tool is explicitly called.\
 {extra_instructions}
+"""
+
+_DELEGATOR_INSTRUCTIONS = """
+You're collecting the caller's phone number. Keep replies to one short sentence, and read numbers back in groups, never as one block.
+Every time the caller says their number, delegate it so it gets recorded.
+{confirmation_instructions}{extra_instructions}
 """
 
 _AUDIO_SPECIFIC = """
@@ -97,6 +104,12 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
                     modality_specific=_TEXT_SPECIFIC,
                     confirmation_instructions=(
                         confirmation_instructions if require_confirmation is True else ""
+                    ),
+                    extra_instructions=extra,
+                ),
+                delegator=_DELEGATOR_INSTRUCTIONS.format(
+                    confirmation_instructions=(
+                        DELEGATOR_CONFIRMATION if require_confirmation is not False else ""
                     ),
                     extra_instructions=extra,
                 ),
