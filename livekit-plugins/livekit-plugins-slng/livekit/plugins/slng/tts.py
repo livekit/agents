@@ -60,6 +60,7 @@ from .gateway_adapter import (
     extract_error_status,
     is_non_retryable_client_error,
     is_payload_too_large,
+    merge_init_payload,
     normalize_region_override,
     normalize_world_part_override,
 )
@@ -287,6 +288,16 @@ def _contains_letter(text: str) -> bool:
     return any(ch.isalpha() for ch in text)
 
 
+def _contains_speech(text: str) -> bool:
+    """True if the text has a letter or a digit in any script: something to say.
+
+    Whitespace, punctuation and symbols alone have nothing to voice, such as the
+    "\\n\\n" some models write around a tool call, or a bare "...". A number
+    does, so a reply of "4200." is still spoken.
+    """
+    return any(ch.isalnum() for ch in text)
+
+
 class _TextFrame(NamedTuple):
     """One text frame for the gateway. ``flush`` marks the reply's last one.
 
@@ -327,9 +338,10 @@ class _FrameBatcher:
     so a letterless token stays attached to a neighbouring word: some providers
     reject a frame with no allowed-language character. ``finish`` is the
     exception. At the end of a reply there is no neighbour left, so it returns
-    whatever is buffered. Sending a bare "4200." gets it voiced by providers
-    that can, and refused loudly by providers that cannot, where dropping it
-    would leave the caller listening to silence.
+    whatever is buffered if it has anything to say. Sending a bare "4200." gets
+    it voiced by providers that can, and refused loudly by providers that
+    cannot, where dropping it would leave the caller listening to silence. A
+    trailing "..." has nothing to voice, and is dropped.
     """
 
     def __init__(self, *, mode: Literal["sentence", "word", "phrase"], max_chars: int) -> None:
@@ -378,8 +390,8 @@ class _FrameBatcher:
         return None
 
     def finish(self) -> str | None:
-        """Return the trailing buffer as a frame, letters or not, or None if empty."""
-        if self._buf.strip():
+        """Return the trailing buffer as a frame, letters or not, or None if silent."""
+        if _contains_speech(self._buf):
             return self._take()
         self._buf, self._has_letter = "", False
         return None
@@ -1059,17 +1071,23 @@ class TTS(tts.TTS):
 
         # SLNG-specific: send init. The `ready` that answers it is read by
         # whoever owns the socket next, the idle reader or a reply.
-        init_payload = self._opts.runtime_init
-        if init_payload is None:
-            init_payload = build_tts_init_payload(
-                model=self._opts.model,
-                voice=self._opts.voice,
-                sample_rate=self._opts.sample_rate,
-                encoding=self._opts.encoding,
-                language=self._opts.language if is_given(self._opts.language) else None,
-                speed=self._opts.speed if is_given(self._opts.speed) else None,
-                model_options=self._opts.model_options,
-            )
+        init_payload = build_tts_init_payload(
+            model=self._opts.model,
+            voice=self._opts.voice,
+            sample_rate=self._opts.sample_rate,
+            encoding=self._opts.encoding,
+            language=self._opts.language if is_given(self._opts.language) else None,
+            speed=self._opts.speed if is_given(self._opts.speed) else None,
+            model_options=self._opts.model_options,
+        )
+        if self._opts.runtime_init is not None:
+            # A caller's own init keeps every field it sets, but what this
+            # instance holds now wins, so update_options still applies. That
+            # is safe to do wholesale: besides the model and voice, the payload
+            # above carries the audio format the plugin decodes and only the
+            # settings the caller chose, as language and speed are left out
+            # unless set.
+            init_payload = merge_init_payload(self._opts.runtime_init, init_payload)
 
         try:
             init_started_at = time.perf_counter()
@@ -1957,9 +1975,17 @@ class ChunkedStream(tts.ChunkedStream):
     """Non-streaming synthesis: send the full text once over the SLNG WebSocket."""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
+        # Text with nothing to say synthesizes to no audio without a request,
+        # rather than to a request that can only fail for want of audio.
+        if not _contains_speech(input_text):
+            input_text = ""
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        # Always recoverable: see SynthesizeStream._emit_error.
+        super()._emit_error(api_error, recoverable=True)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         request_id = utils.shortuuid()
@@ -2103,7 +2129,38 @@ class SynthesizeStream(tts.SynthesizeStream):
         super().__init__(tts=tts, conn_options=conn_options)
         self._tts: TTS = tts
         self._opts = replace(tts._opts)
+        # Text pushed before the segment's first letter or digit; see push_text.
+        self._leading_text = ""
+        self._segment_has_speech = False
         logger.debug("[TTS] SynthesizeStream.__init__ DONE")
+
+    def push_text(self, token: str) -> None:
+        # Hold text with nothing to say until a letter or a digit arrives, then
+        # pass it on together with that text, so leading punctuation is kept. A
+        # segment that never gets one never reaches livekit's segment
+        # accounting at all: it opens no connection, sends no flush, and ends
+        # without audio instead of failing for the lack of it.
+        if not self._segment_has_speech:
+            self._leading_text += token
+            if not _contains_speech(self._leading_text):
+                return
+            token, self._leading_text = self._leading_text, ""
+            self._segment_has_speech = True
+        super().push_text(token)
+
+    def flush(self) -> None:
+        self._leading_text = ""
+        self._segment_has_speech = False
+        super().flush()
+
+    def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
+        # Always recoverable. Every stream runs under a fallback stream, which
+        # retries the model or moves to the next one, and reports the reply's
+        # failure itself, once, when it gives up. Reported here as
+        # unrecoverable, each attempt would count toward the session's limit
+        # on unrecoverable errors, and one failed reply would end the call
+        # even when the next model spoke it.
+        super()._emit_error(api_error, recoverable=True)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # Create segments_ch per run so base-class retries after an error get a
@@ -2722,9 +2779,14 @@ class _FallbackStreamBase:
         self._started = False
         self._closed = False
         self._attempts = 0
+        self._failure_reported = False
 
     async def _start_stream(self) -> None:
         raise NotImplementedError
+
+    def _expects_audio(self) -> bool:
+        """Whether the input has anything to say, so that no audio is a failure."""
+        return True
 
     def __aiter__(self) -> _FallbackStreamBase:
         return self
@@ -2743,6 +2805,36 @@ class _FallbackStreamBase:
         await self.aclose()
 
     async def __anext__(self) -> Any:
+        try:
+            return await self._next_item()
+        except StopAsyncIteration:
+            raise
+        except Exception as exc:
+            self._report_failure(exc)
+            raise
+
+    def _report_failure(self, exc: Exception) -> None:
+        """Tell the session this reply failed: once, and as unrecoverable.
+
+        The streams under this one report every attempt as recoverable, so
+        this is the only unrecoverable error a failed reply produces, as with
+        livekit's own streams and its FallbackAdapter. A reply the next model
+        speaks reports none.
+        """
+        if self._failure_reported:
+            return
+        self._failure_reported = True
+        self._parent.emit(
+            "error",
+            tts.TTSError(
+                timestamp=time.time(),
+                label=self._parent._label,
+                error=exc,
+                recoverable=False,
+            ),
+        )
+
+    async def _next_item(self) -> Any:
         if self._closed:
             raise StopAsyncIteration
         if self._stream is None:
@@ -2757,7 +2849,7 @@ class _FallbackStreamBase:
                 else:
                     item = await self._stream.__anext__()
             except StopAsyncIteration:
-                if self._started:
+                if self._started or not self._expects_audio():
                     raise
                 await self._handle_failure(APIConnectionError("TTS produced no audio"))
                 continue
@@ -2896,6 +2988,11 @@ class _FallbackSynthesizeStream(_FallbackStreamBase):
             self._arm_timeout()
             self._stream.end_input()
 
+    def _expects_audio(self) -> bool:
+        return not self._input_ended or any(
+            isinstance(item, str) and _contains_speech(item) for item in self._texts
+        )
+
     async def _start_stream(self) -> None:
         candidate = self._parent._candidate_tts[self._index]
         await self._parent._drop_inactive_candidate_connections(candidate)
@@ -2941,6 +3038,9 @@ class _FallbackChunkedStream(_FallbackStreamBase):
         ).__aenter__()
         timeout = self._parent._first_audio_timeout_s
         self._deadline = time.monotonic() + timeout if timeout is not None else None
+
+    def _expects_audio(self) -> bool:
+        return _contains_speech(self._text)
 
     async def collect(self) -> rtc.AudioFrame:
         """Utility method to collect every frame in a single call"""

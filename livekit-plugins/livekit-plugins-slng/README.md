@@ -37,9 +37,11 @@ tts = slng.TTS(
 
 Additional keyword arguments are forwarded to the gateway and applied according to the selected model's contract. Failover across multiple models or endpoints is available via `connections=[...]`; see [docs.slng.ai](https://docs.slng.ai/) for details.
 
-## TTS init fields
+## Init fields
 
-The plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent; `encoding` cannot be overridden, because the plugin decodes the audio itself. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+On TTS, the plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent; `encoding` cannot be overridden, because the plugin decodes the audio itself. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+
+A connection can carry its own init message, as in `TTSConnectionConfig(init=...)`. On TTS, every field in it is kept, but the plugin's settings above win wherever both set one, so `update_options` still applies. On STT, where every setting has a default, a connection's init is sent as written, except for the options you later change with `update_options`.
 
 ## TTS text chunking
 
@@ -60,6 +62,8 @@ The plugin sends the opening of a long first sentence as soon as it exists, so a
 The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence followed by a `flush` that ends the reply, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
 
 `warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. After five idle minutes the plugin closes it, and the next reply opens a new one; a connection open for 20 minutes is replaced between replies. A TTS that an agent handoff replaces closes its connection 10 seconds after its session stops using it. Set `warm_standby_enabled=False` to open a connection for each reply and close it afterwards: nothing is held between replies, and every reply pays a connect. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
+
+A reply with nothing to say, such as whitespace or punctuation alone, sends nothing and ends without audio. A reply that fails reaches the session as a single unrecoverable error, however many attempts and models it went through, so `AgentSession` ends a call only after several failed replies in a row, as with any other TTS. A failed attempt that the plugin retries, or that the next model in `connections=[...]` speaks, is reported as recoverable.
 
 ## End of turn finalization
 

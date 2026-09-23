@@ -156,6 +156,25 @@ def build_stt_init_payload(
     return {"type": "init", "config": config}
 
 
+def merge_init_payload(
+    configured: Mapping[str, Any],
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Lay ``current`` over a caller's own init message, one level deep.
+
+    Every field of ``configured`` is kept unless ``current`` sets it too, in
+    which case ``current`` wins, both at the top level and inside ``config``.
+    """
+    merged = dict(configured)
+    configured_config = configured.get("config")
+    current_config = current.get("config")
+    if isinstance(current_config, Mapping):
+        base = configured_config if isinstance(configured_config, Mapping) else {}
+        merged["config"] = {**base, **current_config}
+    merged.update({key: value for key, value in current.items() if key != "config"})
+    return merged
+
+
 def normalize_region_override(region_override: str | list[str] | None) -> str | None:
     if region_override is None:
         return None
