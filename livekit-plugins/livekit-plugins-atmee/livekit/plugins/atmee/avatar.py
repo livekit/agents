@@ -143,6 +143,8 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         self._ended = False
         self._started = False
         self._room_for_events: rtc.Room | None = None
+        self._agent_session_for_events: AgentSession[Any] | None = None
+        self._aclose_task: asyncio.Task[None] | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -251,6 +253,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
         self._room_for_events = room
         room.on("participant_disconnected", self._on_participant_disconnected)
+        # The agent session can close without the job shutting down
+        # (AgentSession.aclose(), an error): end the render then too, or it
+        # would bill until max_duration_seconds.
+        self._agent_session_for_events = agent_session
+        agent_session.on("close", self._on_agent_session_close)
 
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
@@ -273,6 +280,10 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         )
         self.emit("avatar_disconnected", participant)
         self._schedule_end()
+
+    def _on_agent_session_close(self, _: Any) -> None:
+        if self._aclose_task is None:
+            self._aclose_task = asyncio.create_task(self.aclose())
 
     def _schedule_end(self) -> None:
         if self._end_task is None or self._end_task.done():
@@ -320,6 +331,9 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         if self._room_for_events is not None:
             self._room_for_events.off("participant_disconnected", self._on_participant_disconnected)
             self._room_for_events = None
+        if self._agent_session_for_events is not None:
+            self._agent_session_for_events.off("close", self._on_agent_session_close)
+            self._agent_session_for_events = None
         if self._end_task is not None and not self._end_task.done():
             try:
                 await self._end_task

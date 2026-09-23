@@ -599,6 +599,18 @@ def test_error_str_carries_code_and_status() -> None:
     assert str(e) == "nope [insufficient_credits] (HTTP 402)"
 
 
+async def test_malformed_success_is_a_typed_error(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    get_path = f"/v1/avatar_sessions/{SESSION_ID}"
+    fake_atmee.script("GET", get_path, 200, body="<html>not json</html>")
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(AtmeeException) as exc:
+        await api.get_avatar_session(SESSION_ID)
+    assert exc.value.code == "invalid_response"
+    assert len(fake_atmee.calls("GET", get_path)) == 1  # a 2xx is never retried
+
+
 # --- AvatarSession --------------------------------------------------------------
 
 END_PATH = f"/v1/avatar_sessions/{SESSION_ID}/end"
@@ -887,3 +899,21 @@ async def test_wait_for_is_forwarded(
     assert avatar.session_info is not None and avatar.session_info.status == "avatar_joined"
     await asyncio.sleep(0)
     await avatar.aclose()
+
+
+async def test_agent_session_close_ends_the_render(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _session_start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=SESSION_FAST, http_session=http_session
+    )
+    agent_session = FakeAgentSession()
+    await avatar.start(agent_session, FakeRoom())  # type: ignore[arg-type]
+    # AgentSession.aclose() without a job shutdown: the render must end too
+    for handler in list(agent_session.handlers.get("close", [])):
+        handler(None)
+    await settle()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+    assert "close" not in agent_session.handlers or not agent_session.handlers["close"]

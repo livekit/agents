@@ -454,7 +454,14 @@ class AtmeeAPI:
                     if response.ok:
                         if response.status == 204 or response.content_length == 0:
                             return {}
-                        payload = await response.json(content_type=None)
+                        try:
+                            payload = await response.json(content_type=None)
+                        except ValueError as e:
+                            raise AtmeeException(
+                                "the Atmee API returned an invalid JSON response",
+                                status_code=response.status,
+                                code="invalid_response",
+                            ) from e
                         return payload if isinstance(payload, dict) else {"data": payload}
                     raise await _error_from_response(response)
             except AtmeeException as e:
