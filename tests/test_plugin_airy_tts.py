@@ -126,6 +126,16 @@ def test_rejects_invalid_style(style: str) -> None:
         TTS(language="ko", style=style, api_key="test-key")  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "trailing_silence", [-0.01, 5.01, float("nan"), float("inf"), float("-inf"), True, "0.5"]
+)
+def test_rejects_invalid_trailing_silence(trailing_silence: Any) -> None:
+    from livekit.plugins.airy import TTS
+
+    with pytest.raises(ValueError, match="trailing_silence"):
+        TTS(language="ko", trailing_silence=trailing_silence, api_key="test-key")
+
+
 def test_capabilities_and_metadata() -> None:
     from livekit.plugins.airy import TTS
 
@@ -172,6 +182,7 @@ async def test_request_contract_and_trailing_slash() -> None:
             model="airy-tts-v1-custom",
             voice="voice-test",
             style="calm",
+            trailing_silence=0.5,
             api_key="test-key",
             base_url=server.base_url + "/",
             http_session=server.session,
@@ -189,8 +200,35 @@ async def test_request_contract_and_trailing_slash() -> None:
             "model": "airy-tts-v1-custom",
             "voice": "voice-test",
             "style": "calm",
+            "trailing_silence": 0.5,
         },
     }
+
+
+@pytest.mark.parametrize("trailing_silence", [None, 0, 5])
+async def test_trailing_silence_defaults_and_boundaries(trailing_silence: float | None) -> None:
+    from livekit.plugins.airy import TTS
+
+    received: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        received.append(await request.json())
+        return web.Response(body=_pcm(480), headers=_audio_headers())
+
+    async with _Server(handler) as server:
+        synth = TTS(
+            language="ko",
+            trailing_silence=trailing_silence,
+            api_key="test-key",
+            base_url=server.base_url,
+            http_session=server.session,
+        )
+        await _collect(synth)
+
+    if trailing_silence is None:
+        assert "trailing_silence" not in received[0]
+    else:
+        assert received[0]["trailing_silence"] == trailing_silence
 
 
 @pytest.mark.parametrize("text", ["가", "가" * 1280])

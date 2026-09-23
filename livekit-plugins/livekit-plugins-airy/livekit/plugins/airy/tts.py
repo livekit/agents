@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, replace
@@ -57,6 +58,7 @@ class _TTSOptions:
     model: str
     voice: str
     style: Style
+    trailing_silence: float | None
     api_key: str
     base_url: str
 
@@ -221,6 +223,7 @@ class TTS(tts.TTS):
         model: str = DEFAULT_MODEL,
         voice: str = DEFAULT_VOICE,
         style: Style = DEFAULT_STYLE,
+        trailing_silence: float | None = None,
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
         http_session: aiohttp.ClientSession | None = None,
@@ -232,6 +235,8 @@ class TTS(tts.TTS):
             model: Airy model identifier.
             voice: Airy voice identifier.
             style: Speaking style: ``normal``, ``bright``, ``calm``, or ``whisper``.
+            trailing_silence: Seconds of silence appended to each utterance (0 to 5).
+                If omitted, Airy's default of 0 seconds applies.
             api_key: Airy API key. Defaults to the ``AIRY_API_KEY`` environment variable.
             base_url: Airy API root. The plugin appends ``/v1/audio/speech/stream``.
             http_session: Optional existing aiohttp session. The plugin never closes it.
@@ -244,6 +249,13 @@ class TTS(tts.TTS):
         _validate_choice(style, name="style", choices=("normal", "bright", "calm", "whisper"))
         _validate_non_empty(model, name="model")
         _validate_non_empty(voice, name="voice")
+        if trailing_silence is not None and (
+            isinstance(trailing_silence, bool)
+            or not isinstance(trailing_silence, (int, float))
+            or not math.isfinite(trailing_silence)
+            or not 0 <= trailing_silence <= 5
+        ):
+            raise ValueError("trailing_silence must be a finite number between 0 and 5 seconds")
 
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False, aligned_transcript=False),
@@ -255,6 +267,7 @@ class TTS(tts.TTS):
             model=model,
             voice=voice,
             style=style,
+            trailing_silence=trailing_silence,
             api_key=resolved_key,
             base_url=_normalize_base_url(base_url),
         )
@@ -302,13 +315,15 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        payload = {
+        payload: dict[str, str | float] = {
             "input": self._input_text,
             "language": self._opts.language,
             "model": self._opts.model,
             "voice": self._opts.voice,
             "style": self._opts.style,
         }
+        if self._opts.trailing_silence is not None:
+            payload["trailing_silence"] = self._opts.trailing_silence
         headers = {
             "Authorization": f"Bearer {self._opts.api_key}",
             "Content-Type": "application/json",

@@ -54,6 +54,7 @@ export AIRY_API_KEY="your-api-key"
 | `model` | `airy-tts-v1` | Airy model ID |
 | `voice` | `a597bb7a98fc9ec1` | Airy voice ID |
 | `style` | `normal` | `normal`, `bright`, `calm`, or `whisper` |
+| `trailing_silence` | Airy default: `0` | Optional silence in seconds after each utterance; `0`–`5` |
 | `api_key` | `AIRY_API_KEY` | Explicit value takes precedence |
 | `base_url` | `https://api.airy.so` | API root; do not include `/v1` |
 | `http_session` | LiveKit shared session | An injected session remains caller-owned |
@@ -71,6 +72,7 @@ session = AgentSession(
         model="airy-tts-v1",
         voice="a597bb7a98fc9ec1",
         style="normal",
+        trailing_silence=0.5,
     ),
 )
 ```
