@@ -437,3 +437,34 @@ async def test_each_styled_sentence_gets_its_own_part(mock_genai_client_class) -
             ]
         }
     ]
+
+
+@pytest.mark.asyncio
+@patch("livekit.plugins.google.beta.gemini_tts.Client")
+async def test_an_unstyled_span_does_not_sink_the_request(mock_genai_client_class) -> None:
+    """A turn that opens before its first marker still has to have its markers taken out.
+
+    Abandoning the parts would fall back to the raw text, and since gemini conversion
+    deliberately leaves expression markers standing, Gemini would read them aloud.
+    """
+    mock_client = MagicMock()
+    mock_genai_client_class.return_value = mock_client
+    mock_stream = AsyncMock()
+    mock_client.aio.models.generate_content_stream = mock_stream
+    mock_stream.side_effect = _audio_response()
+
+    google_tts = TTS(api_key="test-api-key", model="gemini-3.8-flash-tts")
+    stream = google_tts.synthesize('Hello. <expr type="expression" label="Sad"/> Goodbye.')
+    try:
+        await stream._run(MagicMock(spec=tts.AudioEmitter))
+    finally:
+        await stream.aclose()
+
+    assert _request_body(mock_stream)["contents"] == [
+        {
+            "parts": [
+                {"text": '"Hello."'},  # no direction of its own, and no metadata key
+                {"text": '"Goodbye."', "speech_metadata": {"style": "Sad"}},
+            ]
+        }
+    ]

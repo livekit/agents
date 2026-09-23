@@ -245,3 +245,42 @@ def test_a_caller_supplied_stream_adapter_stays_expressive() -> None:
     # StreamAdapterWrapper reads the wrapped instance's flag, so it has to pass through
     adapter._set_expressive(True)
     assert wrapped._expressive
+
+
+@pytest.mark.asyncio
+async def test_stream_adapter_snapshots_expressive_per_stream() -> None:
+    """_expressive lives on the shared TTS, but a stream is one synthesis.
+
+    The pipeline sets the flag synchronously before stream(); _run happens later in its
+    own task, so another turn or session sharing the TTS could flip it in the gap and
+    send that turn's markers through unlowered.
+    """
+
+    class _NonStreaming(tts.TTS):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=tts.TTSCapabilities(streaming=False),
+                sample_rate=24000,
+                num_channels=1,
+            )
+
+        class Markup(tts.TTS.Markup):
+            def _provider_key(self) -> str:
+                return "gemini"
+
+        def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):  # type: ignore[override]
+            raise NotImplementedError
+
+    wrapped = _NonStreaming()
+    adapter = tts.StreamAdapter(tts=wrapped)
+
+    adapter._set_expressive(True)
+    stream = adapter.stream()
+    adapter._set_expressive(False)  # a second turn, before this one's _run runs
+
+    try:
+        assert stream._expressive is True
+        assert wrapped._expressive is False
+    finally:
+        await stream.aclose()
+        await adapter.aclose()

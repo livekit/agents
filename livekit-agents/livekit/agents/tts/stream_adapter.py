@@ -94,6 +94,11 @@ class StreamAdapterWrapper(SynthesizeStream):
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
         self._tts: StreamAdapter = tts
         self._wrapped_tts_conn_options = conn_options
+        # Snapshot whether expressive is active now, while the framework holds it fixed
+        # for this synthesis (set synchronously before stream()). _run happens later in
+        # its own task, and _expressive lives on the shared TTS, so another turn or
+        # session could flip it in between.
+        self._expressive = tts._wrapped_tts._expressive
 
     async def _metrics_monitor_task(self, event_aiter: AsyncIterable[SynthesizedAudio]) -> None:
         async for _ in event_aiter:
@@ -101,9 +106,9 @@ class StreamAdapterWrapper(SynthesizeStream):
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
         # the framework's input path for every non-streaming TTS, and the first place
-        # whole sentences exist. _expressive is fixed for this synthesis, so read it once
+        # whole sentences exist
         markup = self._tts._wrapped_tts.markup
-        lowering = bool(markup._provider_key()) and self._tts._wrapped_tts._expressive
+        lowering = bool(markup._provider_key()) and self._expressive
 
         sent_stream = self._tts._sentence_tokenizer.stream()
         if self._tts._stream_pacer:

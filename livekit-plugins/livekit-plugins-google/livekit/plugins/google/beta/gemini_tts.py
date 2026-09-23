@@ -316,7 +316,8 @@ class ChunkedStream(tts.ChunkedStream):
 
         The agent's stream adapter hands over one sentence at a time, so a turn usually
         makes one part; a direct ``synthesize()`` call may carry several sentences, and
-        each keeps the style that governs it. Hence ``split_expr_markup``, not
+        each keeps the style that governs it -- including a leading one with no style of
+        its own, which travels as a plain part. Hence ``split_expr_markup``, not
         ``split_all_markup`` -- the latter would take the inline tags out too.
         """
         opts = self._tts._opts
@@ -332,23 +333,31 @@ class ChunkedStream(tts.ChunkedStream):
         spans = [text[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
 
         parts: list[dict[str, Any]] = []
+        stripped_a_marker = False
         for span in spans:
             words, markers = split_expr_markup(span)
+            stripped_a_marker |= any(t["type"] == "expression" for t in markers)
             if not (words := words.strip()):
                 continue
             marker = next((t["value"] for t in markers if t["type"] == "expression"), "")
+            part: dict[str, Any] = {"text": f'"{words}"'}
             metadata: dict[str, str] = {}
             if style := ", ".join(p for p in (opts.instructions, marker) if p):
                 metadata["style"] = style
             if opts.speaker:
                 # every turn of a multi-speaker request has to name its speaker, so a
-                # part is sent even when it carries no style of its own
+                # part carries one even with no style of its own
                 metadata["speaker"] = opts.speaker
-            if not metadata:
-                return None  # no direction to carry, on any span
-            parts.append({"text": f'"{words}"', "speech_metadata": metadata})
+            if metadata:
+                part["speech_metadata"] = metadata
+            parts.append(part)
 
-        return parts or None
+        # a span with no direction is still a part: dropping the whole request over it
+        # would send the raw text, markers and all, for Gemini to read out. Only hand
+        # back None when nothing has to travel out of band at all.
+        if not parts or not (stripped_a_marker or any("speech_metadata" in p for p in parts)):
+            return None
+        return parts
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
