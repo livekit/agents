@@ -326,7 +326,12 @@ class SessionState:
             return None, None, None
         cls = type(userdata)
         try:
-            data = TypeAdapter(cls).dump_python(userdata, mode="json")
+            adapter = TypeAdapter(cls)
+            data = adapter.dump_python(userdata, mode="json")
+            # JSON that does not read back as the same value, such as a dict keyed by tuples,
+            # would restore something else, so it is stored pickled instead
+            if adapter.validate_python(data) != userdata:
+                raise ValueError("userdata does not round-trip through JSON")
             return json.dumps(data), "json", qualified_name(cls)
         except Exception:
             if not self._pickle_warned:

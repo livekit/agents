@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
+import pickle
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -34,6 +35,11 @@ class Booking:
 class Userdata:
     airline: str
     bookings: list[Booking] = field(default_factory=list)
+
+
+@dataclass
+class Keyed:
+    seats: dict[tuple[str, str], str]
 
 
 async def _rows(conversation: store.Conversation, sql: str, *params: Value) -> list[dict]:
@@ -156,6 +162,22 @@ class StoreSuite:
         assert (agent.cls, agent.state, agent.tools) == ("app:FareDesk", {"tier": "gold"}, ["x"])
         assert [item.id for item in agent.chat_items] == [question.id]
         assert stored.interrupted == []
+
+    async def test_userdata_that_json_cannot_restore_is_pickled(
+        self, conversation: store.Conversation
+    ) -> None:
+        state = conversation.session("s1")
+        await state.load()
+        # JSON writes the tuple keys as strings and cannot read them back as tuples
+        userdata = Keyed(seats={("NW812", "12A"): "held"})
+        await state.checkpoint(current_agent_id=None, userdata=userdata, agents=[])
+        await state.release()
+
+        (row,) = await _rows(conversation, "SELECT userdata_encoding FROM sessions")
+        assert row == {"userdata_encoding": "pickle"}
+        stored = await conversation.session("s1").load()
+        assert stored is not None
+        assert pickle.loads(stored.userdata) == userdata
 
     async def test_lease_fences_a_stale_owner(self, conversation: store.Conversation) -> None:
         first = conversation.session("s1")
