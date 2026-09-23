@@ -66,14 +66,15 @@ def _strip(text: str, tags: list[str]) -> str:
 
 class TestExtractAndStrip:
     def test_self_closing(self) -> None:
-        assert _strip('<emotion value="happy"/> Hello!', ["emotion"]) == " Hello!"
+        # a tag heading the text takes the space it stranded along
+        assert _strip('<emotion value="happy"/> Hello!', ["emotion"]) == "Hello!"
 
     def test_wrapping_preserves_content(self) -> None:
         assert _strip("<spell>A.B.C.</spell> confirmed", ["spell"]) == "A.B.C. confirmed"
 
     def test_preserves_unrelated_tags(self) -> None:
         text = '<emotion value="happy"/> <custom>keep</custom>'
-        assert _strip(text, ["emotion"]) == " <custom>keep</custom>"
+        assert _strip(text, ["emotion"]) == "<custom>keep</custom>"
 
     def test_empty_tags_list(self) -> None:
         text = '<emotion value="happy"/> Hi'
