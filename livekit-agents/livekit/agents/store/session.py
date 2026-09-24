@@ -321,10 +321,16 @@ class PersistedSession:
 
 
 def _frozen(item: ChatItem) -> ChatItem:
-    # the base keeps its own lists and dicts, so an item edited in place still differs from it
-    return item.model_copy(
-        update={k: v.copy() for k, v in vars(item).items() if isinstance(v, (list, dict))}
-    )
+    # the base keeps its own lists and dicts at any depth, so an item edited in place still
+    # differs from it; what they hold besides, such as an audio frame, is shared
+    def own(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: own(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [own(v) for v in value]
+        return value
+
+    return item.model_copy(update={k: own(v) for k, v in vars(item).items()})
 
 
 def _text(value: Value | None) -> str | None:

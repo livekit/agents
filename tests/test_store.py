@@ -10,8 +10,16 @@ from typing import Any
 import aiohttp
 import pytest
 
+from livekit import rtc
 from livekit.agents import store
-from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
+from livekit.agents.llm import (
+    AudioContent,
+    ChatItem,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    ImageContent,
+)
 from livekit.agents.store.executor import ExecResult, Executor, SQLiteExecutor, Statement, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
 from livekit.agents.store.session import AgentRecord, PersistedSession, _Database, _Store
@@ -107,15 +115,41 @@ class StoreSuite:
     ) -> None:
         persisted = database.session("s1")
         await persisted.load()
-        call = FunctionCall(call_id="call_1", name="lookup", arguments="{}")
+        call = FunctionCall(call_id="call_1", name="lookup", arguments="{}", extra={"app": {}})
         await _save(persisted, [call])
-        # the framework never edits an item it recorded, but an application may
-        call.extra["app.note"] = "checked"
+        # the framework never edits an item it recorded, but an application may, at any depth
+        call.extra["app"]["note"] = "checked"
         await _save(persisted, [call])
         rows = await database.rows(
-            "SELECT json_extract(item, '$.extra.\"app.note\"') AS note FROM chat_items"
+            "SELECT json_extract(item, '$.extra.app.note') AS note FROM chat_items"
         )
         assert rows == [{"note": "checked"}]
+
+    async def test_an_item_holding_audio_or_an_image_is_written_once(
+        self, database: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        persisted = database.session("s1")
+        await persisted.load()
+        frame = rtc.AudioFrame(b"\x00\x00" * 160, 16000, 1, 160)
+        image = rtc.VideoFrame(2, 2, rtc.VideoBufferType.RGBA, b"\x00" * 16)
+        heard = ChatMessage(
+            role="user",
+            content=["this one", ImageContent(image=image), AudioContent(frame=[frame])],
+        )
+        await _save(persisted, [heard])
+
+        executor = await database.executor()
+        batch = executor.batch
+        written: list[str] = []
+
+        async def recording(*statements: Statement) -> list[ExecResult]:
+            written.extend(sql for sql, _ in statements if "chat_items" in sql)
+            return await batch(*statements)
+
+        monkeypatch.setattr(executor, "batch", recording)
+        # frames compare by identity, so the base shares them rather than copying
+        await _save(persisted, [heard])
+        assert written == []
 
     async def test_a_failed_save_is_written_again_by_the_next(
         self, database: Database, monkeypatch: pytest.MonkeyPatch
