@@ -25,7 +25,8 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 from openai.types.responses import ResponseTextConfigParam
-from openai.types.responses.response_input_item import FunctionCallOutput
+from openai.types.responses.response_input_item import FunctionCallOutput, Message
+from openai.types.responses.response_input_text import ResponseInputText
 from openai.types.shared_params import Reasoning
 
 from ..log import logger
@@ -57,6 +58,11 @@ _SPEAK_NOW = "Do not wait for the caller to speak first. After that, pause and l
 _ASK_INSTRUCTED = f"Immediately follow the instruction below. {_SPEAK_NOW}"
 _ASK_TYPED = f"Reply to the caller now, don't repeat what they said. {_SPEAK_NOW}"
 _ASK_BARE = f"Reply to the caller now. {_SPEAK_NOW}"
+
+# the voice model may acknowledge a caller's answer without delegating it (typically one spoken
+# over its own speech), leaving the call idle with work nobody started; after this long with
+# neither side speaking, the caller's undelegated words go to the backend themselves
+_IDLE_HANDOFF_S = 8.0
 
 # session.closed carries the final usage; the service drains first
 _SESSION_CLOSE_TIMEOUT = 5.0
@@ -417,6 +423,9 @@ class GPTLiveSession(
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
+        # what the caller said since the voice model last delegated, and when anyone last spoke
+        self._undelegated_caller_text = ""
+        self._last_speech_at = time.monotonic()
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -564,6 +573,7 @@ class GPTLiveSession(
         self._backend_running_responses.clear()
         self._backend_open_calls.clear()
         self._backend_response_pending = False
+        self._undelegated_caller_text = ""
         self._usage_total = types.Usage()
         self._session_id = None
 
@@ -668,8 +678,43 @@ class GPTLiveSession(
                         extra={"type": event.get("type"), "error_type": type(e).__name__},
                     )
 
+        async def _idle_handoff_task() -> None:
+            while True:
+                await asyncio.sleep(_IDLE_HANDOFF_S / 16)
+                if (
+                    self._opts.delegation != "responses"
+                    or not self._undelegated_caller_text.strip()
+                    or time.monotonic() - self._last_speech_at < _IDLE_HANDOFF_S
+                    # the backend accepts a new response only once nothing is running or open
+                    or self._backend_running_responses
+                    or self._backend_open_calls
+                ):
+                    continue
+                text, self._undelegated_caller_text = self._undelegated_caller_text.strip(), ""
+                logger.debug(
+                    "gpt-live handing an idle caller turn to the backend",
+                    extra={"lk.pii.text": text},
+                )
+                self.send_event(
+                    types.ResponseItemCreateEvent(
+                        event_id=utils.shortuuid("idle_handoff_"),
+                        item=Message(
+                            type="message",
+                            role="user",
+                            content=[ResponseInputText(type="input_text", text=text)],
+                        ),
+                    )
+                )
+                self.send_event(
+                    types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_"))
+                )
+
         send_task = asyncio.create_task(_send_task(), name="_send_task")
-        tasks = [asyncio.create_task(_recv_task(), name="_recv_task"), send_task]
+        tasks = [
+            asyncio.create_task(_recv_task(), name="_recv_task"),
+            send_task,
+            asyncio.create_task(_idle_handoff_task(), name="_idle_handoff_task"),
+        ]
         wait_reconnect_task: asyncio.Task | None = None
         if self._opts.max_session_duration is not None:
             wait_reconnect_task = asyncio.create_task(
@@ -766,6 +811,9 @@ class GPTLiveSession(
     def _handle_transcript_delta(self, role: Role, event: types.TranscriptDeltaEvent) -> None:
         if not event.delta:
             return
+        self._last_speech_at = time.monotonic()
+        if role == "user":
+            self._undelegated_caller_text += event.delta
         speech = self._speech.get(role)
         # a pause on the model's clock ends the message even when its fragments arrived together
         if (
@@ -834,6 +882,7 @@ class GPTLiveSession(
         )
 
     def _handle_delegation_created(self, event: types.SessionDelegationCreatedEvent) -> None:
+        self._undelegated_caller_text = ""
         delegation = event.delegation
         if not delegation.id:
             logger.warning("gpt-live delegation has no id; nothing can answer it")
