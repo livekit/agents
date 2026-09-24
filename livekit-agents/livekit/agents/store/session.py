@@ -351,14 +351,14 @@ class PersistedSession:
         self, *, current_agent_id: str | None, userdata: Any, agents: list[AgentRecord]
     ) -> None:
         """Rewrite the mutable part in one batch and renew the lease, or write nothing and
-        raise ``LeaseLostError`` when another worker holds the session.
-        """
+        raise ``LeaseLostError`` when another worker holds the session. ``None`` userdata
+        leaves the stored value as is."""
         await self.flush()
         now = time.time()
         statements: list[Statement] = [
             (
-                "UPDATE sessions SET current_agent_id = ?, userdata = ?, updated_at = ?, "
-                "lease_expires_at = ? WHERE session_id = ? AND lease_owner = ?",
+                "UPDATE sessions SET current_agent_id = ?, userdata = COALESCE(?, userdata), "
+                "updated_at = ?, lease_expires_at = ? WHERE session_id = ? AND lease_owner = ?",
                 (
                     current_agent_id,
                     json.dumps(userdata) if userdata is not None else None,

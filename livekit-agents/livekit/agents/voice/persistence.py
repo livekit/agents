@@ -320,9 +320,15 @@ class SessionPersistence:
                     )
                 )
             session = self._session
+            try:
+                userdata = _userdata_json(session._userdata)
+            except TypeError as e:
+                # the rest still lands and renews the lease; the userdata keeps its last value
+                logger.warning(str(e), extra={"session_id": self._persisted.session_id})
+                userdata = None
             await self._persisted.checkpoint(
                 current_agent_id=session._agent.id if session._agent else None,
-                userdata=_userdata_json(session._userdata),
+                userdata=userdata,
                 agents=records,
             )
 

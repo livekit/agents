@@ -230,6 +230,30 @@ async def test_userdata_is_json_only(database: Database) -> None:
     await second.aclose()
 
 
+async def test_userdata_that_stops_being_json_keeps_the_rest_checkpointed(
+    database: Database,
+) -> None:
+    session = _session(_AnsweringLLM(fake_responses=[], fallbacks=[]))
+    await session.start(agent=FareDesk(), persist=database.session("s1"))
+    await session._persistence.checkpoint()  # type: ignore[union-attr]
+    (before,) = await database.rows("SELECT userdata, lease_expires_at FROM sessions")
+
+    # a tool puts something JSON cannot hold in the userdata, and the agent changes
+    session.userdata.rebooked.append(object())  # type: ignore[arg-type]
+    session.update_agent(Transferring())
+    assert session._update_activity_atask is not None
+    await session._update_activity_atask
+    await session._persistence.checkpoint()  # type: ignore[union-attr]
+
+    # the userdata keeps its last good value, and the agent and the lease are still written
+    (after,) = await database.rows("SELECT * FROM sessions")
+    assert after["current_agent_id"] == "transferring"
+    assert after["userdata"] == before["userdata"]
+    assert after["lease_expires_at"] > before["lease_expires_at"]
+    session.userdata.rebooked.clear()
+    await session.aclose()
+
+
 async def test_a_call_running_at_a_crash_leaves_nothing_behind(database: Database) -> None:
     started, release = asyncio.Event(), asyncio.Event()
 
