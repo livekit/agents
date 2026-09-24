@@ -302,13 +302,13 @@ async def test_an_agentdb_that_cannot_connect_leaves_no_http_session_open(
     from livekit.agents.store import agentdb
 
     opened: list[aiohttp.ClientSession] = []
+    client_session = aiohttp.ClientSession
 
-    class Recording(aiohttp.ClientSession):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            opened.append(self)
+    def recording(*args: Any, **kwargs: Any) -> aiohttp.ClientSession:
+        opened.append(session := client_session(*args, **kwargs))
+        return session
 
-    monkeypatch.setattr(agentdb.aiohttp, "ClientSession", Recording)
+    monkeypatch.setattr(agentdb.aiohttp, "ClientSession", recording)
     # nothing listens on port 1, so the dial fails on the spot
     db = store.AgentDB(url="http://127.0.0.1:1", api_key="key", api_secret="secret")
     with pytest.raises(aiohttp.ClientError):
