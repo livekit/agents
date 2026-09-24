@@ -6,6 +6,7 @@ import contextlib
 import os
 import time
 import weakref
+from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal, cast
@@ -33,6 +34,7 @@ from azure.ai.voicelive.models import (
     ServerEventConversationItemDeleted,
     ServerEventConversationItemInputAudioTranscriptionCompleted,
     ServerEventError,
+    ServerEventInputAudioBufferCommitted,
     ServerEventInputAudioBufferSpeechStarted,
     ServerEventInputAudioBufferSpeechStopped,
     ServerEventResponseAudioDelta,
@@ -94,6 +96,8 @@ _GENERATE_REPLY_TIMEOUT = 10.0
 _UPDATE_CHAT_CTX_TIMEOUT = 10.0
 # the input audio buffer can only be committed with at least 100ms of audio
 _MIN_COMMIT_SAMPLES = SAMPLE_RATE // 10
+# how many 100ms chunks of uncommitted audio (30s) a lost connection hands over to the next one
+_MAX_RESENT_AUDIO_CHUNKS = 300
 
 
 @dataclass
@@ -154,24 +158,37 @@ class _DiscardedGeneration:
     response_id: str | None
 
 
-_ConfirmableEvent = ClientEventConversationItemCreate | ClientEventResponseCreate
+_ConfirmableEvent = (
+    ClientEventConversationItemCreate
+    | ClientEventResponseCreate
+    | ClientEventInputAudioBufferCommit
+)
 
 
 @dataclass
 class _ConnectionRequests:
     """What was sent on a single connection, the Azure conversation of which ends with it."""
 
-    # item and response creations Azure hasn't confirmed yet, by event id in send order. They
-    # are sent again on the next connection when this one closes first
+    # item and response creations and audio commits Azure hasn't confirmed yet, by event id in
+    # send order. They are sent again on the next connection when this one closes first
     unconfirmed: dict[str, _ConfirmableEvent] = field(default_factory=dict)
     # the event that created each item of this conversation, including the replayed ones
     item_events: dict[str, str] = field(default_factory=dict)
     # replayed conversation items by event id, so a rejected one leaves the mirror
     replay_events: dict[str, str] = field(default_factory=dict)
     # requests of a previous connection that couldn't be sent again before this one closed
-    unsent: list[_ConfirmableEvent] = field(default_factory=list)
+    unsent: list[ClientEvent] = field(default_factory=list)
     # samples appended to the input audio buffer since it was last committed or cleared
     input_audio_samples: int = 0
+    # the most recent audio appended since the input audio buffer was last committed or
+    # cleared, the buffer of the next connection starts with it when this one closes first
+    input_audio: deque[ClientEventInputAudioBufferAppend] = field(
+        default_factory=lambda: deque(maxlen=_MAX_RESENT_AUDIO_CHUNKS)
+    )
+    # the audio of each unconfirmed commit by event id, sent again ahead of it
+    committed_audio: dict[str, list[ClientEventInputAudioBufferAppend]] = field(
+        default_factory=dict
+    )
     # whether the conversation was replayed (or didn't need to be) and the requests sent again
     replayed: bool = False
 
@@ -374,7 +391,7 @@ class RealtimeSession(
         self._connection_established = False
         # the requests of the current connection, and those a lost one left unconfirmed
         self._requests: _ConnectionRequests | None = None
-        self._resend: list[_ConfirmableEvent] = []
+        self._resend: list[ClientEvent] = []
 
         self._current_generation: _ResponseGeneration | _DiscardedGeneration | None = None
         self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
@@ -582,13 +599,25 @@ class RealtimeSession(
             requests.unconfirmed[event_id] = event
         elif isinstance(event, ClientEventInputAudioBufferAppend):
             requests.input_audio_samples += _decoded_size(event.audio) // BYTES_PER_SAMPLE
+            requests.input_audio.append(event)
         elif isinstance(event, ClientEventInputAudioBufferCommit):
-            if requests.input_audio_samples < _MIN_COMMIT_SAMPLES:
-                # Azure rejects committing less than 100ms, e.g. audio lost with a connection
+            if not requests.input_audio_samples:
+                # nothing to commit, e.g. the turn was committed already
                 return
+            if requests.input_audio_samples < _MIN_COMMIT_SAMPLES:
+                # Azure rejects committing less than 100ms: the turn is dropped, rather than
+                # left in the buffer to merge with the next one
+                event = ClientEventInputAudioBufferClear()
+            else:
+                event_id = event.event_id or utils.shortuuid("commit_")
+                event.event_id = event_id
+                requests.unconfirmed[event_id] = event
+                requests.committed_audio[event_id] = list(requests.input_audio)
             requests.input_audio_samples = 0
+            requests.input_audio.clear()
         elif isinstance(event, ClientEventInputAudioBufferClear):
             requests.input_audio_samples = 0
+            requests.input_audio.clear()
 
         try:
             await self._send_direct(conn, event)
@@ -619,7 +648,7 @@ class RealtimeSession(
 
         # a new connection starts a new, empty conversation: what Azure didn't confirm is sent
         # again once the conversation is replayed, the waiting callers are none the wiser
-        unconfirmed: list[_ConfirmableEvent] = []
+        unconfirmed: list[ClientEvent] = []
         for event_id, event in requests.unconfirmed.items():
             if isinstance(event, ClientEventResponseCreate):
                 # a response of this conversation can't arrive anymore
@@ -627,9 +656,15 @@ class RealtimeSession(
                 fut = self._response_created_futures.get(event_id)
                 if fut is not None and not fut.done():
                     unconfirmed.append(event)
+            elif isinstance(event, ClientEventInputAudioBufferCommit):
+                # the turn went down with the input audio buffer, it's committed again
+                unconfirmed.extend(requests.committed_audio.get(event_id, ()))
+                unconfirmed.append(event)
             elif event.item and event.item.id and self._remote_chat_ctx.get(event.item.id) is None:
                 unconfirmed.append(event)
 
+        # so is the audio of the turn in progress, it doesn't belong to a conversation yet
+        unconfirmed.extend(requests.input_audio)
         self._resend = unconfirmed + requests.unsent + self._resend
 
     def _fail_pending_requests(self, reason: str) -> None:
@@ -654,7 +689,8 @@ class RealtimeSession(
         """Re-create the conversation on a new connection, which starts empty.
 
         Replayed items are mirrored right away, the conversation.item.created events Azure answers
-        them with are then no-ops. Requests the lost connection left unconfirmed follow them.
+        them with are then no-ops. Requests the lost connection left unconfirmed follow them, with
+        the audio its input audio buffer held.
         """
         chat_ctx = self.chat_ctx.copy(
             exclude_empty_message=True,
@@ -686,10 +722,12 @@ class RealtimeSession(
 
         resend, self._resend = self._resend, []
         for i, event in enumerate(resend):
-            # a request that fails to send is still unconfirmed, the rest is sent next time
-            requests.unsent = resend[i + 1 :]
-            await self._send_event(conn, requests, event)
-        requests.unsent = []
+            try:
+                await self._send_event(conn, requests, event)
+            except BaseException:
+                # a request that fails to send is still unconfirmed, the rest is sent next time
+                requests.unsent = resend[i + 1 :]
+                raise
 
     def _voice_config(self) -> str | AzureStandardVoice:
         voice = self._opts.voice
@@ -738,6 +776,8 @@ class RealtimeSession(
                 self._handle_input_speech_started(event)
             elif isinstance(event, ServerEventInputAudioBufferSpeechStopped):
                 self._handle_input_speech_stopped(event)
+            elif isinstance(event, ServerEventInputAudioBufferCommitted):
+                self._handle_input_audio_buffer_committed(event)
             elif isinstance(event, ServerEventConversationItemCreated):
                 self._handle_conversation_item_created(event)
             elif isinstance(event, ServerEventConversationItemDeleted):
@@ -801,13 +841,29 @@ class RealtimeSession(
             ),
         )
 
+    def _handle_input_audio_buffer_committed(self, _: ServerEventInputAudioBufferCommitted) -> None:
+        if (requests := self._requests) is None:
+            return
+
+        # confirmed: the turn doesn't need to be committed again after a reconnection. Commits
+        # are confirmed in order, without their event id
+        commit_id = next(iter(requests.committed_audio), None)
+        if commit_id is not None:
+            requests.committed_audio.pop(commit_id)
+            requests.unconfirmed.pop(commit_id, None)
+        else:
+            # committed by the turn detection of Azure
+            requests.input_audio.clear()
+
     def _handle_conversation_item_created(self, event: ServerEventConversationItemCreated) -> None:
         item = event.item
         if item is None or not item.id:
             return
 
         item_id = item.id
+        created_by_client = False
         if (requests := self._requests) is not None:
+            created_by_client = item_id in requests.item_events
             if requests.replay_events.pop(requests.item_events.get(item_id, ""), None):
                 self._check_established()
             # confirmed: the item doesn't need to be sent again after a reconnection
@@ -823,6 +879,19 @@ class RealtimeSession(
                     "ignoring an Azure Voice Live conversation item",
                     extra={"item_type": item.type},
                 )
+
+        if (
+            not created_by_client
+            and isinstance(self._current_generation, _DiscardedGeneration)
+            and lk_item is not None
+            and (
+                lk_item.type == "function_call"
+                or (lk_item.type == "message" and lk_item.role == "assistant")
+            )
+        ):
+            # an output of the discarded response, created ahead of its output_item.added
+            self._drop_item(item_id)
+            return
 
         if (
             lk_item is not None
@@ -898,6 +967,9 @@ class RealtimeSession(
 
     def _drop_item(self, item_id: str) -> None:
         """Remove an item of a discarded response, nobody heard it, from the conversation."""
+        if item_id in self._dropped_item_ids:
+            # being deleted already, e.g. its conversation.item.created came first
+            return
         self._dropped_item_ids.add(item_id)
         if self._remote_chat_ctx.get(item_id) is not None:
             self._remote_chat_ctx.delete(item_id)
@@ -1239,6 +1311,7 @@ class RealtimeSession(
 
                 # a rejected request is settled, it's never sent again after a reconnection
                 rejected = requests.unconfirmed.pop(event_id, None)
+                requests.committed_audio.pop(event_id, None)
                 if (
                     isinstance(rejected, ClientEventConversationItemCreate)
                     and rejected.item
@@ -1526,13 +1599,16 @@ class RealtimeSession(
             )
 
     def commit_audio(self) -> None:
-        """Commit the audio buffer."""
+        """Commit the audio buffer.
+
+        Azure can't commit less than 100ms of audio, such a short turn is cleared instead.
+        """
         # the buffered tail belongs to this turn, send it before the commit
         for audio_frame in self._bstream.flush():
             self._send_audio(audio_frame)
 
-        # skipped when sending it, if the buffer of the connection holds less than 100ms
-        self._send(ClientEventInputAudioBufferCommit())
+        # checked against the buffer of the connection when it's sent
+        self._send(ClientEventInputAudioBufferCommit(event_id=utils.shortuuid("commit_")))
 
     def clear_audio(self) -> None:
         """Clear the audio buffer."""

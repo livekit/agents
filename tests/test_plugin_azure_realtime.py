@@ -43,6 +43,8 @@ class _Connection:
         self.index = index
         self.events: list[dict[str, Any]] = []
         self.item_ids: list[str] = []
+        # bytes in the input audio buffer
+        self.input_audio = 0
 
     async def send(self, event_type: str, **fields: Any) -> None:
         if not self.ws.closed:
@@ -64,6 +66,8 @@ class _FakeVoiceLive:
         self.answer_items = True
         # close the socket instead of answering the next conversation.item.create
         self.drop_on_item_create = False
+        # close the socket instead of answering the next input_audio_buffer.commit
+        self.drop_on_commit = False
         # connections from this index on close on their first conversation.item.create
         self.drop_item_creates_from: int | None = None
         self.accept_gate: asyncio.Event | None = None
@@ -128,6 +132,38 @@ class _FakeVoiceLive:
             await self.on_response(conn, event, f"resp_{self._responses}")
         elif event["type"] == "conversation.item.delete":
             await conn.send("conversation.item.deleted", item_id=event["item_id"])
+        elif event["type"] == "input_audio_buffer.append":
+            conn.input_audio += len(base64.b64decode(event["audio"]))
+        elif event["type"] == "input_audio_buffer.commit":
+            if self.drop_on_commit:
+                self.drop_on_commit = False
+                await conn.ws.close()
+                return
+            # 100ms of 24kHz PCM16
+            if conn.input_audio < 4800:
+                await conn.send(
+                    "error",
+                    error={
+                        "type": "invalid_request_error",
+                        "code": "input_audio_buffer_commit_empty",
+                        "message": "buffer too small",
+                        "event_id": event.get("event_id"),
+                    },
+                )
+                return
+            await self.commit(conn)
+        elif event["type"] == "input_audio_buffer.clear":
+            conn.input_audio = 0
+            await conn.send("input_audio_buffer.cleared")
+
+    async def commit(self, conn: _Connection) -> None:
+        """Commit the input audio buffer, as requested or as the turn detection of Azure does."""
+        conn.input_audio = 0
+        await conn.send(
+            "input_audio_buffer.committed",
+            previous_item_id=conn.item_ids[-1] if conn.item_ids else None,
+            item_id=f"item_turn_{len(self.sent('input_audio_buffer.append'))}",
+        )
 
     async def close(self) -> None:
         for conn in self.connections:
@@ -519,6 +555,44 @@ async def test_timed_out_reply_is_cancelled_when_it_arrives(
         assert [g.response_id for g in generations] == [generation.response_id]
 
 
+async def test_discarded_reply_created_before_its_output_is_announced(
+    voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(realtime_model, "_GENERATE_REPLY_TIMEOUT", 0.2)
+    voice_live.on_response = _ignore
+    async with _session(voice_live) as session:
+        added: list[llm.RemoteItemAddedEvent] = []
+        session.on("remote_item_added", added.append)
+        received: list[Any] = []
+        session.on("azure_server_event_received", received.append)
+
+        with pytest.raises(llm.RealtimeError, match="timed out"):
+            await session.generate_reply()
+
+        conn = voice_live.connections[0]
+        request = voice_live.sent("response.create")[0]
+        await _created(conn, "resp_late", _metadata(request))
+        reply = {"id": "item_late", "type": "message", "role": "assistant", "content": []}
+        # the item is created before it's announced as an output of the discarded response
+        await conn.send("conversation.item.created", previous_item_id=None, item=reply)
+        # the user speaks meanwhile, the turn isn't part of the discarded response
+        turn = {"id": "item_turn", "type": "message", "role": "user", "content": []}
+        await conn.send("conversation.item.created", previous_item_id="item_late", item=turn)
+        await conn.send(
+            "response.output_item.added", response_id="resp_late", output_index=0, item=reply
+        )
+        await _done(conn, "resp_late", status="cancelled")
+        await _wait_until(lambda: any(e.type == "response.done" for e in received))
+
+        # every request the discarded response caused has reached Azure
+        session.clear_audio()
+        await _wait_until(lambda: voice_live.sent("input_audio_buffer.clear"))
+
+        assert [e["item_id"] for e in voice_live.sent("conversation.item.delete")] == ["item_late"]
+        assert [ev.item.id for ev in added] == ["item_turn"]
+        assert [item.id for item in session.chat_ctx.items] == ["item_turn"]
+
+
 async def test_cancelled_reply_is_discarded(voice_live: _FakeVoiceLive) -> None:
     voice_live.on_response = _ignore
     async with _session(voice_live) as session:
@@ -589,23 +663,150 @@ async def test_audio_is_not_dropped_while_the_reply_waits(voice_live: _FakeVoice
         assert metrics[0].cancelled is False
 
 
-async def test_commit_needs_100ms_of_audio(voice_live: _FakeVoiceLive) -> None:
-    async with _session(voice_live) as session:
-        frame = rtc.AudioFrame(
-            data=_PCM_20MS, sample_rate=24000, num_channels=1, samples_per_channel=480
-        )
-        for _ in range(5):
-            session.push_audio(frame)
-        session.commit_audio()
-        await _wait_until(lambda: voice_live.sent("input_audio_buffer.commit"))
+def _pcm_frame(data: bytes = _PCM_20MS) -> rtc.AudioFrame:
+    return rtc.AudioFrame(
+        data=data, sample_rate=24000, num_channels=1, samples_per_channel=len(data) // 2
+    )
 
-        # 80ms can't be committed
+
+def _input_audio(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in events if e["type"].startswith("input_audio_buffer.")]
+
+
+async def test_turns_under_100ms_are_cleared_instead_of_committed(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        errors: list[llm.RealtimeModelError] = []
+        session.on("error", errors.append)
+
+        # 80ms can't be committed, it's cleared so it doesn't merge with the next turn
         for _ in range(4):
-            session.push_audio(frame)
+            session.push_audio(_pcm_frame())
+        session.commit_audio()
+        # a turn of 120ms follows, then there's nothing left to commit
+        for _ in range(6):
+            session.push_audio(_pcm_frame())
+        session.commit_audio()
         session.commit_audio()
         session.clear_audio()
-        await _wait_until(lambda: voice_live.sent("input_audio_buffer.clear"))
-        assert len(voice_live.sent("input_audio_buffer.commit")) == 1
+
+        await _wait_until(lambda: voice_live.sent("input_audio_buffer.clear")[1:])
+        events = _input_audio(voice_live.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.clear",
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "input_audio_buffer.clear",
+        ]
+        committed = b"".join(base64.b64decode(e["audio"]) for e in events[2:4])
+        assert committed == _PCM_20MS * 6
+        assert errors == []
+
+
+async def test_audio_of_a_lost_connection_is_sent_again(voice_live: _FakeVoiceLive) -> None:
+    async with _session(voice_live) as session:
+        first = await _connected(voice_live)
+        for _ in range(10):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 2)
+
+        # the socket drops mid-turn, and the turn ends while reconnecting
+        await first.ws.close()
+        session.commit_audio()
+
+        second = await _connected(voice_live, 1)
+        await _wait_until(lambda: _input_audio(second.events)[2:])
+        events = _input_audio(second.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+        ]
+        assert b"".join(base64.b64decode(e["audio"]) for e in events[:2]) == _PCM_20MS * 10
+
+
+async def test_unconfirmed_commits_are_committed_again(voice_live: _FakeVoiceLive) -> None:
+    voice_live.drop_on_commit = True
+    async with _session(voice_live) as session:
+        # the socket drops before Azure confirms the turn, the reply must still follow it
+        for _ in range(10):
+            session.push_audio(_pcm_frame())
+        session.commit_audio()
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        assert generation.user_initiated
+
+        first, second = voice_live.connections
+        events = [e for e in second.events if e["type"] != "session.update"]
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "response.create",
+        ]
+        assert b"".join(base64.b64decode(e["audio"]) for e in events[:2]) == _PCM_20MS * 10
+        lost = [e for e in first.events if e["type"] == "input_audio_buffer.commit"]
+        assert [e["event_id"] for e in lost] == [events[2]["event_id"]]
+
+
+async def test_committed_audio_is_not_sent_again(voice_live: _FakeVoiceLive) -> None:
+    async with _session(voice_live) as session:
+        received: list[Any] = []
+        session.on("azure_server_event_received", received.append)
+
+        def committed() -> int:
+            return sum(e.type == "input_audio_buffer.committed" for e in received)
+
+        first = await _connected(voice_live)
+        for _ in range(10):
+            session.push_audio(_pcm_frame())
+        session.commit_audio()
+        await _wait_until(lambda: committed() == 1)
+
+        # the turn detection of Azure commits the next turn
+        for _ in range(10):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 4)
+        await voice_live.commit(first)
+        await _wait_until(lambda: committed() == 2)
+
+        # only the turn in progress is sent again
+        for _ in range(5):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 5)
+        await first.ws.close()
+
+        second = await _connected(voice_live, 1)
+        session.clear_audio()
+        await _wait_until(lambda: _input_audio(second.events)[1:])
+        events = _input_audio(second.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.clear",
+        ]
+        assert base64.b64decode(events[0]["audio"]) == _PCM_20MS * 5
+
+
+async def test_audio_sent_again_is_bounded(
+    voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(realtime_model, "_MAX_RESENT_AUDIO_CHUNKS", 2)
+    async with _session(voice_live) as session:
+        first = await _connected(voice_live)
+        chunks = [bytes([i, 0]) * 2400 for i in range(5)]
+        for chunk in chunks:
+            session.push_audio(_pcm_frame(chunk))
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 5)
+        await first.ws.close()
+
+        second = await _connected(voice_live, 1)
+        session.commit_audio()
+        await _wait_until(lambda: voice_live.sent("input_audio_buffer.commit"))
+        events = _input_audio(second.events)
+        assert [base64.b64decode(e["audio"]) for e in events[:-1]] == chunks[-2:]
+        assert events[-1]["type"] == "input_audio_buffer.commit"
 
 
 async def test_closing_before_the_session_started_settles_requests(
