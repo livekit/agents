@@ -193,3 +193,80 @@ async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) ->
     await _until(lambda: isinstance(resumed.current_agent, ConfirmingDesk))
     await resumed.aclose()
     await crashed.aclose()
+
+
+# while unset, the slow charge does not return
+CHARGE_GATE = asyncio.Event()
+
+
+async def slow_charge(key: str) -> str:
+    CALLS.append(("charge", key))
+    await CHARGE_GATE.wait()
+    return "charged"
+
+
+class SlowDesk(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You book seats.")
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def book(self, ctx: RunContext) -> str:
+        """Book a seat."""
+        charged = await EffectCall(slow_charge(ctx.idempotency_key))
+        held = await EffectCall(hold(ctx.idempotency_key))
+        return f"{charged}, {held}"
+
+
+class _GatedStore(store.LocalStore):
+    """Holds the next checkpoint's batch until ``gate`` opens, the way a slow round trip does."""
+
+    def __init__(self, directory: pathlib.Path) -> None:
+        super().__init__(directory, lease_ttl=LEASE_TTL)
+        self.hold_next = False
+        self.gate = asyncio.Event()
+
+    async def _connect(self, database_id: str) -> Any:
+        executor = await super()._connect(database_id)
+        batch = executor.batch
+
+        async def gated_batch(*statements: Any) -> Any:
+            if self.hold_next and any(
+                sql.startswith("UPDATE sessions SET current_agent_id") for sql, _ in statements
+            ):
+                self.hold_next = False
+                await self.gate.wait()
+            return await batch(*statements)
+
+        executor.batch = gated_batch  # type: ignore[method-assign]
+        return executor
+
+
+@pytest.mark.usefixtures("database")
+async def test_a_slow_checkpoint_does_not_rewind_a_later_boundary(tmp_path: pathlib.Path) -> None:
+    CHARGE_GATE.clear()
+    gated = _GatedStore(tmp_path / "gated")
+    database = Database(gated, await gated.create_database())
+    crashed = AgentSession(llm=_llm("book"))
+    await crashed.start(agent=SlowDesk(), persist=database.session("s1"))
+    crashed.generate_reply(user_input="go")
+    await _until(lambda: ("charge", "call_1:0") in CALLS)
+
+    # a checkpoint reads the frame from before the charge, and lands after the charge resolved
+    gated.hold_next = True
+    checkpoint = asyncio.create_task(crashed._persistence.checkpoint())  # type: ignore[union-attr]
+    await asyncio.sleep(0.05)
+    CHARGE_GATE.set()
+    await asyncio.sleep(0.1)
+    gated.gate.set()
+    await checkpoint
+    await _until(lambda: ("hold", "call_1:1") in CALLS)
+
+    RELEASED.set()
+    resumed = AgentSession(llm=_llm("book"))
+    await resumed.start(agent=SlowDesk(), persist=database.session("s1"))
+    await _until(lambda: _outputs(resumed))
+    # the charge resolved before the crash, so the resume goes on from after it
+    assert CALLS.count(("charge", "call_1:0")) == 1
+    await resumed.aclose()
+    await crashed.aclose()
+    await gated.aclose()

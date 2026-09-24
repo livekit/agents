@@ -68,6 +68,9 @@ class SessionPersistence:
         self._persisted = persisted
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._checkpoint_again = False
+        # a checkpoint and a boundary write read the frames and land them in turn, so an older
+        # read never lands over a newer one
+        self._write_lock = asyncio.Lock()
         self._lease_lost = False
         self._closed = False
 
@@ -292,41 +295,43 @@ class SessionPersistence:
             self._persisted.sync(agent._chat_ctx.items, owner=agent.id, prune=True)
 
     async def checkpoint(self) -> None:
-        self._sync()
-        records: list[AgentRecord] = []
-        for agent in self._chain():
-            state: dict[str, Any] | None = None
-            if self._check_rebuild(agent) is None:
-                with contextlib.suppress(Exception):
-                    state = agent._snapshot_state()
-            parent = agent._old_agent if isinstance(agent, AgentTask) else None
-            scheduler = agent._activity._durable_scheduler if agent._activity else None
-            records.append(
-                AgentRecord(
-                    agent_id=agent.id,
-                    cls=qualified_name(type(agent)),
-                    parent_agent_id=parent.id if parent is not None else None,
-                    state=state,
-                    # a closed activity leaves the frames its tools stopped at
-                    durable_state=scheduler.durable_state() if scheduler is not None else None,
+        async with self._write_lock:
+            self._sync()
+            records: list[AgentRecord] = []
+            for agent in self._chain():
+                state: dict[str, Any] | None = None
+                if self._check_rebuild(agent) is None:
+                    with contextlib.suppress(Exception):
+                        state = agent._snapshot_state()
+                parent = agent._old_agent if isinstance(agent, AgentTask) else None
+                scheduler = agent._activity._durable_scheduler if agent._activity else None
+                records.append(
+                    AgentRecord(
+                        agent_id=agent.id,
+                        cls=qualified_name(type(agent)),
+                        parent_agent_id=parent.id if parent is not None else None,
+                        state=state,
+                        # a closed activity leaves the frames its tools stopped at
+                        durable_state=scheduler.durable_state() if scheduler is not None else None,
+                    )
                 )
+            session = self._session
+            await self._persisted.checkpoint(
+                current_agent_id=session._agent.id if session._agent else None,
+                userdata=_userdata_json(session._userdata),
+                agents=records,
             )
-        session = self._session
-        await self._persisted.checkpoint(
-            current_agent_id=session._agent.id if session._agent else None,
-            userdata=_userdata_json(session._userdata),
-            agents=records,
-        )
 
     async def durable_boundary(self, agent: Agent) -> None:
         """Write the agent's durable tools as they stand at a boundary one of them reached."""
         scheduler = agent._activity._durable_scheduler if agent._activity else None
         if self._closed or self._lease_lost or scheduler is None:
             return
-        self._sync()
-        await self._persisted.write_durable_state(
-            agent.id, cls=qualified_name(type(agent)), durable_state=scheduler.durable_state()
-        )
+        async with self._write_lock:
+            self._sync()
+            await self._persisted.write_durable_state(
+                agent.id, cls=qualified_name(type(agent)), durable_state=scheduler.durable_state()
+            )
 
     def _schedule_checkpoint(self) -> None:
         if self._closed or self._lease_lost:
