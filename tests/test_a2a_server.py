@@ -216,7 +216,7 @@ async def test_a_directive_reaches_the_caller_with_the_answer() -> None:
     assert (answer.directive.kind, answer.directive.reason) == ("end_session", "user_request")
 
 
-async def test_two_requests_share_one_conversation() -> None:
+async def test_two_requests_share_one_context() -> None:
     from livekit.agents.a2a import A2AClient
 
     async with _serving() as served:
@@ -233,17 +233,17 @@ async def test_two_requests_share_one_conversation() -> None:
     assert len(served.sessions) == 1
 
 
-async def test_closing_drops_the_conversation() -> None:
+async def test_closing_drops_the_context() -> None:
     from livekit.agents.a2a import A2AClient
 
     async with _serving() as served:
         client = A2AClient(f"{served.base_url}/fare-desk")
         await _collect(client, TaskInput(instruction="what is the change fee"))
-        assert len(served.executor._conversations) == 1
+        assert len(served.executor._contexts) == 1
 
         # aclose says goodbye, so the endpoint drops the context rather than waiting it out
         await client.aclose()
-        assert served.executor._conversations == {}
+        assert served.executor._contexts == {}
 
     # the expert's session went with it
     assert not served.sessions[0]._started
@@ -268,7 +268,7 @@ async def test_cancelling_a_task_ends_it_canceled_over_the_wire() -> None:
     assert updates[-1].state == "canceled"
 
 
-async def test_a_conversation_nobody_comes_back_to_is_dropped() -> None:
+async def test_a_context_nobody_comes_back_to_is_dropped() -> None:
     """The backstop behind lk/kind = close: a caller that crashes says goodbye to nobody."""
     from livekit.agents.a2a import A2AClient
 
@@ -276,19 +276,19 @@ async def test_a_conversation_nobody_comes_back_to_is_dropped() -> None:
         client = A2AClient(f"{served.base_url}/fare-desk")
         try:
             await _collect(client, TaskInput(instruction="what is the change fee"))
-            assert len(served.executor._conversations) == 1
+            assert len(served.executor._contexts) == 1
 
             await asyncio.sleep(0.1)
             await served.executor._drop_idle()
             # the goodbye below would drop it too, so the claim is made before saying one
-            assert served.executor._conversations == {}
+            assert served.executor._contexts == {}
             assert not served.sessions[0]._started
         finally:
             await client.aclose()
 
 
-async def test_a_conversation_is_kept_unless_an_endpoint_asks_for_idle() -> None:
-    """Dropping loses what the conversation held, so it is off until something wants it."""
+async def test_a_context_is_kept_unless_an_endpoint_asks_for_idle() -> None:
+    """Dropping loses what the context held, so it is off until something wants it."""
     from livekit.agents.a2a import A2AClient
 
     async with _serving() as served:
@@ -296,7 +296,7 @@ async def test_a_conversation_is_kept_unless_an_endpoint_asks_for_idle() -> None
         try:
             await _collect(client, TaskInput(instruction="what is the change fee"))
             assert served.executor._sweeper is None
-            assert len(served.executor._conversations) == 1
+            assert len(served.executor._contexts) == 1
         finally:
             await client.aclose()
 
@@ -472,7 +472,7 @@ async def test_the_keys_stay_home_when_the_card_does_not_offer_the_extension(
     assert seen == [(None, None)]
 
 
-async def test_a_dropped_conversation_rehydrates_on_the_next_request(
+async def test_a_dropped_context_rehydrates_on_the_next_request(
     tmp_path: pathlib.Path,
 ) -> None:
     from livekit.agents import store
@@ -500,7 +500,7 @@ async def test_a_dropped_conversation_rehydrates_on_the_next_request(
         await _collect(first, TaskInput(instruction="what is the change fee", **delegation))
         # the goodbye closes the session, which releases it and so the connection
         await first.aclose()
-        assert served.executor._conversations == {}
+        assert served.executor._contexts == {}
         with pytest.raises(store.StoreError):
             _ = local._databases[conversation_id].executor
 
