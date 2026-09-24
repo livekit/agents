@@ -4845,14 +4845,6 @@ class AgentActivity(RecognitionHooks):
 
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # record the call with its output, as the pipeline task does. a call rejected
-                # before execution never reached the started callback
-                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call)
-                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                self._session._tool_items_added(
-                    [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
-                )
-
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
                         "expected to receive only one Agent from the tool executions",
@@ -4866,6 +4858,16 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
+
+            # record each call with its output after the event, as the pipeline task does, so a
+            # handler's edit lands before the record; a call rejected before execution never
+            # reached the started callback
+            for sanitized_out in tool_output.output:
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call)
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
+                self._session._tool_items_added(
+                    [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
+                )
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:

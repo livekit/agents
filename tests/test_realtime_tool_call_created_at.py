@@ -4,7 +4,15 @@ import time
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    FunctionToolsExecutedEvent,
+    RunContext,
+    function_tool,
+    llm,
+    utils,
+)
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -218,3 +226,48 @@ async def test_a_realtime_tool_update_leaves_its_recorded_call_as_it_was() -> No
         await asyncio.wait_for(waited.wait(), timeout=5)
 
     assert [call.call_id for call in recorded] == ["call_1"]
+
+
+async def test_a_realtime_tools_executed_handler_edits_outputs_before_they_are_recorded() -> None:
+    """As in the pipeline, ``function_tools_executed`` comes before the outputs are recorded."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self) -> str:
+            return "ok"
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    recorded_at_event: list[str] = []
+
+    async with AgentSession(llm=model) as session:
+        await session.start(ToolAgent())
+
+        def on_executed(ev: FunctionToolsExecutedEvent) -> None:
+            recorded_at_event.extend(
+                i.call_id for i in session.history.items if i.type == "function_call_output"
+            )
+            ev.cancel_tool_reply()
+
+        session.on("function_tools_executed", on_executed)
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(llm.FunctionCall(call_id="call_1", name="lookup", arguments="{}"))
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch, function_stream=function_ch, user_initiated=True
+            )
+        )
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+        outputs = [i for i in session.history.items if i.type == "function_call_output"]
+
+    assert recorded_at_event == []
+    assert [(o.call_id, o.reply_required) for o in outputs] == [("call_1", False)]
