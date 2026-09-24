@@ -345,11 +345,20 @@ class SessionPersistence:
             return
         async with self._write_lock:
             self._sync()
-            await self._persisted.write_durable_state(
-                agent.id,
-                cls=_qualified_name(type(agent)),
-                durable_state=scheduler.durable_state(_answered(agent)),
-            )
+            try:
+                await self._persisted.write_durable_state(
+                    agent.id,
+                    cls=_qualified_name(type(agent)),
+                    durable_state=scheduler.durable_state(_answered(agent)),
+                )
+            except LeaseLostError:
+                # the new owner resumes these tools, so here they stop before another effect
+                self._lease_lost = True
+                logger.error(
+                    "another worker took this session, so its durable tools stop here",
+                    extra={"session_id": self._persisted.session_id},
+                )
+                scheduler.close()
 
     def _schedule_checkpoint(self) -> None:
         if self._closed or self._lease_lost:

@@ -361,3 +361,22 @@ async def test_a_frame_written_after_a_failed_effect_resumes(database: Database)
     assert CALLS.count(("refuse", "call_1:0")) == 1
     await resumed.aclose()
     await crashed.aclose()
+
+
+async def test_a_worker_that_lost_the_session_stops_its_durable_tool(database: Database) -> None:
+    stale = AgentSession(llm=_llm("book"))
+    await stale.start(agent=SlowDesk(), persist=database.session("s1"))
+    stale.generate_reply(user_input="go")
+    await _until(lambda: ("charge", "call_1:0") in CALLS)
+
+    # the first worker stalls in the charge past its lease, and a second one takes the session
+    owner = AgentSession(llm=_llm("book"))
+    await owner.start(agent=SlowDesk(), persist=database.session("s1"))
+    await _until(lambda: CALLS.count(("charge", "call_1:0")) == 2)
+    CHARGE_GATE.set()
+    await _until(lambda: ("hold", "call_1:1") in CALLS)
+    await asyncio.sleep(0.2)
+    # the stale worker's boundary write is fenced, so it sends nothing after it
+    assert CALLS.count(("hold", "call_1:1")) == 1
+    await owner.aclose()
+    await stale.aclose()
