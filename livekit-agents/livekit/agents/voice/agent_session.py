@@ -705,6 +705,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
         self._persistence: SessionPersistence | None = None
+        # the agent a restored session left off on, whose first activity goes on rather than
+        # being handed to
+        self._resumed_agent: Agent | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -1976,22 +1979,30 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
-                run_state = self._global_run_state
-                handoff_item = AgentHandoff(
-                    old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
-                    new_agent_id=self._activity.agent.id,
+                # a start that resumes the agent the history already ends on is no handoff;
+                # its configuration update is skipped by content, so a changed one still lands
+                resumes = (
+                    previous_activity_v is None and self._activity.agent is self._resumed_agent
                 )
-                if run_state:
-                    run_state._agent_handoff(
-                        item=handoff_item,
-                        old_agent=(previous_activity_v.agent if previous_activity_v else None),
-                        new_agent=self._activity.agent,
+                if not resumes:
+                    run_state = self._global_run_state
+                    handoff_item = AgentHandoff(
+                        old_agent_id=(
+                            previous_activity_v.agent.id if previous_activity_v else None
+                        ),
+                        new_agent_id=self._activity.agent.id,
                     )
-                self._chat_ctx.insert(handoff_item)
-                self.emit(
-                    "conversation_item_added",
-                    ConversationItemAddedEvent(item=handoff_item),
-                )
+                    if run_state:
+                        run_state._agent_handoff(
+                            item=handoff_item,
+                            old_agent=(previous_activity_v.agent if previous_activity_v else None),
+                            new_agent=self._activity.agent,
+                        )
+                    self._chat_ctx.insert(handoff_item)
+                    self.emit(
+                        "conversation_item_added",
+                        ConversationItemAddedEvent(item=handoff_item),
+                    )
 
                 if new_activity == "start":
                     await self._activity.start(

@@ -204,6 +204,8 @@ class SessionPersistence:
         finally:
             _REHYDRATING.reset(token)
         current, own = chain[kept - 1]
+        if current.id == stored.current_agent_id:
+            session._resumed_agent = current
         if current.id != (stored.current_agent_id or agent.id) or not (own and own.chat_items):
             # a stand-in, or an agent with nothing of its own stored, starts from the history
             current._chat_ctx = session._chat_ctx.copy(

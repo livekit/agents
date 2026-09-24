@@ -156,6 +156,45 @@ async def test_a_second_start_resumes_the_session(database: Database) -> None:
     await second.aclose()
 
 
+async def test_a_resumed_start_records_no_handoff_and_no_configuration(
+    database: Database,
+) -> None:
+    llm = _AnsweringLLM(fake_responses=[], fallbacks=[])
+
+    def recorded(session: AgentSession) -> list[int]:
+        kinds = ("agent_handoff", "agent_config_update")
+        return [sum(item.type == kind for item in session.history.items) for kind in kinds]
+
+    first = _session(llm)
+    await first.start(agent=FareDesk(), persist=database.session("s1"))
+    await first.aclose()
+    assert recorded(first) == [1, 1]
+
+    # the session goes on with the agent it left off on, so its start records nothing
+    second = _session(llm)
+    agent = FareDesk()
+    await second.start(agent=agent, persist=database.session("s1"))
+    assert recorded(second) == [1, 1]
+    assert [item.type for item in agent.chat_ctx.items].count("agent_config_update") == 1
+
+    # a real handoff records both
+    second.update_agent(Transferring())
+    assert second._update_activity_atask is not None
+    await second._update_activity_atask
+    assert recorded(second) == [2, 2]
+    await second.aclose()
+
+    # a resumed agent whose configuration changed records the change, and still no handoff
+    class Changed(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="You transfer to billing and sales.", id="transferring")
+
+    third = _session(llm)
+    await third.start(agent=Changed(), persist=database.session("s1"))
+    assert recorded(third) == [2, 3]
+    await third.aclose()
+
+
 async def test_userdata_is_json_only(database: Database) -> None:
     session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), userdata=object())
     with pytest.raises(TypeError, match="builtins:object cannot be persisted.*dataclass"):
