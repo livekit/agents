@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -112,6 +113,30 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
 }
 
 
+_GPT_VERSION = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
+# families that answer HTTP 400 to prompt_cache_breakpoint; "chat-latest" is the bare alias
+_BREAKPOINT_REJECTING_PREFIXES = ("chat-latest", "chatgpt-", "gpt-4o", "gpt-oss")
+_BREAKPOINT_FORMATS = ("openai", "openai.responses")
+
+
+def supports_prompt_cache_breakpoints(model: str) -> bool:
+    """Whether an OpenAI model accepts ``prompt_cache_breakpoint`` content parts.
+
+    A denylist: OpenAI supports breakpoints on GPT-5.6 and later, so only names known
+    to reject them return False, and a newer or unrecognized OpenAI model is assumed to
+    support them. Models from other providers (``google/...``) always return False.
+    """
+    provider, _, name = model.lower().rpartition("/")
+    if provider not in ("", "openai"):
+        return False
+    if re.match(r"^o\d", name) or name.startswith(_BREAKPOINT_REJECTING_PREFIXES):
+        return False
+    version = _GPT_VERSION.match(name)
+    if version is None:
+        return True
+    return (int(version.group(1)), int(version.group(2) or 0)) >= (5, 6)
+
+
 def min_reasoning_effort(model: str) -> ReasoningEffort | None:
     """Lowest reasoning effort the model supports, or None if the model has no
     reasoning-effort control.
@@ -178,6 +203,13 @@ XAIModels = Literal[
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
 
+class PromptCacheOptions(TypedDict, total=False):
+    """OpenAI ``prompt_cache_options`` (GPT-5.6 and later)."""
+
+    mode: Literal["implicit", "explicit"]
+    ttl: str
+
+
 class ChatCompletionOptions(TypedDict, total=False):
     frequency_penalty: float | None
     logit_bias: dict[str, int] | None
@@ -191,6 +223,7 @@ class ChatCompletionOptions(TypedDict, total=False):
     prediction: ChatCompletionPredictionContentParam | None
     presence_penalty: float | None
     prompt_cache_key: str
+    prompt_cache_options: PromptCacheOptions
     prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
     safety_identifier: str
@@ -220,6 +253,7 @@ class _LLMOptions:
     api_secret: str
     inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
+    prompt_cache_breakpoints: bool | Literal["auto"]
 
 
 class LLM(llm.LLM):
@@ -233,7 +267,15 @@ class LLM(llm.LLM):
         api_secret: str | None = None,
         inference_class: InferenceClass | None = None,
         extra_kwargs: ChatCompletionOptions | dict[str, Any] | None = None,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
     ) -> None:
+        """
+        Args:
+            prompt_cache_breakpoints: Send each :class:`llm.CacheBreakpoint` in the chat
+                context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them
+                when :func:`supports_prompt_cache_breakpoints` accepts the current model;
+                ``True`` or ``False`` overrides that.
+        """
         super().__init__()
 
         lk_base_url = base_url if base_url else get_default_inference_url()
@@ -248,6 +290,7 @@ class LLM(llm.LLM):
             api_secret=lk_api_secret,
             inference_class=inference_class,
             extra_kwargs=extra_kwargs or {},
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
         self._client = openai.AsyncClient(
             api_key=create_access_token(self._opts.api_key, self._opts.api_secret),
@@ -279,6 +322,7 @@ class LLM(llm.LLM):
         *,
         model: NotGivenOr[LLMModels | str] = NOT_GIVEN,
         extra_kwargs: NotGivenOr[ChatCompletionOptions | dict[str, Any]] = NOT_GIVEN,
+        prompt_cache_breakpoints: NotGivenOr[bool | Literal["auto"]] = NOT_GIVEN,
     ) -> None:
         """Update LLM configuration options.
 
@@ -291,6 +335,8 @@ class LLM(llm.LLM):
             self._opts.model = model
         if is_given(extra_kwargs):
             self._opts.extra_kwargs = dict(extra_kwargs)
+        if is_given(prompt_cache_breakpoints):
+            self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
 
     @property
     def model(self) -> str:
@@ -362,7 +408,15 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
         )
+
+    def _resolve_prompt_cache_breakpoints(self) -> bool:
+        # resolved per chat() so update_options(model=...) re-evaluates "auto"
+        setting = self._opts.prompt_cache_breakpoints
+        if isinstance(setting, bool):
+            return setting
+        return supports_prompt_cache_breakpoints(self._opts.model)
 
 
 class LLMStream(llm.LLMStream):
@@ -380,12 +434,17 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         provider_fmt: str = "openai",  # used internally for chat_ctx format
+        prompt_cache_breakpoints: bool = False,
     ) -> None:
         super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._model = model
         self._provider = provider
         self._inference_class = inference_class
         self._provider_fmt = provider_fmt
+        # the other formatters take no such argument and drop CacheBreakpoint themselves
+        self._prompt_cache_breakpoints = prompt_cache_breakpoints and (
+            provider_fmt in _BREAKPOINT_FORMATS
+        )
         self._strict_tool_schema = strict_tool_schema
         self._client = client
         self._llm = llm_v
@@ -404,7 +463,10 @@ class LLMStream(llm.LLMStream):
         retryable = True
 
         try:
-            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt)
+            fmt_kwargs: dict[str, Any] = {}
+            if self._prompt_cache_breakpoints:
+                fmt_kwargs["prompt_cache_breakpoints"] = True
+            chat_ctx, _ = self._chat_ctx.to_provider_format(format=self._provider_fmt, **fmt_kwargs)
             tool_schemas = cast(
                 list[ChatCompletionToolParam],
                 self._tool_ctx.parse_function_tools("openai", strict=self._strict_tool_schema),
