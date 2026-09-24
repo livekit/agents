@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
 SessionKind = Literal["voice", "text", "a2a"]
 TaskStatus = Literal["running", "done", "error", "cancelled", "interrupted"]
-TaskOrigin = Literal["llm", "code"]
 
 SESSION_OWNER = "session"
 """The ``chat_items.owner`` of the session's own history, as opposed to an agent's context."""
@@ -37,8 +36,6 @@ SESSION_OWNER = "session"
 LEASE_TTL = 30.0
 """How long a session stays claimed without a checkpoint renewing it. A worker restarted
 after a crash waits at most this long before it can take the session back."""
-
-INTERRUPTED_OUTPUT = "the call was interrupted before it finished; its outcome is unknown"
 
 _ITEM_ADAPTER: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
 
@@ -69,36 +66,26 @@ class AgentRecord:
 
 @dataclass
 class TaskRecord:
+    """A call the previous owner started and never ended."""
+
     call_id: str
     name: str
     arguments: str | None
-    status: TaskStatus
-    started_at: float
-    ended_at: float | None = None
-    output: str | None = None
-    is_error: bool = False
-    origin: TaskOrigin = "llm"
 
 
 @dataclass
 class StoredSession:
     """What a session had written when it was last checkpointed, read back."""
 
-    session_id: str
-    kind: SessionKind
-    parent_session_id: str | None
-    endpoint: str | None
     current_agent_id: str | None
     userdata: Any
     """Decoded into its class when that class still imports, else plain JSON. Pickled
     userdata stays bytes here: it may name agents, which the session rebuilds first."""
     userdata_encoding: str | None
-    tools: list[str] | None
     history: list[ChatItem]
     agents: dict[str, AgentRecord]
     interrupted: list[TaskRecord]
     """Calls still ``running`` under a previous owner, which died before they ended."""
-    created_at: float
 
 
 def qualified_name(cls: type) -> str:
@@ -159,14 +146,6 @@ class SessionState:
     @property
     def session_id(self) -> str:
         return self._session_id
-
-    @property
-    def kind(self) -> SessionKind:
-        return self._kind
-
-    @property
-    def lease_owner(self) -> str:
-        return self._lease_owner
 
     async def load(self) -> StoredSession | None:
         """Claim the session and read it back, or create it. ``None`` means it is new.
@@ -241,7 +220,6 @@ class SessionState:
                 cls=str(row["cls"]),
                 parent_agent_id=_text(row["parent_agent_id"]),
                 state=_json(row["state_json"]),
-                tools=_json(row["tools_json"]),
             )
         async for row in executor.query(
             "SELECT owner, item_json FROM chat_items WHERE session_id = ? "
@@ -259,7 +237,8 @@ class SessionState:
 
         interrupted: list[TaskRecord] = []
         async for row in executor.query(
-            "SELECT * FROM tasks WHERE session_id = ? AND status = 'running' ORDER BY started_at",
+            "SELECT call_id, name, arguments FROM tasks WHERE session_id = ? "
+            "AND status = 'running' ORDER BY started_at",
             self._session_id,
         ):
             interrupted.append(
@@ -267,26 +246,17 @@ class SessionState:
                     call_id=str(row["call_id"]),
                     name=str(row["name"]),
                     arguments=_text(row["arguments"]),
-                    status="running",
-                    started_at=float(row["started_at"]),  # type: ignore[arg-type]
-                    origin=row["origin"],  # type: ignore[arg-type]
                 )
             )
 
         userdata, has_userdata = self._decode_userdata(session)
         return StoredSession(
-            session_id=self._session_id,
-            kind=session.get("kind") or self._kind,  # type: ignore[arg-type]
-            parent_session_id=_text(session.get("parent_session_id")),
-            endpoint=_text(session.get("endpoint")),
             current_agent_id=_text(session.get("current_agent_id")),
             userdata=userdata,
             userdata_encoding=_text(session.get("userdata_encoding")) if has_userdata else None,
-            tools=_json(session.get("tools_json")),
             history=history,
             agents=agents,
             interrupted=interrupted,
-            created_at=float(session.get("created_at") or 0.0),
         )
 
     def _decode_userdata(self, session: Row) -> tuple[Any, bool]:
@@ -348,14 +318,12 @@ class SessionState:
             (self._session_id, owner, item_id),
         )
 
-    async def task_started(
-        self, call_id: str, *, name: str, arguments: str, origin: TaskOrigin = "llm"
-    ) -> None:
+    async def task_started(self, call_id: str, *, name: str, arguments: str) -> None:
         """Record a call before its body runs, so a crash mid-call leaves it ``running``."""
         self._enqueue(
             "INSERT OR REPLACE INTO tasks (session_id, call_id, name, arguments, status, "
-            "started_at, idempotency_key, origin) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)",
-            (self._session_id, call_id, name, arguments, time.time(), call_id, origin),
+            "started_at, idempotency_key, origin) VALUES (?, ?, ?, ?, 'running', ?, ?, 'llm')",
+            (self._session_id, call_id, name, arguments, time.time(), call_id),
         )
         await self.flush()
 
@@ -536,7 +504,6 @@ def _json(value: Value | None) -> Any:
 
 
 __all__ = [
-    "INTERRUPTED_OUTPUT",
     "LEASE_TTL",
     "SESSION_OWNER",
     "AgentRecord",
@@ -545,7 +512,6 @@ __all__ = [
     "SessionKind",
     "SessionState",
     "StoredSession",
-    "TaskOrigin",
     "TaskRecord",
     "TaskStatus",
     "import_qualified",

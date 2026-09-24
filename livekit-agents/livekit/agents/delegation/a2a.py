@@ -38,10 +38,6 @@ class A2ADelegate(Delegate):
         self._client: A2AClient | None = None
 
     @property
-    def url(self) -> str:
-        return self._url
-
-    @property
     def client(self) -> A2AClient:
         if self._client is None:
             self._client = A2AClient(

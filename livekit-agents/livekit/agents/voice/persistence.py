@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 from .. import llm
 from ..log import logger
 from ..store.session_state import (
-    INTERRUPTED_OUTPUT,
     SESSION_OWNER,
     AgentRecord,
     LeaseLostError,
@@ -34,6 +33,8 @@ from .tool_executor import _RunningTasks
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
+
+INTERRUPTED_OUTPUT = "the call was interrupted before it finished; its outcome is unknown"
 
 _REHYDRATING = contextvars.ContextVar["SessionPersistence"]("agents_rehydrating")
 
@@ -214,8 +215,8 @@ class SessionPersistence:
 
     def _listen(self) -> None:
         self._session.on("conversation_item_added", self._on_item_added)
-        self._session.on("agent_state_changed", self._on_agent_state_changed)
-        self._session.on("tool_execution_updated", self._on_tool_execution_updated)
+        self._session.on("agent_state_changed", self._on_quiet_candidate)
+        self._session.on("tool_execution_updated", self._on_quiet_candidate)
 
     def _check_rebuild(self, agent: Agent) -> str | None:
         """Why the agent's class cannot be rebuilt from its row, or None when it can."""
@@ -326,13 +327,7 @@ class SessionPersistence:
         if ev.item.type == "agent_handoff":
             self._schedule_checkpoint()
 
-    def _on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        self._on_quiet_candidate()
-
-    def _on_tool_execution_updated(self, ev: ToolExecutionUpdatedEvent) -> None:
-        self._on_quiet_candidate()
-
-    def _on_quiet_candidate(self) -> None:
+    def _on_quiet_candidate(self, ev: AgentStateChangedEvent | ToolExecutionUpdatedEvent) -> None:
         # a turn that ended with no tool still running is the point nothing is half-written
         self._sync()
         if self._session._agent_state == "listening" and not _RunningTasks.get(self._session):
@@ -341,8 +336,8 @@ class SessionPersistence:
     async def aclose(self) -> None:
         """Checkpoint once more and let the session go."""
         self._session.off("conversation_item_added", self._on_item_added)
-        self._session.off("agent_state_changed", self._on_agent_state_changed)
-        self._session.off("tool_execution_updated", self._on_tool_execution_updated)
+        self._session.off("agent_state_changed", self._on_quiet_candidate)
+        self._session.off("tool_execution_updated", self._on_quiet_candidate)
         if self._checkpoint_task is not None:
             with contextlib.suppress(Exception):
                 await asyncio.shield(self._checkpoint_task)
@@ -367,4 +362,4 @@ class SessionPersistence:
                 await self._state.release()
 
 
-__all__ = ["SessionPersistence", "lookup_rehydrated_agent"]
+__all__ = ["INTERRUPTED_OUTPUT", "SessionPersistence", "lookup_rehydrated_agent"]

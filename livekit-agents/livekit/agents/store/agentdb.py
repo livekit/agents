@@ -140,10 +140,6 @@ class AgentDBExecutor:
         self._supervisor: asyncio.Task[None] | None = None
         self._pinger: asyncio.Task[None] | None = None
 
-    @property
-    def database_id(self) -> str:
-        return self._database_id
-
     async def connect(self) -> None:
         """Dial and say Hello. The first connect raises, so a bad URL or token is heard here."""
         await self._connect()

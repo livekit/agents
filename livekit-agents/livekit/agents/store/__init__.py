@@ -11,7 +11,7 @@ Open a conversation, bind a session of it, and hand that to ``AgentSession.start
 executors and the agent-db clients underneath are importable from their modules.
 """
 
-from .conversation import AgentDB, Conversation, SQLite, Store
+from .conversation import AgentDB, Conversation, SQLite
 from .executor import StoreError
 from .schema import SchemaVersionError
 from .session_state import LeaseHeldError, LeaseLostError, SessionKind, SessionState
@@ -25,6 +25,5 @@ __all__ = [
     "SchemaVersionError",
     "SessionKind",
     "SessionState",
-    "Store",
     "StoreError",
 ]

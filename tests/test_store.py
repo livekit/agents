@@ -157,9 +157,13 @@ class StoreSuite:
         assert stored.history[2] == call
         assert stored.current_agent_id == "agent_1"
         assert stored.userdata == userdata
-        assert stored.tools == ["lookup"]
         agent = stored.agents["agent_1"]
-        assert (agent.cls, agent.state, agent.tools) == ("app:FareDesk", {"tier": "gold"}, ["x"])
+        assert (agent.cls, agent.state) == ("app:FareDesk", {"tier": "gold"})
+        # tool ids are written for a dashboard; a resumed session takes its tools from code
+        rows = await _rows(
+            conversation, "SELECT tools_json FROM sessions UNION ALL SELECT tools_json FROM agents"
+        )
+        assert [r["tools_json"] for r in rows] == ['["lookup"]', '["x"]']
         assert [item.id for item in agent.chat_items] == [question.id]
         assert stored.interrupted == []
 
@@ -198,7 +202,7 @@ class StoreSuite:
                 agents=[AgentRecord(agent_id="stale", cls="app:Stale")],
             )
         (session,) = await _rows(conversation, "SELECT current_agent_id, lease_owner FROM sessions")
-        assert session == {"current_agent_id": "a", "lease_owner": second.lease_owner}
+        assert session == {"current_agent_id": "a", "lease_owner": second._lease_owner}
         assert await _rows(conversation, "SELECT * FROM agents WHERE agent_id = 'stale'") == []
 
         await second.checkpoint(current_agent_id="b", userdata=None, agents=[])

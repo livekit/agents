@@ -12,7 +12,6 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Protocol
 
 from ..utils import shortuuid
 from .agentdb import TOKEN_TTL, AgentDBExecutor, AgentDBService, access_token
@@ -101,16 +100,6 @@ class Conversation:
             if self._executor is not None:
                 executor, self._executor = self._executor, None
                 await executor.aclose()
-
-
-class Store(Protocol):
-    """Opens conversations by id, and makes new ones."""
-
-    async def conversation(self, database_id: str) -> Conversation: ...
-
-    async def create_conversation(self) -> Conversation: ...
-
-    async def aclose(self) -> None: ...
 
 
 class SQLite:
@@ -252,4 +241,4 @@ class AgentDB:
             self._service = None
 
 
-__all__ = ["AgentDB", "Conversation", "SQLite", "Store"]
+__all__ = ["AgentDB", "Conversation", "SQLite"]

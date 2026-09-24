@@ -14,7 +14,7 @@ import pytest
 from livekit.agents import Agent, AgentSession, RunContext, function_tool, store
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import Delegate
-from livekit.agents.store.session_state import INTERRUPTED_OUTPUT
+from livekit.agents.voice.persistence import INTERRUPTED_OUTPUT
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
 
