@@ -66,35 +66,53 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 
 With agent-db configured, every conversation persists as it goes: the desk writes each item as it lands and checkpoints its mutable state (the mock airline included) when a turn ends, so a desk killed mid-conversation and restarted picks up where it was. One conversation is one agent-db database; the phone agent's session and each desk context it talked to are rows in it, the desk's under the caller's.
 
+```python
+db = store.AgentDB()   # LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+await session.start(agent=FareDesk(), persist=db.session(database_id, session_id, parent=caller))
+```
+
 Start agent-db locally, from `agents-private/agent-db`, and leave it running:
 
 ```bash
 mage build && mage devLocal   # management :7780, data plane ws://localhost:7781/db
 ```
 
-Point both processes at it. The key and secret are devLocal's own, apart from the LiveKit project's:
+Point the processes at it. devLocal serves its data plane on a port of its own, and takes its own key, which the example passes when the URL is on localhost:
 
 ```bash
 export LIVEKIT_AGENTDB_URL=http://localhost:7780
 export LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db
-export LIVEKIT_AGENTDB_API_KEY=devkey LIVEKIT_AGENTDB_API_SECRET=secret
 ```
 
-### The crash drill, with no microphone
+### The desk crash drill, with no microphone
 
-`chat.py` is a text client over A2A. It creates a conversation database and a context, prints both, and sends each line as a person's turn.
+`chat.py` is a text client over A2A. It creates a database and a context, prints both, and sends each line as a person's turn.
 
 ```bash
 python expert.py dev   # terminal 1
-python chat.py         # terminal 2: prints conversation DB_... and context chat-...
+python chat.py         # terminal 2: prints database DB_... and context chat-...
 ```
 
 1. Ask two things that build on each other: _"Hi, I'm dana@example.com. What's the status of my flight to Tokyo tomorrow?"_, then _"What other flights could you put me on that day, and what would the change cost me?"_ The desk quotes the change and keeps the quote on the booking.
 2. Kill the desk hard: `kill -9 $(lsof -ti tcp:8321 -sTCP:LISTEN)`.
-3. Restart it: `python expert.py dev`. A turn that was mid-call when it died is still marked `running`; the next start marks it `interrupted` and tells the model the outcome is unknown. A restart inside the dead desk's 10 s lease waits the rest of it out first.
+3. Restart it: `python expert.py dev`. A restart inside the dead desk's 10 s lease waits the rest of it out first. A tool that was running when it died left nothing behind: a call and its output are written together when the call ends, so a tool that must survive a crash is a durable tool.
 4. In the same `chat.py`, ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated chat-...: N messages back` and rebooks from the quote it made before the crash.
 
-`chat.py --conversation DB_... --context chat-...` picks the same conversation up from a fresh client; `--delegate` sends lines as instructions, the way the phone agent asks.
+`chat.py --database DB_... --context chat-...` picks the same conversation up from a fresh client; `--delegate` sends lines as instructions, the way the phone agent asks.
+
+### The phone agent crash drill: a durable tool
+
+`collect_email` on the phone agent is a durable tool: it awaits `EffectCall(GetEmailTask(...))`, so its frame is written while the email task runs and a restarted agent resumes the task where the caller left off. `voice_drill.py` runs the phone agent over text with the same delegate and persistence.
+
+```bash
+python expert.py dev        # terminal 1
+python voice_drill.py       # terminal 2: prints database DB_...
+```
+
+1. Ask for something that needs an address: _"Hi, my flight to Tokyo tomorrow is delayed. Can you move me onto the evening flight?"_ The desk asks for the caller's email, and the phone agent hands over to the email task, which asks for it.
+2. Kill the phone agent while the task is waiting: `kill -9 $(pgrep -f voice_drill.py)`.
+3. Restart it on the same database: `python voice_drill.py --database DB_...`. It logs `the AgentTask was awaited from a durable tool, so it resumes`, and the email task is the current agent again, without asking twice.
+4. Give the address: _"It's dana@example.com"_. The task hands back to the restored `collect_email`, which records the caller under `ctx.idempotency_key` and returns, and the phone agent delegates the change.
 
 ### Reading the rows
 
@@ -102,24 +120,25 @@ python chat.py         # terminal 2: prints conversation DB_... and context chat
 
 ```bash
 alias adb='./bin/agentdb-console -database DB_...'
-adb -q "SELECT session_id, parent_session_id, kind, current_agent_id, lease_owner FROM sessions"
-adb -q "SELECT json_extract(item_json,'$.role') AS role, substr(json_extract(item_json,'$.content[0]'),1,80) AS text
-        FROM chat_items WHERE owner = 'session' AND json_extract(item_json,'$.type') = 'message' ORDER BY created_at"
-adb -q "SELECT call_id, name, status, is_error, substr(output,1,60) AS output FROM tasks ORDER BY started_at"
-adb -q "SELECT session_id, call_id, child_session_id, task_id, status FROM delegations ORDER BY created_at"
+adb -q "SELECT session_id, parent_session_id, endpoint, current_agent_id, lease_owner FROM sessions"
+adb -q "SELECT json_extract(item,'$.role') AS role, substr(json_extract(item,'$.content[0]'),1,80) AS text
+        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.type') = 'message' ORDER BY created_at"
+adb -q "SELECT agent_id, parent_agent_id, length(durable_state) AS frame_bytes FROM agents"
+adb -q "SELECT json_extract(item,'$.call_id') AS call_id, json_extract(item,'$.extra.\"lk.task_id\"') AS task_id
+        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.name') = 'lk_agents_delegate'"
 ```
 
-`delegations` fills from the phone agent's side: each row says which desk context and task answered which delegate call.
+A desk session names its caller in `parent_session_id`, and each delegate call names the desk task that answered it in `lk.task_id`, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
 
 ### The voice half
 
-`voice.py` persists too once it is given a conversation. The session id `voice` is the app's choice, stable across calls:
+`voice.py` persists too once it is given a database. The session id `voice` is the app's choice, stable across calls:
 
 ```bash
-CONVERSATION=DB_... python voice.py console
+DATABASE=DB_... python voice.py console
 ```
 
-Hang up and run it again on the same `CONVERSATION`: the call resumes with what was said before, and its delegations reach the same desk context, which rehydrates on the first one.
+Hang up and run it again on the same `DATABASE`: the call resumes with what was said before, and its delegations reach the same desk context, which rehydrates on the first one. A durable tool resumes only on a pipeline model; `voice.py` runs a realtime one.
 
 ## Talking to the desk without a voice agent
 
