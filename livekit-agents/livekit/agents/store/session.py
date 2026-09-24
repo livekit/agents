@@ -59,12 +59,6 @@ class StoredSession:
     """Per endpoint, the latest child session this one reached there, to resume on."""
 
 
-def item_json(item: ChatItem) -> str:
-    """One chat item as its row stores it: ``ChatContext.to_dict()``, no audio or images."""
-    data = ChatContext([item]).to_dict(exclude_timestamp=False)["items"][0]
-    return json.dumps(data)
-
-
 class _Database:
     """One database's connection, opened on first use and closed when its last session goes."""
 
@@ -241,8 +235,13 @@ class PersistedSession:
         saved: dict[str, dict[str, str]] = {}
         owners = [(SESSION_OWNER, history)] + [(a.agent_id, a.chat_items) for a in agents]
         for owner, items in owners:
-            # an item is rewritten whole whenever its row would differ, whatever changed in it
-            rows = {item.id: (item_json(item), item.created_at) for item in items}
+            # a row is the item as to_dict() gives it, no audio or images; one that differs is
+            # rewritten whole, whatever changed in it
+            dumped = ChatContext(list(items)).to_dict(exclude_timestamp=False)["items"]
+            rows = {
+                item.id: (json.dumps(d), item.created_at)
+                for item, d in zip(items, dumped, strict=True)
+            }
             base = self._saved.get(owner, {})
             for item_id in base.keys() - rows.keys():
                 statements.append(
@@ -333,5 +332,4 @@ __all__ = [
     "AgentRecord",
     "PersistedSession",
     "StoredSession",
-    "item_json",
 ]
