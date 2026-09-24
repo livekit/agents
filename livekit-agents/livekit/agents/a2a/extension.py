@@ -20,7 +20,7 @@ except ImportError as e:
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
     "CALLER",
-    "CONVERSATION",
+    "DATABASE",
     "DIRECTIVE",
     "EXTENSION_DESCRIPTION",
     "EXTENSION_URI",
@@ -70,8 +70,8 @@ DIRECTIVE = _key("directive")
 REASON = _key("reason")
 """On a ``CancelTaskRequest``: why the caller is stopping the task."""
 
-CONVERSATION = _key("conversation")
-"""On a message: the conversation database the caller persists into, for the expert to join."""
+DATABASE = _key("database")
+"""On a message: the database the caller persists into, for the expert to join."""
 
 CALLER = _key("caller")
 """On a message: the caller's session id, which the expert's session names as its parent."""

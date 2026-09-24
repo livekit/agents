@@ -33,8 +33,8 @@ class TaskInput:
     """Application data, handed to the handler untouched. JSON-serializable."""
     closing: bool = False
     """The conversation is over: nothing is being asked, and the receiver may drop it."""
-    conversation_id: str | None = None
-    """The conversation database the sender persists into, for the receiver to join."""
+    database_id: str | None = None
+    """The database the sender persists into, for the receiver to join."""
     caller_session_id: str | None = None
     """The sender's session in that database, which the receiver's session hangs under."""
 
