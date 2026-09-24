@@ -12,7 +12,7 @@ import contextvars
 import functools
 import pickle
 import reprlib
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Collection, Generator
 from dataclasses import dataclass, field
 from types import coroutine
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -176,10 +176,16 @@ class DurableScheduler:
     ) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._tasks: dict[asyncio.Task[Any], DurableTask] = {}
+        # per key, a finished tool's last snapshot, kept until its output is recorded
+        self._finished: dict[str, bytes] = {}
         self._on_boundary = on_boundary
 
     def execute(
-        self, fnc: Callable[[], DurableCoroutine] | DurableTask, *, metadata: Any | None = None
+        self,
+        fnc: Callable[[], DurableCoroutine] | DurableTask,
+        *,
+        key: str,
+        metadata: Any | None = None,
     ) -> asyncio.Task[Any]:
         from .voice.agent import _pass_through_activity_task_info
 
@@ -196,9 +202,15 @@ class DurableScheduler:
 
             task = DurableTask(fnc().__await__(), fnc_name=fnc_name, metadata=metadata)
 
+        def on_done(_: asyncio.Task[Any]) -> None:
+            del self._tasks[exe_task]
+            if not exe_task.cancelled() and task.snapshot:
+                # resumed from here, the tool ends the same way without sending an effect again
+                self._finished[key] = task.snapshot
+
         exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
-        exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task))
+        exe_task.add_done_callback(on_done)
         _pass_through_activity_task_info(exe_task)
         return exe_task
 
@@ -207,9 +219,13 @@ class DurableScheduler:
         """Whether every durable tool can be captured now."""
         return all(task.at_boundary.is_set() for task in self._tasks.values())
 
-    def durable_state(self) -> bytes:
-        """Each running tool as of its latest boundary, empty when none runs."""
+    def durable_state(self, answered: Collection[str]) -> bytes:
+        """Every running tool as of its latest boundary and every finished one whose key is not
+        ``answered``, or empty when there is none."""
+        for key in self._finished.keys() & set(answered):
+            del self._finished[key]
         snapshots = [task.snapshot for task in self._tasks.values() if task.snapshot]
+        snapshots += self._finished.values()
         return pickle.dumps(snapshots) if snapshots else b""
 
     def close(self) -> None:

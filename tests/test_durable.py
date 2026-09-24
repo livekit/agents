@@ -32,6 +32,8 @@ LEASE_TTL = 0.3
 CALLS: list[tuple[str, str]] = []
 # while unset, the hold effect never returns, the way a worker killed mid-effect never does
 RELEASED = asyncio.Event()
+# while unset, the slow charge does not return
+CHARGE_GATE = asyncio.Event()
 
 
 async def charge(key: str) -> str:
@@ -82,6 +84,8 @@ class ConfirmingDesk(Agent):
 
 @pytest.fixture
 async def database(tmp_path: pathlib.Path) -> AsyncIterator[Database]:
+    global CHARGE_GATE
+    CHARGE_GATE = asyncio.Event()  # an event binds to the loop of its first wait
     CALLS.clear()
     ENTERED.clear()
     RELEASED.clear()
@@ -195,8 +199,6 @@ async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) ->
     await crashed.aclose()
 
 
-# while unset, the slow charge does not return
-CHARGE_GATE = asyncio.Event()
 
 
 async def slow_charge(key: str) -> str:
@@ -243,7 +245,6 @@ class _GatedStore(store.LocalStore):
 
 @pytest.mark.usefixtures("database")
 async def test_a_slow_checkpoint_does_not_rewind_a_later_boundary(tmp_path: pathlib.Path) -> None:
-    CHARGE_GATE.clear()
     gated = _GatedStore(tmp_path / "gated")
     database = Database(gated, await gated.create_database())
     crashed = AgentSession(llm=_llm("book"))
@@ -270,3 +271,55 @@ async def test_a_slow_checkpoint_does_not_rewind_a_later_boundary(tmp_path: path
     await resumed.aclose()
     await crashed.aclose()
     await gated.aclose()
+
+
+async def lookup(key: str) -> str:
+    CALLS.append(("lookup", key))
+    return "found"
+
+
+class TwoToolDesk(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You book seats.")
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def find(self, ctx: RunContext) -> str:
+        """Find the booking."""
+        return await EffectCall(lookup(ctx.idempotency_key))
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def book(self, ctx: RunContext) -> str:
+        """Book a seat."""
+        charged = await EffectCall(slow_charge(ctx.idempotency_key))
+        held = await EffectCall(hold(ctx.idempotency_key))
+        return f"{charged}, {held}"
+
+
+async def test_a_durable_tool_that_finished_beside_a_running_one_survives(
+    database: Database,
+) -> None:
+    calls = [_tool_call("find", "call_1"), _tool_call("book", "call_2")]
+    crashed = AgentSession(
+        llm=_AnsweringLLM(fake_responses=[_says("go", "", calls=calls)], fallbacks=["Done."])
+    )
+    await crashed.start(agent=TwoToolDesk(), persist=database.session("s1"))
+    crashed.generate_reply(user_input="go")
+    await _until(lambda: ("charge", "call_2:0") in CALLS and ("lookup", "call_1:0") in CALLS)
+    await asyncio.sleep(0.05)
+    # the booking writes its frame after the lookup finished, and the hold never returns, so
+    # the step's outputs are never committed
+    CHARGE_GATE.set()
+    await _until(lambda: ("hold", "call_2:1") in CALLS)
+
+    RELEASED.set()
+    resumed = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=["Done."]))
+    await resumed.start(agent=TwoToolDesk(), persist=database.session("s1"))
+    await _until(lambda: len(_outputs(resumed)) == 2)
+    # the finished lookup is answered from its frame, without running again
+    assert {o.call_id: o.output for o in _outputs(resumed)} == {
+        "call_1": "found",
+        "call_2": "charged, held",
+    }
+    assert CALLS.count(("lookup", "call_1:0")) == 1
+    await resumed.aclose()
+    await crashed.aclose()

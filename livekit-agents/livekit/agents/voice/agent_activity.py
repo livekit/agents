@@ -1174,7 +1174,7 @@ class AgentActivity(RecognitionHooks):
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
             assert self._durable_scheduler is not None
-            val = await self._durable_scheduler.execute(task)
+            val = await self._durable_scheduler.execute(task, key=fnc_call.call_id)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
         except asyncio.CancelledError:
             # the scheduler was closed with the session; the frame stays at its last boundary

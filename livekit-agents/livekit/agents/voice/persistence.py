@@ -60,6 +60,11 @@ def _userdata_json(userdata: Any) -> Any:
     return data
 
 
+def _answered(agent: Agent) -> set[str]:
+    """The calls whose output the agent's context already records."""
+    return {item.call_id for item in agent._chat_ctx.items if item.type == "function_call_output"}
+
+
 class SessionPersistence:
     """Keeps one session's rows current: appends as items land, checkpoints when quiet."""
 
@@ -144,11 +149,7 @@ class SessionPersistence:
             for index, (member, own) in enumerate(chain):
                 kept = index + 1
                 newer = chain[index + 1][0] if index + 1 < len(chain) else None
-                answered = {
-                    item.call_id
-                    for item in member._chat_ctx.items
-                    if item.type == "function_call_output"
-                }
+                answered = _answered(member)
                 tasks: list[DurableTask] = []
                 for snapshot in (
                     pickle.loads(own.durable_state) if own and own.durable_state else []
@@ -311,7 +312,11 @@ class SessionPersistence:
                         parent_agent_id=parent.id if parent is not None else None,
                         state=state,
                         # a closed activity leaves the frames its tools stopped at
-                        durable_state=scheduler.durable_state() if scheduler is not None else None,
+                        durable_state=(
+                            scheduler.durable_state(_answered(agent))
+                            if scheduler is not None
+                            else None
+                        ),
                     )
                 )
             session = self._session
@@ -329,7 +334,9 @@ class SessionPersistence:
         async with self._write_lock:
             self._sync()
             await self._persisted.write_durable_state(
-                agent.id, cls=qualified_name(type(agent)), durable_state=scheduler.durable_state()
+                agent.id,
+                cls=qualified_name(type(agent)),
+                durable_state=scheduler.durable_state(_answered(agent)),
             )
 
     def _schedule_checkpoint(self) -> None:
