@@ -256,8 +256,8 @@ def _pending_segment_text(
     """Buffered text of the open segment, for an empty final to fall back on.
 
     The latest of the last interim and preflight, unless the preflight is only an increment of
-    the segment (``SpeechEvent.incremental``) and an interim carries the whole segment. The
-    increments of a segment add up, so without an interim they are its text so far.
+    the segment (``SpeechEvent.incremental``) and an interim carries the whole segment. Text is
+    promoted as an event carried it, never joined.
     """
     if preflight_is_latest and (not preflight_incremental or not interim):
         return preflight
@@ -1375,10 +1375,7 @@ class AudioRecognition:
             # preflight transcript includes all pre-committed transcripts (including final transcript from the previous STT run)
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
-            if ev.incremental and self._last_preflight_incremental and self._last_preflight_text:
-                self._last_preflight_text = f"{self._last_preflight_text} {transcript}"
-            else:
-                self._last_preflight_text = transcript
+            self._last_preflight_text = transcript
             self._last_preflight_incremental = ev.incremental
             self._preflight_is_latest = True
 

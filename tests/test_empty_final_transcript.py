@@ -293,6 +293,14 @@ def _hand_wired_recognition() -> AudioRecognition:
     return ar
 
 
+def _preflight(text: str) -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode(""))],
+        incremental=True,
+    )
+
+
 def _interim(text: str, *, speech_end_time: float | None = None) -> SpeechEvent:
     return SpeechEvent(
         type=SpeechEventType.INTERIM_TRANSCRIPT,
@@ -301,18 +309,31 @@ def _interim(text: str, *, speech_end_time: float | None = None) -> SpeechEvent:
     )
 
 
-def test_incremental_preflights_add_up_within_a_segment() -> None:
+@pytest.mark.parametrize(
+    ("interims", "latest"),
+    [
+        # AssemblyAI documents `utterance` as the whole turn's finalized transcript
+        pytest.param([], "Pick up", id="no-interim"),
+        pytest.param([""], "up", id="empty-interim-between-them"),
+    ],
+)
+def test_latest_incremental_preflight_is_promoted_verbatim(
+    interims: list[str], latest: str
+) -> None:
+    # preflight text is promoted as the event carried it, never joined to an earlier one
     ar = _hand_wired_recognition()
-    for chunk in ("Pick", "up"):
-        ar._process_stt_event(
-            SpeechEvent(
-                type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                alternatives=[SpeechData(text=chunk, language=LanguageCode(""))],
-                incremental=True,
-            )
-        )
+    for ev in [_preflight("Pick"), *(_interim(text) for text in interims), _preflight(latest)]:
+        ar._process_stt_event(ev)
 
-    assert ar._last_preflight_text == "Pick up"
+    assert (
+        _pending_segment_text(
+            ar._last_interim_text,
+            ar._last_preflight_text,
+            ar._preflight_is_latest,
+            ar._last_preflight_incremental,
+        )
+        == latest
+    )
 
 
 def test_unpromoted_empty_final_closes_the_segment() -> None:
