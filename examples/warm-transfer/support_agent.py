@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Callable
 
 from livekit.agents import (
@@ -71,7 +72,9 @@ class SupportAgent(Agent):
 def run(create_agent: Callable[[], Agent]) -> None:
     server = AgentServer()
 
-    @server.rtc_session(agent_name="sip-inbound")
+    @server.rtc_session(
+        agent_name=os.getenv("SUPPORT_AGENT_DISPATCH_NAME", "telephony-support-agent")
+    )
     async def entrypoint(ctx: JobContext) -> None:
         session = AgentSession(
             llm="openai/gpt-4.1-mini",
