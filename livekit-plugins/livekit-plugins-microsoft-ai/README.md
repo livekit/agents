@@ -137,10 +137,14 @@ speech_to_text = microsoft_ai.STT(vad=detector, language="en")
 text_to_speech = microsoft_ai.TTS()
 ```
 
-`vad` is explicit. Pass a LiveKit VAD with ordered, input-relative inference
-timestamps (the current bundled Silero VAD provides these), or pass `vad=None`
-and call the stream's `flush()` / `end_input()` yourself. **Configuring only
-AgentSession's VAD is insufficient:** it does not commit native STT streams.
+`vad` is explicit. Pass a LiveKit VAD with ordered `INFERENCE_DONE` events even
+during silence, input-relative timestamps, and `START_OF_SPEECH.frames`
+containing the detected onset and prefix through that timestamp (the bundled
+Silero VAD provides these). Empty
+or incompatible start frames fail explicitly rather than clipping the onset.
+Alternatively, pass `vad=None` and call `flush()` / `end_input()` yourself.
+**Configuring only AgentSession's VAD is insufficient:** it does not commit
+native STT streams.
 
 The client protocol is:
 
@@ -173,6 +177,15 @@ Mono input at other sample rates is resampled by the SDK. Stereo is rejected.
 Transport frames are 50 ms; the final shorter frame and resampler/VAD remainder
 are sent without rounding away samples or adding synthetic padding.
 
+With VAD, idle inference windows are discarded locally, not uploaded to an
+uncommitted server buffer. At speech start, the VAD's actual frames restore
+the complete detected onset/prefix; no guessed pre-roll duration or private
+VAD settings are used. Only overlap with a previously committed turn is removed.
+The prefix is framed and flushed before subsequent audio so it is not counted
+twice for backpressure. Speech and the VAD's observed end-of-speech silence are
+uploaded in order, then committed; prolonged inter-turn silence sends neither
+audio nor empty commits. No provider clear/keepalive events are invented.
+
 **Tail limitation:** sending every byte and receiving `.completed` proves
 transport completion, not that the backend decoded an incomplete model chunk.
 There is no invented padding rule. An obviously discarded outstanding
@@ -181,18 +194,29 @@ A live test must verify the full expected transcript, particularly the last
 word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
 backend drain/flush mechanism if commit does not decode the tail.
 
-`flush()` commits and waits internally before processing subsequent input;
-it leaves the socket open. `end_input()` flushes, waits for the acknowledged
-final and closes the socket. `aclose()` cancels immediately, without committing
-or exposing buffered events. Batch `recognize()` is unsupported and
-`offline_recognize=False`.
+After VAD detects speech, `flush()` drains its real audio tail and commits,
+waiting internally before processing subsequent input; it leaves the socket
+open. `end_input()` also waits for the acknowledged final and closes the socket.
+Flushing or ending idle VAD input produces no empty turn. To send a finite clip
+regardless of whether a VAD detects speech, use `vad=None`; that manual mode
+continues forwarding all input audio and requires caller-managed commits.
+`aclose()` cancels immediately without committing or exposing buffered events.
+Batch `recognize()` is unsupported and `offline_recognize=False`.
 
 `APIConnectOptions.timeout` bounds connection, handshake, writes and
 finalization. `max_retry` is a finite connection-only retry budget: after any
 audio is consumed, a disconnect/error is surfaced without replay or hidden
 reconnection. Reopening the stream is the caller's decision. Input is bounded
 by `max_buffered_audio` (default 5 seconds) and 1,024 queued entries; overflow
-fails explicitly. Pace prerecorded input rather than enqueueing entire files.
+fails explicitly. Each VAD start prefix is separately capped by the same
+duration and fails rather than being truncated if oversized. The adapter keeps
+no additional idle history; the VAD owns its bounded onset/prefix buffer.
+Idle samples count as processed, so ordinary silence does not consume the
+queued-audio allowance indefinitely. These bounds cover client lag/prefix
+retention, not the length of an active utterance at the provider. Pace
+prerecorded input rather than enqueueing entire files. Idle gating and delayed
+onset recovery are covered by hermetic tests, not an additional live-service
+accuracy or tail guarantee.
 
 ## Azure Speech TTS contract
 

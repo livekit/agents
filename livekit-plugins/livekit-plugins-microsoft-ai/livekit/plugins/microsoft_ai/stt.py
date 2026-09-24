@@ -131,7 +131,11 @@ class STT(stt.STT):
     See the package README for deployment-specific contract and validation limits.
 
     Args:
-        vad: A VAD emitting ordered inference timestamps (e.g. LiveKit's Silero VAD).
+        vad: A VAD emitting ordered INFERENCE_DONE events even during silence,
+            with input-relative timestamps, and START_OF_SPEECH
+            frames containing the detected onset/prefix through that timestamp
+            (e.g. LiveKit's Silero VAD). Idle audio is withheld; these public frames
+            recover the onset even when the start notification is delayed.
             Required explicitly: pass None only when driving flush/end_input yourself.
             AgentSession's separate VAD does not commit a native STT stream.
         url: Full WebSocket URL, or MICROSOFT_AI_STT_URL. No paths/query parameters
@@ -146,8 +150,9 @@ class STT(stt.STT):
         http_session: Optional caller-owned aiohttp session.
         env_file: Explicit dotenv file, or MICROSOFT_AI_ENV_FILE. Constructor
             arguments override environment variables, which override this file.
-        max_buffered_audio: Client-side queued-audio limit in seconds. Synchronous
-            push_frame raises on overflow instead of silently dropping audio.
+        max_buffered_audio: Client-side queued-audio and VAD start-prefix limits
+            in seconds. Queue overflow or an oversized VAD prefix fails explicitly
+            instead of silently dropping speech.
     """
 
     def __init__(
@@ -245,7 +250,7 @@ class SpeechStream(stt.RecognizeStream):
         self._language_hint = language
         self._language = LanguageCode(language or "")
         self._input_duration = 0.0
-        self._uploaded_samples = 0
+        self._processed_samples = 0
         self._segment_samples = 0
         self._input_consumed = False
         self._input_error: APIError | None = None
@@ -265,7 +270,7 @@ class SpeechStream(stt.RecognizeStream):
             raise ValueError("Microsoft AI STT requires mono audio")
         if frame.samples_per_channel <= 0 or frame.sample_rate <= 0:
             raise ValueError("Microsoft AI STT requires nonempty audio frames")
-        buffered = self._input_duration - self._uploaded_samples / SAMPLE_RATE
+        buffered = self._input_duration - self._processed_samples / SAMPLE_RATE
         if (
             buffered + frame.duration > self._stt._max_buffered_audio
             or self._input_ch.qsize() >= 1024
@@ -391,7 +396,9 @@ class SpeechStream(stt.RecognizeStream):
     async def _write(self, ws: _WebSocket, data: dict[str, object]) -> None:
         await asyncio.wait_for(ws.send_json(data), self._conn_options.timeout)
 
-    async def _append(self, ws: _WebSocket, frame: rtc.AudioFrame) -> None:
+    async def _append(
+        self, ws: _WebSocket, frame: rtc.AudioFrame, *, account_input: bool = True
+    ) -> None:
         await self._write(
             ws,
             {
@@ -399,7 +406,8 @@ class SpeechStream(stt.RecognizeStream):
                 "audio": base64.b64encode(frame.data).decode("ascii"),
             },
         )
-        self._uploaded_samples += frame.samples_per_channel
+        if account_input:
+            self._processed_samples += frame.samples_per_channel
         self._segment_samples += frame.samples_per_channel
 
     async def _commit(self, ws: _WebSocket, buffer: utils.audio.AudioByteStream) -> None:
@@ -449,6 +457,8 @@ class SpeechStream(stt.RecognizeStream):
         consumed_samples = 0
         fed_samples = 0
         feed_ended = False
+        speaking = False
+        committed_samples = 0
 
         async def feed() -> None:
             nonlocal fed_samples, feed_ended
@@ -461,6 +471,8 @@ class SpeechStream(stt.RecognizeStream):
                 pending.extend(data.data.cast("B"))
                 fed_samples += data.samples_per_channel
                 vad_stream.push_frame(data)
+            if self._input_error is not None:
+                raise self._input_error
             feed_ended = True
             vad_stream.end_input()
 
@@ -472,29 +484,82 @@ class SpeechStream(stt.RecognizeStream):
                     retryable=False,
                 )
             size = (position - consumed_samples) * 2
-            data = bytes(pending[:size])
+            data = bytes(pending[:size]) if speaking else b""
             del pending[:size]
             consumed_samples = position
-            for frame in buffer.push(data):
-                await self._append(ws, frame)
+            if speaking:
+                for frame in buffer.push(data):
+                    await self._append(ws, frame)
+            else:
+                self._processed_samples += size // 2
+
+        async def send_prefix(event: vad.VADEvent, position: int) -> None:
+            if not event.frames or any(
+                frame.sample_rate != SAMPLE_RATE
+                or frame.num_channels != NUM_CHANNELS
+                or frame.samples_per_channel <= 0
+                for frame in event.frames
+            ):
+                raise APIError(
+                    "Microsoft AI STT requires nonempty mono 16kHz VAD start frames "
+                    "ending at the event timestamp to preserve the speech prefix",
+                    retryable=False,
+                )
+            samples = sum(frame.samples_per_channel for frame in event.frames)
+            if samples > int(self._stt._max_buffered_audio * SAMPLE_RATE):
+                raise APIError(
+                    "Microsoft AI STT VAD start prefix exceeds max_buffered_audio",
+                    retryable=False,
+                )
+            if samples > position or position <= committed_samples:
+                raise APIError(
+                    "Microsoft AI STT received invalid VAD start timing", retryable=False
+                )
+            prefix = rtc.combine_audio_frames(event.frames).data.tobytes()
+            # The VAD may retain audio from the preceding committed turn. Never replay it.
+            overlap = max(0, committed_samples - (position - samples))
+            prefix = prefix[overlap * 2 :]
+            for frame in buffer.push(prefix):
+                await self._append(ws, frame, account_input=False)
+            # Prefix samples were already accounted as idle input. Keep them separate
+            # from subsequent, not-yet-accounted audio in the framing buffer.
+            for frame in buffer.flush():
+                await self._append(ws, frame, account_input=False)
 
         async def consume() -> None:
+            nonlocal speaking, committed_samples
             async for event in vad_stream:
                 if not math.isfinite(event.timestamp) or event.timestamp < 0:
                     raise APIError(
                         "Microsoft AI STT received an invalid VAD timestamp", retryable=False
                     )
-                await drain(round(event.timestamp * SAMPLE_RATE))
+                position = round(event.timestamp * SAMPLE_RATE)
+                await drain(position)
                 if event.type == vad.VADEventType.START_OF_SPEECH:
+                    if speaking:
+                        raise APIError(
+                            "Microsoft AI STT received overlapping VAD speech starts",
+                            retryable=False,
+                        )
+                    await send_prefix(event, position)
+                    speaking = True
                     self._start_speaking()
                 elif event.type == vad.VADEventType.END_OF_SPEECH:
+                    if not speaking:
+                        raise APIError(
+                            "Microsoft AI STT received a VAD end without a speech start",
+                            retryable=False,
+                        )
                     await self._commit(ws, buffer)
+                    committed_samples = position
+                    speaking = False
             if not feed_ended:
                 raise APIError("Microsoft AI STT VAD stopped before end of input", retryable=False)
             # A VAD's last inference window can be incomplete. Send the actual remaining
             # samples, not invented silence, before the explicit final commit.
             await drain(fed_samples)
-            await self._commit(ws, buffer)
+            if speaking:
+                await self._commit(ws, buffer)
 
         producer = asyncio.create_task(feed())
         consumer = asyncio.create_task(consume())

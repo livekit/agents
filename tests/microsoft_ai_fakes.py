@@ -150,15 +150,27 @@ class FakeSocket:
 
 
 class ScriptedVAD(vad.VAD):
-    def __init__(self, boundaries: dict[int, vad.VADEventType] | None = None) -> None:
+    def __init__(
+        self,
+        boundaries: dict[int, vad.VADEventType] | None = None,
+        *,
+        prefix_samples: int = 16000,
+    ) -> None:
         super().__init__(capabilities=vad.VADCapabilities(update_interval=0.032))
         self.boundaries = boundaries or {}
+        self.prefix_samples = prefix_samples
         self.streams: list[ScriptedVADStream] = []
+        self.started = asyncio.Event()
 
     def stream(self) -> ScriptedVADStream:
         stream = ScriptedVADStream(self)
         self.streams.append(stream)
+        self.started.set()
         return stream
+
+    async def wait_consumed(self, samples: int) -> None:
+        await asyncio.wait_for(self.started.wait(), 1.0)
+        await self.streams[-1].wait_consumed(samples)
 
 
 class ScriptedVADStream(vad.VADStream):
@@ -166,25 +178,64 @@ class ScriptedVADStream(vad.VADStream):
         super().__init__(detector)
         self.detector = detector
         self.closed = False
+        self.retained_samples = 0
+        self._previous_event: vad.VADEvent | None = None
+        self._consumed_samples = 0
+        self._progress = asyncio.Condition()
+
+    async def __anext__(self) -> vad.VADEvent:
+        # Asking for the next event proves the consumer finished processing the previous one.
+        async with self._progress:
+            if self._previous_event is not None:
+                self._consumed_samples = self._previous_event.samples_index
+            self._progress.notify_all()
+        self._previous_event = await super().__anext__()
+        return self._previous_event
+
+    async def wait_consumed(self, samples: int) -> None:
+        async def wait() -> None:
+            async with self._progress:
+                await self._progress.wait_for(lambda: self._consumed_samples >= samples)
+
+        await asyncio.wait_for(wait(), 2.0)
 
     async def _main_task(self) -> None:
         samples = 0
         pending = bytearray()
+        prefix = bytearray()
         async for data in self._input_ch:
             if isinstance(data, self._FlushSentinel):
                 # Like the bundled VAD, flush does not decode a partial inference window.
                 pending.clear()
+                prefix.clear()
                 samples = 0
                 continue
             pending.extend(data.data.cast("B"))
             while len(pending) >= 1024:
+                prefix.extend(pending[:1024])
+                excess = len(prefix) - self.detector.prefix_samples * 2
+                if excess > 0:
+                    del prefix[:excess]
+                self.retained_samples = len(prefix) // 2
                 del pending[:1024]
                 samples += 512
                 self.emit(vad.VADEventType.INFERENCE_DONE, samples)
                 if boundary := self.detector.boundaries.get(samples):
-                    self.emit(boundary, samples)
+                    frames = []
+                    if boundary == vad.VADEventType.START_OF_SPEECH and prefix:
+                        frames = [
+                            rtc.AudioFrame(
+                                data=bytes(prefix),
+                                sample_rate=16000,
+                                num_channels=1,
+                                samples_per_channel=len(prefix) // 2,
+                            )
+                        ]
+                    self.emit(boundary, samples, frames=frames)
 
-    def emit(self, type: vad.VADEventType, samples: int) -> None:
+    def emit(
+        self, type: vad.VADEventType, samples: int, *, frames: list[rtc.AudioFrame] | None = None
+    ) -> None:
         self._event_ch.send_nowait(
             vad.VADEvent(
                 type=type,
@@ -192,6 +243,7 @@ class ScriptedVADStream(vad.VADStream):
                 timestamp=samples / 16000,
                 speech_duration=samples / 16000,
                 silence_duration=0.0,
+                frames=frames or [],
             )
         )
 

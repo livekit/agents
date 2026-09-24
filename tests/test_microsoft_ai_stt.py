@@ -342,14 +342,36 @@ async def test_vad_end_input_preserves_incomplete_inference_window() -> None:
     assert socket.commits == [frame.data.tobytes()]
 
 
-async def test_bundled_vad_timestamps_and_tail_match_the_current_sdk() -> None:
+async def test_bundled_vad_silence_does_not_create_an_empty_turn() -> None:
     socket = FakeSocket()
     instance, _ = provider(socket, detector=inference.VAD(model="silero"))
-    frame = audio_frame(1307)
+    frame = audio_frame(1307, value=b"\0\0")
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
         stream.push_frame(frame)
         stream.end_input()
+        assert await collect(stream) == []
+        assert stream._processed_samples == frame.samples_per_channel
+    assert socket.commits == []
+    assert all(event["type"] == "session.update" for event in socket.sent)
+
+
+async def test_bundled_vad_start_frames_preserve_delayed_onset_and_tail() -> None:
+    # A public zero activation threshold makes synthetic PCM deterministically
+    # count as speech. This checks the VAD frame contract, not model accuracy.
+    detector = inference.VAD(
+        activation_threshold=0.0, min_speech_duration=0.736, prefix_padding_duration=0.0
+    )
+    socket = FakeSocket()
+    instance, _ = provider(socket, detector=detector)
+    frame = audio_frame(16437)
+    async with (
+        instance,
+        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=2)) as stream,
+    ):
+        stream.push_frame(frame)
+        stream.end_input()
         assert finals(await collect(stream)) == ["turn 1"]
+        assert stream._processed_samples == frame.samples_per_channel
     assert socket.commits == [frame.data.tobytes()]
 
 
@@ -368,9 +390,167 @@ async def test_manual_flush_resets_vad_without_merging_turns() -> None:
     assert len(detector.streams) == 2
 
 
-async def test_resampling_drains_the_sdk_resampler_tail(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_prolonged_vad_idle_sends_no_audio_and_keeps_local_retention_bounded() -> None:
     socket = FakeSocket()
-    instance, _ = provider(socket)
+    detector = ScriptedVAD(prefix_samples=16000)
+    instance, _ = provider(socket, detector=detector, max_buffered_audio=1.1)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        for second in range(180):
+            stream.push_frame(audio_frame(16000, value=b"\0\0"))
+            await detector.wait_consumed(((second + 1) * 16000 // 512) * 512)
+            assert stream._input_duration - stream._processed_samples / 16000 <= 0.032
+            assert detector.streams[0].retained_samples <= 16000
+        assert socket.pending_audio == b""
+        assert socket.commits == []
+        assert all(event["type"] == "session.update" for event in socket.sent)
+        assert stream._segment_samples == 0
+        stream.end_input()
+        assert await collect(stream) == []
+    assert socket.closed
+
+
+async def test_prolonged_interturn_silence_does_not_grow_the_remote_buffer() -> None:
+    idle_samples = 16000 * 180
+    detector = ScriptedVAD(
+        {
+            512: vad.VADEventType.START_OF_SPEECH,
+            2048: vad.VADEventType.END_OF_SPEECH,
+            2048 + idle_samples + 512: vad.VADEventType.START_OF_SPEECH,
+            4096 + idle_samples: vad.VADEventType.END_OF_SPEECH,
+        },
+        prefix_samples=1024,
+    )
+    socket = FakeSocket()
+    instance, _ = provider(socket, detector=detector, max_buffered_audio=1.1)
+    first, second = audio_frame(2048), audio_frame(2048, value=b"\x01\0")
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(first)
+        first_events = []
+        while True:
+            event = await next_event(stream)
+            first_events.append(event)
+            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                break
+        assert finals(first_events) == ["turn 1"]
+        for second_index in range(180):
+            stream.push_frame(audio_frame(16000, value=b"\0\0"))
+            await detector.wait_consumed((2048 + (second_index + 1) * 16000) // 512 * 512)
+            assert stream._input_duration - stream._processed_samples / 16000 <= 0.032
+            assert detector.streams[0].retained_samples <= 1024
+        assert socket.commits == [first.data.tobytes()]
+        assert socket.pending_audio == b""
+        assert stream._segment_samples == 0
+        stream.push_frame(second)
+        stream.end_input()
+        assert finals(await collect(stream)) == ["turn 2"]
+        assert stream._processed_samples == 4096 + idle_samples
+    assert socket.commits == [first.data.tobytes(), b"\0\0" * 512 + second.data.tobytes()]
+    assert socket.closed
+
+
+async def test_delayed_vad_start_uses_all_public_prefix_frames_not_a_fixed_preroll() -> None:
+    detector = ScriptedVAD(
+        {16384: vad.VADEventType.START_OF_SPEECH, 32768: vad.VADEventType.END_OF_SPEECH},
+        prefix_samples=12000,
+    )
+    socket = FakeSocket()
+    instance, _ = provider(socket, detector=detector)
+    # Speech starts 724 ms before START_OF_SPEECH. A guessed 500 ms
+    # pre-roll would lose 224 ms, but the VAD's actual prefix contains it.
+    pcm = b"\0\0" * 4800 + b"\x23\x01" * 19200 + b"\x34\x02" * 64
+    pcm += b"\0\0" * (32768 + 123 - 24064)
+    frame = rtc.AudioFrame(
+        data=pcm, sample_rate=16000, num_channels=1, samples_per_channel=len(pcm) // 2
+    )
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(frame)
+        stream.end_input()
+        assert finals(await collect(stream)) == ["turn 1"]
+        assert stream._processed_samples == len(pcm) // 2
+    assert socket.commits == [pcm[(16384 - 12000) * 2 : 32768 * 2]]
+    assert b"\x34\x02" * 64 in socket.commits[0]
+
+
+async def test_recovered_prefix_is_not_double_counted_against_backpressure() -> None:
+    before = asyncio.all_tasks()
+    socket = FakeSocket()
+    detector = ScriptedVAD({512: vad.VADEventType.START_OF_SPEECH}, prefix_samples=512)
+    instance, _ = provider(socket, detector=detector, max_buffered_audio=0.1)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame(512))
+        await socket.wait_sent("input_audio_buffer.append")
+        assert stream._processed_samples == 512
+        socket.append_started.clear()
+        socket.append_gate = asyncio.Event()
+        stream.push_frame(audio_frame(1600))
+        await asyncio.wait_for(socket.append_started.wait(), 1)
+        with pytest.raises(APIConnectionError, match="buffer is full"):
+            stream.push_frame(audio_frame(1))
+        with pytest.raises(APIConnectionError, match="buffer is full"):
+            await asyncio.wait_for(collect(stream), 1)
+        assert socket.closed
+    assert socket.commits == []
+    assert not (asyncio.all_tasks() - before)
+
+
+async def test_vad_start_without_prefix_fails_instead_of_dropping_onset() -> None:
+    socket = FakeSocket()
+    detector = ScriptedVAD({512: vad.VADEventType.START_OF_SPEECH}, prefix_samples=0)
+    instance, _ = provider(socket, detector=detector)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame(512))
+        with pytest.raises(APIError, match="preserve the speech prefix") as caught:
+            await collect(stream)
+        assert not caught.value.retryable
+    assert not socket.commits and not socket.pending_audio
+
+
+async def test_oversized_vad_prefix_fails_explicitly_not_by_truncating_audio() -> None:
+    socket = FakeSocket()
+    detector = ScriptedVAD({2048: vad.VADEventType.START_OF_SPEECH})
+    instance, _ = provider(socket, detector=detector, max_buffered_audio=0.1)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        for position in (512, 1024, 1536):
+            stream.push_frame(audio_frame(512))
+            await detector.wait_consumed(position)
+        stream.push_frame(audio_frame(512))
+        with pytest.raises(APIError, match="prefix exceeds max_buffered_audio") as caught:
+            await collect(stream)
+        assert not caught.value.retryable
+        assert stream._input_error is None
+    assert not socket.commits and not socket.pending_audio
+
+
+@pytest.mark.parametrize("ending", ["flush", "end_input", "aclose"])
+async def test_idle_vad_boundaries_do_not_send_audio_or_empty_commits(ending: str) -> None:
+    socket = FakeSocket()
+    detector = ScriptedVAD()
+    instance, _ = provider(socket, detector=detector)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame(1307, value=b"\0\0"))
+        await detector.wait_consumed(1024)
+        if ending == "flush":
+            stream.flush()
+            stream.end_input()
+            assert await collect(stream) == []
+        elif ending == "end_input":
+            stream.end_input()
+            assert await collect(stream) == []
+        else:
+            await stream.aclose()
+            assert await collect(stream) == []
+    assert not socket.commits and not socket.pending_audio
+    assert all(event["type"] == "session.update" for event in socket.sent)
+    assert socket.closed and all(item.closed for item in detector.streams)
+
+
+@pytest.mark.parametrize("use_vad", [False, True])
+async def test_resampling_drains_the_sdk_resampler_tail(
+    monkeypatch: pytest.MonkeyPatch, use_vad: bool
+) -> None:
+    socket = FakeSocket()
+    detector = ScriptedVAD({512: vad.VADEventType.START_OF_SPEECH}) if use_vad else None
+    instance, _ = provider(socket, detector=detector)
     frame = audio_frame(4817, sample_rate=48000)
     reference = rtc.AudioResampler(48000, 16000, quality=rtc.AudioResamplerQuality.HIGH)
     resampled: list[rtc.AudioFrame] = []
@@ -395,6 +575,7 @@ async def test_resampling_drains_the_sdk_resampler_tail(monkeypatch: pytest.Monk
         stream.push_frame(frame)
         stream.end_input()
         await collect(stream)
+        assert stream._processed_samples == sum(frame.samples_per_channel for frame in resampled)
     assert socket.commits == [b"".join(f.data.tobytes() for f in resampled)]
     assert sum(f.samples_per_channel for f in resampled) == round(4817 / 3)
     assert all(f.sample_rate == 16000 and f.num_channels == 1 for f in resampled)
@@ -471,7 +652,7 @@ async def test_vad_feed_error_propagates_while_consumer_waits(
     instance, http = provider(socket, detector=detector)
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
         stream.push_frame(audio_frame(1024))
-        await socket.wait_sent("input_audio_buffer.append")
+        await detector.wait_consumed(1024)
         failure = RuntimeError("VAD input failed")
 
         def fail_push(frame: rtc.AudioFrame) -> None:
@@ -522,7 +703,7 @@ async def test_vad_finite_input_has_a_bounded_consumer_drain(
         instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1)) as stream,
     ):
         stream.push_frame(audio_frame(1024))
-        await socket.wait_sent("input_audio_buffer.append")
+        await detector.wait_consumed(1024)
         # Simulate a VAD that never completes after receiving its end-of-input signal.
         monkeypatch.setattr(detector.streams[0], "end_input", lambda: None)
         stream.end_input()
@@ -564,7 +745,7 @@ async def test_live_vad_input_does_not_get_a_stream_idle_timeout() -> None:
         instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05)) as stream,
     ):
         stream.push_frame(audio_frame(1024))
-        await socket.wait_sent("input_audio_buffer.append")
+        await detector.wait_consumed(1024)
         reader = asyncio.create_task(collect(stream))
         try:
             with pytest.raises(asyncio.TimeoutError):
