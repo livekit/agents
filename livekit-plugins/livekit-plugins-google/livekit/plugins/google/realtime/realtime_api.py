@@ -1275,7 +1275,11 @@ class RealtimeSession(llm.RealtimeSession):
             and self._opts.session_resumption is not None
             else None
         )
-        if self._session_resumption_handle is not None or transparent is not None:
+        if self._session_resumption_handle is not None or (
+            self._opts.vertexai
+            and is_given(self._opts.session_resumption)
+            and self._opts.session_resumption is not None
+        ):
             resumption_config = types.SessionResumptionConfig(
                 handle=self._session_resumption_handle,
                 transparent=transparent,
