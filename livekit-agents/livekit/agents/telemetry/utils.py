@@ -54,9 +54,28 @@ def redaction_enabled(span_attributes: Mapping[str, Any] | None = None) -> bool:
     return job_ctx is not None and job_ctx._redaction_enabled
 
 
+def participant_attributes(participant: Any) -> dict[str, Any]:
+    """Span attributes identifying a room participant (identity is tagged ``lk.pii``)."""
+    from livekit import rtc
+
+    return {
+        trace_types.ATTR_PARTICIPANT_ID: participant.sid,
+        trace_types.ATTR_PARTICIPANT_IDENTITY: participant.identity,
+        trace_types.ATTR_PARTICIPANT_KIND: rtc.ParticipantKind.Name(participant.kind),
+    }
+
+
 def record_exception(
-    span: trace.Span, exception: Exception, *, redacted: NotGivenOr[bool] = NOT_GIVEN
+    span: trace.Span,
+    exception: Exception,
+    *,
+    redacted: NotGivenOr[bool] = NOT_GIVEN,
+    record_event: bool = True,
+    set_status: bool = True,
 ) -> None:
+    """Record an exception with redaction and independent event/status controls."""
+    if not (record_event or set_status) or not span.is_recording():
+        return
     if redacted is NOT_GIVEN:
         redacted = redaction_enabled()
 
@@ -66,18 +85,22 @@ def record_exception(
 
     set_error_type(span, exception)
 
+    if set_status:
+        message = REDACTED_EXCEPTION_MESSAGE if redacted else str(exception)
+        span.set_status(trace.Status(trace.StatusCode.ERROR, message))
+    if not record_event:
+        return
+
     if redacted:
         attrs = {
             trace_types.ATTR_EXCEPTION_TYPE: exception.__class__.__name__,
             trace_types.ATTR_EXCEPTION_MESSAGE: REDACTED_EXCEPTION_MESSAGE,
         }
         span.add_event("exception", attrs)
-        span.set_status(trace.Status(trace.StatusCode.ERROR, REDACTED_EXCEPTION_MESSAGE))
         span.set_attributes(attrs)
         return
 
     span.record_exception(exception)
-    span.set_status(trace.Status(trace.StatusCode.ERROR, str(exception)))
     # set the exception in span attributes in case the exception event is not rendered
     span.set_attributes(
         {

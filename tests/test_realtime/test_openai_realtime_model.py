@@ -11,15 +11,22 @@ from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetectio
 from openai.types.realtime import (
     ConversationItemCreateEvent,
     ConversationItemDeletedEvent,
+    ConversationItemInputAudioTranscriptionCompletedEvent,
     RealtimeErrorEvent,
+    SessionUpdateEvent,
 )
 from openai.types.realtime.audio_transcription import AudioTranscription
 from openai.types.realtime.realtime_audio_input_turn_detection import ServerVad
 
-from livekit.agents import llm
+from livekit.agents import AgentSession, llm
 from livekit.agents._exceptions import APIError
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as CoreRealtimeModels
 from livekit.agents.llm.remote_chat_context import RemoteChatContext
+from livekit.agents.metrics import STTMetrics
 from livekit.agents.utils import is_given
+from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.report import SessionReport
+from livekit.plugins.openai.models import RealtimeModels as PluginRealtimeModels
 from livekit.plugins.openai.realtime.realtime_model import (
     RealtimeModel,
     RealtimeSession,
@@ -27,6 +34,13 @@ from livekit.plugins.openai.realtime.realtime_model import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def test_direct_model_preserves_public_label_and_model_types() -> None:
+    model = RealtimeModel(api_key="fake")
+
+    assert model.label == "livekit.plugins.openai.realtime.realtime_model.RealtimeModel"
+    assert PluginRealtimeModels is CoreRealtimeModels
 
 
 def test_update_options_only_propagates_given_turn_detection() -> None:
@@ -242,6 +256,7 @@ def _handle_error_session(
             _opts=SimpleNamespace(turn_detection=turn_detection),
             _chat_ctx_event_futures={},
             _response_created_futures={},
+            _is_fatal_error=_is_fatal_error,
             _emit_error=lambda error, recoverable: capture.update(recoverable=recoverable),
         ),
     )
@@ -516,3 +531,143 @@ def test_error_with_unknown_event_id_leaves_generate_reply_futures_untouched() -
     assert session._response_created_futures == {"response_create_1": fut}
     # still reported down the ordinary path
     assert captured["recoverable"] is True
+
+
+def _transcription_metrics_session() -> tuple[RealtimeSession, list[STTMetrics]]:
+    model = RealtimeModel(
+        api_key="fake", input_audio_transcription=AudioTranscription(model="whisper-1")
+    )
+    session = RealtimeSession.__new__(RealtimeSession)
+    llm.RealtimeSession.__init__(session, model)
+    session._opts = replace(model._opts)
+    session._capabilities = replace(model.capabilities)
+    session._remote_chat_ctx = RemoteChatContext()
+    session._input_transcript_accumulators = {}
+    session._input_speech_started_at = {}
+    collected: list[STTMetrics] = []
+    session.on("metrics_collected", collected.append)
+    return session, collected
+
+
+def _completed_event_with_raw_usage(
+    usage: dict[str, object] | None,
+) -> ConversationItemInputAudioTranscriptionCompletedEvent:
+    event = ConversationItemInputAudioTranscriptionCompletedEvent.construct(
+        type="conversation.item.input_audio_transcription.completed",
+        event_id="evt",
+        item_id="item_1",
+        content_index=0,
+        transcript="hello",
+        usage=None,
+    )
+    event.usage = usage  # type: ignore[assignment]
+    return event
+
+
+def test_raw_duration_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert len(collected) == 1
+    assert collected[0].audio_duration == 2.5
+    assert collected[0].streamed is True
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "whisper-1"
+
+
+def test_raw_token_usage_emits_stt_metrics() -> None:
+    session, collected = _transcription_metrics_session()
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8},
+            }
+        )
+    )
+
+    assert len(collected) == 1
+    assert collected[0].input_tokens == 10
+    assert collected[0].output_tokens == 2
+    assert collected[0].total_tokens == 12
+    assert collected[0].input_audio_tokens == 8
+    assert collected[0].streamed is True
+
+
+@pytest.mark.parametrize("usage", [None, {"type": "unknown"}, {"type": "tokens"}])
+def test_missing_or_invalid_transcription_usage_preserves_transcript(
+    usage: dict[str, object] | None,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    transcripts: list[llm.InputTranscriptionCompleted] = []
+    session.on("input_audio_transcription_completed", transcripts.append)
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(usage)
+    )
+    assert collected == []
+    assert len(transcripts) == 1
+    assert transcripts[0].transcript == "hello"
+    assert transcripts[0].is_final is True
+
+
+def test_transcription_metrics_use_session_model_after_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, collected = _transcription_metrics_session()
+    updates: list[SessionUpdateEvent] = []
+    monkeypatch.setattr(session, "send_event", updates.append)
+
+    session.update_options(input_audio_transcription=AudioTranscription(model="gpt-4o-transcribe"))
+    assert updates[0].session.audio.input.transcription.model == "gpt-4o-transcribe"
+    assert session._realtime_model._opts.input_audio_transcription.model == "whisper-1"
+
+    session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage({"type": "duration", "seconds": 2.5})
+    )
+
+    assert collected[0].metadata is not None
+    assert collected[0].metadata.model_name == "gpt-4o-transcribe"
+
+
+def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
+    realtime_session, _ = _transcription_metrics_session()
+    agent_session = AgentSession()
+    activity = AgentActivity.__new__(AgentActivity)
+    activity._session = agent_session
+    realtime_session.on("metrics_collected", activity._on_metrics_collected)
+
+    realtime_session._handle_conversion_item_input_audio_transcription_completed(
+        _completed_event_with_raw_usage(
+            {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+                "input_token_details": {"audio_tokens": 8, "text_tokens": 2},
+            }
+        )
+    )
+
+    report = SessionReport(
+        job_id="job",
+        room_id="room",
+        room="test",
+        options=agent_session.options,
+        events=[],
+        chat_history=llm.ChatContext(),
+        model_usage=agent_session.usage.model_usage,
+    )
+    assert report.to_dict()["usage"] == [
+        {
+            "provider": "api.openai.com",
+            "model": "whisper-1",
+            "input_tokens": 10,
+            "input_audio_tokens": 8,
+            "output_tokens": 2,
+        }
+    ]

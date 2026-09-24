@@ -9,8 +9,17 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
-from ..llm import ChatContext, RealtimeModel, ToolError, find_function_tools
+from ..llm import (
+    LLM,
+    ChatContext,
+    DuplexModel,
+    DuplexRealtimeAdapter,
+    RealtimeModel,
+    ToolError,
+    find_function_tools,
+)
 from ..llm.chat_context import Instructions, _ReadOnlyChatContext
+from ..llm.duplex_adapter import _DuplexRealtimeSession
 from ..log import logger
 from ..types import NOT_GIVEN, FlushSentinel, NotGivenOr
 from ..utils import is_given, misc
@@ -20,7 +29,7 @@ from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, ExpressiveOptions
@@ -47,7 +56,9 @@ class Agent:
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -85,13 +96,16 @@ class Agent:
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
         self._stt = stt
-        self._llm = llm
+        # a duplex model is wrapped on the way in, so nothing downstream sees one
+        self._llm: NotGivenOr[LLM | RealtimeModel | None] = (
+            DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else llm
+        )
         self._tts = tts
         self._vad = vad
         self._expressive: NotGivenOr[bool | ExpressiveOptions] = expressive
@@ -266,7 +280,9 @@ class Agent:
         *,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
-        llm: NotGivenOr[llm.LLM | llm.RealtimeModel | LLMModels | str | None] = NOT_GIVEN,
+        llm: NotGivenOr[
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
+        ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
     ) -> None:
@@ -286,9 +302,12 @@ class Agent:
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
+
+        if isinstance(llm, DuplexModel):
+            llm = DuplexRealtimeAdapter(llm)
 
         if self._activity is None:
             # not running: replace stored config, applied on the next start
@@ -649,6 +668,23 @@ class Agent:
             raise RuntimeError("no realtime LLM session")
 
         return rt_session
+
+    @property
+    def duplex_session(self) -> llm.DuplexSession:
+        """
+        Retrieve the duplex session of the current agent, for provider-specific APIs.
+
+        A duplex model is driven through an adapter that presents it as a realtime session; this
+        returns the plugin's own session, where a provider puts what the abstraction does not carry.
+
+        Raises:
+            RuntimeError: If the agent is not running, or is not running on a duplex model
+        """
+        rt_session = self._get_activity_or_raise().realtime_llm_session
+        if not isinstance(rt_session, _DuplexRealtimeSession):
+            raise RuntimeError("no duplex session, this agent is not running a DuplexModel")
+
+        return rt_session.duplex_session
 
     @property
     def turn_detection(self) -> NotGivenOr[TurnDetectionMode | None]:
