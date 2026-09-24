@@ -22,7 +22,13 @@ from livekit.agents.llm import (
 )
 from livekit.agents.store.executor import ExecResult, Executor, SQLiteExecutor, Statement, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
-from livekit.agents.store.session import AgentRecord, PersistedSession, _Database, _Store
+from livekit.agents.store.session import (
+    SESSION_OWNER,
+    AgentRecord,
+    PersistedSession,
+    _Database,
+    _Store,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -175,17 +181,17 @@ class StoreSuite:
         rows = await database.rows("SELECT item_id FROM chat_items")
         assert [row["item_id"] for row in rows] == [second.id]
 
-    async def test_an_agent_cannot_share_the_history_s_owner(self, database: Database) -> None:
+    async def test_an_agent_cannot_take_the_history_owner(self, database: Database) -> None:
         persisted = database.session("s1")
         await persisted.load()
         said = ChatMessage(role="user", content=["hello"])
         # a class named Session gets the id the history's rows are stored under
         with pytest.raises(ValueError, match="reserved"):
             await persisted.save(
-                current_agent_id=store.session.SESSION_OWNER,
+                current_agent_id=SESSION_OWNER,
                 userdata=None,
                 history=[said],
-                agents=[AgentRecord(agent_id=store.session.SESSION_OWNER, cls="app:Session")],
+                agents=[AgentRecord(agent_id=SESSION_OWNER, cls="app:Session")],
             )
         assert await database.rows("SELECT item_id FROM chat_items") == []
 

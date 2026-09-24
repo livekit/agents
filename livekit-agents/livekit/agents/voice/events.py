@@ -72,8 +72,8 @@ class RunContext(Generic[Userdata_T]):
 
         # synthesized progress-update pairs, populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
-        # carried by every output recorded for this call from then on, since a recorded item
-        # is never edited
+        # merged into each output made for this call from now on, since a recorded item is
+        # never edited
         self._output_extra: dict[str, Any] = {}
 
         # set/cleared by the executor around the tool's lifetime

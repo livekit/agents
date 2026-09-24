@@ -85,7 +85,7 @@ class DiffOps:
 
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
-    """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx.
+    """Computes the remove, create and update operations that transform old_ctx into new_ctx.
 
     An item kept under the same id is an update when it differs from the old one by value.
     """
