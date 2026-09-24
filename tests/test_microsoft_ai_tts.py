@@ -475,7 +475,7 @@ def test_region_from_file_and_constructor_precedence(
     path.write_text(
         DUMMY_CONFIG.replace(
             "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
-            "MICROSOFT_AI_TTS_URL=\nMICROSOFT_AI_TTS_REGION=eastus2",
+            "MICROSOFT_AI_TTS_REGION=eastus2",
         ),
         encoding="utf-8",
     )
@@ -504,6 +504,60 @@ def test_configured_url_wins_over_region_and_is_not_rewritten(
         env_file=path, region="eastus2", url="https://argument.example.invalid/exact"
     )
     assert instance._client.url == "https://argument.example.invalid/exact"
+
+
+@pytest.mark.usefixtures("no_http_session")
+@pytest.mark.parametrize("source", ["argument", "environment", "dotenv"])
+@pytest.mark.parametrize("empty_url", ["", " \t "], ids=["empty", "whitespace"])
+def test_present_empty_tts_url_is_rejected_without_region_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    empty_url: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = tmp_path / "endpoints.env"
+    content = DUMMY_CONFIG + "MICROSOFT_AI_TTS_REGION=eastus2\n"
+    if source == "dotenv":
+        content = content.replace(
+            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
+            f'MICROSOFT_AI_TTS_URL="{empty_url}"',
+        )
+    elif source == "environment":
+        monkeypatch.setenv("MICROSOFT_AI_TTS_URL", empty_url)
+    path.write_text(content, encoding="utf-8")
+    http = fake_session()
+    with pytest.raises(ValueError, match="MICROSOFT_AI_TTS_URL"):
+        microsoft_ai.TTS(
+            env_file=path,
+            url=empty_url if source == "argument" else None,
+            region="eastus2",
+            http_session=http,
+        )
+    http.post.assert_not_called()
+    http.ws_connect.assert_not_called()
+    assert not caplog.records
+
+
+@pytest.mark.usefixtures("no_http_session")
+@pytest.mark.parametrize("source", ["argument", "environment"])
+def test_nonempty_tts_url_overrides_empty_lower_priority_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(
+        DUMMY_CONFIG.replace(
+            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
+            "MICROSOFT_AI_TTS_URL=",
+        ),
+        encoding="utf-8",
+    )
+    url = "https://override.example.invalid/exact?deployment=dummy"
+    monkeypatch.setenv("MICROSOFT_AI_TTS_URL", "" if source == "argument" else url)
+    provider = microsoft_ai.TTS(
+        env_file=path, url=url if source == "argument" else None, region="eastus2"
+    )
+    assert provider._client.url == url
 
 
 @pytest.mark.usefixtures("no_http_session")

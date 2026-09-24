@@ -77,9 +77,10 @@ example, `wss://stt.example.invalid/v1/realtime?intent=transcription` is a **dum
 not a Microsoft service address. No path or model query parameter is appended.
 TLS is required except for loopback development endpoints. For TTS, a configured
 full URL wins over `region`, regardless of which configuration source provides
-each. Only when no URL is configured does an explicitly supplied region select
-the standard public-cloud endpoint. Other required empty values fail rather
-than falling back silently.
+each. Only when the URL is unset does an explicitly supplied region select
+the standard public-cloud endpoint. An explicit or configured empty/whitespace
+URL is an error, not permission to fall back to a region. Other required empty
+values also fail rather than falling back silently.
 
 TTS sends the Azure Speech resource key as `Ocp-Apim-Subscription-Key`, **not**
 as a raw-key Bearer token. STT preserves its `Authorization: Bearer ...` default.

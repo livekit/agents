@@ -59,11 +59,9 @@ class _TTSOptions:
 
 
 def _endpoint(config: Configuration, url: str | None, region: str | None) -> str:
-    if url is not None:
-        return url
-    configured_url = config.get("MICROSOFT_AI_TTS_URL")
-    if configured_url and configured_url.strip():
-        return configured_url
+    configured_url = url if url is not None else config.get("MICROSOFT_AI_TTS_URL")
+    if configured_url is not None:
+        return config.required(configured_url, "MICROSOFT_AI_TTS_URL")
     selected_region = region if region is not None else config.get("MICROSOFT_AI_TTS_REGION")
     if not selected_region:
         raise ValueError("Set MICROSOFT_AI_TTS_URL or MICROSOFT_AI_TTS_REGION, or pass url/region")
@@ -119,7 +117,7 @@ class TTS(tts.TTS):
         url: Full synthesis POST endpoint, or MICROSOFT_AI_TTS_URL. Its host/path
             are used exactly as supplied and take precedence over region.
         region: Public-cloud Azure Speech region, or MICROSOFT_AI_TTS_REGION.
-            Used only when no URL is configured, to construct the standard endpoint.
+            Used only when the URL is unset, not when it is empty or whitespace.
         model: Model metadata/validation, or MICROSOFT_AI_TTS_MODEL. It must match
             the full voice ID's model suffix (case-insensitively), not an alias.
         voice: Full Azure Speech voice ID, or MICROSOFT_AI_TTS_VOICE. This selects

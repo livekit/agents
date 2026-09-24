@@ -500,10 +500,12 @@ class SpeechStream(stt.RecognizeStream):
         consumer = asyncio.create_task(consume())
         try:
             done, _ = await asyncio.wait([producer, consumer], return_when=asyncio.FIRST_COMPLETED)
-            if consumer in done:
+            if producer in done:
+                await producer
+                await asyncio.wait_for(consumer, self._conn_options.timeout)
+            else:
+                # Live input may remain open indefinitely; surface the consumer's error now.
                 await consumer
-            await producer
-            await asyncio.wait_for(consumer, self._conn_options.timeout)
         finally:
             await utils.aio.cancel_and_wait(producer, consumer)
             await vad_stream.aclose()

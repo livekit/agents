@@ -435,6 +435,150 @@ async def test_missing_final_or_ack_has_finite_timeout(ack: bool) -> None:
     assert len(socket.commits) == 1
 
 
+@pytest.mark.parametrize("ack", [False, True])
+async def test_live_vad_commit_timeout_propagates_with_input_still_open(ack: bool) -> None:
+    before = asyncio.all_tasks()
+    socket = FakeSocket(auto_commit=False)
+    detector = ScriptedVAD(
+        {512: vad.VADEventType.START_OF_SPEECH, 1024: vad.VADEventType.END_OF_SPEECH}
+    )
+    instance, http = provider(socket, detector=detector)
+    options = APIConnectOptions(timeout=0.1, max_retry=2)
+    async with instance, instance.stream(conn_options=options) as stream:
+        stream.push_frame(audio_frame(1024))
+        await socket.wait_sent("input_audio_buffer.commit")
+        if ack:
+            socket.emit({"type": "input_audio_buffer.committed", "item_id": "item-1"})
+        with pytest.raises(APITimeoutError) as caught:
+            await asyncio.wait_for(collect(stream), timeout=1.0)
+        assert not stream._input_ch.closed
+        assert stream._input_error is None
+        assert not caught.value.retryable
+        assert socket.closed
+        assert detector.streams[0]._task.done()
+        assert detector.streams[0]._metrics_task.done()
+    http.ws_connect.assert_awaited_once()
+    assert len(socket.commits) == 1
+    assert not (asyncio.all_tasks() - before)
+
+
+async def test_vad_feed_error_propagates_while_consumer_waits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = asyncio.all_tasks()
+    socket = FakeSocket()
+    detector = ScriptedVAD()
+    instance, http = provider(socket, detector=detector)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame(1024))
+        await socket.wait_sent("input_audio_buffer.append")
+        failure = RuntimeError("VAD input failed")
+
+        def fail_push(frame: rtc.AudioFrame) -> None:
+            raise failure
+
+        monkeypatch.setattr(detector.streams[0], "push_frame", fail_push)
+        stream.push_frame(audio_frame(512))
+        with pytest.raises(RuntimeError, match="VAD input failed") as caught:
+            await asyncio.wait_for(collect(stream), timeout=1.0)
+        assert caught.value is failure
+        assert not stream._input_ch.closed
+        assert socket.closed
+    http.ws_connect.assert_awaited_once()
+    assert detector.streams[0].closed
+    assert not (asyncio.all_tasks() - before)
+
+
+async def test_vad_finite_input_drains_exact_tail_and_waits_for_final() -> None:
+    socket = FakeSocket(auto_commit=False)
+    detector = ScriptedVAD({512: vad.VADEventType.START_OF_SPEECH})
+    instance, _ = provider(socket, detector=detector)
+    frame = audio_frame(1307)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(frame)
+        stream.end_input()
+        reader = asyncio.create_task(collect(stream))
+        try:
+            await socket.wait_sent("input_audio_buffer.commit")
+            assert socket.commits == [frame.data.tobytes()]
+            assert not reader.done() and not socket.closed
+            socket.complete(text="all final words")
+            assert finals(await asyncio.wait_for(reader, timeout=1.0)) == ["all final words"]
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+    assert socket.closed and detector.streams[0].closed
+
+
+async def test_vad_finite_input_has_a_bounded_consumer_drain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = asyncio.all_tasks()
+    socket = FakeSocket()
+    detector = ScriptedVAD()
+    instance, _ = provider(socket, detector=detector)
+    async with (
+        instance,
+        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.1)) as stream,
+    ):
+        stream.push_frame(audio_frame(1024))
+        await socket.wait_sent("input_audio_buffer.append")
+        # Simulate a VAD that never completes after receiving its end-of-input signal.
+        monkeypatch.setattr(detector.streams[0], "end_input", lambda: None)
+        stream.end_input()
+        with pytest.raises(APITimeoutError):
+            await asyncio.wait_for(collect(stream), timeout=1.0)
+        assert stream._input_ch.closed
+        assert socket.closed
+    assert detector.streams[0].closed
+    assert not (asyncio.all_tasks() - before)
+
+
+async def test_vad_cancellation_releases_a_pending_commit_and_open_input() -> None:
+    before = asyncio.all_tasks()
+    socket = FakeSocket(auto_commit=False)
+    detector = ScriptedVAD(
+        {512: vad.VADEventType.START_OF_SPEECH, 1024: vad.VADEventType.END_OF_SPEECH}
+    )
+    instance, _ = provider(socket, detector=detector)
+    async with instance:
+        stream = instance.stream(conn_options=APIConnectOptions(timeout=10.0))
+        stream.push_frame(audio_frame(1024))
+        await socket.wait_sent("input_audio_buffer.commit")
+        assert not stream._input_ch.closed
+        await asyncio.wait_for(stream.aclose(), timeout=1.0)
+        assert await collect(stream) == []
+        assert socket.closed
+        assert stream._task.done() and stream._metrics_task.done()
+        assert detector.streams[0].closed
+    assert len(socket.commits) == 1
+    assert not (asyncio.all_tasks() - before)
+
+
+async def test_live_vad_input_does_not_get_a_stream_idle_timeout() -> None:
+    socket = FakeSocket()
+    detector = ScriptedVAD()
+    instance, _ = provider(socket, detector=detector)
+    async with (
+        instance,
+        instance.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.05)) as stream,
+    ):
+        stream.push_frame(audio_frame(1024))
+        await socket.wait_sent("input_audio_buffer.append")
+        reader = asyncio.create_task(collect(stream))
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(reader), timeout=0.15)
+            assert not reader.done()
+            assert not stream._input_ch.closed and not socket.closed
+            assert not socket.commits
+        finally:
+            await stream.aclose()
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+    assert detector.streams[0].closed
+
+
 @pytest.mark.parametrize(
     "event",
     [
