@@ -383,6 +383,8 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this output, such as what the tool learned only while it ran."""
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 

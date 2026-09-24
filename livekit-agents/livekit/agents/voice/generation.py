@@ -1039,6 +1039,7 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
+                    output.fnc_call_out.extra.update(run_ctx._output_extra)
                     current_span.set_attribute(
                         trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
                     )

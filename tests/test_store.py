@@ -11,7 +11,7 @@ import aiohttp
 import pytest
 
 from livekit.agents import store
-from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall
+from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall, FunctionCallOutput
 from livekit.agents.store.executor import ExecResult, Executor, SQLiteExecutor, Statement, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
 from livekit.agents.store.session import AgentRecord, PersistedSession, _Database, _Store
@@ -107,15 +107,15 @@ class StoreSuite:
     ) -> None:
         persisted = database.session("s1")
         await persisted.load()
-        call = FunctionCall(call_id="call_1", name="lk_agents_delegate", arguments="{}")
+        call = FunctionCall(call_id="call_1", name="lookup", arguments="{}")
         await _save(persisted, [call])
-        # the delegate names its expert task on the call only once the task is known
-        call.extra["lk.task_id"] = "task-1"
+        # the framework never edits an item it recorded, but an application may
+        call.extra["app.note"] = "checked"
         await _save(persisted, [call])
         rows = await database.rows(
-            "SELECT json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items"
+            "SELECT json_extract(item, '$.extra.\"app.note\"') AS note FROM chat_items"
         )
-        assert rows == [{"task_id": "task-1"}]
+        assert rows == [{"note": "checked"}]
 
     async def test_a_failed_save_is_written_again_by_the_next(
         self, database: Database, monkeypatch: pytest.MonkeyPatch
@@ -182,14 +182,15 @@ class StoreSuite:
         await persisted.load()
         greeting = ChatMessage(role="assistant", content=["hi, how can I help?"])
         question = ChatMessage(role="user", content=["move my flight"])
-        call = FunctionCall(
-            call_id="call_1", name="lookup", arguments="{}", extra={"lk.task_id": "task-1"}
+        call = FunctionCall(call_id="call_1", name="lk_agents_delegate", arguments="{}")
+        answer = FunctionCallOutput(
+            call_id="call_1", output="done", is_error=False, extra={"lk.task_id": "task-1"}
         )
         userdata = {"airline": "Northwind", "bookings": [{"reference": "NW812"}]}
         await persisted.save(
             current_agent_id="agent_1",
             userdata=userdata,
-            history=[greeting, question, call],
+            history=[greeting, question, call, answer],
             agents=[
                 AgentRecord(
                     agent_id="agent_1",
@@ -206,8 +207,13 @@ class StoreSuite:
         again = database.session("s1")
         stored = await again.load()
         assert stored is not None
-        assert [item.id for item in stored.history] == [greeting.id, question.id, call.id]
-        assert stored.history[2] == call
+        assert [item.id for item in stored.history] == [
+            greeting.id,
+            question.id,
+            call.id,
+            answer.id,
+        ]
+        assert stored.history[3] == answer
         assert stored.current_agent_id == "agent_1"
         assert stored.userdata == userdata
         agent = stored.agents["agent_1"]
@@ -215,11 +221,11 @@ class StoreSuite:
         assert [item.id for item in agent.chat_items] == [question.id]
         (row,) = await database.rows("SELECT closed_at FROM sessions")
         assert row["closed_at"] is None
-        # the delegate call names its expert task, so a dashboard joins through chat_items
+        # the delegate's answer names its expert task, so a dashboard joins through chat_items
         rows = await database.rows(
             "SELECT json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
             "WHERE item_id = ?",
-            call.id,
+            answer.id,
         )
         assert rows == [{"task_id": "task-1"}]
         await again.release()

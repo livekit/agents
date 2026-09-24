@@ -126,10 +126,11 @@ adb -q "SELECT json_extract(item,'$.role') AS role, substr(json_extract(item,'$.
         FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.type') = 'message' ORDER BY created_at"
 adb -q "SELECT agent_id, parent_agent_id, length(durable_state) AS frame_bytes FROM agents"
 adb -q "SELECT json_extract(item,'$.call_id') AS call_id, json_extract(item,'$.extra.\"lk.task_id\"') AS task_id
-        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.name') = 'lk_agents_delegate'"
+        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.name') = 'lk_agents_delegate'
+        AND json_extract(item,'$.type') = 'function_call_output'"
 ```
 
-A desk session names its caller in `parent_session_id`, and each delegate call names the desk task that answered it in `lk.task_id`, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
+A desk session names its caller in `parent_session_id`, and the output of each delegate call names the desk task that answered it in `lk.task_id`, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
 
 ### The voice half
 

@@ -423,9 +423,13 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     assert first.context_id == second.context_id
     assert named_at_start == [None, first.context_id]
     assert seen == [(first.context_id, conversation_id, "voice")] * 2
-    # each delegate call names the expert task that answered it
-    calls = [i for i in caller.history.items if i.type == "function_call" and i.call_id == "d2"]
-    assert [bool(c.extra.get(TASK_ID_EXTRA)) for c in calls] == [True]
+    # the answer to each delegate call names the expert task that gave it, and the call, recorded
+    # before the task existed, is left as it was
+    history = caller.history.items
+    answers = [i for i in history if i.type == "function_call_output" and i.call_id == "d2_final"]
+    assert [bool(a.extra.get(TASK_ID_EXTRA)) for a in answers] == [True]
+    calls = [i for i in history if i.type == "function_call" and i.call_id == "d2"]
+    assert [c.extra.get(TASK_ID_EXTRA) for c in calls] == [None]
 
     executor = SQLiteExecutor(str(tmp_path / f"{conversation_id}.sqlite"))
     tree = [
@@ -444,11 +448,11 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
             "SELECT json_extract(item, '$.call_id') AS call_id, "
             "json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
             "WHERE session_id = 'voice' AND owner = 'session' "
-            "AND json_extract(item, '$.call_id') IN ('d1', 'd2') "
-            "AND json_extract(item, '$.type') = 'function_call'"
+            "AND json_extract(item, '$.call_id') IN ('d1_final', 'd2_final') "
+            "AND json_extract(item, '$.type') = 'function_call_output'"
         )
     ]
-    assert sorted(row["call_id"] for row in tasks) == ["d1", "d2"]
+    assert sorted(row["call_id"] for row in tasks) == ["d1_final", "d2_final"]
     assert all(row["task_id"] for row in tasks)
     await executor.aclose()
     await local.aclose()

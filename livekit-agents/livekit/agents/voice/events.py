@@ -72,6 +72,9 @@ class RunContext(Generic[Userdata_T]):
 
         # synthesized progress-update pairs, populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
+        # carried by every output recorded for this call from then on, since a recorded item
+        # is never edited
+        self._output_extra: dict[str, Any] = {}
 
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
@@ -361,6 +364,7 @@ class RunContext(Generic[Userdata_T]):
             update_of=self.function_call.call_id if call_id_suffix else None,
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
+        tool_output.fnc_call_out.extra.update(self._output_extra)
         return (fnc_call, tool_output.fnc_call_out)
 
 

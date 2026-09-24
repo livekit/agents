@@ -11,7 +11,7 @@ from ..voice.events import RunContext
 from .delegate import DELEGATE_TOOL_NAME
 
 TASK_ID_EXTRA = "lk.task_id"
-"""The ``FunctionCall.extra`` key naming the far side's task that answered a delegate call."""
+"""The ``FunctionCallOutput.extra`` key naming the far side's task that answered a delegate call."""
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
 
@@ -92,8 +92,9 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                     # that died mid-flight reaches the caller
                     raise ToolError("the delegation ended without an answer") from None
                 if stream.task_id:
-                    # the call names the expert task that answered it, for a dashboard to join
-                    ctx.function_call.extra[TASK_ID_EXTRA] = stream.task_id
+                    # the outputs from here on name the expert task that answers the call, for a
+                    # dashboard to join; the call itself was recorded before the task existed
+                    ctx._output_extra[TASK_ID_EXTRA] = stream.task_id
                 if update.state == "working":
                     if not update.text:
                         continue
