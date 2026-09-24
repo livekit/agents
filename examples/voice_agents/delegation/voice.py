@@ -64,7 +64,7 @@ LOCAL_KEY = (
     if AGENTDB_URL and "localhost" in AGENTDB_URL
     else {}
 )
-DB = (
+db = (
     store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
     if AGENTDB_URL
     else None
@@ -200,9 +200,9 @@ async def entrypoint(ctx: JobContext) -> None:
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
     persisted = None
-    if DB is not None and (conversation_id := os.environ.get("CONVERSATION")):
+    if db is not None and (conversation_id := os.environ.get("CONVERSATION")):
         # the app picks the phone agent's session id, stable across calls
-        persisted = DB.session(conversation_id, "voice")
+        persisted = db.session(conversation_id, "voice")
     await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
     if persisted is not None and (messages := session.history.messages()):
         logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")

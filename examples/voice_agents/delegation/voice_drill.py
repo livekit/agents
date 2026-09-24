@@ -9,7 +9,7 @@ import argparse
 import asyncio
 import logging
 
-from voice import DB, FARE_DESK_URL, Receptionist
+from voice import FARE_DESK_URL, Receptionist, db
 
 from livekit.agents import AgentSession, ConversationItemAddedEvent, inference
 from livekit.agents.delegation import A2ADelegate
@@ -21,10 +21,10 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--conversation", help="resume this DB_... conversation")
     args = parser.parse_args()
-    if DB is None:
+    if db is None:
         raise SystemExit("set LIVEKIT_AGENTDB_URL: the drill needs somewhere to persist")
 
-    conversation_id = args.conversation or await DB.create_database()
+    conversation_id = args.conversation or await db.create_database()
     print(f"conversation {conversation_id}")
     session: AgentSession = AgentSession(
         llm=inference.LLM("openai/gpt-4.1-mini"),
@@ -38,7 +38,7 @@ async def main() -> None:
         elif ev.item.type == "agent_handoff":
             print(f"  [{ev.item.old_agent_id} -> {ev.item.new_agent_id}]")
 
-    await session.start(agent=Receptionist(), persist=DB.session(conversation_id, "voice"))
+    await session.start(agent=Receptionist(), persist=db.session(conversation_id, "voice"))
     print(f"agent    {session.current_agent.id}, {len(session.history.messages())} messages back")
 
     loop = asyncio.get_running_loop()
@@ -52,7 +52,7 @@ async def main() -> None:
                 session.generate_reply(user_input=line)
     finally:
         await session.aclose()
-        await DB.aclose()
+        await db.aclose()
 
 
 if __name__ == "__main__":

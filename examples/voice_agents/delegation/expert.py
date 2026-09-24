@@ -73,7 +73,7 @@ LOCAL_KEY = (
     if AGENTDB_URL and "localhost" in AGENTDB_URL
     else {}
 )
-DB = (
+db = (
     store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
     if AGENTDB_URL
     else None
@@ -890,9 +890,9 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
             _trace(task_id, "←", f"{update.status}: {update.message}")
 
     persisted = None
-    if DB is not None and ctx.conversation_id:
+    if db is not None and ctx.conversation_id:
         # the caller names the conversation; this context is one session in it, under the caller's
-        persisted = DB.session(
+        persisted = db.session(
             ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id, endpoint=ctx.endpoint
         )
     await session.start(agent=FareDesk(), persist=persisted)
