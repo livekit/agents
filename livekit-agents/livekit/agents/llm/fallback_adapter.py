@@ -171,6 +171,8 @@ def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
 
 class FallbackLLMStream(LLMStream):
     _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    # Provider request spans own the inference operation.
+    _genai_operation_name: ClassVar[str | None] = None
 
     def __init__(
         self,

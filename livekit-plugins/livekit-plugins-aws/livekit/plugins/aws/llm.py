@@ -51,8 +51,16 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
     "claude-fable-5",
 )
 
+# Model IDs that reject a forced ``toolChoice`` (``any``/``tool``) with a
+# ValidationException ('tool_choice: type "tool" and "any" are not supported for
+# this model.'). Matched the same way as the list above.
+_MODELS_REJECTING_FORCED_TOOL_CHOICE = (
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+)
 
-def _model_rejects_sampling_params(model_id: str) -> bool:
+
+def _model_matches(model_id: str, names: tuple[str, ...]) -> bool:
     lowered = model_id.lower()
     # Application inference profiles hide the underlying model behind a
     # user-chosen name, so a substring match would both miss rejecting models
@@ -61,7 +69,11 @@ def _model_rejects_sampling_params(model_id: str) -> bool:
     # those; callers can use the explicit supports_sampling_params override.
     if "application-inference-profile" in lowered:
         return False
-    return any(name in lowered for name in _MODELS_REJECTING_SAMPLING_PARAMS)
+    return any(name in lowered for name in names)
+
+
+def _model_rejects_sampling_params(model_id: str) -> bool:
+    return _model_matches(model_id, _MODELS_REJECTING_SAMPLING_PARAMS)
 
 
 @dataclass
@@ -114,6 +126,8 @@ class LLM(llm.LLM):
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
+                Forced choices ("required" or a named tool) are sent as "auto" (with a warning) for
+                models that reject them, e.g. Claude Opus 5.5 and Fable 5.1.
             additional_request_fields (dict[str, Any], optional): Additional request fields to send to the AWS Bedrock Converse API. Defaults to None.
             cache_system (bool, optional): Caches system messages to reduce token usage. Defaults to False.
             cache_tools (bool, optional): Caches tool definitions to reduce token usage. Defaults to False.
@@ -128,6 +142,7 @@ class LLM(llm.LLM):
         super().__init__()
 
         self._sampling_params_warned = False
+        self._forced_tool_choice_warned = False
         self._session = _resolve_session(session)
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
@@ -213,6 +228,19 @@ class LLM(llm.LLM):
                     tool_config["toolChoice"] = {"any": {}}
                 elif effective_tool_choice == "auto":
                     tool_config["toolChoice"] = {"auto": {}}
+
+            forced = tool_config.get("toolChoice", {}).keys() & {"any", "tool"}
+            if forced and _model_matches(self._opts.model, _MODELS_REJECTING_FORCED_TOOL_CHOICE):
+                # "auto" is the only toolChoice these models accept; warn once per
+                # instance, like the sampling params below.
+                if not self._forced_tool_choice_warned:
+                    logger.warning(
+                        "aws bedrock llm: this model does not support a forced "
+                        "tool_choice; sending 'auto' to avoid a ValidationException",
+                        extra={"lk.pii.model": self._opts.model},
+                    )
+                    self._forced_tool_choice_warned = True
+                tool_config["toolChoice"] = {"auto": {}}
 
             return tool_config
 
