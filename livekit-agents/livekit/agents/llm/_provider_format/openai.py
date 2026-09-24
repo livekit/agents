@@ -15,8 +15,17 @@ def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
 
 
 def to_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    prompt_cache_breakpoints: bool = False,
 ) -> tuple[list[dict], Literal[None]]:
+    """Convert to Chat Completions messages.
+
+    With ``prompt_cache_breakpoints``, text before each :class:`llm.CacheBreakpoint`
+    is sent as its own part tagged with ``prompt_cache_breakpoint``. Without it the
+    markers are dropped and the output matches a context that never had them.
+    """
     item_groups = group_tool_calls(chat_ctx)
     messages = []
     for group in item_groups:
@@ -24,7 +33,11 @@ def to_chat_ctx(
             continue
 
         # one message can contain zero or more tool calls
-        msg = _to_chat_item(group.message) if group.message else {"role": "assistant"}
+        msg = (
+            _to_chat_item(group.message, prompt_cache_breakpoints=prompt_cache_breakpoints)
+            if group.message
+            else {"role": "assistant"}
+        )
         tool_calls = []
         for tool_call in group.tool_calls:
             tc: dict[str, Any] = {
@@ -47,29 +60,14 @@ def to_chat_ctx(
     return messages, None
 
 
-def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
+def _to_chat_item(msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False) -> dict[str, Any]:
     if msg.type == "message":
-        list_content: list[dict[str, Any]] = []
-        text_content = ""
-        for content in msg.content:
-            if isinstance(content, llm.ImageContent):
-                list_content.append(_to_image_content(content))
-            elif isinstance(content, llm.AudioContent):
-                pass
-            else:
-                # str or Instructions
-                if text_content:
-                    text_content += "\n"
-                text_content += str(content)
-
-        if not list_content:
-            # certain providers require text-only content in a string vs a list.
-            # for max-compatibility, we will combine all text content into a single string.
-            result: dict[str, Any] = {"role": msg.role, "content": text_content}
-        else:
-            if text_content:
-                list_content.append({"type": "text", "text": text_content})
-            result = {"role": msg.role, "content": list_content}
+        images = [_to_image_content(c) for c in msg.content if isinstance(c, llm.ImageContent)]
+        text, cuts = _text_and_cuts(msg, breakpoints=prompt_cache_breakpoints)
+        result: dict[str, Any] = {
+            "role": msg.role,
+            "content": _message_content(images, text, cuts, text_type="text"),
+        }
 
         extra_content = _filter_extra(msg.extra)
         if extra_content:
@@ -101,6 +99,56 @@ def _to_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
         }
 
     raise ValueError(f"unsupported message type: {msg.type}")
+
+
+def _text_and_cuts(msg: llm.ChatMessage, *, breakpoints: bool) -> tuple[str, list[int]]:
+    """Join the message's text and record where cache breakpoints split it.
+
+    The text is joined exactly as it was before breakpoints existed, so cutting it
+    never changes what the model reads. A breakpoint with no new text since the last
+    cut (leading, or repeated) is ignored.
+    """
+    text = ""
+    cuts: list[int] = []
+    for content in msg.content:
+        if isinstance(content, (llm.ImageContent, llm.AudioContent)):
+            continue
+        if isinstance(content, llm.CacheBreakpoint):
+            if breakpoints and len(text) > (cuts[-1] if cuts else 0):
+                cuts.append(len(text))
+            continue
+        # str or Instructions
+        if text:
+            text += "\n"
+        text += str(content)
+    return text, cuts
+
+
+def _text_parts(text: str, cuts: list[int], *, text_type: str) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    start = 0
+    for cut in cuts:
+        parts.append(
+            {
+                "type": text_type,
+                "text": text[start:cut],
+                "prompt_cache_breakpoint": {"mode": "explicit"},
+            }
+        )
+        start = cut
+    if start < len(text):
+        parts.append({"type": text_type, "text": text[start:]})
+    return parts
+
+
+def _message_content(
+    images: list[dict[str, Any]], text: str, cuts: list[int], *, text_type: str
+) -> str | list[dict[str, Any]]:
+    if not images and not cuts:
+        # certain providers require text-only content in a string vs a list.
+        # for max-compatibility, we will combine all text content into a single string.
+        return text
+    return images + _text_parts(text, cuts, text_type=text_type)
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
@@ -142,8 +190,16 @@ def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:
 
 
 def to_responses_chat_ctx(
-    chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
+    chat_ctx: llm.ChatContext,
+    *,
+    inject_dummy_user_message: bool = True,
+    prompt_cache_breakpoints: bool = False,
 ) -> tuple[list[dict], Literal[None]]:
+    """Convert to Responses API input items.
+
+    ``prompt_cache_breakpoints`` behaves as in :func:`to_chat_ctx`, except that
+    assistant messages never carry one.
+    """
     item_groups = group_tool_calls(chat_ctx)
     items = []
     for group in item_groups:
@@ -151,7 +207,9 @@ def to_responses_chat_ctx(
             continue
 
         if group.message:
-            msg = _to_responses_chat_item(group.message)
+            msg = _to_responses_chat_item(
+                group.message, prompt_cache_breakpoints=prompt_cache_breakpoints
+            )
             items.append(msg)
 
         for tool_call in group.tool_calls:
@@ -169,27 +227,20 @@ def to_responses_chat_ctx(
     return items, None
 
 
-def _to_responses_chat_item(msg: llm.ChatItem) -> dict[str, Any]:
+def _to_responses_chat_item(
+    msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False
+) -> dict[str, Any]:
     if msg.type == "message":
-        list_content: list[dict[str, Any]] = []
-        text_content = ""
-        for content in msg.content:
-            if isinstance(content, llm.ImageContent):
-                list_content.append(_to_responses_image_content(content))
-            elif isinstance(content, llm.AudioContent):
-                pass
-            else:
-                # str or Instructions
-                if text_content:
-                    text_content += "\n"
-                text_content += str(content)
-
-        if not list_content:
-            item: dict[str, Any] = {"role": msg.role, "content": text_content}
-        else:
-            if text_content:
-                list_content.append({"type": "input_text", "text": text_content})
-            item = {"role": msg.role, "content": list_content}
+        images = [
+            _to_responses_image_content(c) for c in msg.content if isinstance(c, llm.ImageContent)
+        ]
+        # Responses assistant content is output text, which has no prompt_cache_breakpoint
+        breakpoints = prompt_cache_breakpoints and msg.role != "assistant"
+        text, cuts = _text_and_cuts(msg, breakpoints=breakpoints)
+        item: dict[str, Any] = {
+            "role": msg.role,
+            "content": _message_content(images, text, cuts, text_type="input_text"),
+        }
 
         # Re-attach the assistant message phase (commentary / final_answer) captured from
         # the Responses API. Dropping it on follow-up requests can degrade performance for

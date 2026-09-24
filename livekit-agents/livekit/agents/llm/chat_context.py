@@ -219,6 +219,24 @@ class AudioContent(BaseModel):
     transcript: str | None = None
 
 
+class CacheBreakpoint(BaseModel):
+    """Marks the end of a reusable prompt prefix inside a message's content.
+
+    The text before the marker becomes its own cacheable segment on LLMs that
+    enable OpenAI prompt cache breakpoints (GPT-5.6 and later). Every other
+    provider format drops it, and it is never part of ``text_content``.
+
+    Example::
+
+        chat_ctx.add_message(
+            role="system",
+            content=[STATIC_PROMPT, CacheBreakpoint(), f"Caller: {caller_id}"],
+        )
+    """
+
+    type: Literal["cache_breakpoint"] = Field(default="cache_breakpoint")
+
+
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
@@ -350,7 +368,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+ChatContent: TypeAlias = ImageContent | AudioContent | CacheBreakpoint | str
 
 
 class FunctionCall(BaseModel):
@@ -700,6 +718,7 @@ class ChatContext:
         format: Literal["openai", "openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
+        prompt_cache_breakpoints: bool = False,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
