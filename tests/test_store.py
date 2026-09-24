@@ -73,9 +73,9 @@ class StoreSuite:
         persisted = database.session("s1")
         assert await persisted.load() is None
         item = ChatMessage(role="user", content=["first"])
-        persisted.append(item)
-        persisted.append(item.model_copy(update={"content": ["first, corrected"]}))
-        persisted.append(item, owner="agent_1")
+        persisted.sync([item])
+        persisted.sync([item.model_copy(update={"content": ["first, corrected"]})])
+        persisted.sync([item], owner="agent_1")
         await persisted.flush()
 
         rows = await database.rows(
@@ -120,7 +120,7 @@ class StoreSuite:
     async def test_checkpoint_rewrites_the_mutable_rows_only(self, database: Database) -> None:
         persisted = database.session("s1", endpoint="fare-desk")
         await persisted.load()
-        persisted.append(ChatMessage(role="user", content=["hello"]))
+        persisted.sync([ChatMessage(role="user", content=["hello"])])
         await persisted.checkpoint(
             current_agent_id="agent_1",
             userdata={"step": 1},
@@ -165,8 +165,8 @@ class StoreSuite:
             call_id="call_1", name="lookup", arguments="{}", extra={"lk.task_id": "task-1"}
         )
         for item in (greeting, question, call):
-            persisted.append(item)
-        persisted.append(question, owner="agent_1")
+            persisted.sync([item])
+        persisted.sync([question], owner="agent_1")
         userdata = {"airline": "Northwind", "bookings": [{"reference": "NW812"}]}
         await persisted.checkpoint(
             current_agent_id="agent_1",
@@ -275,7 +275,7 @@ async def test_a_local_database_reopens_by_id(tmp_path: pathlib.Path) -> None:
     database_id = await local.create_database()
     persisted = local.session(database_id, "s1")
     await persisted.load()
-    persisted.append(ChatMessage(role="user", content=["hi"]))
+    persisted.sync([ChatMessage(role="user", content=["hi"])])
     await persisted.release()
     await local.aclose()
 

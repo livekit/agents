@@ -56,7 +56,7 @@ class AgentRecord:
     durable_state: bytes | None = None
     """The agent's durable tools, pickled; empty when none runs, None to leave the row's as is."""
     chat_items: list[ChatItem] = field(default_factory=list)
-    """Filled on load; a checkpoint writes items through ``append`` instead."""
+    """Filled on load; a checkpoint writes items through ``sync`` instead."""
 
 
 @dataclass
@@ -296,25 +296,23 @@ class PersistedSession:
             children=dict(self._children),
         )
 
-    def append(self, item: ChatItem, *, owner: str = SESSION_OWNER) -> None:
-        """Write one chat item, again on its id when it changed. Queued; nothing waits on it."""
-        data = item_json(item)
+    def sync(
+        self, items: list[ChatItem], *, owner: str = SESSION_OWNER, prune: bool = False
+    ) -> None:
+        """Write each item that is new or changed since last queued, again on its id; ``prune``
+        also drops the owner's rows no longer in ``items``. Queued; nothing waits on it."""
         written = self._written.setdefault(owner, {})
-        if written.get(item.id) == hash(data):
-            return
-        written[item.id] = hash(data)
-        self._enqueue(
-            "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (self._session_id, owner, item.id, data, item.created_at),
-        )
-
-    def sync(self, items: list[ChatItem], *, owner: str, prune: bool) -> None:
-        """Append whatever changed in ``items``; ``prune`` also drops rows no longer in them."""
         for item in items:
-            self.append(item, owner=owner)
+            data = item_json(item)
+            if written.get(item.id) == hash(data):
+                continue
+            written[item.id] = hash(data)
+            self._enqueue(
+                "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (self._session_id, owner, item.id, data, item.created_at),
+            )
         if prune:
-            written = self._written.setdefault(owner, {})
             for item_id in written.keys() - {item.id for item in items}:
                 del written[item_id]
                 self._enqueue(
