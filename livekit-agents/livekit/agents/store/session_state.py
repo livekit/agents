@@ -24,6 +24,7 @@ from ..utils import shortuuid
 from .executor import Row, Statement, StoreError, Value
 
 if TYPE_CHECKING:
+    from ..delegation.delegate import Delegate
     from .conversation import Conversation
 
 SessionKind = Literal["voice", "text", "a2a"]
@@ -149,6 +150,7 @@ class SessionState:
         self._writer: asyncio.Task[None] | None = None
         self._pickle_warned = False
         self._released = False
+        self._resumed: dict[Delegate, asyncio.Task[None]] = {}
 
     @property
     def conversation(self) -> Conversation:
@@ -394,6 +396,27 @@ class SessionState:
         ):
             child = _text(row["child_session_id"])
         return child
+
+    async def resume_delegate(self, delegate: Delegate) -> None:
+        """Point a delegate back at the expert session this one last had on its endpoint.
+
+        Looked up once per delegate, and shared by concurrent callers, before its first send.
+        """
+        if (lookup := self._resumed.get(delegate)) is None:
+
+            async def resume() -> None:
+                if (endpoint := delegate.endpoint) is None:
+                    return
+                if (child := await self.child_session(endpoint)) is not None and delegate.resume(
+                    child
+                ):
+                    logger.debug(
+                        "resuming the delegate's earlier conversation",
+                        extra={"endpoint": endpoint, "context_id": child},
+                    )
+
+            lookup = self._resumed[delegate] = asyncio.create_task(resume())
+        await asyncio.shield(lookup)
 
     async def checkpoint(
         self,

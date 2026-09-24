@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import weakref
-
 from ..a2a import TaskInput, TaskUpdate
 from ..llm.tool_context import FunctionTool, ToolError, function_tool
 
@@ -11,7 +9,7 @@ from ..llm.tool_context import FunctionTool, ToolError, function_tool
 # arrives, so RunContext has to be a real name by then
 from ..voice.events import RunContext
 from .a2a import A2ADelegate
-from .delegate import DELEGATE_TOOL_NAME, Delegate
+from .delegate import DELEGATE_TOOL_NAME
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
 
@@ -44,10 +42,6 @@ DISPATCHED = (
     'now" — varying the wording, restating none of the request and promising nothing about '
     "the outcome. The answer is a separate entry, not this one."
 )
-
-
-# delegates already pointed back at their stored context, so each is looked up once
-_RESUME_CHECKED: weakref.WeakSet[Delegate] = weakref.WeakSet()
 
 
 def build_delegate_tool(description: str | None = None, *, announce: bool = True) -> FunctionTool:
@@ -85,14 +79,8 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
             # the expert joins this conversation's database, under this session
             task_input.conversation_id = state.conversation.database_id
             task_input.caller_session_id = state.session_id
-            # the session-level delegate was pointed back at its context on rehydrate; one the
-            # current agent brings is caught here, before its first send
-            if handler not in _RESUME_CHECKED:
-                _RESUME_CHECKED.add(handler)
-                if (endpoint := handler.endpoint) is not None and (
-                    child := await state.child_session(endpoint)
-                ) is not None:
-                    handler.resume(child)
+            # a delegate an agent brings after a handoff is pointed back here, before it sends
+            await state.resume_delegate(handler)
 
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
