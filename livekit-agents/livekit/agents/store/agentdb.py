@@ -56,24 +56,24 @@ class _Disconnected(Exception):
     """The socket went away with the request in flight."""
 
 
-def _to_wire(value: Value) -> pb.AgentDB.Wire.Value:
-    if value is None:
-        return Wire.Value(null_value=True)
-    if isinstance(value, bool):
-        return Wire.Value(int_value=int(value))
-    if isinstance(value, int):
-        return Wire.Value(int_value=value)
-    if isinstance(value, float):
-        return Wire.Value(double_value=value)
-    if isinstance(value, str):
-        return Wire.Value(text_value=value)
-    if isinstance(value, (bytes, bytearray, memoryview)):
-        return Wire.Value(blob_value=bytes(value))
-    raise TypeError(f"cannot bind a {type(value).__name__} as a SQL parameter")
-
-
 def _statement(sql: str, params: tuple[Value, ...] | list[Value]) -> pb.AgentDB.Wire.Statement:
-    return Wire.Statement(sql=sql, params=[_to_wire(p) for p in params])
+    values: list[pb.AgentDB.Wire.Value] = []
+    for value in params:
+        if value is None:
+            values.append(Wire.Value(null_value=True))
+        elif isinstance(value, bool):
+            values.append(Wire.Value(int_value=int(value)))
+        elif isinstance(value, int):
+            values.append(Wire.Value(int_value=value))
+        elif isinstance(value, float):
+            values.append(Wire.Value(double_value=value))
+        elif isinstance(value, str):
+            values.append(Wire.Value(text_value=value))
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            values.append(Wire.Value(blob_value=bytes(value)))
+        else:
+            raise TypeError(f"cannot bind a {type(value).__name__} as a SQL parameter")
+    return Wire.Statement(sql=sql, params=values)
 
 
 def _decode_batch(names: list[str], batch: pb.AgentDB.Wire.ColumnBatch) -> list[Row]:
@@ -204,28 +204,23 @@ class AgentDBExecutor:
                 "agent-db socket dropped, reconnecting",
                 extra={"database_id": self._database_id, "close_code": ws.close_code},
             )
-            if not await self._redial():
-                return
-
-    async def _redial(self) -> bool:
-        deadline = time.monotonic() + self._reconnect_budget
-        backoff = 0.1
-        while not self._closed:
-            try:
-                await self._connect()
-                return True
-            except Exception as e:
-                if time.monotonic() > deadline:
-                    logger.error(
-                        "could not reconnect to agent-db",
-                        extra={"database_id": self._database_id, "error": str(e)},
-                    )
-                    self._close_reason = e
-                    await self.aclose()
-                    return False
-            await asyncio.sleep(backoff * (1 + random.random() / 4))
-            backoff = min(backoff * 2, 5.0)
-        return False
+            deadline = time.monotonic() + self._reconnect_budget
+            backoff = 0.1
+            while not self._closed:
+                try:
+                    await self._connect()
+                    break
+                except Exception as e:
+                    if time.monotonic() > deadline:
+                        logger.error(
+                            "could not reconnect to agent-db",
+                            extra={"database_id": self._database_id, "error": str(e)},
+                        )
+                        self._close_reason = e
+                        await self.aclose()
+                        return
+                await asyncio.sleep(backoff * (1 + random.random() / 4))
+                backoff = min(backoff * 2, 5.0)
 
     async def _ping(self) -> None:
         # the server reads with a timeout, so an idle socket stays open only while it pings

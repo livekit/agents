@@ -199,10 +199,6 @@ class SessionState:
             )
             await asyncio.sleep(wait)
 
-        return await self._read()
-
-    async def _read(self) -> StoredSession:
-        executor = self._conversation.executor
         session: Row = {}
         async for row in executor.query(
             "SELECT * FROM sessions WHERE session_id = ?", self._session_id
@@ -249,59 +245,27 @@ class SessionState:
                 )
             )
 
-        userdata, has_userdata = self._decode_userdata(session)
+        userdata: Any = session.get("userdata")
+        encoding = _text(session.get("userdata_encoding"))
+        if encoding == "json":
+            userdata = json.loads(str(userdata))
+            if cls_name := (_json(session.get("extra")) or {}).get("userdata_cls"):
+                try:
+                    userdata = TypeAdapter(import_qualified(cls_name)).validate_python(userdata)
+                except Exception:
+                    logger.warning(
+                        "the stored userdata's class did not rebuild, restoring it as plain JSON",
+                        extra={"session_id": self._session_id, "cls": cls_name},
+                        exc_info=True,
+                    )
         return StoredSession(
             current_agent_id=_text(session.get("current_agent_id")),
             userdata=userdata,
-            userdata_encoding=_text(session.get("userdata_encoding")) if has_userdata else None,
+            userdata_encoding=encoding,
             history=history,
             agents=agents,
             interrupted=interrupted,
         )
-
-    def _decode_userdata(self, session: Row) -> tuple[Any, bool]:
-        raw = session.get("userdata")
-        if raw is None:
-            return None, False
-        if session.get("userdata_encoding") == "pickle":
-            return raw, True
-
-        data = json.loads(str(raw))
-        cls_name = (_json(session.get("extra")) or {}).get("userdata_cls")
-        if not cls_name:
-            return data, True
-        try:
-            cls = import_qualified(cls_name)
-            return TypeAdapter(cls).validate_python(data), True
-        except Exception:
-            logger.warning(
-                "the stored userdata's class did not rebuild, restoring it as plain JSON",
-                extra={"session_id": self._session_id, "cls": cls_name},
-                exc_info=True,
-            )
-            return data, True
-
-    def _encode_userdata(self, userdata: Any) -> tuple[Value, str | None, str | None]:
-        if userdata is None:
-            return None, None, None
-        cls = type(userdata)
-        try:
-            adapter = TypeAdapter(cls)
-            data = adapter.dump_python(userdata, mode="json")
-            # JSON that does not read back as the same value, such as a dict keyed by tuples,
-            # would restore something else, so it is stored pickled instead
-            if adapter.validate_python(data) != userdata:
-                raise ValueError("userdata does not round-trip through JSON")
-            return json.dumps(data), "json", qualified_name(cls)
-        except Exception:
-            if not self._pickle_warned:
-                self._pickle_warned = True
-                logger.warning(
-                    "userdata is not JSON-serializable, so it is stored pickled; make it a "
-                    "dataclass or pydantic model of JSON fields to keep it readable",
-                    extra={"session_id": self._session_id, "cls": qualified_name(cls)},
-                )
-            return pickle.dumps(userdata), "pickle", qualified_name(cls)
 
     def append(self, item: ChatItem, *, owner: str = SESSION_OWNER) -> None:
         """Write one chat item, again on its id. Queued; the caller never waits on it."""
@@ -400,7 +364,28 @@ class SessionState:
         session now.
         """
         await self.flush()
-        encoded, encoding, userdata_cls = self._encode_userdata(userdata)
+        encoded: Value = None
+        encoding = userdata_cls = None
+        if userdata is not None:
+            cls = type(userdata)
+            userdata_cls = qualified_name(cls)
+            try:
+                adapter = TypeAdapter(cls)
+                data = adapter.dump_python(userdata, mode="json")
+                # JSON that reads back as something else, such as a dict keyed by tuples, is
+                # stored pickled instead
+                if adapter.validate_python(data) != userdata:
+                    raise ValueError("userdata does not round-trip through JSON")
+                encoded, encoding = json.dumps(data), "json"
+            except Exception:
+                if not self._pickle_warned:
+                    self._pickle_warned = True
+                    logger.warning(
+                        "userdata is not JSON-serializable, so it is stored pickled; make it a "
+                        "dataclass or pydantic model of JSON fields to keep it readable",
+                        extra={"session_id": self._session_id, "cls": userdata_cls},
+                    )
+                encoded, encoding = pickle.dumps(userdata), "pickle"
         now = time.time()
         statements: list[Statement] = [
             (
@@ -469,7 +454,11 @@ class SessionState:
                 self._lease_owner,
             )
         finally:
-            await self._conversation._session_released()
+            conversation = self._conversation
+            conversation._sessions -= 1
+            if conversation._sessions <= 0:
+                conversation._sessions = 0
+                await conversation.aclose()
 
     async def flush(self) -> None:
         """Wait for every queued write to land."""

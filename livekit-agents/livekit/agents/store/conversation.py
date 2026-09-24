@@ -89,12 +89,6 @@ class Conversation:
             lease_ttl=self._lease_ttl,
         )
 
-    async def _session_released(self) -> None:
-        self._sessions -= 1
-        if self._sessions <= 0:
-            self._sessions = 0
-            await self.aclose()
-
     async def aclose(self) -> None:
         async with self._open_lock:
             if self._executor is not None:
