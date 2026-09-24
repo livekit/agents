@@ -1690,7 +1690,7 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
+    from livekit.agents.voice.audio_recognition import _STT_STREAM_RECREATED, _STTPipeline
 
     monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
 
@@ -1713,7 +1713,10 @@ async def test_stt_pipeline_recreates_stream_after_unrecoverable_error(
     pipeline = _STTPipeline(stt_node)
     try:
         # the first stream dies on a connection error; the pump must recreate it
-        # and forward the transcript produced by the second stream
+        # and forward the transcript produced by the second stream, after a marker
+        # that tells the consumer the events come from a new stream
+        marker = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert marker is _STT_STREAM_RECREATED
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"
@@ -1796,7 +1799,7 @@ async def test_stt_pipeline_recreation_uses_rebound_node(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from livekit.agents.voice import audio_recognition
-    from livekit.agents.voice.audio_recognition import _STTPipeline
+    from livekit.agents.voice.audio_recognition import _STT_STREAM_RECREATED, _STTPipeline
 
     monkeypatch.setattr(audio_recognition, "_STT_RECONNECT_INTERVAL", 0.0)
 
@@ -1826,6 +1829,8 @@ async def test_stt_pipeline_recreation_uses_rebound_node(
         await asyncio.wait_for(started_old.wait(), timeout=5)
         pipeline._rebind_node(new_node)
         fail_old.set()
+        marker = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
+        assert marker is _STT_STREAM_RECREATED
         ev = await asyncio.wait_for(pipeline.event_ch.recv(), timeout=5)
         assert ev.type == SpeechEventType.FINAL_TRANSCRIPT
         assert ev.alternatives[0].text == "recovered"

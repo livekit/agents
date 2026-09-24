@@ -59,6 +59,14 @@ _EOU_MAX_HISTORY_TURNS = 6
 _STT_RECONNECT_INTERVAL = 0.5
 
 
+class _STTStreamRecreated:
+    """Sent on an _STTPipeline's event channel between the events of a failed provider
+    stream and those of the stream that replaces it."""
+
+
+_STT_STREAM_RECREATED = _STTStreamRecreated()
+
+
 @dataclass
 class _EndOfTurnMetrics:
     started_speaking_at: float | None
@@ -174,7 +182,7 @@ class _STTPipeline:
         # don't recreate the stream while the session is closing
         self._is_closing = is_closing or (lambda: False)
         self._audio_ch = aio.Chan[rtc.AudioFrame]()
-        self._event_ch = aio.Chan[stt.SpeechEvent]()
+        self._event_ch = aio.Chan[stt.SpeechEvent | _STTStreamRecreated]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
         # wall-clock anchor for stream-based (STT and barge-in) timestamps
@@ -185,7 +193,7 @@ class _STTPipeline:
         return self._audio_ch
 
     @property
-    def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
+    def event_ch(self) -> aio.Chan[stt.SpeechEvent | _STTStreamRecreated]:
         return self._event_ch
 
     @utils.log_exceptions(logger=logger)
@@ -226,6 +234,7 @@ class _STTPipeline:
                 # the session may have started closing during the backoff
                 if self._is_closing():
                     return
+                self._event_ch.send_nowait(_STT_STREAM_RECREATED)
                 continue
 
             # node ended without error (audio input closed): stop
@@ -324,7 +333,7 @@ class AudioRecognition:
         self._interruption_atask: asyncio.Task[None] | None = None
         self._interruption_detection = interruption_detection
         self._interruption_ch: aio.Chan[inference.InterruptionDataFrameType] | None = None
-        self._transcript_buffer: deque[SpeechEvent] = deque()
+        self._transcript_buffer: deque[SpeechEvent | _STTStreamRecreated] = deque()
         self._transcript_gate_active: bool = False
         self._interruption_enabled: bool = interruption_detection is not None and vad is not None
         # Tracks active audio playout, independently of the generation lifecycle.
@@ -709,6 +718,11 @@ class AudioRecognition:
 
         while self._transcript_buffer:
             event = self._transcript_buffer[0]
+            if isinstance(event, _STTStreamRecreated):
+                # the failed stream's held events are gone, so its segment ends here
+                self._transcript_buffer.popleft()
+                self._reset_pending_segment()
+                continue
             # Known speech timing takes precedence; arrival time is the fallback.
             if event.speech_end_time is not None:
                 should_trim = event.speech_end_time < trim_start and (
@@ -756,6 +770,9 @@ class AudioRecognition:
         events_to_emit = list(self._transcript_buffer)
         self._transcript_buffer.clear()
         for ev in events_to_emit:
+            if isinstance(ev, _STTStreamRecreated):
+                self._reset_pending_segment()
+                continue
             logger.trace("re-emitting held STT event", extra={"event": ev.type})
             self._process_stt_event(ev)
 
@@ -1154,7 +1171,15 @@ class AudioRecognition:
             return self._audio_transcript + " " + self._audio_interim_transcript
         return self._audio_transcript
 
-    async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+    async def _on_stt_event(self, ev: stt.SpeechEvent | _STTStreamRecreated) -> None:
+        if isinstance(ev, _STTStreamRecreated):
+            # held events are replayed later, so the boundary waits in line behind them
+            if self._transcript_buffer:
+                self._transcript_buffer.append(ev)
+            else:
+                self._reset_pending_segment()
+            return
+
         if (
             ev.speech_end_time is None
             and self._stt_aligned_transcript
@@ -1919,7 +1944,7 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _stt_consumer(
         self,
-        event_ch: aio.Chan[stt.SpeechEvent],
+        event_ch: aio.Chan[stt.SpeechEvent | _STTStreamRecreated],
         old_pipeline: _STTPipeline | None,
         old_consumer: asyncio.Task[None] | None,
     ) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +15,12 @@ from livekit.agents import (
 )
 from livekit.agents.llm import ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
-from livekit.agents.voice.audio_recognition import AudioRecognition, _pending_segment_text
+from livekit.agents.utils import aio
+from livekit.agents.voice.audio_recognition import (
+    _STT_STREAM_RECREATED,
+    AudioRecognition,
+    _pending_segment_text,
+)
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -280,7 +286,19 @@ def _hand_wired_recognition() -> AudioRecognition:
     ar._last_preflight_text = ""
     ar._last_preflight_incremental = False
     ar._preflight_is_latest = False
+    ar._transcript_buffer = deque()
+    ar._transcript_gate_active = False
+    ar._backchannel_boundary = None
+    ar._agent_speech_started_at = None
     return ar
+
+
+def _interim(text: str, *, speech_end_time: float | None = None) -> SpeechEvent:
+    return SpeechEvent(
+        type=SpeechEventType.INTERIM_TRANSCRIPT,
+        alternatives=[SpeechData(text=text, language=LanguageCode(""))],
+        speech_end_time=speech_end_time,
+    )
 
 
 def test_incremental_preflights_add_up_within_a_segment() -> None:
@@ -327,3 +345,46 @@ def test_stt_swap_closes_the_segment() -> None:
     ar._update_stt(None, reset_context=True)
 
     assert (ar._last_interim_text, ar._last_preflight_text) == ("", "")
+
+
+async def test_recreated_stt_stream_closes_the_segment() -> None:
+    # the failed stream's interim must not be promoted by the new stream's empty final
+    ar = _hand_wired_recognition()
+    ar._process_stt_event(_interim("yes"))
+    ch = aio.Chan()  # type: ignore[var-annotated]
+    ch.send_nowait(_STT_STREAM_RECREATED)
+    ch.close()
+
+    await ar._stt_consumer(ch, None, None)
+
+    assert ar._last_interim_text == ""
+
+
+async def test_recreated_stream_boundary_waits_behind_held_transcripts() -> None:
+    # the failed stream's interim is held during agent speech and replayed later
+    ar = _hand_wired_recognition()
+    ar._transcript_gate_active = True
+    ar._transcript_buffer.append(_interim("yes"))
+    ch = aio.Chan()  # type: ignore[var-annotated]
+    ch.send_nowait(_STT_STREAM_RECREATED)
+    ch.close()
+    await ar._stt_consumer(ch, None, None)
+
+    ar._flush_held_transcripts()
+
+    assert ar._last_interim_text == ""
+
+
+def test_trimmed_held_transcripts_close_the_segment() -> None:
+    # the failed stream's held interim is trimmed, but the one before the hold is pending
+    ar = _hand_wired_recognition()
+    ar._process_stt_event(_interim("yes"))
+    kept = _interim("no", speech_end_time=11.0)
+    ar._transcript_buffer.extend(
+        [_interim("yes please", speech_end_time=9.0), _STT_STREAM_RECREATED, kept]
+    )
+
+    ar._trim_held_transcripts(resolved_at=10.0, vad_speech_started_at=None)
+
+    assert list(ar._transcript_buffer) == [kept]
+    assert ar._last_interim_text == ""
