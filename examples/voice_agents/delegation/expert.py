@@ -24,9 +24,8 @@ one session per contextId, so the second request sees what the first one did.
 so the phone agent can say "holding a seat" while the seat is being held. That report is
 relayed as the tool wrote it rather than handed to a model to restate.
 
-With LIVEKIT_AGENTDB_URL set, each conversation persists to the agent-db database the caller
-names, so a desk killed mid-conversation and restarted picks up where it was; see the
-README's "Persistence" section.
+With LIVEKIT_AGENTDB_URL set, each conversation persists to the database the caller names and
+survives a restart of the desk; see the README's "Persistence" section.
 """
 
 import asyncio
@@ -64,9 +63,8 @@ load_dotenv()
 # random one in dev
 server = AgentServer(port=8321)
 
-# where conversations persist, when agent-db is configured; without it the desk keeps each one
-# in memory only. The short lease is what lets a desk restarted after a crash take a
-# conversation back within seconds
+# without agent-db the desk keeps conversations in memory; the short lease lets a desk restarted
+# after a crash take one back within seconds
 STORE = store.AgentDB.from_env(lease_ttl=10) if os.environ.get("LIVEKIT_AGENTDB_URL") else None
 
 

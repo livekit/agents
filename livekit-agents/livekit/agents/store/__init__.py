@@ -1,14 +1,7 @@
-"""Persisting sessions: a conversation is one SQLite database, in agent-db or on disk.
+"""Persisting sessions, so a conversation survives the worker that ran it.
 
-Open a conversation, bind a session of it, and hand that to ``AgentSession.start``::
-
-    STORE = store.AgentDB.from_env()
-
-    conversation = await STORE.conversation(database_id)
-    await session.start(agent=FareDesk(), state=conversation.session("fare-desk", kind="a2a"))
-
-``store.SQLite(directory)`` is the same API on local files, for tests and offline runs. The
-executors and the agent-db clients underneath are importable from their modules.
+A conversation is one SQLite database, in agent-db or a local file; ``SQLite`` runs the same
+API offline and in tests.
 """
 
 from .conversation import AgentDB, Conversation, SQLite

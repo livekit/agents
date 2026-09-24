@@ -942,10 +942,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
-            state: This session's rows in a conversation database, from
-                ``Conversation.session()``. A stored session is restored into ``agent`` and the
-                session before it starts, a new one is created, and either is kept current
-                until the session closes. Without it nothing is persisted.
+            state: This session's rows, from ``Conversation.session()``: a stored session is
+                restored before it starts, and either kind is kept current until it closes.
         """
         async with self._lock:
             if self._started:

@@ -43,8 +43,7 @@ if TYPE_CHECKING:
     from .turn import TurnDetectionMode
 
 
-# configuration the handler supplies on every start, not state: models, tools and turn options
-# are rebuilt from code, and the chat context is restored from its own rows
+# configuration the handler's code supplies on every start, not state to snapshot
 _CONFIGURATION_PARAMETERS = frozenset(
     {
         "chat_ctx",
@@ -543,9 +542,8 @@ class Agent:
     def _snapshot_state(self) -> dict[str, Any]:
         """JSON-serializable constructor arguments that rebuild this agent on resume.
 
-        The default reads each constructor parameter back from the same-named attribute, or
-        its underscored twin, skipping ``NOT_GIVEN`` ones and configuration. A class whose
-        constructor takes something it does not keep defines this and ``_from_state``.
+        The default reads each parameter back from the attribute of that name or its underscored
+        twin; a class that does not keep what it takes defines this and ``_from_state``.
         """
         state: dict[str, Any] = {}
         for name, param in inspect.signature(type(self).__init__).parameters.items():
@@ -593,8 +591,7 @@ class Agent:
         return cls(**kwargs)
 
     def __reduce__(self) -> str | tuple[Any, ...]:
-        # an agent pickled inside userdata is a reference to the session's instance, found by
-        # id when the session is rehydrated rather than copied
+        # an agent pickled inside userdata is a reference to the rehydrated session's instance
         from .persistence import lookup_rehydrated_agent
 
         return (lookup_rehydrated_agent, (type(self), self._id))

@@ -1,9 +1,7 @@
 """The agent-db client: its data plane as an ``Executor``, and its management API.
 
-agent-db speaks its own protocol rather than HTTP: one binary protobuf message per WebSocket
-frame, ``Hello`` first, requests multiplexed by a client-chosen id, streamed results paced by
-credits. The server severs sockets on drain and eviction and marks those failures retryable,
-so reconnecting is the normal path here, not an error case.
+The server severs sockets on drain and eviction and marks those failures retryable, so
+reconnecting is the normal path here, not an error case.
 """
 
 from __future__ import annotations
@@ -34,8 +32,7 @@ MAX_FRAME_BYTES = 16 << 20
 """The server's cap on one inbound frame; results come back under the same bound."""
 
 RETRYABLE_CODES = frozenset({"unavailable"})
-"""Codes the server uses for a database that is moving: the request is sent again, on the
-new socket once the old one is severed."""
+"""Codes the server uses for a database that is moving, where the request is sent again."""
 RETRY_DELAY = 0.1
 
 
@@ -107,9 +104,8 @@ def _decode_batch(names: list[str], batch: pb.AgentDB.Wire.ColumnBatch) -> list[
 class AgentDBExecutor:
     """An ``Executor`` on one agent-db database, over one WebSocket.
 
-    A request interrupted by a reconnect is sent again on the new socket, so the statements
-    run through it must be idempotent; every statement the store issues is. A query that has
-    already yielded rows cannot be replayed, and fails instead.
+    A request cut off by a reconnect is sent again, so every statement run through it must be
+    idempotent; a query that already yielded rows fails instead.
     """
 
     def __init__(
@@ -131,8 +127,7 @@ class AgentDBExecutor:
         self._ids = itertools.count(1)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._pending: dict[int, asyncio.Queue[pb.AgentDB.Wire.ServerMessage | None]] = {}
-        # set while a Hello has completed on the live socket; cleared across a reconnect so
-        # a request made then waits instead of failing
+        # cleared across a reconnect, so a request made then waits instead of failing
         self._ready = asyncio.Event()
         self._closed = False
         self._close_reason: Exception | None = None
@@ -304,8 +299,7 @@ class AgentDBExecutor:
             done = False
             names: list[str] = []
             try:
-                # the server grants the initial window with the query; each consumed batch
-                # is replenished by one
+                # the query carries the initial window; each batch taken is replenished by one
                 await self._send(Wire.ClientMessage(request_id=request_id, query=statement))
                 while True:
                     message = await queue.get()

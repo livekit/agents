@@ -18,8 +18,7 @@ class A2ADelegate(Delegate):
 
         AgentSession(llm=realtime_model, delegate=A2ADelegate("http://localhost:8080/fare-desk"))
 
-    A session persisted with ``start(state=...)`` resumes the conversation it last had with
-    this endpoint, so the expert picks up where it left off.
+    A session persisted with ``start(state=...)`` resumes the conversation it last had here.
     """
 
     def __init__(

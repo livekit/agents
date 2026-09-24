@@ -78,13 +78,7 @@ class A2ASessionContext:
 
     @property
     def conversation_id(self) -> str | None:
-        """The conversation database the caller persists into, when it sent one.
-
-        Open it and bind this context's session to it, so both halves land in one database::
-
-            conversation = await STORE.conversation(ctx.conversation_id)
-            state = conversation.session(ctx.context_id, kind="a2a", parent=ctx.caller_session_id)
-        """
+        """The conversation database the caller persists into, for this session to join."""
         return self._conversation_id
 
     @property

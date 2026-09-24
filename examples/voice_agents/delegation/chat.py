@@ -1,22 +1,6 @@
 """A text client for the fare desk: each line you type is a turn, over A2A, with no microphone.
 
-Start the desk first, with agent-db configured (see the README's "Persistence" section):
-
-    python expert.py dev
-
-then this:
-
-    python chat.py
-
-It creates a conversation database and a context and prints both. Pass them back to pick
-the same conversation up from another run, or after the desk was killed and restarted:
-
-    python chat.py --conversation DB_... --context chat-...
-
-Each line is sent as a person's turn; with --delegate it is sent as an agent's instruction
-instead, the way voice.py's phone agent asks. Relayed progress prints as it arrives, then
-the answer and how the task ended. Ctrl-D says goodbye, which lets the desk drop the
-conversation at once rather than wait for it to idle.
+Run it against ``python expert.py dev``; the README's "Persistence" section has the crash drill.
 """
 
 import argparse

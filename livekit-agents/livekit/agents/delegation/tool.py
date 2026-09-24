@@ -132,8 +132,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                             ),
                         )
                     if update.verbatim:
-                        # said as written, then kept to the model: no return, so no reply
-                        # repeats it
+                        # said as written, then kept to the model: no return, so no reply repeats it
                         session.say(update.text)
                         await ctx.update(update.text, silent=True)
                         return None

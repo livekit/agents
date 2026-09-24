@@ -1,8 +1,7 @@
 """Where conversations live: agent-db in production, a directory of SQLite files offline.
 
-A conversation is one database. Every session of it, the voice agent and each expert it
-delegated to, is rows in that database keyed by session id, so the whole of one user's
-conversation is one socket for the agent and one query for a dashboard.
+Every session of one conversation, the voice agent and each expert it delegated to, is rows in
+one database, so the conversation is one socket for the agent and one query for a dashboard.
 """
 
 from __future__ import annotations
@@ -21,12 +20,7 @@ from .session_state import LEASE_TTL, SessionKind, SessionState
 
 
 class Conversation:
-    """One conversation database. Sessions are made from it.
-
-    Its connection opens on first use and closes when the last session bound to it lets go,
-    so a server that has answered many conversations holds sockets only for the live ones;
-    the next session opens it again.
-    """
+    """One conversation database, whose connection is open only while a session holds it."""
 
     def __init__(
         self,
@@ -74,11 +68,7 @@ class Conversation:
         parent: str | None = None,
         endpoint: str | None = None,
     ) -> SessionState:
-        """A handle on one session of this conversation; ``AgentSession.start`` loads it.
-
-        ``parent`` is the session that delegated to this one, when there is one. The
-        conversation stays open until every handle made here is released.
-        """
+        """A handle on one session, for ``AgentSession.start``; ``parent`` is its delegator."""
         self._sessions += 1
         return SessionState(
             self,
@@ -135,10 +125,7 @@ class SQLite:
 
 
 class AgentDB:
-    """Conversations in agent-db: its management API mints them, its data plane serves them.
-
-    One socket per open conversation, closed when its last session is released.
-    """
+    """Conversations in agent-db: its management API mints them, its data plane serves them."""
 
     def __init__(
         self,
@@ -161,10 +148,8 @@ class AgentDB:
 
     @classmethod
     def from_env(cls, *, lease_ttl: float = LEASE_TTL) -> AgentDB:
-        """Read ``LIVEKIT_AGENTDB_URL`` and ``LIVEKIT_AGENTDB_WS_URL``, and the project's key.
-
-        ``LIVEKIT_AGENTDB_API_KEY``/``_SECRET`` win over ``LIVEKIT_API_KEY``/``_SECRET``, for a
-        database served apart from the LiveKit project, as a local agent-db is.
+        """Read the agent-db URLs, and its key from ``LIVEKIT_AGENTDB_API_KEY``/``_SECRET``
+        or else the project's ``LIVEKIT_API_KEY``/``_SECRET``.
         """
         env = {
             "url": os.environ.get("LIVEKIT_AGENTDB_URL"),

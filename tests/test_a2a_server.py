@@ -496,8 +496,7 @@ async def test_a_dropped_conversation_rehydrates_on_the_next_request(
     async with _serving(handler=persisted) as served:
         first = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
         await _collect(first, TaskInput(instruction="what is the change fee", **delegation))
-        # the goodbye drops the conversation: its session checkpoints and lets the lease go,
-        # and with the last session of it released, the database connection closes
+        # the goodbye closes the session, which releases its state and so the connection
         await first.aclose()
         assert served.executor._conversations == {}
         with pytest.raises(store.StoreError):

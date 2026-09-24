@@ -53,8 +53,7 @@ FARE_DESK_URL = "http://localhost:8321/fare-desk"
 
 server = AgentServer()
 
-# where the call persists, when agent-db is configured and the app names a conversation. A
-# real app looks the database up from a caller key such as a phone number
+# a real app looks the conversation up from a caller key, such as a phone number
 STORE = store.AgentDB.from_env(lease_ttl=10) if os.environ.get("LIVEKIT_AGENTDB_URL") else None
 
 

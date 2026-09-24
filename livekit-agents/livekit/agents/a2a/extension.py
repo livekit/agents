@@ -71,8 +71,7 @@ REASON = _key("reason")
 """On a ``CancelTaskRequest``: why the caller is stopping the task."""
 
 CONVERSATION = _key("conversation")
-"""On a message: the conversation database the caller persists into, which the expert
-writes its own session into as well. Sent only where the card offered the profile."""
+"""On a message: the conversation database the caller persists into, for the expert to join."""
 
 CALLER = _key("caller")
 """On a message: the caller's session id, which the expert's session names as its parent."""

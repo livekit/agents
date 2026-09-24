@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Regenerates livekit_agentdb_pb2 from livekit/protocol. These files move to livekit-protocol
-# once a release ships the agentdb module; until then they are vendored here.
-#
-# protoc 29 emits protobuf 5.29 gencode, the same floor livekit-protocol's modules carry, so
-# the vendored module runs on protobuf 5.29+ and 6.x alike.
+# vendored until a livekit-protocol release ships the agentdb module, then imported from there
+# protoc 29 emits protobuf 5.29 gencode, which runs on protobuf 5.29+ and 6.x alike
 set -euo pipefail
 
 PROTOCOL_DIR="${PROTOCOL_DIR:-$HOME/code/protocol}"

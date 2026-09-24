@@ -1,8 +1,4 @@
-"""The session store on a local SQLite file: schema, append, checkpoint, rehydrate, lease.
-
-``StoreSuite`` is written against a ``conversation`` fixture only, so the agent-db suite runs
-the same tests over the wire.
-"""
+"""The session store on a local SQLite file; ``StoreSuite`` runs again over agent-db's wire."""
 
 from __future__ import annotations
 

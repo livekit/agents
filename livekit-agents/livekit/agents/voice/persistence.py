@@ -1,9 +1,7 @@
 """An ``AgentSession`` bound to its rows in a conversation database.
 
-Imported only when ``AgentSession.start`` is given a ``state``, so a session that persists
-nothing never loads the store. The handler builds the agent and the session as it does on
-every cold start; this restores data into what it was given, and rebuilds an agent from its
-row only when its class can say how.
+Imported only when ``start()`` is given a ``state``; it restores data into the agent and
+session the handler built, and rebuilds an agent from its row only when its class says how.
 """
 
 from __future__ import annotations
@@ -38,8 +36,7 @@ INTERRUPTED_OUTPUT = "the call was interrupted before it finished; its outcome i
 
 _REHYDRATING = contextvars.ContextVar["SessionPersistence"]("agents_rehydrating")
 
-# a class is checked once, the first time it starts under a persisted session: None means it
-# rebuilds, a string says why it cannot
+# per class, checked once: None when it rebuilds from its row, else why it cannot
 _REBUILD_CHECKS: dict[type[Agent], str | None] = {}
 
 
@@ -72,8 +69,7 @@ class SessionPersistence:
         self._state = state
         self._stored: StoredSession | None = None
         self._agents: dict[str, Agent] = {}
-        # per owner, the fingerprint of each item as last written: an item finalized in place,
-        # such as an interrupted message, differs from it and is written again
+        # per owner, each item's fingerprint as last written, so one changed in place is rewritten
         self._written: dict[str, dict[str, int]] = {}
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._checkpoint_again = False
@@ -142,8 +138,7 @@ class SessionPersistence:
                     },
                 )
         self._agents[current.id] = current
-        # resolved the way the activity will resolve it, so the delegate names its context
-        # before anything is sent
+        # the delegate the activity will resolve, pointed back before anything is sent
         delegation = session._opts.delegation | current._delegation
         if (delegate := delegation.get("delegate")) is not None:
             await self._state.resume_delegate(delegate)
@@ -152,8 +147,7 @@ class SessionPersistence:
         if reason is None and own is not None and own.chat_items:
             current._chat_ctx = llm.ChatContext(list(own.chat_items))
         elif stored.history:
-            # a stand-in for the agent that was running, or one with nothing of its own stored,
-            # starts from the whole conversation
+            # a stand-in, or an agent with nothing of its own stored, starts from the whole history
             current._chat_ctx = session._chat_ctx.copy(
                 exclude_handoff=True, exclude_config_update=True
             )
@@ -204,8 +198,7 @@ class SessionPersistence:
         )
         self._check_rebuild(current)
         self._sync()
-        # queued behind the items above: a crash before they land leaves the calls running,
-        # so the next owner tells the model again
+        # queued behind the items, so a crash before they land leaves the calls to the next owner
         for task in stored.interrupted:
             self._state.task_ended(
                 task.call_id, status="interrupted", output=INTERRUPTED_OUTPUT, is_error=True

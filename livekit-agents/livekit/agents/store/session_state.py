@@ -1,9 +1,7 @@
 """One session's rows in a conversation database: what it loads, appends and checkpoints.
 
-A ``SessionState`` is a handle bound to a conversation and a session id, not a snapshot. Chat
-items are appended as they land, through an ordered queue the conversation never waits on;
-the small mutable part is rewritten at checkpoints, each fenced by the session's lease so a
-worker that lost the session cannot overwrite the one that took it.
+Chat items are appended through a queue the conversation never waits on; the small mutable
+part is rewritten at checkpoints, each fenced by the session's lease.
 """
 
 from __future__ import annotations
@@ -34,8 +32,7 @@ SESSION_OWNER = "session"
 """The ``chat_items.owner`` of the session's own history, as opposed to an agent's context."""
 
 LEASE_TTL = 30.0
-"""How long a session stays claimed without a checkpoint renewing it. A worker restarted
-after a crash waits at most this long before it can take the session back."""
+"""How long a session stays claimed without a checkpoint, and so the longest a restart waits."""
 
 _ITEM_ADAPTER: TypeAdapter[ChatItem] = TypeAdapter(ChatItem)
 
@@ -79,8 +76,8 @@ class StoredSession:
 
     current_agent_id: str | None
     userdata: Any
-    """Decoded into its class when that class still imports, else plain JSON. Pickled
-    userdata stays bytes here: it may name agents, which the session rebuilds first."""
+    """Decoded into its class when that still imports, else plain JSON; pickled stays bytes,
+    since it may name agents the session rebuilds first."""
     userdata_encoding: str | None
     history: list[ChatItem]
     agents: dict[str, AgentRecord]
@@ -111,10 +108,7 @@ def item_json(item: ChatItem) -> str:
 
 
 class SessionState:
-    """One session in a conversation database: load it, append to it, checkpoint it.
-
-    Made by ``Conversation.session()`` and handed to ``AgentSession.start(state=...)``.
-    """
+    """A handle on one session's rows, from ``Conversation.session()``, for ``start(state=)``."""
 
     def __init__(
         self,
@@ -148,9 +142,9 @@ class SessionState:
         return self._session_id
 
     async def load(self) -> StoredSession | None:
-        """Claim the session and read it back, or create it. ``None`` means it is new.
+        """Claim the session, waiting out a previous owner's lease, and read it back.
 
-        Waits out a previous owner's lease, which is what a restart after a crash meets.
+        ``None`` means the session is new, and has been created.
         """
         executor = await self._conversation.open()
         now = time.time()
@@ -330,10 +324,7 @@ class SessionState:
         return child
 
     async def resume_delegate(self, delegate: Delegate) -> None:
-        """Point a delegate back at the expert session this one last had on its endpoint.
-
-        Looked up once per delegate, and shared by concurrent callers, before its first send.
-        """
+        """Point a delegate back at the expert session this one last had on its endpoint, once."""
         if (lookup := self._resumed.get(delegate)) is None:
 
             async def resume() -> None:
@@ -358,10 +349,8 @@ class SessionState:
         agents: list[AgentRecord],
         tools: list[str] | None = None,
     ) -> None:
-        """Rewrite the mutable part in one batch, and renew the lease with it.
-
-        Raises ``LeaseLostError``, having written nothing, when another worker holds the
-        session now.
+        """Rewrite the mutable part in one batch and renew the lease, or write nothing and
+        raise ``LeaseLostError`` when another worker holds the session.
         """
         await self.flush()
         encoded: Value = None
@@ -372,8 +361,7 @@ class SessionState:
             try:
                 adapter = TypeAdapter(cls)
                 data = adapter.dump_python(userdata, mode="json")
-                # JSON that reads back as something else, such as a dict keyed by tuples, is
-                # stored pickled instead
+                # JSON that reads back as something else, such as a tuple-keyed dict, is pickled
                 if adapter.validate_python(data) != userdata:
                     raise ValueError("userdata does not round-trip through JSON")
                 encoded, encoding = json.dumps(data), "json"
@@ -437,10 +425,7 @@ class SessionState:
             raise
 
     async def release(self) -> None:
-        """Flush what is queued and let the session go, so the next worker need not wait.
-
-        The last session of a conversation to be released closes its connection.
-        """
+        """Flush what is queued and let the session go, closing the conversation after its last."""
         if self._released:
             return
         self._released = True

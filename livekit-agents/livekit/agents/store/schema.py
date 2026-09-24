@@ -1,8 +1,7 @@
 """The conversation database's schema, versioned in ``_meta`` and migrated forward on open.
 
-A database written by one release is opened by a later one weeks on, so every change to the
-tables is a new migration appended below, never an edit to an old one. A framework older than
-the database refuses to open it rather than write rows it does not understand.
+A database outlives the release that wrote it, so a change is a new migration appended below,
+never an edit to an old one.
 """
 
 from __future__ import annotations
@@ -72,8 +71,7 @@ MIGRATIONS: dict[int, list[str]] = {
             ended_at REAL,
             PRIMARY KEY (session_id, call_id)
         )""",
-        # a checkpoint from a worker that lost the lease writes one row here that breaks the
-        # check, which aborts its whole batch rather than half of it
+        # a stale owner's checkpoint writes held = 0 here, which aborts its whole batch
         """CREATE TABLE _lease_check (
             id INTEGER PRIMARY KEY,
             held INTEGER NOT NULL CONSTRAINT lease_held CHECK (held = 1)

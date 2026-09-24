@@ -1,8 +1,5 @@
-"""SQL over two backends: the store speaks one dialect through this protocol.
-
-agent-db serves SQLite, so the statements the store writes run unchanged on a local
-``sqlite3`` file. Unit tests and offline runs use that file; the wire enters only where it
-has to.
+"""SQL over two backends: agent-db serves SQLite, so the store's statements run unchanged on
+a local ``sqlite3`` file, and only the wire tests need a server.
 """
 
 from __future__ import annotations
@@ -42,11 +39,7 @@ class StoreError(Exception):
 
 
 class Executor(Protocol):
-    """Runs SQL against one database.
-
-    Concurrent calls are not ordered against each other: await one before issuing the next
-    when order matters.
-    """
+    """Runs SQL against one database. Concurrent calls are not ordered against each other."""
 
     async def exec(self, sql: str, *params: Value) -> ExecResult: ...
 
@@ -60,10 +53,7 @@ class Executor(Protocol):
 
 
 class SQLiteExecutor:
-    """An ``Executor`` on a local SQLite file, or ``:memory:``.
-
-    One connection on one thread, so a memory database is the same database on every call.
-    """
+    """An ``Executor`` on a local SQLite file, or on one ``:memory:`` database per instance."""
 
     def __init__(self, path: str = ":memory:") -> None:
         self._path = path

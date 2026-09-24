@@ -22,7 +22,7 @@ class DelegateStream(Protocol):
 
     @property
     def task_id(self) -> str:
-        """The far side's id for this delegation. Empty until its first event has arrived."""
+        """The far side's id for this delegation, empty until its first event arrives."""
         ...
 
     async def __anext__(self) -> TaskUpdate: ...
@@ -56,17 +56,11 @@ class Delegate(ABC):
 
     @property
     def endpoint(self) -> str | None:
-        """Where the far side lives, stable across restarts, or None when it has no address.
-
-        A persisted session finds the conversation it last had there by this.
-        """
+        """Where the far side lives, stable across restarts, or None when it has no address."""
         return None
 
     def resume(self, context_id: str) -> bool:
-        """Continue an earlier conversation on the far side instead of opening a new one.
-
-        Returns False, changing nothing, once this delegate has fixed a context of its own.
-        """
+        """Continue an earlier conversation on the far side; False once a send has fixed one."""
         return False
 
     async def aclose(self) -> None:  # noqa: B027

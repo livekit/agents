@@ -1,11 +1,4 @@
-"""The session store over agent-db's data plane, against a running server.
-
-Start one with ``mage devLocal`` in agent-db, then::
-
-    LIVEKIT_AGENTDB_URL=http://localhost:7780 LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db \\
-    LIVEKIT_AGENTDB_API_KEY=devkey LIVEKIT_AGENTDB_API_SECRET=secret \\
-    uv run pytest tests/test_store_agentdb.py --plugin agentdb
-"""
+"""The store suite over agent-db's wire, against ``mage devLocal`` and ``LIVEKIT_AGENTDB_*``."""
 
 from __future__ import annotations
 
