@@ -194,6 +194,17 @@ async def test_a_resumed_start_records_no_handoff_and_no_configuration(
     assert recorded(third) == [2, 3]
     await third.aclose()
 
+    # the same session and agent started again without persistence is a start like any other
+    await (fresh := _session(llm)).start(agent=FareDesk(), persist=database.session("s2"))
+    await fresh.aclose()
+    fourth = _session(llm)
+    agent = FareDesk()
+    await fourth.start(agent=agent, persist=database.session("s2"))
+    await fourth.aclose()
+    await fourth.start(agent=agent)
+    assert recorded(fourth)[0] == 2
+    await fourth.aclose()
+
 
 async def test_userdata_is_json_only(database: Database) -> None:
     session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), userdata=object())

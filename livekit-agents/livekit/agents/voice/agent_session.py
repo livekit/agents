@@ -705,9 +705,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
         self._persistence: SessionPersistence | None = None
-        # the agent a restored session left off on, whose first activity goes on rather than
-        # being handed to
-        self._resumed_agent: Agent | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -954,13 +951,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started_at = time.time()
 
+            resumes = False
             if persist is not None:
                 # imported here: a session that persists nothing never loads the store
                 from .persistence import SessionPersistence
 
                 self._persistence = SessionPersistence(self, persist)
                 try:
-                    agent = await self._persistence.rehydrate(agent)
+                    agent, resumes = await self._persistence.rehydrate(agent)
                 except BaseException:
                     # a session that never started is never closed, so it lets the state go here
                     self._persistence = None
@@ -1169,7 +1167,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # _update_activity_task also watches on_enter on the run state: without it
             # the run completes as soon as the first speech does, dropping whatever
             # on_enter produces next — and never completes when on_enter says nothing.
-            tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
+            tasks.append(
+                asyncio.create_task(self._update_activity_task(None, self._agent, resumes=resumes))
+            )
 
             try:
                 try:
@@ -1891,6 +1891,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         new_activity: Literal["start", "resume"] = "start",
         blocked_tasks: list[asyncio.Task] | None = None,
         wait_on_enter: bool = True,
+        resumes: bool = False,
     ) -> None:
         async with self._activity_lock:
             if self._closing and new_activity == "start":
@@ -1981,9 +1982,6 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 # a start that resumes the agent the history already ends on is no handoff;
                 # its configuration update is skipped by content, so a changed one still lands
-                resumes = (
-                    previous_activity_v is None and self._activity.agent is self._resumed_agent
-                )
                 if not resumes:
                     run_state = self._global_run_state
                     handoff_item = AgentHandoff(
@@ -2032,7 +2030,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(
-        self, old_task: asyncio.Task[None] | None, agent: Agent
+        self, old_task: asyncio.Task[None] | None, agent: Agent, *, resumes: bool = False
     ) -> None:
         if old_task is not None:
             await old_task
@@ -2040,7 +2038,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # an agent resumed with durable tools already has its activity, which resumes
         rehydrated = agent._activity is not None and self._activity is None
         await self._update_activity(
-            agent, new_activity="resume" if rehydrated else "start", wait_on_enter=False
+            agent,
+            new_activity="resume" if rehydrated else "start",
+            wait_on_enter=False,
+            resumes=resumes,
         )
 
         # watch on_enter so the run captures its output without awaiting it

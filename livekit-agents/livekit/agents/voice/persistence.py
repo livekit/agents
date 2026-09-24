@@ -78,15 +78,16 @@ class SessionPersistence:
     def persisted(self) -> PersistedSession:
         return self._persisted
 
-    async def rehydrate(self, agent: Agent) -> Agent:
-        """Claim the session and restore what it had; returns the agent to start."""
+    async def rehydrate(self, agent: Agent) -> tuple[Agent, bool]:
+        """Claim the session and restore what it had; returns the agent to start, and whether
+        it is the one the session left off on."""
         session = self._session
         _userdata_json(session._userdata)
         stored = await self._persisted.load()
         if stored is None:
             self._check_rebuild(agent)
             self._listen()
-            return agent
+            return agent, False
 
         session._chat_ctx = llm.ChatContext(list(stored.history))
 
@@ -207,8 +208,6 @@ class SessionPersistence:
         finally:
             _REHYDRATING.reset(token)
         current, own = chain[kept - 1]
-        if current.id == stored.current_agent_id:
-            session._resumed_agent = current
         if current.id != (stored.current_agent_id or agent.id) or not (own and own.chat_items):
             # a stand-in, or an agent with nothing of its own stored, starts from the history
             current._chat_ctx = session._chat_ctx.copy(
@@ -253,7 +252,7 @@ class SessionPersistence:
         self._check_rebuild(current)
         self._sync()
         self._listen()
-        return current
+        return current, current.id == stored.current_agent_id
 
     def _listen(self) -> None:
         self._session.on("conversation_item_added", self._on_item_added)
