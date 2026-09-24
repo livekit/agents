@@ -86,8 +86,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
     async def on_enter(self) -> None:
         self.session.generate_reply(
             instructions=(
-                "Ask the user for their email address. If the user already stated one earlier "
-                "in this conversation, record it with update_email_address instead of asking again."
+                "Get the user's email address. First scan the conversation - if they already gave "
+                "one earlier, read it back and ask them to confirm it rather than asking from "
+                "scratch. Only ask fresh when the conversation has no email address yet."
             )
         )
 

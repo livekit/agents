@@ -78,8 +78,9 @@ class GetAddressTask(AgentTask[GetAddressResult]):
     async def on_enter(self) -> None:
         self.session.generate_reply(
             instructions=(
-                "Ask the user for their address. If the user already stated one earlier in "
-                "this conversation, record it with update_address instead of asking again."
+                "Get the user's address. First scan the conversation - if they already gave one "
+                "earlier, read it back and ask them to confirm it rather than asking from scratch. "
+                "Only ask fresh when the conversation has no address yet."
             )
         )
 

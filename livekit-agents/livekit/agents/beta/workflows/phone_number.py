@@ -114,8 +114,9 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
     async def on_enter(self) -> None:
         self.session.generate_reply(
             instructions=(
-                "Ask the user for their phone number. If the user already stated one earlier "
-                "in this conversation, record it with update_phone_number instead of asking again."
+                "Get the user's phone number. First scan the conversation - if they already gave "
+                "one earlier, read it back and ask them to confirm it rather than asking from "
+                "scratch. Only ask fresh when the conversation has no phone number yet."
             )
         )
 
@@ -126,7 +127,8 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
 
         @function_tool(flags=flags)
         async def update_phone_number(phone_number: str, ctx: RunContext) -> str | None:
-            """Update the phone number provided by the user.
+            """Update the phone number provided by the user. Call it only once the user has given
+            the whole number; if they pause partway through, wait for the rest.
 
             Args:
                 phone_number: The phone number provided by the user, digits only with optional leading +
