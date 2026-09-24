@@ -102,6 +102,21 @@ class StoreSuite:
         ]
         assert "first, corrected" in rows[1]["item"]
 
+    async def test_an_item_edited_in_place_after_a_save_is_rewritten(
+        self, database: Database
+    ) -> None:
+        persisted = database.session("s1")
+        await persisted.load()
+        call = FunctionCall(call_id="call_1", name="lk_agents_delegate", arguments="{}")
+        await _save(persisted, [call])
+        # the delegate names its expert task on the call only once the task is known
+        call.extra["lk.task_id"] = "task-1"
+        await _save(persisted, [call])
+        rows = await database.rows(
+            "SELECT json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items"
+        )
+        assert rows == [{"task_id": "task-1"}]
+
     async def test_a_failed_save_is_written_again_by_the_next(
         self, database: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:

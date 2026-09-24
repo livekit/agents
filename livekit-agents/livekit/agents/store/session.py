@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from pydantic import TypeAdapter
 
 from ..llm.chat_context import ChatContext, ChatItem
-from ..llm.utils import compute_chat_ctx_diff
 from ..log import logger
 from .executor import Executor, Row, Statement, StoreError, Value
 from .schema import migrate
@@ -144,8 +143,8 @@ class PersistedSession:
         self._endpoint = endpoint
         self._released = False
         self._children: dict[str | None, str] = {}
-        # per owner, the items as last saved, which the next save diffs against
-        self._saved: dict[str, ChatContext] = {}
+        # per owner, each item's row as last saved, which the next save compares against
+        self._saved: dict[str, dict[str, str]] = {}
 
     @property
     def database_id(self) -> str:
@@ -200,11 +199,11 @@ class PersistedSession:
             "SELECT owner, item FROM chat_items WHERE session_id = ? ORDER BY created_at, rowid",
             self._session_id,
         ):
-            owned.setdefault(str(row["owner"]), []).append(
-                _ITEM_ADAPTER.validate_json(str(row["item"]))
-            )
+            owner, data = str(row["owner"]), str(row["item"])
+            item = _ITEM_ADAPTER.validate_json(data)
+            owned.setdefault(owner, []).append(item)
+            self._saved.setdefault(owner, {})[item.id] = data
         for owner, items in owned.items():
-            self._saved[owner] = ChatContext([_frozen(item) for item in items])
             if owner == SESSION_OWNER:
                 history = items
             else:
@@ -236,30 +235,29 @@ class PersistedSession:
         """Write the items the history and each agent's context gained, changed or lost since
         the last save, and the mutable part, in one batch. ``None`` userdata leaves it as is."""
         statements: list[Statement] = []
-        saved: dict[str, ChatContext] = {}
+        saved: dict[str, dict[str, str]] = {}
         owners = [(SESSION_OWNER, history)] + [(a.agent_id, a.chat_items) for a in agents]
         for owner, items in owners:
-            new = ChatContext([_frozen(item) for item in items])
-            diff = compute_chat_ctx_diff(self._saved.get(owner, ChatContext.empty()), new)
-            for item_id in diff.to_remove:
+            # an item is rewritten whole whenever its row would differ, whatever changed in it
+            rows = {item.id: (item_json(item), item.created_at) for item in items}
+            base = self._saved.get(owner, {})
+            for item_id in base.keys() - rows.keys():
                 statements.append(
                     (
                         "DELETE FROM chat_items WHERE session_id = ? AND owner = ? AND item_id = ?",
                         (self._session_id, owner, item_id),
                     )
                 )
-            # an item diffed as changed is rewritten whole
-            changed = {item_id for _, item_id in diff.to_create + diff.to_update}
-            for item in new.items:
-                if item.id in changed:
+            for item_id, (data, created_at) in rows.items():
+                if base.get(item_id) != data:
                     statements.append(
                         (
                             "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item, "
                             "created_at) VALUES (?, ?, ?, ?, ?)",
-                            (self._session_id, owner, item.id, item_json(item), item.created_at),
+                            (self._session_id, owner, item_id, data, created_at),
                         )
                     )
-            saved[owner] = new
+            saved[owner] = {item_id: data for item_id, (data, _) in rows.items()}
 
         statements.append(
             (
@@ -317,13 +315,6 @@ class PersistedSession:
             database.sessions = max(database.sessions - 1, 0)
             if database.sessions == 0:
                 await database.aclose()
-
-
-def _frozen(item: ChatItem) -> ChatItem:
-    # the diff compares a message's text, so the base keeps its own copy of the content list
-    return (
-        item.model_copy(update={"content": list(item.content)}) if item.type == "message" else item
-    )
 
 
 def _text(value: Value | None) -> str | None:
