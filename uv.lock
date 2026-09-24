@@ -18,7 +18,10 @@ members = [
     "livekit-example-frontdesk",
     "livekit-example-healthcare",
     "livekit-example-homepage",
+    "livekit-example-hotel-amenities",
+    "livekit-example-hotel-guest-support",
     "livekit-example-hotel-receptionist",
+    "livekit-example-hotel-reservations",
     "livekit-example-inference",
     "livekit-example-survey",
     "livekit-example-voice-agents",
@@ -2470,9 +2473,78 @@ requires-dist = [
 ]
 
 [[package]]
+name = "livekit-example-hotel-amenities"
+version = "0"
+source = { virtual = "examples/hotel_amenities" }
+dependencies = [
+    { name = "apsw" },
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector" },
+    { name = "python-dotenv" },
+    { name = "tzdata" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apsw", specifier = ">=3.46" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
+]
+
+[[package]]
+name = "livekit-example-hotel-guest-support"
+version = "0"
+source = { virtual = "examples/hotel_guest_support" }
+dependencies = [
+    { name = "apsw" },
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector" },
+    { name = "python-dotenv" },
+    { name = "tzdata" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apsw", specifier = ">=3.46" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
+]
+
+[[package]]
 name = "livekit-example-hotel-receptionist"
 version = "0"
 source = { virtual = "examples/hotel_receptionist" }
+dependencies = [
+    { name = "apsw" },
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector" },
+    { name = "python-dotenv" },
+    { name = "tzdata" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "apsw", specifier = ">=3.46" },
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "livekit-plugins-silero", editable = "livekit-plugins/livekit-plugins-silero" },
+    { name = "livekit-plugins-turn-detector", editable = "livekit-plugins/livekit-plugins-turn-detector" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
+]
+
+[[package]]
+name = "livekit-example-hotel-reservations"
+version = "0"
+source = { virtual = "examples/hotel_reservations" }
 dependencies = [
     { name = "apsw" },
     { name = "livekit-agents" },
