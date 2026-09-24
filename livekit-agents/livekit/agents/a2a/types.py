@@ -28,11 +28,11 @@ class TaskInput:
     instruction: str | None = None
     """What an agent is asking for, in its words. Empty where it says nothing of its own."""
     chat_ctx: ChatContext = field(default_factory=ChatContext.empty)
-    """The whole conversation the sender holds; the receiver takes the delta by item id."""
+    """The whole history the sender holds; the receiver takes the delta by item id."""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Application data, handed to the handler untouched. JSON-serializable."""
     closing: bool = False
-    """The conversation is over: nothing is being asked, and the receiver may drop it."""
+    """The context is over: nothing is being asked, and the receiver may drop it."""
     conversation_id: str | None = None
     """The sender's conversation, whose database the receiver persists into."""
     caller_session_id: str | None = None

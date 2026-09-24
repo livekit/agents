@@ -123,7 +123,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                     return None
                 # completed, canceled and input-required all answer: a cancelled delegation
                 # still says what happened, side effects included, and a question is what the
-                # conversation relays to the user
+                # conversation model relays to the user
                 return update.text
 
     # not CANCELLABLE, since the expert owns its work. duplicates are allowed because the

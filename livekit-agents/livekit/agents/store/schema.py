@@ -1,4 +1,4 @@
-"""A session database's schema, versioned in ``_meta`` and migrated forward on open.
+"""A conversation database's schema, versioned in ``_meta`` and migrated forward on open.
 
 A database outlives the release that wrote it, so a change is a new migration appended below,
 never an edit to an old one.
@@ -64,7 +64,7 @@ async def migrate(executor: Executor) -> int:
         found = int(str(row["value"]))
     if found > SCHEMA_VERSION:
         raise SchemaVersionError(
-            f"the session database is at schema version {found}, and this framework "
+            f"the database is at schema version {found}, and this framework "
             f"only knows up to {SCHEMA_VERSION}; upgrade livekit-agents to open it"
         )
 

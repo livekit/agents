@@ -1,6 +1,6 @@
 """Answering requests with one ``AgentSession``, and knowing which answer belongs to which.
 
-One session holds the whole conversation, and each request is one turn of it. What goes back
+One session holds the whole context, and each request is one turn of it. What goes back
 is attributed by lineage rather than guessed: a request owns the speech its turn produced,
 the tool calls that speech made, the deferred replies to those calls, and anything said from
 inside one of its tools.
@@ -292,7 +292,7 @@ class RequestRun:
 
 
 class SessionRunner:
-    """One conversation's session, and the requests fed through it as turns.
+    """One context's session, and the requests fed through it as turns.
 
     The activity's scheduler serializes generation and playout, so requests are taken in
     arrival order with no queue here. Listening starts here, before the first request.
@@ -337,9 +337,9 @@ class SessionRunner:
     async def _sync_chat_ctx(self, run: RequestRun) -> None:
         """Take into this session whatever the caller said that it has not seen.
 
-        The caller sends the conversation whole and the merge takes the delta by item id,
+        The caller sends its history whole and the merge takes the delta by item id,
         so what this session did itself stays as it recorded it. The caller's plumbing —
-        its calls, its handoffs, its instructions — is not conversation and does not travel.
+        its calls, its handoffs, its instructions — is not what was said and does not travel.
         """
         if not run._input.chat_ctx.items:
             return

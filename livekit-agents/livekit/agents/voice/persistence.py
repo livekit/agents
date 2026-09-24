@@ -1,4 +1,4 @@
-"""An ``AgentSession`` bound to its rows in a session database.
+"""An ``AgentSession`` bound to its rows in its conversation's database.
 
 Imported only when ``start()`` is given ``persist``; it restores data into the agent and
 session the handler built, and rebuilds an agent from its row only when its class says how.

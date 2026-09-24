@@ -452,7 +452,7 @@ async def test_a_vanilla_reply_without_a_task_is_the_answer() -> None:
     assert [(u.state, u.text) for u in updates] == [("completed", "the fee is $75")]
 
 
-async def test_the_conversation_rides_along_and_comes_back_intact() -> None:
+async def test_the_history_rides_along_and_comes_back_intact() -> None:
     agent = ForeignAgent(ANSWERED, offers_extension=True)
     chat_ctx = a2a.TaskInput(text="x").chat_ctx
     chat_ctx.add_message(role="user", content="change my Monday flight", id="m1")

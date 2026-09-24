@@ -15,11 +15,11 @@ if TYPE_CHECKING:
 class A2ADelegate(Delegate):
     """An expert served at an HTTP endpoint speaking A2A, ours or not.
 
-    One delegate is one conversation, so give each session its own::
+    One delegate is one context, so give each session its own::
 
         AgentSession(llm=realtime_model, delegate=A2ADelegate("http://localhost:8080/fare-desk"))
 
-    A session persisted with ``start(persist=...)`` resumes the conversation it last had here.
+    A session persisted with ``start(persist=...)`` resumes the context it last had here.
     """
 
     def __init__(
@@ -50,7 +50,7 @@ class A2ADelegate(Delegate):
 
     @property
     def context_id(self) -> str | None:
-        """The conversation with the endpoint: the one given, else minted on the first send."""
+        """The context with the endpoint: the one given, else minted on the first send."""
         return self._client.context_id if self._client is not None else self._context_id
 
     @property

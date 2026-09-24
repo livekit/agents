@@ -126,7 +126,7 @@ class Receptionist(Agent):
         """Ask the caller for their email address, reading it back to confirm it.
 
         This one talks, which is why it lives here and not on the other side: spelling an
-        address out and confirming it is a conversation, and the other half is not on the
+        address out and confirming it is a back-and-forth, and the other half is not on the
         phone. Reach for it only once an answer has asked for an address.
 
         Args:
@@ -140,7 +140,7 @@ class Receptionist(Agent):
         email = result.email_address.strip().lower()
         # an effect in flight at a crash runs again, so it is keyed to run once per call
         await EffectCall(identify(email, key=ctx.idempotency_key))
-        # said back into the conversation, so the next delegation carries it to the desk
+        # said back into the history, so the next delegation carries it to the desk
         return f"confirmed with the caller: {email}"
 
 
@@ -149,8 +149,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     session = AgentSession(
-        # one delegate per conversation: the session closes it when the call ends, which is
-        # what tells the desk it can drop this conversation rather than wait for it to idle
+        # one delegate per session: the session closes it when the call ends, which is
+        # what tells the desk it can drop this context rather than wait for it to idle
         delegate={"delegate": A2ADelegate(FARE_DESK_URL), "announce": False},
         llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
         # llm=inference.LLM("openai/gpt-4.1-mini"),

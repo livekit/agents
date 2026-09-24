@@ -47,8 +47,7 @@ A client asks for it with the ``A2A-Extensions`` header; not echoed back means n
 """
 
 EXTENSION_DESCRIPTION = (
-    "LiveKit agent session profile: conversation context, typed chat items, verbatim text, "
-    "directives."
+    "LiveKit agent session profile: chat history, typed chat items, verbatim text, directives."
 )
 
 
@@ -59,7 +58,7 @@ def _key(name: str) -> str:
 
 KIND = _key("kind")
 """On a message: ``delegation`` when an agent is asking, absent for a person's turn.
-On a part: ``chat_ctx`` for the conversation, ``chat_item`` for one typed item."""
+On a part: ``chat_ctx`` for the chat history, ``chat_item`` for one typed item."""
 
 VERBATIM = _key("verbatim")
 """On a status message or an artifact: say the text as written rather than phrasing it."""
@@ -78,7 +77,7 @@ CALLER = _key("caller")
 
 KIND_DELEGATION = "delegation"
 KIND_CLOSE = "close"
-"""On a message: the conversation is over, and the server may drop it now rather than wait
+"""On a message: the context is over, and the server may drop it now rather than wait
 for it to go idle."""
 KIND_CHAT_CTX = "chat_ctx"
 KIND_CHAT_ITEM = "chat_item"

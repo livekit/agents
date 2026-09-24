@@ -1,4 +1,4 @@
-"""The voice side: a conversation that hands work to an expert over A2A."""
+"""The voice side: a session that hands work to an expert over A2A."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def _answer(session: AgentSession) -> str | None:
 
 
 @contextlib.asynccontextmanager
-async def _conversation(llm: FakeLLM, **session_kwargs: Any) -> Any:
+async def _voice_session(llm: FakeLLM, **session_kwargs: Any) -> Any:
     async with _serving() as served:
         delegate = A2ADelegate(f"{served.base_url}/fare-desk")
         session = AgentSession(llm=llm, delegate=delegate, **session_kwargs)
@@ -114,7 +114,7 @@ async def _conversation(llm: FakeLLM, **session_kwargs: Any) -> Any:
 
 
 async def test_the_delegate_tool_is_offered_when_a_delegate_is_in_force() -> None:
-    async with _conversation(_voice_llm()) as (session, _):
+    async with _voice_session(_voice_llm()) as (session, _):
         activity = session.current_agent._get_activity_or_raise()
 
         def _delegate_tool() -> Any:
@@ -141,11 +141,11 @@ async def test_a_session_without_a_delegate_offers_no_such_tool() -> None:
 
 
 async def test_progress_is_relayed_and_the_answer_is_the_tools_return() -> None:
-    async with _conversation(_voice_llm()) as (session, _):
+    async with _voice_session(_voice_llm()) as (session, _):
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
 
-        # the expert's report reached the conversation as the tool wrote it
+        # the expert's report reached the history as the tool wrote it
         assert "checking the fare rules" in " ".join(_outputs(session))
         assert _answer(session) == "It is 240 USD."
 
@@ -153,7 +153,7 @@ async def test_progress_is_relayed_and_the_answer_is_the_tools_return() -> None:
 async def test_a_directive_is_raised_on_the_session_after_the_answer() -> None:
     events: list[DirectiveReceivedEvent] = []
 
-    async with _conversation(_voice_llm(instruction="that is all")) as (session, _):
+    async with _voice_session(_voice_llm(instruction="that is all")) as (session, _):
         session.on("directive_received", events.append)
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
@@ -166,9 +166,9 @@ async def test_a_directive_is_raised_on_the_session_after_the_answer() -> None:
         assert session.history.items
 
 
-async def test_the_conversation_is_sent_without_its_calls() -> None:
+async def test_the_history_is_sent_without_its_calls() -> None:
     """The expert gets what was said, not the plumbing that said it."""
-    async with _conversation(_voice_llm()) as (session, served):
+    async with _voice_session(_voice_llm()) as (session, served):
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
 
@@ -176,7 +176,7 @@ async def test_the_conversation_is_sent_without_its_calls() -> None:
     items = expert.current_agent.chat_ctx.items
     said = [item.text_content or "" for item in items if item.type == "message"]
     assert any("how much is it" in text for text in said), "the caller's turn reached the expert"
-    # the delegate call and its synthetic progress entries are not conversation
+    # the delegate call and its synthetic progress entries are not what was said
     assert not [item for item in items if getattr(item, "name", "") == DELEGATE_TOOL_NAME]
 
 
@@ -278,7 +278,7 @@ async def test_an_agents_delegate_overrides_the_sessions() -> None:
 
 
 async def test_a_delegation_that_ends_without_a_state_is_a_failure() -> None:
-    """Rule 1: a stream that ends without a terminal status failed, and the conversation
+    """Rule 1: a stream that ends without a terminal status failed, and the conversation model
     has to hear that rather than a stray StopAsyncIteration."""
 
     class _Silent(Delegate):

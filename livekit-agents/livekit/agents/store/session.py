@@ -1,6 +1,6 @@
-"""One session's rows in a session database: what it loads, appends and checkpoints.
+"""One session's rows in its conversation's database: what it loads, appends and checkpoints.
 
-Chat items are appended through a queue the conversation never waits on; the small mutable
+Chat items are appended through a queue the session never waits on; the small mutable
 part is rewritten at checkpoints, each fenced by the session's lease.
 """
 
@@ -327,7 +327,7 @@ class PersistedSession:
         endpoint = delegate.endpoint
         if (child := self._children.get(endpoint)) is not None and delegate.resume(child):
             logger.debug(
-                "resuming the delegate's earlier conversation",
+                "resuming the delegate's earlier context",
                 extra={"endpoint": endpoint, "context_id": child},
             )
 

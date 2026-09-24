@@ -60,8 +60,8 @@ _ANSWER_IN_ARTIFACT: frozenset[TaskState] = frozenset({"completed", "input-requi
 
 
 def encode_ctx(chat_ctx: ChatContext) -> dict[str, Any]:
-    """The conversation as JSON, with timestamps so a receiver renders history in its own
-    order, and without images or audio, which a conversation carries by the megabyte."""
+    """The chat history as JSON, with timestamps so a receiver renders history in its own
+    order, and without images or audio, which a history carries by the megabyte."""
     return chat_ctx.to_dict(exclude_timestamp=False)
 
 
@@ -82,7 +82,7 @@ def to_a2a_request(
     context_id: str,
     reference_task_ids: Sequence[str] = (),
 ) -> pb.SendMessageRequest:
-    """One message on a context: the text, the conversation, and what it may be answering."""
+    """One message on a context: the text, the history, and what it may be answering."""
     parts = [pb.Part(text=task_input.body)]
     if task_input.chat_ctx.items:
         parts.append(
@@ -121,7 +121,7 @@ def to_a2a_request(
 def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
     """The input an incoming request carries — the inverse of :func:`to_a2a_request`.
 
-    A client that sends text and nothing else is a person's turn with an empty conversation,
+    A client that sends text and nothing else is a person's turn with an empty history,
     which is what makes a plain A2A client usable against a LiveKit endpoint.
     """
     message = request.message

@@ -1,4 +1,4 @@
-"""Talking to an A2A endpoint: one conversation, one task at a time."""
+"""Talking to an A2A endpoint: one context, one task at a time."""
 
 from __future__ import annotations
 
@@ -147,10 +147,10 @@ class TaskStream:
 
 
 class A2AClient:
-    """An A2A endpoint, as one conversation.
+    """An A2A endpoint, as one context.
 
     The card is read once on the first send, and the extension is activated only where that
-    card offers it; one instance is one ``context_id``, so give each conversation its own.
+    card offers it; one instance is one ``context_id``, so give each session its own.
     """
 
     def __init__(
@@ -180,7 +180,7 @@ class A2AClient:
 
     @property
     def context_id(self) -> str:
-        """The conversation. The server finds or creates its side by this."""
+        """The context. The server finds or creates its side by this."""
         return self._context_id
 
     @property
@@ -242,7 +242,7 @@ class A2AClient:
             return self._client
 
     async def close_context(self) -> None:
-        """Tell the endpoint the conversation is over, so it need not wait for idle.
+        """Tell the endpoint the context is over, so it need not wait for idle.
 
         Best-effort: a server keeps its own idle policy, and this only saves it the wait.
         """

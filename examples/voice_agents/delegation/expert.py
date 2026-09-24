@@ -17,15 +17,15 @@ header the binding requires:
               "what flights are there from SFO to Tokyo next Monday?"}]}}'
 
 The desk never speaks to the caller. It works out what is true, hands back the facts and the
-numbers, and says what the phone agent should tell them. It holds the whole conversation:
+numbers, and says what the phone agent should tell them. It holds each context whole:
 one session per contextId, so the second request sees what the first one did.
 
 `ctx.update()` inside a tool reports while the work is still running and releases the turn,
 so the phone agent can say "holding a seat" while the seat is being held. That report is
 relayed as the tool wrote it rather than handed to a model to restate.
 
-With LIVEKIT_AGENTDB_URL set, each conversation persists to the database the caller names and
-survives a restart of the desk; see the README's "Persistence" section.
+With LIVEKIT_AGENTDB_URL set, each context persists as a session in the conversation the caller
+names and survives a restart of the desk; see the README's "Persistence" section.
 """
 
 import asyncio
@@ -63,7 +63,7 @@ load_dotenv()
 # random one in dev
 server = AgentServer(port=8321)
 
-# without agent-db the desk keeps conversations in memory; the short lease lets a desk restarted
+# without agent-db the desk keeps contexts in memory; the short lease lets a desk restarted
 # after a crash take one back within seconds
 AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
 # devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
@@ -866,7 +866,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
     def _on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
         if ev.item.type != "message":
             return
-        # the conversation frames the work, so it takes no task id: what came in at the top,
+        # messages frame the work, so they take no task id: what came in at the top,
         # what went back at the bottom, and the task's own lines in between
         _trace("", "▶" if ev.item.role == "user" else "◀", ev.item.text_content, limit=200)
 
@@ -899,7 +899,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
     if persisted is not None and (messages := session.history.messages()):
         # a fresh session has said nothing yet, so any message here came back from the store
         _trace("", "↺", f"rehydrated {ctx.context_id}: {len(messages)} messages back", limit=200)
-    # todo: the expert runs in the server process; a job process per conversation is planned
+    # todo: the expert runs in the server process; a job process per context is planned
     ctx.attach(session)
 
 

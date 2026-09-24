@@ -434,7 +434,7 @@ async def test_an_ordinary_session_has_no_request_to_direct() -> None:
     assert branch == ["close"]
 
 
-async def test_the_conversation_is_merged_once_across_requests() -> None:
+async def test_the_history_is_merged_once_across_requests() -> None:
     """The caller sends what it holds, whole; the receiver takes the delta by item id."""
     llm = _AnsweringLLM(
         fake_responses=[_says("first", "one"), _says("second", "two")],
@@ -464,7 +464,7 @@ async def test_the_conversation_is_merged_once_across_requests() -> None:
     assert len(items) == len({item.id for item in items})
 
 
-async def test_what_the_caller_holds_arrives_as_conversation_not_plumbing() -> None:
+async def test_what_the_caller_holds_arrives_as_history_not_plumbing() -> None:
     """A caller's calls, handoffs and instructions are not what was said."""
     llm = _AnsweringLLM(fake_responses=[_says("first", "one")], fallbacks=[])
     session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)

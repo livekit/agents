@@ -133,7 +133,7 @@ async def test_turns_are_written_as_they_happen(database: Database) -> None:
     assert len(agent_items) >= 4
 
 
-async def test_a_second_start_resumes_the_conversation(database: Database) -> None:
+async def test_a_second_start_resumes_the_session(database: Database) -> None:
     llm = _RecordingLLM(
         fake_responses=[_says("my flight is NW812", "Noted, NW812.")], fallbacks=["You said NW812."]
     )
@@ -344,7 +344,7 @@ async def test_a_class_that_cannot_be_rebuilt_warns_and_falls_back(
         await second.start(agent=root, persist=database.session("s1"))
     assert second.current_agent is root
     assert any("could not be rebuilt" in r.getMessage() for r in caplog.records)
-    # the root resumes with the whole conversation in front of it
+    # the root resumes with the whole history in front of it
     root_ids = {item.id for item in root.chat_ctx.items}
     messages = [i.id for i in first.history.items if i.id in history and i.type == "message"]
     assert set(messages) <= root_ids
