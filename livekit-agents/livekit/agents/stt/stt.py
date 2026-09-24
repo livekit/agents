@@ -127,8 +127,8 @@ class SpeechEvent:
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
     incremental: bool = False
-    """For PREFLIGHT_TRANSCRIPT: the transcript carries only the words since the previous
-    preflight instead of the whole segment so far."""
+    """For PREFLIGHT_TRANSCRIPT: the transcript may cover only part of the segment, such as the
+    words since the previous preflight. An interim of the same segment supersedes it."""
 
 
 @dataclass
