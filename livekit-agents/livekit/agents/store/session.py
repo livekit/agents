@@ -7,7 +7,6 @@ part is rewritten at checkpoints, each fenced by the session's lease.
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -70,22 +69,6 @@ class StoredSession:
     agents: dict[str, AgentRecord]
     children: dict[str | None, str]
     """Per endpoint, the latest child session this one reached there, to resume on."""
-
-
-def qualified_name(cls: type) -> str:
-    return f"{cls.__module__}:{cls.__qualname__}"
-
-
-def import_qualified(name: str) -> Any:
-    """The class a ``module:qualname`` names. Raises ``ImportError`` when it is gone."""
-    module_name, _, qualname = name.partition(":")
-    target: Any = importlib.import_module(module_name)
-    for part in qualname.split("."):
-        try:
-            target = getattr(target, part)
-        except AttributeError:
-            raise ImportError(f"{name} does not import") from None
-    return target
 
 
 def item_json(item: ChatItem) -> str:
@@ -469,7 +452,5 @@ __all__ = [
     "LeaseLostError",
     "PersistedSession",
     "StoredSession",
-    "import_qualified",
     "item_json",
-    "qualified_name",
 ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import importlib
 import json
 import pickle
 from typing import TYPE_CHECKING, Any
@@ -23,8 +24,6 @@ from ..store.session import (
     AgentRecord,
     LeaseLostError,
     PersistedSession,
-    import_qualified,
-    qualified_name,
 )
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
@@ -37,6 +36,10 @@ if TYPE_CHECKING:
 
 # per class, checked once: None when it rebuilds from its row, else why it cannot
 _REBUILD_CHECKS: dict[type[Agent], str | None] = {}
+
+
+def _qualified_name(cls: type) -> str:
+    return f"{cls.__module__}:{cls.__qualname__}"
 
 
 def _userdata_json(userdata: Any) -> Any:
@@ -54,7 +57,7 @@ def _userdata_json(userdata: Any) -> Any:
             raise ValueError("it does not read back from JSON as the same value")
     except Exception as e:
         raise TypeError(
-            f"userdata of type {qualified_name(cls)} cannot be persisted ({e}); pass a "
+            f"userdata of type {_qualified_name(cls)} cannot be persisted ({e}); pass a "
             "dataclass, a pydantic model, or plain JSON data"
         ) from None
     return data
@@ -111,8 +114,11 @@ class SessionPersistence:
                 chain.append((agent, record))
                 continue
             try:
-                cls = import_qualified(record.cls)
-            except ImportError:
+                module_name, _, qualname = record.cls.partition(":")
+                cls: Any = importlib.import_module(module_name)
+                for part in qualname.split("."):
+                    cls = getattr(cls, part)
+            except (ImportError, AttributeError, ValueError):
                 reason = f"{record.cls} does not import"
             else:
                 if not (isinstance(cls, type) and issubclass(cls, Agent)):
@@ -273,7 +279,7 @@ class SessionPersistence:
                     f"{cls.__name__} cannot be rebuilt on resume: {e}; define "
                     "_snapshot_state/_from_state to rebuild it, or the nearest agent above it "
                     "resumes instead",
-                    extra={"cls": qualified_name(cls)},
+                    extra={"cls": _qualified_name(cls)},
                 )
         return _REBUILD_CHECKS[cls]
 
@@ -308,7 +314,7 @@ class SessionPersistence:
                 records.append(
                     AgentRecord(
                         agent_id=agent.id,
-                        cls=qualified_name(type(agent)),
+                        cls=_qualified_name(type(agent)),
                         parent_agent_id=parent.id if parent is not None else None,
                         state=state,
                         # a closed activity leaves the frames its tools stopped at
@@ -341,7 +347,7 @@ class SessionPersistence:
             self._sync()
             await self._persisted.write_durable_state(
                 agent.id,
-                cls=qualified_name(type(agent)),
+                cls=_qualified_name(type(agent)),
                 durable_state=scheduler.durable_state(_answered(agent)),
             )
 
