@@ -76,6 +76,12 @@ def test_rule_rejects_bare_chat_latest():
     assert supports_prompt_cache_breakpoints("openai/chat-latest") is False
 
 
+def test_rule_accepts_versioned_chat_latest_from_5_6():
+    # a chat-latest snapshot is gated by its version like any other name; OpenAI documents
+    # breakpoints as supported on gpt-5.6 and later, and no 5.6+ snapshot exists to measure
+    assert supports_prompt_cache_breakpoints("gpt-5.6-chat-latest") is True
+
+
 def test_rule_rejects_chatgpt_alias():
     assert supports_prompt_cache_breakpoints("chatgpt-4o-latest") is False
 
