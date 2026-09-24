@@ -298,7 +298,15 @@ class SpeechStream(stt.SpeechStream):
             config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
         ws = await asyncio.wait_for(
-            self._ensure_session().ws_connect(self._stt._base_url),
+            self._ensure_session().ws_connect(
+                self._stt._base_url,
+                # Without a heartbeat a silently dropped socket (half-open TCP, no
+                # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
+                # forever and the reconnect in `_run` is only ever triggered by that
+                # task ending. aiohttp closes the socket itself when a ping goes
+                # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
+                heartbeat=30.0,
+            ),
             timeout=self._conn_options.timeout,
         )
         # Set initial configuration message.
@@ -392,6 +400,17 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.close()
                     self._ws = None
 
+    def _request_reconnect(self, reason: str) -> None:
+        """Ask `_run` to tear down the current socket and open a new one.
+
+        No-op when there is no socket or a reconnect is already in flight; otherwise the
+        `_run` loop would never learn that the connection is gone.
+        """
+        if self._ws is None or self._reconnect_event.is_set():
+            return
+        logger.warning("Soniox STT WebSocket %s; requesting reconnect", reason)
+        self._reconnect_event.set()
+
     async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
@@ -399,6 +418,11 @@ class SpeechStream(stt.SpeechStream):
             while self._ws:
                 await self._ws.send_str(KEEPALIVE_MESSAGE)
                 await asyncio.sleep(5)
+        except (aiohttp.ClientError, ConnectionError) as e:
+            # When no audio is flowing this write is the only thing touching the socket,
+            # so a dropped connection surfaces here first. Swallowing it left the stream
+            # parked on a dead socket with nothing ever logged.
+            self._request_reconnect(f"keepalive write failed ({e!r})")
         except Exception as e:
             logger.error(f"Error while sending keep alive message: {e}")
 
@@ -430,6 +454,9 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
                 raise
+            except (aiohttp.ClientError, ConnectionError) as e:
+                self._request_reconnect(f"audio write failed ({e!r})")
+                break
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
@@ -503,6 +530,14 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    break
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Treating it as an
+                    # unexpected message type stepped over it and discarded the reason,
+                    # which only survives on `ws.exception()`.
+                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
