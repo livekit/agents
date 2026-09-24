@@ -81,17 +81,22 @@ class DiffOps:
     ]  # (previous_item_id, id), if previous_item_id is None, add to the root
     to_update: list[
         tuple[str | None, str]
-    ]  # (previous_item_id, id), the items with the same id but different content
+    ]  # (previous_item_id, id), the items with the same id but a different value
 
 
 def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps:
-    """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx."""
-    # TODO(theomonnom): Make ChatMessage hashable and also add update ops
+    """Computes the minimal list of create/remove operations to transform old_ctx into new_ctx.
 
+    An item kept under the same id is an update when it differs from the old one by value.
+    """
     old_ids = [m.id for m in old_ctx.items]
     new_ids = [m.id for m in new_ctx.items]
 
-    lcs_ids = set(_compute_lcs(old_ids, new_ids))
+    # an append-only change, the common case, needs no LCS
+    if new_ids[: len(old_ids)] == old_ids:
+        lcs_ids = set(old_ids)
+    else:
+        lcs_ids = set(_compute_lcs(old_ids, new_ids))
     old_ctx_by_id = {item.id: item for item in old_ctx.items}
 
     to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
@@ -102,13 +107,8 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     for new_msg in new_ctx.items:
         if new_msg.id not in lcs_ids:
             to_create.append((prev_id, new_msg.id))
-        else:
-            # check if the content is different
-            old_msg = old_ctx_by_id[new_msg.id]
-            if new_msg.type == "message" and old_msg.type == "message":
-                if new_msg.raw_text_content != old_msg.raw_text_content:
-                    to_update.append((prev_id, new_msg.id))
-                # TODO: check other content types
+        elif new_msg != old_ctx_by_id[new_msg.id]:
+            to_update.append((prev_id, new_msg.id))
 
         prev_id = new_msg.id
 

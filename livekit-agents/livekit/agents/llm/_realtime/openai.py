@@ -1574,11 +1574,20 @@ class RealtimeSession(
                 )
             )
 
-        def _is_content_empty(msg_id: str) -> bool:
+        def _text_changed(msg_id: str) -> bool:
+            # the remote copy keeps only what the server echoed, so only a message's text is
+            # compared; empty content almost always means the content is not synced down, and
+            # recreating it there would be wrong
             remote_item = remote_ctx.get_by_id(msg_id)
-            if remote_item and remote_item.type == "message" and not remote_item.content:
-                return True
-            return False
+            item = chat_ctx.get_by_id(msg_id)
+            return (
+                remote_item is not None
+                and remote_item.type == "message"
+                and bool(remote_item.content)
+                and item is not None
+                and item.type == "message"
+                and item.raw_text_content != remote_item.raw_text_content
+            )
 
         for msg_id in diff_ops.to_remove:
             _delete_item(msg_id)
@@ -1586,11 +1595,8 @@ class RealtimeSession(
         for previous_msg_id, msg_id in diff_ops.to_create:
             _create_item(previous_msg_id, msg_id)
 
-        # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # empty content almost always means the content is not synced down
-            # we don't want to recreate these items there
-            if _is_content_empty(msg_id):
+            if not _text_changed(msg_id):
                 continue
             _delete_item(msg_id)
             _create_item(previous_msg_id, msg_id)
