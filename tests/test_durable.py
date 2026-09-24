@@ -58,9 +58,15 @@ class Desk(Agent):
         return f"{flight}: {charged}, {held}"
 
 
+ENTERED: list[str] = []
+
+
 class Confirm(AgentTask[bool]):
     def __init__(self) -> None:
         super().__init__(instructions="Ask the caller to confirm.")
+
+    async def on_enter(self) -> None:
+        ENTERED.append(self.id)
 
 
 class ConfirmingDesk(Agent):
@@ -77,6 +83,7 @@ class ConfirmingDesk(Agent):
 @pytest.fixture
 async def database(tmp_path: pathlib.Path) -> AsyncIterator[Database]:
     CALLS.clear()
+    ENTERED.clear()
     RELEASED.clear()
     local = store.LocalStore(tmp_path, lease_ttl=LEASE_TTL)
     yield Database(local, await local.create_database())
@@ -177,6 +184,8 @@ async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) ->
     await resumed.start(agent=ConfirmingDesk(), persist=database.session("s1"))
     task = resumed.current_agent
     assert isinstance(task, Confirm)
+    # the task goes on where it was rather than entering again
+    assert ENTERED == ["confirm"]
     task.complete(True)
     await _until(lambda: _outputs(resumed))
     (output,) = _outputs(resumed)

@@ -173,7 +173,13 @@ class SessionPersistence:
                     ),
                     None,
                 )
-                failed = await AgentActivity(member, session)._rehydrate(tasks) if tasks else []
+                # a resumed task takes its activity too, so it goes on without running on_enter
+                resumed_task = isinstance(member, AgentTask) and member._rehydrated
+                failed = (
+                    await AgentActivity(member, session)._rehydrate(tasks)
+                    if tasks or resumed_task
+                    else []
+                )
                 if not isinstance(newer, AgentTask):
                     break
                 call_id = (

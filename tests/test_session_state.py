@@ -327,14 +327,15 @@ async def test_a_class_that_cannot_be_rebuilt_warns_and_falls_back(
     await first.start(agent=Transferring(), persist=database.session("s1"))
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
         await first.run(user_input="billing please")
-    assert isinstance(first.current_agent, Billing)
+        assert isinstance(first.current_agent, Billing)
+        history = [item.id for item in first.history.items]
+        # the check runs at the handoff's checkpoint, which the close waits for
+        await first.aclose()
     assert any(
         "Billing cannot be rebuilt on resume" in r.getMessage()
         and "'customer' has no matching attribute" in r.getMessage()
         for r in caplog.records
     )
-    history = [item.id for item in first.history.items]
-    await first.aclose()
 
     caplog.clear()
     root = Transferring()
