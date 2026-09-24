@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import pathlib
 from collections.abc import AsyncIterator
 from typing import Any
@@ -279,12 +280,17 @@ async def test_a_frame_whose_code_changed_ends_in_a_tool_error(database: Databas
     await resumed.aclose()
 
 
-async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) -> None:
+async def test_a_task_awaited_from_a_durable_tool_resumes(
+    database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
     first = AgentSession(llm=_llm("change"))
     await first.start(agent=ConfirmingDesk(), persist=database.session("s1"))
     first.generate_reply(user_input="go")
     await _until(lambda: isinstance(first.current_agent, Confirm))
-    await first.aclose()
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        await first.aclose()
+    # the close stops the tool awaiting the task and cancels the task, in that order
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
 
     resumed = AgentSession(llm=_llm("change"))
     await resumed.start(agent=ConfirmingDesk(), persist=database.session("s1"))

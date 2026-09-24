@@ -263,7 +263,12 @@ class DurableScheduler:
                             raise RuntimeError("invalid EffectCall state")
                         exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c, loop=self._loop)
                         _pass_through_activity_task_info(exe_task)
-                        nv._set_result(await exe_task)
+                        if isinstance(nv._c, AgentTask):
+                            # a frame stopped here leaves the task to the session's close
+                            exe_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+                            nv._set_result(await asyncio.shield(exe_task))
+                        else:
+                            nv._set_result(await exe_task)
                     except Exception as e:
                         if not isinstance(e, (ToolError, StopResponse)):
                             logger.exception("error executing step of durable function")
