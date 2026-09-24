@@ -34,6 +34,33 @@ class GetCardResult:
     expiration_date: str
 
 
+_DIGIT_WORDS = {
+    "zero": "0",
+    "oh": "0",
+    "o": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+}
+
+
+def _spoken_digits(text: str) -> str:
+    """The digits in a transcript, spoken ("four one one") or written ("4111"), in order."""
+    out: list[str] = []
+    for token in text.lower().replace("-", " ").replace(",", " ").replace(".", " ").split():
+        if token.isdigit():
+            out.append(token)
+        elif token in _DIGIT_WORDS:
+            out.append(_DIGIT_WORDS[token])
+    return "".join(out)
+
+
 def _luhn_ok(card_number: str) -> bool:
     total = 0
     for index, digit in enumerate(card_number[::-1]):
@@ -97,6 +124,12 @@ class GetCardTask(AgentTask[GetCardResult]):
             card_number: All the digits, no spaces or dashes.
         """
         digits = "".join(c for c in card_number if c.isdigit())
+        if not (13 <= len(digits) <= 19 and _luhn_ok(digits)):
+            # the model can miscount a run of repeated digits the caller read correctly;
+            # the caller's own words since the agent last spoke are the ground truth
+            heard = self._caller_words_since_agent_spoke()
+            if 13 <= len(heard) <= 19 and _luhn_ok(heard):
+                digits = heard
         if not 13 <= len(digits) <= 19:
             raise ToolError(
                 "that card number has the wrong number of digits - ask the caller to read it again"
@@ -108,6 +141,17 @@ class GetCardTask(AgentTask[GetCardResult]):
             )
         self._card_number = digits
         return f"card number recorded (ending {digits[-4:]}) | {self._status()}"
+
+    def _caller_words_since_agent_spoke(self) -> str:
+        words: list[str] = []
+        for item in reversed(self.chat_ctx.items):
+            if item.type != "message":
+                continue
+            if item.role == "assistant":
+                break
+            if item.role == "user":
+                words.insert(0, item.text_content or "")
+        return _spoken_digits(" ".join(words))
 
     @function_tool()
     async def record_expiration(self, month: int, year: int) -> str:

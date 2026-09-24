@@ -326,11 +326,21 @@ class BookRoomTask(AgentTask[RoomBooking]):
                 self._must_offer.arm()
         # Per-night extras and the room both reprice with the night count.
         await self._requote()
+        # which pairings can be smoking is a fact the options above don't carry, and a
+        # model offering a room goes by what the return says
+        smoking = await self._db.list_room_options(
+            check_in=check_in, check_out=check_out, guests=guests, smoking=True
+        )
+        smoking_line = (
+            f"smoking rooms available only as:\n{describe_room_options(smoking)}"
+            if smoking
+            else "no smoking rooms available for these dates"
+        )
         return (
             f"stay recorded ({check_in} to {check_out}, {guests} guests)\n"
             f"options (one line per room type + view - the price is that pairing's, so "
             f"the view is part of what the caller is picking):\n"
-            f"{describe_room_options(avail)}\n{self._status()}"
+            f"{describe_room_options(avail)}\n{smoking_line}\n{self._status()}"
         )
 
     @function_tool()
@@ -468,6 +478,13 @@ class BookRoomTask(AgentTask[RoomBooking]):
         r = await beta.workflows.GetPhoneNumberTask(
             chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
         )
+        digits = "".join(c for c in r.phone_number if c.isdigit())
+        # a US number is 10 digits, 11 with the country code; anything else is a mishearing
+        if not (len(digits) == 10 or (len(digits) == 11 and digits[0] == "1")):
+            raise ToolError(
+                f"the phone number came through as {len(digits)} digits, so part of it was "
+                "misheard - open the phone dialog again and have the caller repeat it"
+            )
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
