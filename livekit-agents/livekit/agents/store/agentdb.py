@@ -410,7 +410,11 @@ class AgentDB(_Store):
 
     async def _connect(self, database_id: str) -> Executor:
         executor = AgentDBExecutor(ws_url=self._ws_url, database_id=database_id, token=self._token)
-        await executor.connect()
+        try:
+            await executor.connect()
+        except BaseException:
+            await executor.aclose()
+            raise
         return executor
 
     async def _request(self, method: str, request: Message, response: type[_M]) -> _M:

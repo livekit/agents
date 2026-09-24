@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
+import aiohttp
 import pytest
 
 from livekit.agents import store
@@ -293,3 +294,24 @@ async def test_memory_executor_batch_is_atomic() -> None:
         await executor.batch(("INSERT INTO t VALUES (1)", ()), ("INSERT INTO nope VALUES (1)", ()))
     assert [row async for row in executor.query("SELECT * FROM t")] == []
     await executor.aclose()
+
+
+async def test_an_agentdb_that_cannot_connect_leaves_no_http_session_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livekit.agents.store import agentdb
+
+    opened: list[aiohttp.ClientSession] = []
+
+    class Recording(aiohttp.ClientSession):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+    monkeypatch.setattr(agentdb.aiohttp, "ClientSession", Recording)
+    # nothing listens on port 1, so the dial fails on the spot
+    db = store.AgentDB(url="http://127.0.0.1:1", api_key="key", api_secret="secret")
+    with pytest.raises(aiohttp.ClientError):
+        await db.session("DB_x", "s1").load()
+    assert opened and all(session.closed for session in opened)
+    await db.aclose()
