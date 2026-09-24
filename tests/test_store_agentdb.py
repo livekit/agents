@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
 from livekit.agents import store
 from livekit.agents.store import agentdb as agentdb_client
-from livekit.agents.store.executor import Row
 
 from .test_store import LEASE_TTL, StoreSuite
 
@@ -52,15 +52,16 @@ async def test_a_query_streams_many_batches(
     )
     assert isinstance(executor, agentdb_client.AgentDBExecutor)
 
+    # query() sends one credit per batch it takes, so the credits count the batches
     batches = 0
-    original = agentdb_client._decode_batch
+    send = executor._send
 
-    def counting(names: list[str], batch: object) -> list[Row]:
+    async def counting(message: Any) -> None:
         nonlocal batches
-        batches += 1
-        return original(names, batch)  # type: ignore[arg-type]
+        batches += message.WhichOneof("message") == "credit"
+        await send(message)
 
-    monkeypatch.setattr(agentdb_client, "_decode_batch", counting)
+    monkeypatch.setattr(executor, "_send", counting)
     seen = [row async for row in executor.query("SELECT * FROM t ORDER BY id")]
     assert batches > 1
     assert len(seen) == rows

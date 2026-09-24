@@ -73,34 +73,6 @@ def _statement(sql: str, params: tuple[Value, ...] | list[Value]) -> pb.AgentDB.
     return Wire.Statement(sql=sql, params=values)
 
 
-def _decode_batch(names: list[str], batch: pb.AgentDB.Wire.ColumnBatch) -> list[Row]:
-    """Rows from a column batch: each row names its own storage class per column."""
-    columns: list[list[Value]] = []
-    for column in batch.columns:
-        ints, doubles = iter(column.ints), iter(column.doubles)
-        texts, blobs = iter(column.text_ends), iter(column.blob_ends)
-        text_at = blob_at = 0
-        values: list[Value] = []
-        for row in range(batch.rows):
-            kind = column.types[row] if row < len(column.types) else Wire.NULL
-            if kind == Wire.INT:
-                values.append(next(ints))
-            elif kind == Wire.DOUBLE:
-                values.append(next(doubles))
-            elif kind == Wire.TEXT:
-                end = next(texts)
-                values.append(column.text_data[text_at:end].decode())
-                text_at = end
-            elif kind == Wire.BLOB:
-                end = next(blobs)
-                values.append(bytes(column.blob_data[blob_at:end]))
-                blob_at = end
-            else:
-                values.append(None)
-        columns.append(values)
-    return [{name: columns[i][row] for i, name in enumerate(names)} for row in range(batch.rows)]
-
-
 class AgentDBExecutor:
     """An ``Executor`` on one agent-db database, over one WebSocket.
 
@@ -314,9 +286,35 @@ class AgentDBExecutor:
                         )
                         with contextlib.suppress(_Disconnected):
                             await self._send(credit)
-                        for row in _decode_batch(names, message.column_batch):
+                        # each row names its own storage class per column, and text and blobs
+                        # are sliced by exclusive end offsets
+                        batch = message.column_batch
+                        columns: list[list[Value]] = []
+                        for column in batch.columns:
+                            ints, doubles = iter(column.ints), iter(column.doubles)
+                            texts, blobs = iter(column.text_ends), iter(column.blob_ends)
+                            text_at = blob_at = 0
+                            values: list[Value] = []
+                            for i in range(batch.rows):
+                                kind = column.types[i] if i < len(column.types) else Wire.NULL
+                                if kind == Wire.INT:
+                                    values.append(next(ints))
+                                elif kind == Wire.DOUBLE:
+                                    values.append(next(doubles))
+                                elif kind == Wire.TEXT:
+                                    end = next(texts)
+                                    values.append(column.text_data[text_at:end].decode())
+                                    text_at = end
+                                elif kind == Wire.BLOB:
+                                    end = next(blobs)
+                                    values.append(bytes(column.blob_data[blob_at:end]))
+                                    blob_at = end
+                                else:
+                                    values.append(None)
+                            columns.append(values)
+                        for i in range(batch.rows):
                             yielded = True
-                            yield row
+                            yield {name: columns[c][i] for c, name in enumerate(names)}
                     elif kind == "done":
                         done = True
                         return
