@@ -1789,9 +1789,9 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            # kept once closed: the frames its tools stopped at are what the save on close writes
             if self._durable_scheduler is not None:
                 self._durable_scheduler.close()
+                self._durable_scheduler = None
 
             # session-scoped toolsets are closed by the session; this only closes
             # the agent's own toolsets + MCP — all of which outlive pause
