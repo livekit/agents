@@ -2279,7 +2279,6 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sounddevice", specifier = ">=0.5" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.15.1" },
     { name = "types-protobuf", specifier = ">=4" },
     { name = "typing-extensions", specifier = ">=4.12" },
