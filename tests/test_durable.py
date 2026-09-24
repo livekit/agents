@@ -335,5 +335,4 @@ async def test_a_rehydrate_that_fails_midway_leaves_no_running_frame(
     (activity,) = restored
     assert desk._activity is None and activity._restored_tools == []
     assert not any(t.get_name() == "AgentActivity.resume_durable_tool" for t in asyncio.all_tasks())
-    assert activity._durable_scheduler is not None
-    assert activity._durable_scheduler.durable_state() == b""
+    assert activity._durable_scheduler is None
