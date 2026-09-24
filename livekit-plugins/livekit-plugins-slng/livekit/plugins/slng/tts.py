@@ -148,6 +148,9 @@ _WS_END_TYPES = (*_WS_CLOSED_TYPES, aiohttp.WSMsgType.ERROR)
 # text and binary frames only, so the transport-level ping above does not hold
 # a silent socket open.
 _IDLE_KEEPALIVE_S = 20.0
+# Acknowledgements that can reach an idle socket late, after the reply that
+# asked for them has handed it back. They carry no audio.
+_IDLE_CONTROL_FRAMES = frozenset({"cleared", "keepalive"})
 
 # How a cancelled reply ended. Only "acknowledged" lets the socket be reused,
 # so this is a closed set rather than free-form strings.
@@ -286,6 +289,20 @@ def _contains_letter(text: str) -> bool:
     into a neighbouring word rather than sent on their own.
     """
     return any(ch.isalpha() for ch in text)
+
+
+def _failure_fields(exc: BaseException) -> dict[str, Any]:
+    """Log fields for a failed attempt, with its message under a PII key.
+
+    No traceback: its last line is the message, and the message can be speech.
+    livekit's "no audio frames were pushed for text" error quotes the whole
+    reply, and a provider's error can quote the text it refused.
+    """
+    return {
+        "error_type": type(exc).__name__,
+        "error_status": getattr(exc, "status_code", None),
+        "lk.pii.error": str(exc),
+    }
 
 
 def _contains_speech(text: str) -> bool:
@@ -696,14 +713,16 @@ class TTS(tts.TTS):
             raise ValueError("phrase_max_chars must be positive")
         if "encoding" in model_options:
             # Everything else is forwarded to the gateway untouched, but this
-            # one decides how the plugin reads the audio coming back. An
-            # override here leaves the init and the decoder disagreeing, and
-            # the caller hears noise rather than an error. (`sample_rate`
+            # one decides how the plugin reads the audio coming back. Another
+            # value leaves the init and the decoder disagreeing, and the caller
+            # hears noise rather than an error. linear16 is what the plugin
+            # asks for anyway, so passing it stays harmless. (`sample_rate`
             # cannot arrive this way: it is a named argument.)
-            raise ValueError(
-                "encoding cannot be passed as a model option: the plugin decodes the "
-                "audio itself and always requests linear16"
-            )
+            if model_options.pop("encoding") != "linear16":
+                raise ValueError(
+                    "encoding cannot be changed with a model option: the plugin decodes "
+                    "the audio itself and always requests linear16"
+                )
         if model is not None and connections:
             raise ValueError("use model or connections, not both")
 
@@ -1260,6 +1279,12 @@ class TTS(tts.TTS):
         still allows it; a private socket, a stale init, a socket past its
         maximum age, a dead socket, a replaced candidate or a closing instance
         is closed here instead. ``keep=False`` always closes.
+
+        Either way, closing the held socket opens its replacement in the
+        background, so the reply after a failed one is not the one to pay the
+        connect. A retry of the failed reply waits for that connect rather than
+        opening a second socket (see ``_acquire_connection``), and a switch to
+        another candidate cancels it.
         """
         async with self._ws_lock:
             conn.in_use = False
@@ -1270,7 +1295,7 @@ class TTS(tts.TTS):
             if current:
                 self._held = None
         await _close_ws(conn.ws, context="release_keep" if keep else "release_error")
-        if keep and current and not self._closing:
+        if current and not self._closing:
             self._on_connection_lost(conn, reason=self._reopen_reason(conn))
 
     def _release_after_cancel(
@@ -1580,16 +1605,26 @@ class TTS(tts.TTS):
                         # and the next reply report the error itself.
                         retire = "error_before_text"
                         break
-                    # Otherwise not a terminator: the gateway reports a bad
-                    # pronunciation reference, a not-ready backend or a failed
-                    # translation on a connection it keeps. Tearing it down here
+                    # Otherwise the error alone decides nothing. One that ends
+                    # the session is followed by its close, which retires the
+                    # socket on the next read; one the gateway sends on a
+                    # session it keeps, such as a refused pronunciation
+                    # reference, is no reason to close it. Tearing it down here
                     # would close a socket the gateway never closed, and a
                     # repeating error would do it in a loop.
                     continue
-                if event.kind == "audio_chunk" or isinstance(resp.get("audio"), str):
+                if event.kind == "audio_chunk" or event.audio or isinstance(resp.get("audio"), str):
                     note_stray(event.kind)
                     retire = "stray_audio"
                     break
+                if (
+                    event.kind in ("ignore", "audio_end")
+                    or resp.get("type") in _IDLE_CONTROL_FRAMES
+                ):
+                    # Control traffic with no audio in it: metadata, an
+                    # acknowledgement, a late terminator. Nothing here can
+                    # reach the next reply, so it is not reported as stray.
+                    continue
                 note_stray(event.kind)
         except Exception:
             # A read failure must still clear the held socket below; letting the
@@ -2197,7 +2232,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if isinstance(the_input, str):
                     text_count += 1
                     if text_count == 1:
-                        logger.debug(f"[TTS] First text received: '{the_input[:50]}...'")
+                        logger.debug(
+                            "[TTS] first text received", extra={"lk.pii.text": the_input[:50]}
+                        )
                     if segment is None:
                         segment = _SegmentInput(stream=self._open_tokenizer_stream())
                         self._segments_ch.send_nowait(segment)
@@ -2463,7 +2500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     break
                 token_count += 1
                 if token_count == 1:
-                    logger.debug(f"[TTS] send_task: first token '{data.token}'")
+                    logger.debug("[TTS] send_task: first token", extra={"lk.pii.token": data.token})
                 if not segment.input_ended:
                     # More text is still coming, so this token cannot close the
                     # reply: send its frame straight away without the flush.
@@ -2907,8 +2944,11 @@ class _FallbackStreamBase:
             self._attempts += 1
             logger.warning(
                 "[TTS] attempt failed, retrying the same model",
-                extra={"tts_model": candidate._opts.model, "attempt": self._attempts},
-                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "tts_model": candidate._opts.model,
+                    "attempt": self._attempts,
+                    **_failure_fields(exc),
+                },
             )
             self._parent._emit_plugin_event(
                 "fallback.attempt_failed",
@@ -2925,8 +2965,7 @@ class _FallbackStreamBase:
         if next_index is None:
             logger.error(
                 "[TTS] every candidate failed; raising to the caller",
-                extra={"tts_model": candidate._opts.model},
-                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={"tts_model": candidate._opts.model, **_failure_fields(exc)},
             )
             self._parent._emit_plugin_event(
                 "fallback.exhausted",
@@ -2942,8 +2981,8 @@ class _FallbackStreamBase:
             extra={
                 "tts_model": candidate._opts.model,
                 "next_tts_model": next_candidate._opts.model,
+                **_failure_fields(exc),
             },
-            exc_info=(type(exc), exc, exc.__traceback__),
         )
         self._parent._emit_plugin_event(
             "fallback.attempt_failed",
@@ -2981,9 +3020,14 @@ class _FallbackSynthesizeStream(_FallbackStreamBase):
         super().__init__(parent=parent, conn_options=conn_options)
         self._texts: list[Any] = []
         self._input_ended = False
+        # Whether any text so far has a letter or a digit. Until it does, no
+        # audio is due, so the first-audio deadline does not start: a model
+        # that writes "\n\n" and then takes its time must not fail the reply.
+        self._has_speech = False
 
     def push_text(self, text: str) -> None:
         self._texts.append(text)
+        self._has_speech = self._has_speech or _contains_speech(text)
         if self._stream is not None:
             self._arm_timeout()
             self._stream.push_text(text)
@@ -3001,9 +3045,7 @@ class _FallbackSynthesizeStream(_FallbackStreamBase):
             self._stream.end_input()
 
     def _expects_audio(self) -> bool:
-        return not self._input_ended or any(
-            isinstance(item, str) and _contains_speech(item) for item in self._texts
-        )
+        return not self._input_ended or self._has_speech
 
     async def _start_stream(self) -> None:
         candidate = self._parent._candidate_tts[self._index]
@@ -3017,13 +3059,13 @@ class _FallbackSynthesizeStream(_FallbackStreamBase):
                 self._stream.push_text(item)
         if self._input_ended:
             self._stream.end_input()
-        if self._texts:
+        if self._has_speech:
             timeout = self._parent._first_audio_timeout_s
             self._deadline = time.monotonic() + timeout if timeout is not None else None
 
     def _arm_timeout(self) -> None:
         timeout = self._parent._first_audio_timeout_s
-        if self._deadline is None and timeout is not None:
+        if self._has_speech and self._deadline is None and timeout is not None:
             self._deadline = time.monotonic() + timeout
 
 
@@ -3059,5 +3101,8 @@ class _FallbackChunkedStream(_FallbackStreamBase):
         frames = []
         async for ev in self:
             frames.append(ev.frame)
-
+        if not frames:
+            # Text with nothing to say, such as "...", produces no audio. An
+            # empty frame says so; combine_audio_frames refuses an empty list.
+            return rtc.AudioFrame.create(self._parent.sample_rate, self._parent.num_channels, 0)
         return rtc.combine_audio_frames(frames)

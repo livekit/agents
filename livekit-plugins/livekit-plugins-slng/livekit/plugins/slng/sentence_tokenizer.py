@@ -217,6 +217,9 @@ _ELLIPSIS = "…"
 # How much of what follows a title-shaped word blingfire is shown when asked
 # about it again.
 _TITLE_LOOKAHEAD_CHARS = 80
+# What may open a sentence ahead of its title: whitespace, opening quotes and
+# brackets, and a list number with the space after it.
+_TITLE_LEAD = re.compile(r"[\s(\[\"'«“‘]*(?:\d{1,3}\.\s+[\s(\[\"'«“‘]*)?")
 # A whitespace run holding a line break. With markdown stripped, headings, list
 # items and table rows carry no terminator, so the break is the only sign the
 # line ended.
@@ -374,6 +377,9 @@ def _boundaries(text: str) -> list[int]:
     ends = _blingfire_ends(text)
     cuts: list[int] = []
     length = len(text)
+    # Where the current line starts. A line break is a cut too (added after
+    # this scan), so a would-be sentence starts at the later of the two.
+    line_start = 0
     i = 0
     while i < length:
         char = text[i]
@@ -385,6 +391,8 @@ def _boundaries(text: str) -> list[int]:
             and not greek_question
             and not ellipsis
         ):
+            if char == "\n":
+                line_start = i + 1
             i += 1
             continue
         # Take the whole run, so "？！" or a stop before a closing quote is one
@@ -430,13 +438,19 @@ def _boundaries(text: str) -> list[int]:
                     cuts.append(j)
             elif non_ascii:
                 cuts.append(j)
-            elif i > 0 and _in_ranges(text[i - 1], _UNSPACED_CJK):
+            elif (
+                i > 0
+                and _in_ranges(text[i - 1], _UNSPACED_CJK)
+                # A file name or a domain ("报告.pdf", "百度.com") goes on
+                # straight after the stop.
+                and not (text[j].isalnum() and not _in_ranges(text[j], _UNSPACED_CJK))
+            ):
                 # Chinese or Japanese written with ASCII stops ("你好.我是小明."),
                 # which blingfire never splits.
                 cuts.append(j)
-            elif _title_is_abbreviation(text, cuts[-1] if cuts else 0, j):
+            elif _title_is_abbreviation(text, max(cuts[-1] if cuts else 0, line_start), j):
                 pass
-            elif _is_list_marker(text, i, j):
+            elif _is_list_marker(text, i, j, line_start):
                 pass
             elif _single_letter_word(text, i, j):
                 pass
@@ -495,29 +509,34 @@ def _is_title_shaped(piece: str) -> bool:
 
 
 def _title_is_abbreviation(text: str, start: int, end: int) -> bool:
-    """Whether the title-shaped would-be sentence ``text[start:end]`` is an abbreviation.
+    """Whether the would-be sentence ``text[start:end]`` is only a title, such as "Dr.".
 
     Blingfire takes "Dr." for a whole sentence when it follows one ("... called.
     Dr. Smith ...") yet keeps it with its name when it opens the text, so the
-    span is shown to it again with what follows, on a bounded window, and the
+    word is shown to it again with what follows, on a bounded window, and the
     cut is skipped only if it then keeps the word with the next one. "Sure. Let
     me" still ends at "Sure.". The price is a title before a name blingfire
     reads as a sentence opener, such as "Dr. Who", which is spoken alone.
+
+    Opening quotes and brackets, and a list number, may come before the title:
+    '"Dr. Smith is here," she said.', "(Dr. Smith stayed.)" and "1. Dr. Smith
+    on Monday" each keep the title with its name.
     """
+    word = _TITLE_LEAD.match(text, start, end)
+    start = word.end() if word is not None else start
     if not _is_title_shaped(text[start:end]):
         return False
-    while start < end and text[start].isspace():
-        start += 1
     ends = _blingfire_ends(text[start : end + _TITLE_LOOKAHEAD_CHARS])
     return ends is not None and (end - start) not in ends
 
 
-def _is_list_marker(text: str, start: int, end: int) -> bool:
+def _is_list_marker(text: str, start: int, end: int, line_start: int) -> bool:
     """Whether the stop at ``text[start:end]`` numbers a list item ("1. Open the app").
 
     Blingfire takes "1." for a sentence, which would speak each number at the
-    end of the line before it. One to three digits opening their line, a lone
-    stop and whitespace after it are a list number instead.
+    end of the line before it. One to three digits opening their line (which
+    starts at ``line_start``), a lone stop and whitespace after it are a list
+    number instead.
     """
     if text[start:end] != "." or end >= len(text) or not text[end].isspace():
         return False
@@ -526,7 +545,6 @@ def _is_list_marker(text: str, start: int, end: int) -> bool:
         k -= 1
     if not 1 <= start - 1 - k <= 3:
         return False
-    line_start = text.rfind("\n", 0, k + 1) + 1
     return not text[line_start : k + 1].strip()
 
 
@@ -538,15 +556,16 @@ def _single_letter_word(text: str, start: int, end: int) -> bool:
     letter with its marks, and the start of the text, whitespace or an opening
     quote or bracket before it, stays with the next word. The price is a
     sentence ending in a one-letter word ("vitamin C."), which waits for the
-    next one. Not in a script where a space already marks a phrase break, and
-    not after a number, where the letter is a unit ("12 h.") ending its sentence.
+    next one. Not in a script where a space already marks a phrase break, not
+    after a number, where the letter is a unit ("12 h.") ending its sentence,
+    and not the English pronoun, which ends sentences all the time ("So do I.").
     """
     if text[start:end] != ".":
         return False
     k = start - 1
     while k >= 0 and unicodedata.category(text[k]).startswith("M"):
         k -= 1
-    if k < 0 or not text[k].isalpha():
+    if k < 0 or not text[k].isalpha() or text[k] == "I":
         return False
     if _in_ranges(text[k], _SPACE_IS_BREAK) or _in_ranges(text[k], _UNSPACED_CJK):
         return False
@@ -759,6 +778,13 @@ def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
     ``BufferedSentenceStream`` consumes its buffer up to each ``end``, so every
     ``end`` advances and is the next span's ``start``, save where a span held
     nothing but whitespace and was dropped.
+
+    Pieces with no letter at the end of the text, such as the number on the
+    line after "Your code is:", join the piece before them. Sent alone, the
+    last frame of a reply would have no letter, which some models refuse, and
+    by then the frames before it are already sent. A stream holds the last
+    piece, so it holds the one before too while the text after it has no
+    letter yet. A reply with no letter at all is left as it is.
     """
     if not text.strip():
         return []
@@ -774,6 +800,12 @@ def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
         piece = _normalize(text[start:end])
         if piece:
             result.append((piece, start, end))
+    spelled = len(result)
+    while spelled > 0 and not any(char.isalpha() for char in result[spelled - 1][0]):
+        spelled -= 1
+    if 0 < spelled < len(result):
+        start, end = result[spelled - 1][1], result[-1][2]
+        result[spelled - 1 :] = [(_normalize(text[start:end]), start, end)]
     return result
 
 

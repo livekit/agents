@@ -39,9 +39,9 @@ Additional keyword arguments are forwarded to the gateway and applied according 
 
 ## Init fields
 
-On TTS, the plugin sends only the settings you set. `encoding` (always `linear16`) and `sample_rate` are always sent; `encoding` cannot be overridden, because the plugin decodes the audio itself. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
+On TTS, the plugin sends only the settings you set. `model` and `voice` are always sent, the model from the connection and the voice from `voice` (or the connection's own `voice`). `encoding` (always `linear16`) and `sample_rate` are always sent too; `encoding` cannot be changed, because the plugin decodes the audio itself. `language` and `speed` are sent only when you pass them, so the model's catalog defaults apply otherwise. Any other keyword argument is forwarded verbatim in the init `config`.
 
-A connection can carry its own init message, as in `TTSConnectionConfig(init=...)`. On TTS, every field in it is kept, but the plugin's settings above win wherever both set one, so `update_options` still applies. On STT, where every setting has a default, a connection's init is sent as written, except for the options you later change with `update_options`.
+A connection can carry its own init message, as in `TTSConnectionConfig(init=...)`. On TTS, every field in it is kept, but the plugin's settings above win wherever both set one, so `update_options` still applies. On STT, where every setting has a default, a connection's init is sent as written, except for the options you later change with `update_options`, which are set in its `config` and in any top-level copy of the same field.
 
 ## TTS text chunking
 
@@ -53,7 +53,7 @@ A connection can carry its own init message, as in `TTSConnectionConfig(init=...
 
 The default, `"auto"`, is `"sentence"`, or `"phrase"` when `word_tokenizer` is a `WordTokenizer`.
 
-Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set). A line break also ends a piece, so a heading or a list item leaves as its own frame, and a list number stays with its line. Greek questions end at their `;`, and Chinese or Japanese written with ASCII stops splits at them. Any piece longer than 200 characters is cut at a space, which is what makes a script with no terminator stream at all. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length; an overriding tokenizer must be a `SentenceTokenizer` in this mode.
+Sentence mode needs no setup and no language setting. The default `slng.SentenceTokenizer` ends a sentence at any script's terminator (`. ! ?`, the danda, the ideographic full stop, and the rest of Unicode's `Sentence_Terminal` set). A line break also ends a piece, so a heading or a list item leaves as its own frame, and a list number stays with its line. Greek questions end at their `;`, and Chinese or Japanese written with ASCII stops splits at them. Text with no letter at the end of a reply, such as a number on its own last line, is sent with the sentence before it. Any piece longer than 200 characters is cut at a space, which is what makes a script with no terminator stream at all. Pass `word_tokenizer=slng.SentenceTokenizer(max_chars=...)` to change that length; an overriding tokenizer must be a `SentenceTokenizer` in this mode.
 
 The plugin sends the opening of a long first sentence as soon as it exists, so a model that can start on part of a sentence begins speaking sooner, and every other model hears the sentence as before. This needs no configuration, and it happens only where the gateway supports it. Text in a script with no sentence terminator stays in one frame until it reaches `max_chars`, so first audio waits for the whole reply unless you lower it.
 
@@ -61,7 +61,7 @@ The plugin sends the opening of a long first sentence as soon as it exists, so a
 
 The plugin holds one WebSocket per call. It sends `init` once, then one `text` frame per sentence followed by a `flush` that ends the reply, and keeps the socket open for the next reply, reconnecting if the gateway closes it. With `connections=[...]`, only the model in use holds a connection.
 
-`warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it. That connection counts as one concurrent session on your key for the whole call, including silences. After five idle minutes the plugin closes it, and the next reply opens a new one; a connection open for 20 minutes is replaced between replies. A TTS that an agent handoff replaces closes its connection 10 seconds after its session stops using it. Set `warm_standby_enabled=False` to open a connection for each reply and close it afterwards: nothing is held between replies, and every reply pays a connect. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
+`warm_standby_enabled` is on by default: `prewarm()` opens the connection before the first reply, and the plugin reopens it in the background if the gateway closes it or a reply fails on it. That connection counts as one concurrent session on your key for the whole call, including silences. After five idle minutes the plugin closes it, and the next reply opens a new one; a connection open for 20 minutes is replaced between replies. A TTS that an agent handoff replaces closes its connection 10 seconds after its session stops using it. Set `warm_standby_enabled=False` to open a connection for each reply and close it afterwards: nothing is held between replies, and every reply pays a connect. A reply that starts while the previous one is still being cancelled, and `synthesize()`, each use their own short-lived socket.
 
 A reply with nothing to say, such as whitespace or punctuation alone, sends nothing and ends without audio. A reply that fails reaches the session as a single unrecoverable error, however many attempts and models it went through, so `AgentSession` ends a call only after several failed replies in a row, as with any other TTS. A failed attempt that the plugin retries, or that the next model in `connections=[...]` speaks, is reported as recoverable.
 
@@ -126,7 +126,13 @@ Version 2.0 is a breaking change:
 - Language codes are no longer normalized client-side; send the value the model expects (for example BCP-47 `hi-IN` for Sarvam, not `hi`).
 - STT `recognize()` (HTTP batch) is no longer supported; use `stream()`. Only `pcm_s16le` input audio is supported.
 - `api_token` still works on STT but is deprecated; use `api_key`.
-- TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.
-- TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames. A `word_tokenizer` that is a `WordTokenizer` keeps the clause-sized frames.
+
+## Upgrading from 1.8.3 or earlier
+
+These change what an existing worker does:
+
+- `slng_base_url` has no default on STT or TTS: pass your region's host, for example `us-east.api.slng.ai`, or set `SLNG_BASE_URL`. Without either, construction raises a `ValueError`. Connections given as full endpoint URLs need neither.
 - TTS `warm_standby_enabled` defaults to True, so the connection is open from session start and counts as one concurrent session for the whole call. Set it to False for a connection per reply, as before.
-- `slng_base_url` has no default on STT or TTS: pass your region's host, for example `us-east.api.slng.ai`, or set `SLNG_BASE_URL`.
+- TTS `text_chunking` defaults to `"sentence"`: one frame per sentence, rather than clause-sized frames. A `word_tokenizer` that is a `WordTokenizer` keeps the clause-sized frames.
+- TTS no longer sends `language="en"` when `language` is omitted; the model's catalog default applies instead.
+- A TTS `encoding` keyword argument other than `linear16` raises a `ValueError`, where it used to reach the init and garble the audio.

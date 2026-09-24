@@ -1518,20 +1518,26 @@ class SpeechStream(stt.SpeechStream):
         )
         if connection.init is not None:
             # The connection's own init, plus whatever update_options (or the
-            # stream's language) has changed since it was written.
+            # stream's language) has changed since it was written. Changed
+            # fields go into its config, and into a top-level copy where the
+            # init has one, so the two cannot disagree. With nothing changed,
+            # it is sent exactly as written.
             updated = {
                 field for option in self._updated_init_options for field in _INIT_FIELDS[option]
             }
-            init_message = merge_init_payload(
-                connection.init,
-                {
-                    "config": {
-                        key: value
-                        for key, value in init_message["config"].items()
-                        if key in updated
-                    }
-                },
-            )
+            changes = {
+                key: value for key, value in init_message["config"].items() if key in updated
+            }
+            if changes:
+                init_message = merge_init_payload(
+                    connection.init,
+                    {
+                        "config": changes,
+                        **{key: value for key, value in changes.items() if key in connection.init},
+                    },
+                )
+            else:
+                init_message = dict(connection.init)
 
         try:
             await ws.send_str(json.dumps(init_message))
