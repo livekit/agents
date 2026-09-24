@@ -336,3 +336,54 @@ async def test_a_rehydrate_that_fails_midway_leaves_no_running_frame(
     assert desk._activity is None and activity._restored_tools == []
     assert not any(t.get_name() == "AgentActivity.resume_durable_tool" for t in asyncio.all_tasks())
     assert activity._durable_scheduler is None
+
+
+async def note() -> str:
+    CALLS.append("note")
+    return "noted"
+
+
+class NotingDesk(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You change bookings and take notes.")
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def take_note(self, ctx: RunContext) -> str:
+        """Take a note."""
+        return await EffectCall(note())
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def change(self, ctx: RunContext) -> str:
+        """Change the booking once the caller confirms."""
+        confirmed = await EffectCall(Confirm())
+        return "changed" if confirmed else "kept"
+
+
+async def test_a_tool_that_finished_beside_one_awaiting_a_task_is_saved(
+    database: Database,
+) -> None:
+    def both() -> _AnsweringLLM:
+        calls = [_tool_call("take_note", "call_note"), _tool_call("change", "call_change")]
+        return _AnsweringLLM(
+            fake_responses=[_says("go", "", calls=calls)], fallbacks=["Done.", "Done again."]
+        )
+
+    first = AgentSession(llm=both())
+    await first.start(agent=NotingDesk(), persist=database.session("s1"))
+    first.generate_reply(user_input="go")
+    await _until(lambda: isinstance(first.current_agent, Confirm) and "note" in CALLS)
+    # the step commits the note only once the change returns, which the close cuts short
+    await first.aclose()
+
+    resumed = AgentSession(llm=both())
+    await resumed.start(agent=NotingDesk(), persist=database.session("s1"))
+    task = resumed.current_agent
+    assert isinstance(task, Confirm)
+    task.complete(True)
+    await _until(lambda: len(_outputs(resumed)) == 2)
+    assert {(o.call_id, o.output) for o in _outputs(resumed)} == {
+        ("call_note", "noted"),
+        ("call_change", "changed"),
+    }
+    assert CALLS == ["note"]
+    await resumed.aclose()

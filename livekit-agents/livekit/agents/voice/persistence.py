@@ -279,8 +279,33 @@ class SessionPersistence:
             try:
                 for scheduler in schedulers:
                     await scheduler.pause()
+                session = self._session
+                history = list(session._chat_ctx.items)
+                in_history = {item.id for item in history}
                 records: list[AgentRecord] = []
                 for agent, frames in chain.items():
+                    items = list(agent._chat_ctx.items)
+                    if agent._activity is not None:
+                        # a step waiting on one tool, such as one awaiting a task, commits what
+                        # its other tools finished only when it ends, which may be after this
+                        known = {item.id for item in items}
+                        for speech in agent._activity._background_speeches:
+                            answered = {
+                                item.call_id
+                                for item in speech.chat_items
+                                if item.type == "function_call_output"
+                            }
+                            for item in speech.chat_items:
+                                if (
+                                    item.type in ("function_call", "function_call_output")
+                                    and item.call_id in answered
+                                    and item.id not in known
+                                ):
+                                    known.add(item.id)
+                                    items.append(item)
+                                    if item.id not in in_history:
+                                        in_history.add(item.id)
+                                        history.append(item)
                     state: dict[str, Any] | None = None
                     if self._check_rebuild(agent) is None:
                         with contextlib.suppress(Exception):
@@ -293,10 +318,9 @@ class SessionPersistence:
                             parent_agent_id=parent.id if parent is not None else None,
                             state=state,
                             durable_state=frames.durable_state() if frames else b"",
-                            chat_items=agent._chat_ctx.items,
+                            chat_items=items,
                         )
                     )
-                session = self._session
                 try:
                     userdata = _userdata_json(session._userdata)
                 except TypeError as e:
@@ -306,7 +330,7 @@ class SessionPersistence:
                 await self._persisted.save(
                     current_agent_id=next(iter(chain)).id if chain else None,
                     userdata=userdata,
-                    history=session._chat_ctx.items,
+                    history=history,
                     agents=records,
                 )
             finally:
