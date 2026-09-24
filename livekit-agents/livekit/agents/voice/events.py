@@ -80,8 +80,9 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
-        # set by the first update(): whether anything voices its output, and what the step
-        # that answers it may call
+        # set by the first update(): that the tool no longer holds its speech, whether anything
+        # voices its output, and what the step that answers it may call
+        self._released = False
         self._suppress_reply = False
         self._reply_tool_choice: ToolChoice | None = None
 
@@ -314,7 +315,7 @@ class RunContext(Generic[Userdata_T]):
             self._suppress_reply = not reply
             self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
-            self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            self._released = True
             return
 
         await self._executor._enqueue_reply(

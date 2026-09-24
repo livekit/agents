@@ -1071,7 +1071,11 @@ async def _execute_tools_task(
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
-                    task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
+                    task,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                    run_ctx=run_ctx,
+                    inline_task=True,
                 )
                 tasks.append(task)
                 task.add_done_callback(lambda task: tasks.remove(task))

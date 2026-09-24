@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
+    from .events import RunContext
     from .io import TimedString
     from .turn import TurnDetectionMode
 
@@ -1252,6 +1253,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 @dataclass
 class _ActivityTaskInfo:
     function_call: llm.FunctionCall | None = None
+    run_ctx: RunContext | None = None
     speech_handle: SpeechHandle | None = None
     inline_task: bool = False
 
@@ -1260,6 +1262,7 @@ def _set_activity_task_info(
     task: asyncio.Task[Any],
     *,
     function_call: NotGivenOr[llm.FunctionCall | None] = NOT_GIVEN,
+    run_ctx: NotGivenOr[RunContext | None] = NOT_GIVEN,
     speech_handle: NotGivenOr[SpeechHandle | None] = NOT_GIVEN,
     inline_task: NotGivenOr[bool] = NOT_GIVEN,
 ) -> None:
@@ -1267,6 +1270,9 @@ def _set_activity_task_info(
 
     if is_given(function_call):
         info.function_call = function_call
+
+    if is_given(run_ctx):
+        info.run_ctx = run_ctx
 
     if is_given(speech_handle):
         info.speech_handle = speech_handle
