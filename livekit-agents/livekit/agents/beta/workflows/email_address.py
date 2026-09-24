@@ -38,6 +38,7 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         allow_interruptions: NotGivenOr[bool] = NOT_GIVEN,
         require_confirmation: NotGivenOr[bool] = NOT_GIVEN,
         require_explicit_ask: bool = False,
+        verify_spelling: bool = False,
         # deprecated
         extra_instructions: str = "",
     ) -> None:
@@ -53,14 +54,20 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 _modality_specific=Instructions(audio=AUDIO_SPECIFIC, text=TEXT_SPECIFIC),
                 _confirmation=Instructions(
                     # confirmation is enabled by default for audio, disabled by default for text
-                    audio=CONFIRMATION_INSTRUCTION if require_confirmation is not False else "",
-                    text=CONFIRMATION_INSTRUCTION if require_confirmation is True else "",
+                    audio=CONFIRMATION_INSTRUCTION
+                    if verify_spelling or require_confirmation is not False
+                    else "",
+                    text=CONFIRMATION_INSTRUCTION
+                    if verify_spelling or require_confirmation is True
+                    else "",
                 ),
+                _spelling=SPELLING_INSTRUCTION if verify_spelling else "",
             )
 
         assert isinstance(instructions, (str, Instructions))  # for type checking
         self._current_email = ""
-        self._spell_read_back = False
+        self._verify_spelling = verify_spelling
+        self._spell_read_back = verify_spelling
         self._require_confirmation = require_confirmation
         self._require_explicit_ask = require_explicit_ask
 
@@ -160,6 +167,8 @@ class GetEmailTask(AgentTask[GetEmailResult]):
             self.complete(ToolError(f"couldn't get the email address: {reason}"))
 
     def _confirmation_required(self, ctx: RunContext) -> bool:
+        if self._verify_spelling:
+            return True
         if is_given(self._require_confirmation):
             return self._require_confirmation
         return ctx.speech_handle.input_details.modality == "audio"
@@ -192,12 +201,17 @@ If the address looks almost correct but has minor typos (e.g. missing '@' or dom
 CONFIRMATION_INSTRUCTION = """\
 Call `confirm_email_address` after the user confirmed the email address is correct."""
 
+SPELLING_INSTRUCTION = """\
+After receiving the email address, always verify the spelling by asking the user to confirm or spell it out character by character.
+When confirming, spell out the email address character by character to the user.
+"""
+
 INSTRUCTIONS_TEMPLATE = """\
 {persona}
 
 {_modality_specific}
 
-Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
+{_spelling}Call `update_email_address` at the first opportunity whenever you form a new hypothesis about the email. (before asking any questions or providing any answers.)
 Don't invent new email addresses, stick strictly to what the user said.
 {_confirmation}
 If the email is unclear or invalid, or it takes too much back-and-forth, prompt for it in parts: first the part before the '@', then the domain—only if needed.

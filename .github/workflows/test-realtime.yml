@@ -10,6 +10,8 @@ on:
         default: "main"
   pull_request:
     paths:
+      - "livekit-agents/livekit/agents/inference/realtime/**"
+      - "livekit-agents/livekit/agents/llm/_realtime/**"
       - "livekit-plugins/livekit-plugins-openai/livekit/plugins/openai/realtime/**"
       - "livekit-plugins/livekit-plugins-xai/livekit/plugins/xai/realtime/**"
       - "tests/test_realtime/**"

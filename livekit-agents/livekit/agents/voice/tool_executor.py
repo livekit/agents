@@ -21,6 +21,7 @@ from ..llm.tool_context import (
     Tool,
     ToolError,
     ToolFlag,
+    ToolResult,
     Toolset,
     function_tool,
 )
@@ -447,6 +448,9 @@ class _ToolExecutor:
             # one terminal entry per call; deferred entries use the _final id
             from .agent import Agent
 
+            if isinstance(output, ToolResult):
+                output = output.output
+
             status: Literal["done", "error", "cancelled"]
             message: str | None
             if task.cancelled() or isinstance(output, asyncio.CancelledError):
@@ -527,6 +531,9 @@ class _ToolExecutor:
         chat_ctx.insert(items)
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
+
+        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+            return
 
         self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
 
