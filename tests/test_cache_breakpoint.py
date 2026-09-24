@@ -99,14 +99,50 @@ def test_openai_enabled_multiple_markers_make_multiple_segments():
     ]
 
 
-def test_openai_enabled_keeps_images_before_text_parts():
+def _image_part(part: dict) -> dict:
+    assert part["type"] == "image_url"
+    assert part["image_url"]["url"] == IMAGE_URL
+    return part
+
+
+def test_openai_enabled_image_before_prefix_stays_first():
     ctx = _ctx(ImageContent(image=IMAGE_URL), STATIC, CacheBreakpoint(), DYNAMIC, role="user")
 
     content = _openai(ctx, enabled=True)[0]["content"]
 
-    assert content[0]["type"] == "image_url"
-    assert content[0]["image_url"]["url"] == IMAGE_URL
+    _image_part(content[0])
+    assert "prompt_cache_breakpoint" not in content[0]
     assert content[1:] == [_tagged(STATIC), _plain(f"\n{DYNAMIC}")]
+
+
+def test_openai_enabled_image_after_marker_stays_out_of_prefix():
+    ctx = _ctx(STATIC, CacheBreakpoint(), ImageContent(image=IMAGE_URL), DYNAMIC, role="user")
+
+    content = _openai(ctx, enabled=True)[0]["content"]
+
+    assert content[0] == _tagged(STATIC)
+    _image_part(content[1])
+    assert "prompt_cache_breakpoint" not in content[1]
+    assert content[2] == _plain(f"\n{DYNAMIC}")
+
+
+def test_openai_enabled_marker_after_image_tags_image():
+    ctx = _ctx(STATIC, ImageContent(image=IMAGE_URL), CacheBreakpoint(), DYNAMIC, role="user")
+
+    content = _openai(ctx, enabled=True)[0]["content"]
+
+    assert content[0] == _plain(STATIC)
+    assert _image_part(content[1])["prompt_cache_breakpoint"] == BREAKPOINT
+    assert content[2] == _plain(f"\n{DYNAMIC}")
+
+
+def test_openai_disabled_with_image_keeps_images_first():
+    ctx = _ctx(STATIC, CacheBreakpoint(), ImageContent(image=IMAGE_URL), DYNAMIC, role="user")
+
+    content = _openai(ctx, enabled=False)[0]["content"]
+
+    _image_part(content[0])
+    assert content[1:] == [_plain(f"{STATIC}\n{DYNAMIC}")]
 
 
 def test_openai_enabled_tags_assistant_message():

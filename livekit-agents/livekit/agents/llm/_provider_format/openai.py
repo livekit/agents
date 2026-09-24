@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from typing import Any, Literal
 
 from livekit.agents import llm
@@ -62,11 +63,15 @@ def to_chat_ctx(
 
 def _to_chat_item(msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False) -> dict[str, Any]:
     if msg.type == "message":
-        images = [_to_image_content(c) for c in msg.content if isinstance(c, llm.ImageContent)]
-        text, cuts = _text_and_cuts(msg, breakpoints=prompt_cache_breakpoints)
+        parts = _ordered_parts(
+            msg,
+            breakpoints=prompt_cache_breakpoints,
+            to_image=_to_image_content,
+            text_type="text",
+        )
         result: dict[str, Any] = {
             "role": msg.role,
-            "content": _message_content(images, text, cuts, text_type="text"),
+            "content": _message_content(parts, text_type="text"),
         }
 
         extra_content = _filter_extra(msg.extra)
@@ -101,54 +106,57 @@ def _to_chat_item(msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False) 
     raise ValueError(f"unsupported message type: {msg.type}")
 
 
-def _text_and_cuts(msg: llm.ChatMessage, *, breakpoints: bool) -> tuple[str, list[int]]:
-    """Join the message's text and record where cache breakpoints split it.
+def _ordered_parts(
+    msg: llm.ChatMessage,
+    *,
+    breakpoints: bool,
+    to_image: Callable[[llm.ImageContent], dict[str, Any]],
+    text_type: str,
+) -> list[dict[str, Any]]:
+    """Convert the message content to parts, in content order.
 
-    The text is joined exactly as it was before breakpoints existed, so cutting it
-    never changes what the model reads. A breakpoint with no new text since the last
-    cut (leading, or repeated) is ignored.
+    Text is joined exactly as it was before breakpoints existed, so the text parts
+    always concatenate to the string a plain request would send. With ``breakpoints``,
+    the part right before each CacheBreakpoint is tagged; a breakpoint with nothing
+    new before it (leading, or repeated) is ignored.
     """
-    text = ""
-    cuts: list[int] = []
+    parts: list[dict[str, Any]] = []
+    run = ""
+    has_text = False
     for content in msg.content:
-        if isinstance(content, (llm.ImageContent, llm.AudioContent)):
+        if isinstance(content, llm.AudioContent):
             continue
-        if isinstance(content, llm.CacheBreakpoint):
-            if breakpoints and len(text) > (cuts[-1] if cuts else 0):
-                cuts.append(len(text))
+        if isinstance(content, (llm.ImageContent, llm.CacheBreakpoint)):
+            if run:
+                parts.append({"type": text_type, "text": run})
+                run = ""
+            if isinstance(content, llm.ImageContent):
+                parts.append(to_image(content))
+            elif breakpoints and parts and "prompt_cache_breakpoint" not in parts[-1]:
+                parts[-1]["prompt_cache_breakpoint"] = {"mode": "explicit"}
             continue
         # str or Instructions
-        if text:
-            text += "\n"
-        text += str(content)
-    return text, cuts
-
-
-def _text_parts(text: str, cuts: list[int], *, text_type: str) -> list[dict[str, Any]]:
-    parts: list[dict[str, Any]] = []
-    start = 0
-    for cut in cuts:
-        parts.append(
-            {
-                "type": text_type,
-                "text": text[start:cut],
-                "prompt_cache_breakpoint": {"mode": "explicit"},
-            }
-        )
-        start = cut
-    if start < len(text):
-        parts.append({"type": text_type, "text": text[start:]})
+        text = str(content)
+        if has_text:
+            run += "\n"
+        run += text
+        has_text = has_text or bool(text)
+    if run:
+        parts.append({"type": text_type, "text": run})
     return parts
 
 
-def _message_content(
-    images: list[dict[str, Any]], text: str, cuts: list[int], *, text_type: str
-) -> str | list[dict[str, Any]]:
-    if not images and not cuts:
+def _message_content(parts: list[dict[str, Any]], *, text_type: str) -> str | list[dict[str, Any]]:
+    if any("prompt_cache_breakpoint" in part for part in parts):
+        return parts
+    # no breakpoint: images first, then all text as one part, as before breakpoints existed
+    images = [part for part in parts if part["type"] != text_type]
+    text = "".join(part["text"] for part in parts if part["type"] == text_type)
+    if not images:
         # certain providers require text-only content in a string vs a list.
         # for max-compatibility, we will combine all text content into a single string.
         return text
-    return images + _text_parts(text, cuts, text_type=text_type)
+    return [*images, {"type": text_type, "text": text}] if text else images
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
@@ -231,15 +239,16 @@ def _to_responses_chat_item(
     msg: llm.ChatItem, *, prompt_cache_breakpoints: bool = False
 ) -> dict[str, Any]:
     if msg.type == "message":
-        images = [
-            _to_responses_image_content(c) for c in msg.content if isinstance(c, llm.ImageContent)
-        ]
-        # Responses assistant content is output text, which has no prompt_cache_breakpoint
-        breakpoints = prompt_cache_breakpoints and msg.role != "assistant"
-        text, cuts = _text_and_cuts(msg, breakpoints=breakpoints)
+        parts = _ordered_parts(
+            msg,
+            # Responses assistant content is output text, which has no prompt_cache_breakpoint
+            breakpoints=prompt_cache_breakpoints and msg.role != "assistant",
+            to_image=_to_responses_image_content,
+            text_type="input_text",
+        )
         item: dict[str, Any] = {
             "role": msg.role,
-            "content": _message_content(images, text, cuts, text_type="input_text"),
+            "content": _message_content(parts, text_type="input_text"),
         }
 
         # Re-attach the assistant message phase (commentary / final_answer) captured from
