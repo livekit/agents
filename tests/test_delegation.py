@@ -383,7 +383,7 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
                 ctx.conversation_id,
                 ctx.context_id,
                 parent=ctx.caller_session_id,
-                endpoint="fare-desk",
+                endpoint=ctx.endpoint,
             ),
         )
         served.sessions.append(session)

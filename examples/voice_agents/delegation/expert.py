@@ -893,7 +893,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
     if DB is not None and ctx.conversation_id:
         # the caller names the conversation; this context is one session in it, under the caller's
         persisted = DB.session(
-            ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id, endpoint="fare-desk"
+            ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id, endpoint=ctx.endpoint
         )
     await session.start(agent=FareDesk(), persist=persisted)
     if persisted is not None and (messages := session.history.messages()):

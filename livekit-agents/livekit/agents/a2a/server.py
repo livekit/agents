@@ -63,10 +63,12 @@ class A2ASessionContext:
         self,
         context_id: str,
         *,
+        endpoint: str,
         conversation_id: str | None = None,
         caller_session_id: str | None = None,
     ) -> None:
         self._context_id = context_id
+        self._endpoint = endpoint
         self._conversation_id = conversation_id
         self._caller_session_id = caller_session_id
         self._runner: SessionRunner | None = None
@@ -75,6 +77,11 @@ class A2ASessionContext:
     def context_id(self) -> str:
         """The context. The same handler run answers every request carrying it."""
         return self._context_id
+
+    @property
+    def endpoint(self) -> str:
+        """The endpoint serving this context, as registered, which a persisted session names."""
+        return self._endpoint
 
     @property
     def conversation_id(self) -> str | None:
@@ -104,10 +111,13 @@ class _Context:
     rehydrates it rather than starting over.
     """
 
-    def __init__(self, context_id: str, handler: A2ASessionHandler, first_input: TaskInput) -> None:
+    def __init__(
+        self, context_id: str, endpoint: str, handler: A2ASessionHandler, first_input: TaskInput
+    ) -> None:
         # the first request of a context says where it persists, and the handler runs on it
         self._ctx = A2ASessionContext(
             context_id,
+            endpoint=endpoint,
             conversation_id=first_input.conversation_id,
             caller_session_id=first_input.caller_session_id,
         )
@@ -148,8 +158,11 @@ class _SessionExecutor(AgentExecutor):
     One context is one handler run, found or created by ``context_id``.
     """
 
-    def __init__(self, handler: A2ASessionHandler, *, idle_timeout: float | None) -> None:
+    def __init__(
+        self, handler: A2ASessionHandler, *, endpoint: str, idle_timeout: float | None
+    ) -> None:
         self._handler = handler
+        self._endpoint = endpoint
         self._contexts: dict[str, _Context] = {}
         self._by_task: dict[str, RequestRun] = {}
         self._idle_timeout = idle_timeout
@@ -158,7 +171,9 @@ class _SessionExecutor(AgentExecutor):
 
     def _context(self, context_id: str, task_input: TaskInput) -> _Context:
         if context_id not in self._contexts:
-            self._contexts[context_id] = _Context(context_id, self._handler, task_input)
+            self._contexts[context_id] = _Context(
+                context_id, self._endpoint, self._handler, task_input
+            )
         if self._sweeper is None and self._idle_timeout is not None:
             self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
         held = self._contexts[context_id]
@@ -282,7 +297,7 @@ def mount(
     The card route goes on before the binding's own routes: the SDK mounts a catch-all that
     would otherwise shadow the well-known path.
     """
-    executor = _SessionExecutor(handler, idle_timeout=idle_timeout)
+    executor = _SessionExecutor(handler, endpoint=endpoint, idle_timeout=idle_timeout)
     card_name = name or endpoint
     prefix = f"/{endpoint}"
 
