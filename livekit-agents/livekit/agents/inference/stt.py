@@ -43,7 +43,6 @@ from ._utils import (
 if TYPE_CHECKING:
     from ..voice.events import ConversationItemAddedEvent
 
-INACTIVITY_TIMEOUT_ERROR_CODE = 2007
 FINALIZATION_TIMEOUT = 30.0
 FINAL_TRANSCRIPT_INACTIVITY_TIMEOUT = 3.0
 
@@ -1049,7 +1048,7 @@ class SpeechStream(stt.SpeechStream):
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},
-                        retryable=code != INACTIVITY_TIMEOUT_ERROR_CODE,
+                        retryable=not input_ended.is_set(),
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None

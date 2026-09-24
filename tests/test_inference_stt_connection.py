@@ -12,6 +12,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from livekit import rtc
 from livekit.agents import APIConnectOptions, APIError
 from livekit.agents.inference import STT
 from livekit.agents.inference.stt import SpeechStream
@@ -385,7 +386,70 @@ async def test_final_before_input_end_uses_shorter_inactivity_window(
     assert socket.sent == ["session.finalize", "session.close"]
 
 
-async def test_inactivity_timeout_is_not_retried() -> None:
+@pytest.mark.parametrize("error_code", [2006, 2007], ids=["connection", "inactivity"])
+async def test_error_before_input_end_reconnects(error_code: int) -> None:
+    connection_count = 0
+    second_connection = asyncio.Event()
+    audio_connections: list[int] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        connection = connection_count
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                if connection == 1:
+                    await ws.send_json(
+                        {
+                            "type": "error",
+                            "code": error_code,
+                            "message": "customer content must not reach the API error",
+                        }
+                    )
+                else:
+                    second_connection.set()
+            elif event["type"] == "input_audio":
+                audio_connections.append(connection)
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "final words", "language": "en"}
+                )
+                await ws.send_json({"type": "session.closed"})
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session, sample_rate=16000)
+        errors: list[Exception] = []
+        stt.on("error", lambda event: errors.append(event.error))
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0.001, timeout=1.0)
+        )
+        try:
+            await asyncio.wait_for(second_connection.wait(), timeout=1.0)
+            stream.push_frame(
+                rtc.AudioFrame.create(sample_rate=16000, num_channels=1, samples_per_channel=800)
+            )
+            stream.end_input()
+            transcripts = await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+        finally:
+            await stream.aclose()
+
+    assert connection_count == 2
+    assert audio_connections == [2]
+    assert transcripts == ["final words"]
+    assert len(errors) == 1
+    error = errors[0]
+    assert isinstance(error, APIError)
+    assert error.message == "LiveKit Inference STT returned an error"
+    assert error.body == {"code": error_code}
+    assert error.retryable is True
+
+
+@pytest.mark.parametrize("error_code", [2006, 2007], ids=["connection", "inactivity"])
+async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     connection_count = 0
 
     async def handler(request: web.Request) -> web.WebSocketResponse:
@@ -398,7 +462,7 @@ async def test_inactivity_timeout_is_not_retried() -> None:
                 await ws.send_json(
                     {
                         "type": "error",
-                        "code": 2007,
+                        "code": error_code,
                         "message": "customer content must not reach the API error",
                     }
                 )
@@ -414,13 +478,12 @@ async def test_inactivity_timeout_is_not_retried() -> None:
         try:
             stream.end_input()
             with pytest.raises(APIError) as exc_info:
-                async for _ in stream:
-                    pass
+                await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
         finally:
             await stream.aclose()
 
     assert connection_count == 1
     assert errors == [exc_info.value]
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
-    assert exc_info.value.body == {"code": 2007}
+    assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
