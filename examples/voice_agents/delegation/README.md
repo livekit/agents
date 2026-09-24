@@ -47,7 +47,7 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 ## What to look at
 
 - **`@server.a2a_session(endpoint="fare-desk")`** serves an `AgentSession` over A2A on the
-  agent server's own HTTP app. The handler runs once per conversation, builds its session and
+  agent server's own HTTP app. The handler runs once per context, builds its session and
   hands it over; every later request on that `contextId` is a turn of the same session, so
   the desk remembers who it is talking to.
 - **`ctx.update()`** in `rebook` and `book_flight` reports while the seat is being held and
@@ -57,18 +57,18 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
   answer. When one is, it sets a directive that rides back with the answer; in an ordinary
   session there is nobody to advise.
 - **`collect_email` lives on the voice side**, because spelling an address back is a
-  conversation and the desk is not on the phone. The desk asks for one in its answer.
+  back-and-forth and the desk is not on the phone. The desk asks for one in its answer.
 - **`delegate=A2ADelegate(url)`** is the whole of the voice side's delegation code. The
   session closes the delegate when the call ends, which is what tells the desk to drop the
-  conversation.
+  context.
 
 ## Persistence
 
-With agent-db configured, every conversation persists as it goes: the desk writes each item as it lands and checkpoints its mutable state (the mock airline included) when a turn ends, so a desk killed mid-conversation and restarted picks up where it was. One conversation is one agent-db database; the phone agent's session and each desk context it talked to are rows in it, the desk's under the caller's.
+With agent-db configured, every conversation persists as it goes: the desk writes each item as it lands and checkpoints its mutable state (the mock airline included) when a turn ends, so a desk killed mid-conversation and restarted picks up where it was. One conversation is one agent-db database, so its id is the database id; the phone agent's session and each desk context it talked to are rows in it, the desk's under the caller's.
 
 ```python
 db = store.AgentDB()   # LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-await session.start(agent=FareDesk(), persist=db.session(database_id, session_id, parent=caller))
+await session.start(agent=FareDesk(), persist=db.session(conversation_id, session_id, parent=caller))
 ```
 
 Start agent-db locally, from `agents-private/agent-db`, and leave it running:
@@ -86,11 +86,11 @@ export LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db
 
 ### The desk crash drill, with no microphone
 
-`chat.py` is a text client over A2A. It creates a database and a context, prints both, and sends each line as a person's turn.
+`chat.py` is a text client over A2A. It mints a conversation and a context, prints both, and sends each line as a person's turn.
 
 ```bash
 python expert.py dev   # terminal 1
-python chat.py         # terminal 2: prints database DB_... and context chat-...
+python chat.py         # terminal 2: prints conversation DB_... and context chat-...
 ```
 
 1. Ask two things that build on each other: _"Hi, I'm dana@example.com. What's the status of my flight to Tokyo tomorrow?"_, then _"What other flights could you put me on that day, and what would the change cost me?"_ The desk quotes the change and keeps the quote on the booking.
@@ -98,7 +98,7 @@ python chat.py         # terminal 2: prints database DB_... and context chat-...
 3. Restart it: `python expert.py dev`. A restart inside the dead desk's 10 s lease waits the rest of it out first. A tool that was running when it died left nothing behind: a call and its output are written together when the call ends, so a tool that must survive a crash is a durable tool.
 4. In the same `chat.py`, ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated chat-...: N messages back` and rebooks from the quote it made before the crash.
 
-`chat.py --database DB_... --context chat-...` picks the same conversation up from a fresh client; `--delegate` sends lines as instructions, the way the phone agent asks.
+`chat.py --conversation DB_... --context chat-...` picks the same context up from a fresh client; `--delegate` sends lines as instructions, the way the phone agent asks.
 
 ### The phone agent crash drill: a durable tool
 
@@ -106,12 +106,12 @@ python chat.py         # terminal 2: prints database DB_... and context chat-...
 
 ```bash
 python expert.py dev        # terminal 1
-python voice_drill.py       # terminal 2: prints database DB_...
+python voice_drill.py       # terminal 2: prints conversation DB_...
 ```
 
 1. Ask for something that needs an address: _"Hi, my flight to Tokyo tomorrow is delayed. Can you move me onto the evening flight?"_ The desk asks for the caller's email, and the phone agent hands over to the email task, which asks for it.
 2. Kill the phone agent while the task is waiting: `kill -9 $(pgrep -f voice_drill.py)`.
-3. Restart it on the same database: `python voice_drill.py --database DB_...`. It logs `the AgentTask was awaited from a durable tool, so it resumes`, and the email task is the current agent again, without asking twice.
+3. Restart it on the same conversation: `python voice_drill.py --conversation DB_...`. It logs `the AgentTask was awaited from a durable tool, so it resumes`, and the email task is the current agent again, without asking twice.
 4. Give the address: _"It's dana@example.com"_. The task hands back to the restored `collect_email`, which records the caller under `ctx.idempotency_key` and returns, and the phone agent delegates the change.
 
 ### Reading the rows
@@ -132,13 +132,13 @@ A desk session names its caller in `parent_session_id`, and each delegate call n
 
 ### The voice half
 
-`voice.py` persists too once it is given a database. The session id `voice` is the app's choice, stable across calls:
+`voice.py` persists too once it is given a conversation. The session id `voice` is the app's choice, stable across calls:
 
 ```bash
-DATABASE=DB_... python voice.py console
+CONVERSATION=DB_... python voice.py console
 ```
 
-Hang up and run it again on the same `DATABASE`: the call resumes with what was said before, and its delegations reach the same desk context, which rehydrates on the first one. A durable tool resumes only on a pipeline model; `voice.py` runs a realtime one.
+Hang up and run it again on the same `CONVERSATION`: the call resumes with what was said before, and its delegations reach the same desk context, which rehydrates on the first one. A durable tool resumes only on a pipeline model; `voice.py` runs a realtime one.
 
 ## Talking to the desk without a voice agent
 

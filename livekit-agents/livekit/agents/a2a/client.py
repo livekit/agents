@@ -78,9 +78,9 @@ class TaskStream:
         try:
             task_input = self._input
             if not self._client.extension_active:
-                # the database id is ours to share only with an endpoint that joins it
+                # the conversation id is ours to share only with an endpoint that joins it
                 task_input = dataclasses.replace(
-                    task_input, database_id=None, caller_session_id=None
+                    task_input, conversation_id=None, caller_session_id=None
                 )
             request = to_a2a_request(
                 task_input,

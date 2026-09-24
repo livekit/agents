@@ -19,8 +19,8 @@ Dana Whitfield <dana@example.com> is a Gold member whose Tokyo flight tomorrow i
 the seat moves for nothing. Miguel Ortiz <ortiz@example.com> is on a BASIC fare, which
 cannot be changed or refunded at all. Priya Raman <raman@example.com> holds travel credit.
 
-With agent-db configured and DATABASE=DB_... set, the call persists: a second console run
-on the same database resumes it, and its delegations reach the same desk context.
+With agent-db configured and CONVERSATION=DB_... set, the call persists: a second console run
+on the same conversation resumes it, and its delegations reach the same desk context.
 """
 
 import json
@@ -54,7 +54,7 @@ FARE_DESK_URL = "http://localhost:8321/fare-desk"
 
 server = AgentServer()
 
-# a real app looks the database up from a caller key, such as a phone number
+# a real app looks the conversation up from a caller key, such as a phone number
 AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
 # devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
 # todo: devLocal should accept the project key; until then a local agent-db takes its own
@@ -204,12 +204,12 @@ async def entrypoint(ctx: JobContext) -> None:
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
     persisted = None
-    if DB is not None and (database_id := os.environ.get("DATABASE")):
+    if DB is not None and (conversation_id := os.environ.get("CONVERSATION")):
         # the app picks the phone agent's session id, stable across calls
-        persisted = DB.session(database_id, "voice")
+        persisted = DB.session(conversation_id, "voice")
     await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
     if persisted is not None and (messages := session.history.messages()):
-        logger.info(f"resumed call on {database_id}: {len(messages)} messages back")
+        logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")
 
 
 if __name__ == "__main__":

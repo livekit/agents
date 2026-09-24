@@ -17,7 +17,7 @@ from ..voice.served_request import Directive
 from .extension import (
     ANSWER_ARTIFACT_NAME,
     CALLER,
-    DATABASE,
+    CONVERSATION,
     DIRECTIVE,
     KIND,
     KIND_CHAT_CTX,
@@ -104,8 +104,8 @@ def to_a2a_request(
         metadata[KIND] = KIND_CLOSE
     elif task_input.is_delegation:
         metadata[KIND] = KIND_DELEGATION
-    if task_input.database_id:
-        metadata[DATABASE] = task_input.database_id
+    if task_input.conversation_id:
+        metadata[CONVERSATION] = task_input.conversation_id
     if task_input.caller_session_id:
         metadata[CALLER] = task_input.caller_session_id
     if metadata:
@@ -143,7 +143,7 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
         chat_ctx=chat_ctx,
         metadata=as_dict(request.metadata),
         closing=kind == KIND_CLOSE,
-        database_id=message_metadata.get(DATABASE),
+        conversation_id=message_metadata.get(CONVERSATION),
         caller_session_id=message_metadata.get(CALLER),
     )
 

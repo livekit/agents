@@ -19,22 +19,22 @@ load_dotenv()
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--url", default="http://localhost:8321/fare-desk")
-    parser.add_argument("--database", help="reuse this DB_... database")
+    parser.add_argument("--conversation", help="reuse this DB_... conversation")
     parser.add_argument("--context", help="reuse this A2A context")
     parser.add_argument("--delegate", action="store_true", help="send lines as instructions")
     args = parser.parse_args()
 
-    database_id = args.database
-    if database_id is None and (url := os.environ.get("LIVEKIT_AGENTDB_URL")):
-        # the desk writes into whichever database the caller names, so the caller makes it
+    conversation_id = args.conversation
+    if conversation_id is None and (url := os.environ.get("LIVEKIT_AGENTDB_URL")):
+        # the desk persists into whichever conversation the caller names, so the caller mints it
         # todo: devLocal should accept the project key; until then a local agent-db takes its own
         local_key = {"api_key": "devkey", "api_secret": "secret"} if "localhost" in url else {}
         db = store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **local_key)
-        database_id = await db.create_database()
+        conversation_id = await db.create_database()
         await db.aclose()
     context_id = args.context or shortuuid("chat-")
-    print(f"database {database_id or '(not persisted)'}")
-    print(f"context  {context_id}")
+    print(f"conversation {conversation_id or '(not persisted)'}")
+    print(f"context      {context_id}")
 
     client = A2AClient(args.url, context_id=context_id)
     loop = asyncio.get_running_loop()
@@ -47,9 +47,9 @@ async def main() -> None:
             if not line.strip():
                 continue
             task_input = (
-                TaskInput(instruction=line, database_id=database_id)
+                TaskInput(instruction=line, conversation_id=conversation_id)
                 if args.delegate
-                else TaskInput(text=line, database_id=database_id)
+                else TaskInput(text=line, conversation_id=conversation_id)
             )
             try:
                 async with client.send(task_input) as stream:

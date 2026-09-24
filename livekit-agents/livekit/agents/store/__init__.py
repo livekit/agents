@@ -1,7 +1,8 @@
 """Persisting sessions, so a conversation survives the worker that ran it.
 
-Every session of one conversation is rows in one SQLite database, served by agent-db or kept
-in a local file by ``LocalStore`` for tests and offline runs.
+A conversation is stored as one SQLite database, so a conversation id is a database id: every
+session of it is rows in that database, served by agent-db or kept in a local file by
+``LocalStore`` for tests and offline runs.
 """
 
 from .agentdb import AgentDB

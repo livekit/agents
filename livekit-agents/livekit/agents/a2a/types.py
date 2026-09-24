@@ -33,10 +33,10 @@ class TaskInput:
     """Application data, handed to the handler untouched. JSON-serializable."""
     closing: bool = False
     """The conversation is over: nothing is being asked, and the receiver may drop it."""
-    database_id: str | None = None
-    """The database the sender persists into, for the receiver to join."""
+    conversation_id: str | None = None
+    """The sender's conversation, whose database the receiver persists into."""
     caller_session_id: str | None = None
-    """The sender's session in that database, which the receiver's session hangs under."""
+    """The sender's session in that conversation, which the receiver's session hangs under."""
 
     def __post_init__(self) -> None:
         if self.closing and self.text is None and self.instruction is None:

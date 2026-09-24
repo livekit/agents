@@ -63,11 +63,11 @@ class A2ASessionContext:
         self,
         context_id: str,
         *,
-        database_id: str | None = None,
+        conversation_id: str | None = None,
         caller_session_id: str | None = None,
     ) -> None:
         self._context_id = context_id
-        self._database_id = database_id
+        self._conversation_id = conversation_id
         self._caller_session_id = caller_session_id
         self._runner: SessionRunner | None = None
 
@@ -77,13 +77,13 @@ class A2ASessionContext:
         return self._context_id
 
     @property
-    def database_id(self) -> str | None:
-        """The database the caller persists into, for this session to join."""
-        return self._database_id
+    def conversation_id(self) -> str | None:
+        """The caller's conversation, whose database this session persists into."""
+        return self._conversation_id
 
     @property
     def caller_session_id(self) -> str | None:
-        """The caller's own session in that database, which this one is the child of."""
+        """The caller's own session in that conversation, which this one is the child of."""
         return self._caller_session_id
 
     def attach(self, session: AgentSession) -> None:
@@ -108,7 +108,7 @@ class _Conversation:
         # the first request of a context says where it persists, and the handler runs on it
         self._ctx = A2ASessionContext(
             context_id,
-            database_id=first_input.database_id,
+            conversation_id=first_input.conversation_id,
             caller_session_id=first_input.caller_session_id,
         )
         self._handler = handler

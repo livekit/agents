@@ -1,7 +1,7 @@
 """The phone agent over text, for the crash drill: each line you type is a caller's turn.
 
 It runs voice.py's Receptionist on a text model with the same delegate and persistence, so
-killing it mid-call and starting it again on the same database resumes the call, a durable
+killing it mid-call and starting it again on the same conversation resumes the call, a durable
 collect_email included. The README's "Persistence" section has the drill.
 """
 
@@ -19,13 +19,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s - %(message
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--database", help="resume on this DB_... database")
+    parser.add_argument("--conversation", help="resume this DB_... conversation")
     args = parser.parse_args()
     if DB is None:
         raise SystemExit("set LIVEKIT_AGENTDB_URL: the drill needs somewhere to persist")
 
-    database_id = args.database or await DB.create_database()
-    print(f"database {database_id}")
+    conversation_id = args.conversation or await DB.create_database()
+    print(f"conversation {conversation_id}")
     session: AgentSession = AgentSession(
         llm=inference.LLM("openai/gpt-4.1-mini"),
         delegate={"delegate": A2ADelegate(FARE_DESK_URL), "announce": False},
@@ -38,7 +38,7 @@ async def main() -> None:
         elif ev.item.type == "agent_handoff":
             print(f"  [{ev.item.old_agent_id} -> {ev.item.new_agent_id}]")
 
-    await session.start(agent=Receptionist(), persist=DB.session(database_id, "voice"))
+    await session.start(agent=Receptionist(), persist=DB.session(conversation_id, "voice"))
     print(f"agent    {session.current_agent.id}, {len(session.history.messages())} messages back")
 
     loop = asyncio.get_running_loop()

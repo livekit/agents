@@ -401,13 +401,13 @@ async def test_a_stock_client_hands_the_handler_where_to_persist() -> None:
     from a2a.types import a2a_pb2 as pb
     from a2a.utils.constants import TransportProtocol
 
-    from livekit.agents.a2a import CALLER, DATABASE
+    from livekit.agents.a2a import CALLER, CONVERSATION
     from livekit.agents.a2a.extension import struct
 
     seen: list[tuple[str, str | None, str | None]] = []
 
     async def recording(ctx: A2ASessionContext, served: _Served) -> None:
-        seen.append((ctx.context_id, ctx.database_id, ctx.caller_session_id))
+        seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(agent=Agent(instructions="fare desk"))
         served.sessions.append(session)
@@ -429,7 +429,7 @@ async def test_a_stock_client_hands_the_handler_where_to_persist() -> None:
                 context_id="ctx-stock",
                 role=pb.Role.ROLE_USER,
                 parts=[pb.Part(text="what is the change fee")],
-                metadata=struct({DATABASE: "DB_stock", CALLER: "voice"}),
+                metadata=struct({CONVERSATION: "DB_stock", CALLER: "voice"}),
             )
         )
         _ = [event async for event in client.send_message(request)]
@@ -441,13 +441,13 @@ async def test_a_stock_client_hands_the_handler_where_to_persist() -> None:
 async def test_the_keys_stay_home_when_the_card_does_not_offer_the_extension(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A database id is ours to share only with an endpoint that joins it."""
+    """A conversation id is ours to share only with an endpoint that joins it."""
     from livekit.agents.a2a import A2AClient, client as client_module
 
     seen: list[tuple[str | None, str | None]] = []
 
     async def recording(ctx: A2ASessionContext, served: _Served) -> None:
-        seen.append((ctx.database_id, ctx.caller_session_id))
+        seen.append((ctx.conversation_id, ctx.caller_session_id))
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(agent=Agent(instructions="fare desk"))
         served.sessions.append(session)
@@ -461,7 +461,7 @@ async def test_the_keys_stay_home_when_the_card_does_not_offer_the_extension(
                 client,
                 TaskInput(
                     instruction="what is the change fee",
-                    database_id="DB_secret",
+                    conversation_id="DB_secret",
                     caller_session_id="voice",
                 ),
             )
@@ -480,19 +480,21 @@ async def test_a_dropped_conversation_rehydrates_on_the_next_request(
     from livekit.agents.store.executor import SQLiteExecutor
 
     local = store.LocalStore(tmp_path)
-    database_id = await local.create_database()
+    conversation_id = await local.create_database()
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
-        assert ctx.database_id is not None
+        assert ctx.conversation_id is not None
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(
             agent=Agent(instructions="fare desk", tools=[check_fares]),
-            persist=local.session(ctx.database_id, ctx.context_id, parent=ctx.caller_session_id),
+            persist=local.session(
+                ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id
+            ),
         )
         served.sessions.append(session)
         ctx.attach(session)
 
-    delegation = {"database_id": database_id, "caller_session_id": "voice"}
+    delegation = {"conversation_id": conversation_id, "caller_session_id": "voice"}
     async with _serving(handler=persisted) as served:
         first = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
         await _collect(first, TaskInput(instruction="what is the change fee", **delegation))
@@ -500,7 +502,7 @@ async def test_a_dropped_conversation_rehydrates_on_the_next_request(
         await first.aclose()
         assert served.executor._conversations == {}
         with pytest.raises(store.StoreError):
-            _ = local._databases[database_id].executor
+            _ = local._databases[conversation_id].executor
 
         second = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
         try:
@@ -516,7 +518,7 @@ async def test_a_dropped_conversation_rehydrates_on_the_next_request(
     assert "what is the change fee" in texts and "The change fee is $75." in texts
     assert texts[-1] == "It is 240 USD."
 
-    reopened = SQLiteExecutor(str(tmp_path / f"{database_id}.sqlite"))
+    reopened = SQLiteExecutor(str(tmp_path / f"{conversation_id}.sqlite"))
     rows = [
         row
         async for row in reopened.query(

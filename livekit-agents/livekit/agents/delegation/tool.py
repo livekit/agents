@@ -75,8 +75,8 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
         )
 
         if (persisted := session.persisted) is not None:
-            # the expert joins this session's database, under this session
-            task_input.database_id = persisted.database_id
+            # the expert joins this session's conversation, whose id is the database id
+            task_input.conversation_id = persisted.database_id
             task_input.caller_session_id = persisted.session_id
             # a delegate an agent brings after a handoff is pointed back here, before it sends
             persisted.resume_delegate(handler)
