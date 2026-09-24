@@ -292,8 +292,8 @@ class SessionPersistence:
                 for agent, frames in chain.items():
                     items = list(agent._chat_ctx.items)
                     if agent._activity is not None:
-                        # a step waiting on one tool, such as one awaiting a task, commits what
-                        # its other tools finished only when it ends, which may be after this
+                        # a step commits its finished tools once its last returns, which a
+                        # tool awaiting a task holds past this save
                         known = {item.id for item in items}
                         for speech in agent._activity._background_speeches:
                             answered = {
@@ -344,7 +344,7 @@ class SessionPersistence:
                     scheduler.resume()
 
     async def aclose(self, chain: dict[Agent, DurableScheduler | None]) -> None:
-        """Save once more and let the session go."""
+        """Save the session as it closed and let its rows go."""
         try:
             await self.save(chain)
         except Exception:

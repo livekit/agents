@@ -279,7 +279,7 @@ class DurableScheduler:
                     exc = DurableInvalidStateError(
                         f"Unsupported awaitable yielded: {nv!r}.\n"
                         "Durable functions may only await supported operations.\n"
-                        "You awaited something that can't be checkpointed/replayed.\n"
+                        "You awaited something that can't be saved and resumed.\n"
                         ">> Wrap it in EffectCall(...)."
                     )
                     nv = EffectCall(None)  # type: ignore[arg-type]

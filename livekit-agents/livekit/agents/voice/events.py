@@ -249,7 +249,7 @@ class RunContext(Generic[Userdata_T]):
                 it where the report is genuinely something to act on.
         """
         if self._durable:
-            # releasing the floor mid-tool is not something a replayed frame can repeat
+            # releasing the floor mid-tool is not something a resumed frame can repeat
             raise RuntimeError("ctx.update() is not supported inside a durable tool")
 
         # update() is a deliberate agent action — reset any active filler dwell so a

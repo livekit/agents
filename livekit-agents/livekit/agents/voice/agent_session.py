@@ -1380,7 +1380,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         for scheduler in schedulers:
                             await scheduler.pause()
                     finally:
-                        # a close cut short while an effect is in flight loses that tool only
+                        # a close cut short while an effect is in flight loses only that tool
                         for scheduler in schedulers:
                             scheduler.close()
 
@@ -1392,8 +1392,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     await self._teardown_activity(reason=reason, drain=drain)
                 finally:
                     if self._persistence is not None:
-                        # after the drain, so the last turn is in the save, and even when the
-                        # close failed or was cut short
+                        # after the drain, so the last turn is in it, and also on a close cut short
                         await asyncio.shield(self._persistence.aclose(chain))
                         self._persistence = None
 
