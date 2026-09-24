@@ -28,6 +28,8 @@ class _FakeClient:
         self.entered = False
         self.exited = False
         self.converse_stream_calls = 0
+        self.count_tokens_calls = 0
+        self.count_tokens_kwargs: dict[str, Any] = {}
 
     async def __aenter__(self) -> _FakeClient:
         self.entered = True
@@ -42,6 +44,11 @@ class _FakeClient:
             "ResponseMetadata": {"RequestId": "req-1", "HTTPStatusCode": 200},
             "stream": _empty_stream(),
         }
+
+    async def count_tokens(self, **kwargs: Any) -> dict[str, Any]:
+        self.count_tokens_calls += 1
+        self.count_tokens_kwargs = kwargs
+        return {"inputTokens": 1}
 
 
 async def _empty_stream() -> AsyncIterator[dict[str, Any]]:
@@ -130,10 +137,14 @@ async def test_aclose_closes_the_cached_client(session: _FakeSession) -> None:
     assert llm._client is None
 
 
-async def test_prewarm_establishes_the_client(session: _FakeSession) -> None:
+async def test_prewarm_sends_a_token_free_request(session: _FakeSession) -> None:
+    """Constructing the client is not enough: prewarm must reach the service."""
     llm = _make_llm()
 
     await llm._prewarm_impl()
 
     assert session.create_client_calls == 1
     assert session.client.entered is True
+    assert session.client.count_tokens_calls == 1
+    assert session.client.count_tokens_kwargs["modelId"] == "amazon.nova-2-lite-v1:0"
+    assert session.client.converse_stream_calls == 0

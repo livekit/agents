@@ -196,7 +196,15 @@ class LLM(llm.LLM):
         return self._client
 
     async def _prewarm_impl(self) -> None:
-        await self._get_client()
+        # CountTokens is the only bedrock-runtime operation that reaches the
+        # service without generating anything: it resolves DNS, completes the TLS
+        # handshake and leaves a keep-alive connection in the pool for the first
+        # real turn. Failures are swallowed by LLM.prewarm().
+        client = await self._get_client()
+        await client.count_tokens(
+            modelId=self.model,
+            input={"converse": {"messages": [{"role": "user", "content": [{"text": "ping"}]}]}},
+        )
 
     async def aclose(self) -> None:
         await super().aclose()
