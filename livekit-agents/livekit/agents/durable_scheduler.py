@@ -55,12 +55,6 @@ class EffectException(Exception):
         self.exc_message = exc_message
         super().__init__(self.__str__())
 
-    @classmethod
-    def from_exception(cls, exc: BaseException) -> EffectException:
-        return cls(exc_type=type(exc).__name__, exc_message=str(exc)).with_traceback(
-            exc.__traceback__
-        )
-
     def __reduce__(self) -> tuple[type, tuple[str, str]]:
         # the snapshot after a failed effect holds one, and __init__ takes both fields back
         return (self.__class__, (self.exc_type, self.exc_message))
@@ -89,12 +83,6 @@ class EffectCall(Generic[TaskResult_T]):
         self._c_ctx: contextvars.Context | None = None
         self._done: bool = False
 
-    @classmethod
-    def _from_exception(cls, exc: BaseException) -> EffectCall:
-        ec = cls(None)  # type: ignore[arg-type]
-        ec._set_exception(exc)
-        return ec
-
     def __await__(self) -> Generator[Any, Any, TaskResult_T]:
         self._c_ctx = contextvars.copy_context()
         return yields(self)  # type: ignore
@@ -105,7 +93,9 @@ class EffectCall(Generic[TaskResult_T]):
         self._done = True
 
     def _set_exception(self, exc: BaseException) -> None:
-        self._c_exc = EffectException.from_exception(exc)
+        self._c_exc = EffectException(type(exc).__name__, str(exc)).with_traceback(
+            exc.__traceback__
+        )
         self._done = True
 
     def __getstate__(self) -> dict[str, Any]:
@@ -258,18 +248,6 @@ class DurableScheduler:
 
         __tracebackhide__ = True
 
-        async def _execute_step(ec: EffectCall) -> None:
-            try:
-                if not ec._c or ec._c_ctx is None:
-                    raise RuntimeError("invalid EffectCall state")
-
-                exe_task = ec._c_ctx.run(asyncio.ensure_future, ec._c, loop=self._loop)
-                _pass_through_activity_task_info(exe_task)
-                ec._set_result(await exe_task)
-            except Exception as e:
-                logger.exception("error executing step of durable function")
-                ec._set_exception(e)
-
         g = task.generator
         assert not isinstance(g, bytes)
         nv: EffectCall | Any = task.next_value
@@ -293,7 +271,15 @@ class DurableScheduler:
                         if isinstance(nv._c, AgentTask):
                             # a pending AgentTask pickles, so awaiting one is a boundary too
                             await self._boundary(task)
-                        await _execute_step(nv)
+                        try:
+                            if not nv._c or nv._c_ctx is None:
+                                raise RuntimeError("invalid EffectCall state")
+                            exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c, loop=self._loop)
+                            _pass_through_activity_task_info(exe_task)
+                            nv._set_result(await exe_task)
+                        except Exception as e:
+                            logger.exception("error executing step of durable function")
+                            nv._set_exception(e)
                         task.at_boundary.clear()
                         assert nv._done
                     else:
@@ -303,7 +289,8 @@ class DurableScheduler:
                             "You awaited something that can't be checkpointed/replayed.\n"
                             ">> Wrap it in EffectCall(...)."
                         )
-                        nv = EffectCall._from_exception(exc)
+                        nv = EffectCall(None)  # type: ignore[arg-type]
+                        nv._set_exception(exc)
                         task.next_value = nv
 
                 except StopIteration as e:
