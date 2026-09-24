@@ -23,13 +23,20 @@ the Armenian full stop), and its 20-character minimum re-merges the short
 sentences of Chinese and Japanese. A reply in those languages then leaves as a
 single frame once the LLM has finished, so first audio waits for the whole reply.
 
-This tokenizer keeps blingfire for what it is good at and adds two
+This tokenizer keeps blingfire for what it is good at and adds three
 script-agnostic rules on top:
 
 1. Cut after any character Unicode classifies as ``Sentence_Terminal``, whatever
    the script, keeping closing quotes and brackets attached to the sentence.
-2. Cut at the last space once a span exceeds ``max_chars``, so text with no
+2. Cut at a line break. Once livekit's markdown filter has stripped its marker,
+   a heading or a list item has no other end mark.
+3. Cut at the last space once a span exceeds ``max_chars``, so text with no
    terminator at all (Thai and Lao have none) still streams.
+
+An ASCII stop also gets a few checks blingfire lacks: a list number or a
+one-letter word before it is not a sentence end, nor is a title opening a
+sentence or a quote closing in the middle of one, while a stop after a CJK
+character, a Greek question mark and an ellipsis before a new sentence are.
 
 No minimum sentence length: a sentence boundary is a natural pause, and a
 character-count minimum is exactly what starves scripts with short sentences.
@@ -177,6 +184,44 @@ _EMOJI_MODIFIERS = frozenset(chr(cp) for cp in range(0x1F3FB, 0x1F400))
 # A flag is a pair of regional indicators; cutting between them shows letters.
 _REGIONAL_INDICATORS = frozenset(chr(cp) for cp in range(0x1F1E6, 0x1F200))
 
+# Code-point ranges behind the checks an ASCII stop gets. A ";" after a Greek
+# letter is the script's question mark. In the unspaced CJK scripts (kana,
+# ideographs, halfwidth katakana, Hangul) a stop after a letter can only end a
+# sentence, since no abbreviation there is written with one. The bicameral
+# scripts open a sentence with a capital, so a lowercase word after a closing
+# quote continues the sentence. Thai, Myanmar and Khmer mark a phrase break with
+# a space, so a one-letter word before a stop there is not a title.
+_Ranges = tuple[tuple[int, int], ...]
+_GREEK: _Ranges = ((0x0370, 0x03FF), (0x1F00, 0x1FFF))
+_GREEK_QUESTION_MARKS = frozenset(";;")
+_UNSPACED_CJK: _Ranges = (
+    (0x3040, 0x30FF),
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xAC00, 0xD7AF),
+    (0xF900, 0xFAFF),
+    (0xFF66, 0xFF9F),
+    (0x20000, 0x2FFFF),
+)
+_BICAMERAL: _Ranges = (
+    (0x0041, 0x024F),
+    (0x0370, 0x03FF),
+    (0x0400, 0x052F),
+    (0x0531, 0x0587),
+    (0x1E00, 0x1EFF),
+    (0x1F00, 0x1FFF),
+)
+_SPACE_IS_BREAK: _Ranges = ((0x0E00, 0x0EFF), (0x1000, 0x109F), (0x1780, 0x17FF))
+_OPENERS = frozenset("(\"'«“‘")
+_ELLIPSIS = "…"
+# How much of what follows a title-shaped word blingfire is shown when asked
+# about it again.
+_TITLE_LOOKAHEAD_CHARS = 80
+# A whitespace run holding a line break. With markdown stripped, headings, list
+# items and table rows carry no terminator, so the break is the only sign the
+# line ended.
+_LINE_BREAK = re.compile(r"[^\S\n]*\n\s*")
+
 # Every clause mark above U+007F: what Unicode's Terminal_Punctuation adds to
 # Sentence_Terminal, which is the comma, semicolon and colon of each script (the
 # ideographic and fullwidth comma, the Arabic comma and semicolon, the Ethiopic
@@ -315,19 +360,39 @@ def _blingfire_ends(text: str) -> frozenset[int] | None:
 
 
 def _boundaries(text: str) -> list[int]:
-    """Offsets to cut at, one after each sentence-ending run of punctuation."""
+    """Offsets to cut at, one after each sentence-ending run of punctuation.
+
+    A run holding another script's terminator always ends a sentence, and so
+    does a Greek question mark. A run of ASCII stops is blingfire's call, after
+    the checks it lacks, in this order: a quote closing mid-sentence, a stop
+    after a CJK character, a title opening a sentence, a list number, a
+    one-letter word, and a closing quote followed by a lowercase word. An
+    ellipsis on its own ends a sentence only before a capital, a letter of a
+    caseless script or a CJK character. Every line break with text on both
+    sides is a cut as well.
+    """
     ends = _blingfire_ends(text)
     cuts: list[int] = []
     length = len(text)
     i = 0
     while i < length:
         char = text[i]
-        if char not in _STERM and char not in _ASCII_TERMINATORS:
+        greek_question = char in _GREEK_QUESTION_MARKS and _prev_is_greek(text, i)
+        ellipsis = char == _ELLIPSIS
+        if (
+            char not in _STERM
+            and char not in _ASCII_TERMINATORS
+            and not greek_question
+            and not ellipsis
+        ):
             i += 1
             continue
         # Take the whole run, so "？！" or a stop before a closing quote is one
         # boundary rather than several.
-        non_ascii = char in _STERM
+        non_ascii = char in _STERM or greek_question
+        # An ellipsis trails off as often as it ends a sentence, unless a
+        # terminator shares its run.
+        only_ellipsis = ellipsis
         saw_closer = False
         j = i + 1
         while j < length:
@@ -336,37 +401,87 @@ def _boundaries(text: str) -> list[int]:
                 saw_closer = True
             elif nxt in _STERM:
                 non_ascii = True
+                only_ellipsis = False
+            elif nxt == _ELLIPSIS and ellipsis:
+                pass
             elif nxt not in _ASCII_TERMINATORS:
                 break
+            else:
+                only_ellipsis = False
             j += 1
         # A mark or joiner after the run belongs to the run's last character.
         while j < length and _binds_to_previous(text[j]):
             j += 1
         if j < length:
+            after = _next_visible(text, j)
+            # A lowercase word of a script that opens its sentences with a
+            # capital: whatever came before it, the sentence goes on.
+            continues = after.islower() and _in_ranges(after, _BICAMERAL)
             if saw_closer and not text[j].isspace():
                 # A quotation closing mid-sentence, as in 「はい。」と言った。
                 # Breaking here would put a pause inside one sentence.
                 pass
+            elif only_ellipsis:
+                # "One moment… Your order" ends a sentence; "Hmm… that" trails off.
+                if text[j].isspace():
+                    if after.isalpha() and not continues:
+                        cuts.append(j)
+                elif _in_ranges(text[j], _UNSPACED_CJK):
+                    cuts.append(j)
             elif non_ascii:
                 cuts.append(j)
-            elif _is_title_shaped(text[cuts[-1] if cuts else 0 : j]):
+            elif i > 0 and _in_ranges(text[i - 1], _UNSPACED_CJK):
+                # Chinese or Japanese written with ASCII stops ("你好.我是小明."),
+                # which blingfire never splits.
+                cuts.append(j)
+            elif _title_is_abbreviation(text, cuts[-1] if cuts else 0, j):
+                pass
+            elif _is_list_marker(text, i, j):
+                pass
+            elif _single_letter_word(text, i, j):
+                pass
+            elif saw_closer and continues:
+                # 'He said "Stop!" and left.' goes on after the quote.
                 pass
             elif j in ends if ends is not None else text[j].isspace():
                 # Without blingfire, a stop followed by more of the same word
                 # ("3.14", "example.com") is not taken for a sentence end.
                 cuts.append(j)
         i = j
-    return cuts
+    # A line break with text on both sides ends the line's piece.
+    first_visible = length - len(text.lstrip())
+    for match in _LINE_BREAK.finditer(text):
+        if match.start() > first_visible and match.end() < length:
+            cuts.append(match.end())
+    return sorted(set(cuts))
+
+
+def _in_ranges(char: str, ranges: _Ranges) -> bool:
+    code_point = ord(char)
+    return any(low <= code_point <= high for low, high in ranges)
+
+
+def _next_visible(text: str, index: int) -> str:
+    """The first non-space character at or after ``index``, or "" past the end."""
+    while index < len(text) and text[index].isspace():
+        index += 1
+    return text[index] if index < len(text) else ""
+
+
+def _prev_is_greek(text: str, index: int) -> bool:
+    """Whether the letter before ``text[index]``, past closers and marks, is Greek."""
+    k = index - 1
+    while k >= 0 and (text[k] in _CLOSERS or _binds_to_previous(text[k])):
+        k -= 1
+    return k >= 0 and text[k].isalpha() and _in_ranges(text[k], _GREEK)
 
 
 def _is_title_shaped(piece: str) -> bool:
     """Whether a would-be sentence is one short capitalised word and a full stop.
 
-    Such as "Dr." or "Mrs.": blingfire takes one for a whole sentence when it
-    opens a new one ("... called. Dr. Who ..."), and sent alone it is spoken as
-    a sentence, with a closing intonation and a pause. So the cut after it is
-    skipped. A real one-word sentence of that shape ("No.", "Hi.") then joins
-    the sentence after it, which costs only the wait for that one.
+    "Dr." and "Mrs." have this shape, and so do "Sure." and "No.": the shape
+    alone cannot tell a title from a one-word sentence, so a span that has it
+    is put to blingfire again by ``_title_is_abbreviation``.
     """
     word = piece.strip()
     stem = word[:-1]
@@ -377,6 +492,70 @@ def _is_title_shaped(piece: str) -> bool:
         and stem[0].isupper()
         and (len(stem) == 1 or stem[1:].islower())
     )
+
+
+def _title_is_abbreviation(text: str, start: int, end: int) -> bool:
+    """Whether the title-shaped would-be sentence ``text[start:end]`` is an abbreviation.
+
+    Blingfire takes "Dr." for a whole sentence when it follows one ("... called.
+    Dr. Smith ...") yet keeps it with its name when it opens the text, so the
+    span is shown to it again with what follows, on a bounded window, and the
+    cut is skipped only if it then keeps the word with the next one. "Sure. Let
+    me" still ends at "Sure.". The price is a title before a name blingfire
+    reads as a sentence opener, such as "Dr. Who", which is spoken alone.
+    """
+    if not _is_title_shaped(text[start:end]):
+        return False
+    while start < end and text[start].isspace():
+        start += 1
+    ends = _blingfire_ends(text[start : end + _TITLE_LOOKAHEAD_CHARS])
+    return ends is not None and (end - start) not in ends
+
+
+def _is_list_marker(text: str, start: int, end: int) -> bool:
+    """Whether the stop at ``text[start:end]`` numbers a list item ("1. Open the app").
+
+    Blingfire takes "1." for a sentence, which would speak each number at the
+    end of the line before it. One to three digits opening their line, a lone
+    stop and whitespace after it are a list number instead.
+    """
+    if text[start:end] != "." or end >= len(text) or not text[end].isspace():
+        return False
+    k = start - 1
+    while k >= 0 and text[k] in "0123456789":
+        k -= 1
+    if not 1 <= start - 1 - k <= 3:
+        return False
+    line_start = text.rfind("\n", 0, k + 1) + 1
+    return not text[line_start : k + 1].strip()
+
+
+def _single_letter_word(text: str, start: int, end: int) -> bool:
+    """Whether the stop at ``text[start:end]`` follows a one-letter word.
+
+    "z. B.", "κ.", "د.", "डॉ." and "ডা." are abbreviations blingfire cuts after,
+    and "z." is one it commits to on a prefix, before "B." has arrived. One
+    letter with its marks, and the start of the text, whitespace or an opening
+    quote or bracket before it, stays with the next word. The price is a
+    sentence ending in a one-letter word ("vitamin C."), which waits for the
+    next one. Not in a script where a space already marks a phrase break, and
+    not after a number, where the letter is a unit ("12 h.") ending its sentence.
+    """
+    if text[start:end] != ".":
+        return False
+    k = start - 1
+    while k >= 0 and unicodedata.category(text[k]).startswith("M"):
+        k -= 1
+    if k < 0 or not text[k].isalpha():
+        return False
+    if _in_ranges(text[k], _SPACE_IS_BREAK) or _in_ranges(text[k], _UNSPACED_CJK):
+        return False
+    if not (k == 0 or text[k - 1].isspace() or text[k - 1] in _OPENERS):
+        return False
+    m = k - 1
+    while m >= 0 and text[m].isspace():
+        m -= 1
+    return not (m >= 0 and text[m].isdigit())
 
 
 def _binds_to_previous(char: str) -> bool:
@@ -490,7 +669,11 @@ def _ends_a_sentence(text: str) -> bool:
     tail = text.rstrip()
     while tail and (tail[-1] in _CLOSERS or _binds_to_previous(tail[-1])):
         tail = tail[:-1]
-    return bool(tail) and (tail[-1] in _ASCII_TERMINATORS or tail[-1] in _STERM)
+    return bool(tail) and (
+        tail[-1] in _ASCII_TERMINATORS
+        or tail[-1] in _STERM
+        or (tail[-1] in _GREEK_QUESTION_MARKS and _prev_is_greek(tail, len(tail) - 1))
+    )
 
 
 def _clause_end(text: str, index: int) -> int | None:
@@ -712,8 +895,9 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
     The plugin's default for ``text_chunking="sentence"``. It needs no language
     setting: blingfire handles Latin punctuation and its abbreviations, and any
     character Unicode classifies as a sentence terminator ends a sentence in
-    every other script. Text with no terminator, such as Thai, is cut at a space
-    once it passes ``max_chars``.
+    every other script. A line break ends a piece too, so a heading or a list
+    item is a frame of its own. Text with no terminator, such as Thai, is cut at
+    a space once it passes ``max_chars``.
 
     Args:
         max_chars: Length at which a piece is cut, at the last space inside
