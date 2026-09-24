@@ -258,6 +258,9 @@ class StoreSuite:
             "rebook",
             '{"flight": "NW812"}',
         )
+        # a call that ended with no output in the history is reported with what it returned
+        (ended,) = stored.ended
+        assert (ended.call_id, ended.output, ended.is_error) == ("call_done", "found", False)
         # the row stays running until the new owner has told the model, then settles it
         (row,) = await _rows(conversation, "SELECT status FROM tasks WHERE call_id = 'call_hung'")
         assert row["status"] == "running"

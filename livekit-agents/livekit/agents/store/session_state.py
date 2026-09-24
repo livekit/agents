@@ -63,11 +63,13 @@ class AgentRecord:
 
 @dataclass
 class TaskRecord:
-    """A call the previous owner started and never ended."""
+    """A call the history does not answer: left running, or ended with its output unwritten."""
 
     call_id: str
     name: str
     arguments: str | None
+    output: str | None = None
+    is_error: bool = False
 
 
 @dataclass
@@ -83,6 +85,8 @@ class StoredSession:
     agents: dict[str, AgentRecord]
     interrupted: list[TaskRecord]
     """Calls still ``running`` under a previous owner, which died before they ended."""
+    ended: list[TaskRecord]
+    """Calls that ended, whose output the previous owner died before writing to the history."""
 
 
 def qualified_name(cls: type) -> str:
@@ -242,6 +246,24 @@ class SessionState:
                 )
             )
 
+        answered = {item.call_id for item in history if item.type == "function_call_output"}
+        ended: list[TaskRecord] = []
+        async for row in executor.query(
+            "SELECT call_id, name, arguments, output, is_error FROM tasks WHERE session_id = ? "
+            "AND status != 'running' ORDER BY started_at",
+            self._session_id,
+        ):
+            if str(row["call_id"]) not in answered:
+                ended.append(
+                    TaskRecord(
+                        call_id=str(row["call_id"]),
+                        name=str(row["name"]),
+                        arguments=_text(row["arguments"]),
+                        output=_text(row["output"]),
+                        is_error=bool(row["is_error"]),
+                    )
+                )
+
         userdata: Any = session.get("userdata")
         encoding = _text(session.get("userdata_encoding"))
         if encoding == "json":
@@ -262,6 +284,7 @@ class SessionState:
             history=history,
             agents=agents,
             interrupted=interrupted,
+            ended=ended,
         )
 
     def append(self, item: ChatItem, *, owner: str = SESSION_OWNER) -> None:

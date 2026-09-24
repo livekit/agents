@@ -14,6 +14,7 @@ import pytest
 from livekit.agents import Agent, AgentSession, RunContext, function_tool, store
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import Delegate
+from livekit.agents.llm import ChatMessage
 from livekit.agents.voice.persistence import INTERRUPTED_OUTPUT
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -233,6 +234,32 @@ async def test_a_crash_right_after_resuming_still_reports_the_interrupted_call(
     release.set()
     await dead.aclose()
     await crashed.aclose()
+
+
+async def test_a_call_that_ended_before_a_crash_keeps_its_output(
+    conversation: store.Conversation,
+) -> None:
+    # the previous owner ended the call, then died before its output reached the history
+    earlier = conversation.session("s1")
+    await earlier.load()
+    earlier.append(ChatMessage(role="user", content=["book NW812 for Miguel"]))
+    await earlier.task_started("call_1", name="book_flight", arguments='{"flight": "NW812"}')
+    earlier.task_ended("call_1", status="done", output="booked NW6343", is_error=False)
+    await earlier.release()
+
+    for _ in range(2):
+        session = _session(_AnsweringLLM(fake_responses=[], fallbacks=[]))
+        agent = FareDesk()
+        await session.start(agent=agent, state=conversation.session("s1"))
+        outputs = [i for i in session.history.items if i.type == "function_call_output"]
+        # restored once, and read back on the next start rather than added again
+        assert [(o.call_id, o.output, o.is_error) for o in outputs] == [
+            ("call_1", "booked NW6343", False)
+        ]
+        assert any(
+            i.type == "function_call" and i.call_id == "call_1" for i in agent.chat_ctx.items
+        )
+        await session.aclose()
 
 
 async def test_a_stale_worker_still_lets_the_conversation_go(

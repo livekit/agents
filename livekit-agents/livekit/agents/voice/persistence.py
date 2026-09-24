@@ -140,8 +140,10 @@ class SessionPersistence:
                 exclude_handoff=True, exclude_config_update=True
             )
 
-        for task in stored.interrupted:
-            # the model is told the call has no known outcome, rather than left to assume one
+        # the model is told a running call has no known outcome, and what an ended one returned
+        answers = [(task, INTERRUPTED_OUTPUT, True) for task in stored.interrupted]
+        answers += [(task, task.output or "", task.is_error) for task in stored.ended]
+        for task, output, is_error in answers:
             for ctx in (session._chat_ctx, current._chat_ctx):
                 if not any(
                     item.type == "function_call" and item.call_id == task.call_id
@@ -160,8 +162,8 @@ class SessionPersistence:
                         llm.FunctionCallOutput(
                             call_id=task.call_id,
                             name=task.name,
-                            output=INTERRUPTED_OUTPUT,
-                            is_error=True,
+                            output=output,
+                            is_error=is_error,
                         )
                     )
 
@@ -182,6 +184,7 @@ class SessionPersistence:
                 "items": len(stored.history),
                 "agent_id": current.id,
                 "interrupted": len(stored.interrupted),
+                "ended": len(stored.ended),
             },
         )
         self._check_rebuild(current)
