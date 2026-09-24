@@ -619,6 +619,11 @@ async def test_what_a_request_produced_is_stamped_with_it() -> None:
         fallbacks=["It is 240 USD."],
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
+    heard: list[str | None] = []
+    session.on(
+        "conversation_item_added",
+        lambda ev: ev.item.role == "assistant" and heard.append(ev.item.extra.get(REQUEST_ID_KEY)),
+    )
 
     await _collect(runner.submit(TaskInput(instruction="what is the fare"), request_id="r1"))
     stamped = [
@@ -630,3 +635,23 @@ async def test_what_a_request_produced_is_stamped_with_it() -> None:
 
     assert stamped, "the request's own items carry its id"
     assert any(item.type == "function_call" for item in stamped)
+    # an item is stamped before anyone hears it was added
+    assert heard == ["r1"]
+
+
+async def test_what_was_said_before_a_request_is_relayed_stamped_and_stored_as_it_was() -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Welcome to the fare desk.")], fallbacks=[])
+    session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
+
+    await session.generate_reply(user_input="hello")
+    (greeting,) = [
+        i for i in session.history.items if i.type == "message" and i.role == "assistant"
+    ]
+    updates = await _collect(
+        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
+    )
+    await _close(session, runner)
+
+    relayed = [u.item for u in updates if u.item is not None and u.item.id == greeting.id]
+    assert [item.extra.get(REQUEST_ID_KEY) for item in relayed] == ["r1"]
+    assert REQUEST_ID_KEY not in greeting.extra

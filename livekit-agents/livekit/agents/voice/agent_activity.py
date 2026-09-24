@@ -4034,9 +4034,9 @@ class AgentActivity(RecognitionHooks):
                 metrics=assistant_metrics,
                 **extra_kwargs,
             )
+            speech_handle._item_added([msg])
             self._agent._chat_ctx.insert(msg)
             self._session._conversation_item_added(msg)
-            speech_handle._item_added([msg])
             current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
 
         if not speech_handle.interrupted and len(tool_output.output) > 0:

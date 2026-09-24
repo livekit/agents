@@ -153,6 +153,11 @@ class RequestRun:
         handle.request = self._served
         self._runner._orphans.pop(handle.id, None)
         for item in handle.chat_items:
+            # an item recorded before the request existed is relayed stamped and stored as it was
+            if item.type in ("function_call", "message"):
+                item = item.model_copy(
+                    update={"extra": {REQUEST_ID_KEY: self._request_id, **item.extra}}
+                )
             self.on_item(item, handle)
         handle._add_item_added_callback(lambda item: self.on_item(item, handle))
         handle.add_done_callback(lambda _: self.maybe_finish())
