@@ -65,7 +65,19 @@ server = AgentServer(port=8321)
 
 # without agent-db the desk keeps conversations in memory; the short lease lets a desk restarted
 # after a crash take one back within seconds
-STORE = store.AgentDB.from_env(lease_ttl=10) if os.environ.get("LIVEKIT_AGENTDB_URL") else None
+AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
+# devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
+# todo: devLocal should accept the project key; until then a local agent-db takes its own
+LOCAL_KEY = (
+    {"api_key": "devkey", "api_secret": "secret"}
+    if AGENTDB_URL and "localhost" in AGENTDB_URL
+    else {}
+)
+DB = (
+    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), lease_ttl=10, **LOCAL_KEY)
+    if AGENTDB_URL
+    else None
+)
 
 
 # cheapest to dearest — the order the rules compare buckets in
@@ -877,15 +889,14 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
             task_id, name = calls.pop(update.call_id, ("", "?"))
             _trace(task_id, "←", f"{update.status}: {update.message}")
 
-    state = None
-    if STORE is not None and ctx.conversation_id:
+    persisted = None
+    if DB is not None and ctx.database_id:
         # the caller names the database; this context is one session in it, under the caller's
-        conversation = await STORE.conversation(ctx.conversation_id)
-        state = conversation.session(
-            ctx.context_id, kind="a2a", parent=ctx.caller_session_id, endpoint="fare-desk"
+        persisted = DB.session(
+            ctx.database_id, ctx.context_id, parent=ctx.caller_session_id, endpoint="fare-desk"
         )
-    await session.start(agent=FareDesk(), state=state)
-    if state is not None and (messages := session.history.messages()):
+    await session.start(agent=FareDesk(), persist=persisted)
+    if persisted is not None and (messages := session.history.messages()):
         # a fresh session has said nothing yet, so any message here came back from the store
         _trace("", "↺", f"rehydrated {ctx.context_id}: {len(messages)} messages back", limit=200)
     # todo: the expert runs in the server process; a job process per conversation is planned
