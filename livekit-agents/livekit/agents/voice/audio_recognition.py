@@ -253,14 +253,21 @@ def _ends_with_words(text: str, tail: str) -> bool:
     return bool(tail_words) and (words == tail_words or words.endswith(f" {tail_words}"))
 
 
-def _pending_segment_text(interim: str, preflight: str, preflight_is_latest: bool) -> str:
+def _pending_segment_text(
+    interim: str,
+    interim_start: float,
+    preflight: str,
+    preflight_start: float,
+    preflight_is_latest: bool,
+) -> str:
     """Buffered text of the open segment, for an empty final to fall back on.
 
-    The latest of the last interim and preflight, unless the preflight only repeats the tail
-    of the interim before it: most providers send a preflight as the whole segment, but the
+    The latest of the last interim and preflight, unless the preflight repeats the tail of the
+    interim and starts after it: most providers send a preflight as the whole segment, but the
     AssemblyAI plugin sends only the words since its last preflight.
     """
-    if preflight_is_latest and not _ends_with_words(interim, preflight):
+    preflight_is_chunk = preflight_start > interim_start and _ends_with_words(interim, preflight)
+    if preflight_is_latest and not preflight_is_chunk:
         return preflight
     return interim
 
@@ -314,11 +321,12 @@ class AudioRecognition:
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
-        # latest interim and preflight texts of the open segment, and which arrived last, for an
-        # empty final to fall back on
+        # latest interim and preflight of the open segment (text and start time), and which
+        # arrived last, for an empty final to fall back on
         self._last_interim_text = ""
+        self._last_interim_start = 0.0
         self._last_preflight_text = ""
-        self._preflight_is_latest = False
+        self._last_preflight_start = 0.0
         self._preflight_is_latest = False
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
@@ -1034,9 +1042,7 @@ class AudioRecognition:
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
-        self._last_interim_text = ""
-        self._last_preflight_text = ""
-        self._preflight_is_latest = False
+        self._reset_pending_segment()
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
@@ -1129,9 +1135,7 @@ class AudioRecognition:
 
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
-            self._last_interim_text = ""
-            self._last_preflight_text = ""
-            self._preflight_is_latest = False
+            self._reset_pending_segment()
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
                 chat_ctx,
@@ -1252,7 +1256,9 @@ class AudioRecognition:
                 and (
                     pending_text := _pending_segment_text(
                         self._last_interim_text,
+                        self._last_interim_start,
                         self._last_preflight_text,
+                        self._last_preflight_start,
                         self._preflight_is_latest,
                     )
                 )
@@ -1278,6 +1284,7 @@ class AudioRecognition:
 
             self._final_transcript_received.set()
             if not transcript:
+                self._reset_pending_segment()
                 return
 
             self._hooks.on_final_transcript(
@@ -1303,9 +1310,7 @@ class AudioRecognition:
             self._final_transcript_confidence.append(confidence)
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
-            self._last_interim_text = ""
-            self._last_preflight_text = ""
-            self._preflight_is_latest = False
+            self._reset_pending_segment()
             self._audio_preflight_transcript = ""
 
             if use_stt_speaking_time:
@@ -1363,6 +1368,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
             self._last_preflight_text = transcript
+            self._last_preflight_start = ev.alternatives[0].start_time
             self._preflight_is_latest = True
 
             if use_stt_speaking_time:
@@ -1387,6 +1393,7 @@ class AudioRecognition:
             )
             self._audio_interim_transcript = ev.alternatives[0].text
             self._last_interim_text = self._audio_interim_transcript
+            self._last_interim_start = ev.alternatives[0].start_time
             self._preflight_is_latest = False
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
@@ -2014,6 +2021,13 @@ class AudioRecognition:
         if (handle := getattr(self, "_transcription_timeout_handle", None)) is not None:
             handle.cancel()
             self._transcription_timeout_handle = None
+
+    def _reset_pending_segment(self) -> None:
+        self._last_interim_text = ""
+        self._last_interim_start = 0.0
+        self._last_preflight_text = ""
+        self._last_preflight_start = 0.0
+        self._preflight_is_latest = False
 
     def _reset_transcription_timeout(self) -> None:
         self._cancel_transcription_timeout()

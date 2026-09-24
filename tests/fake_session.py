@@ -150,6 +150,7 @@ class FakeActions:
         final: bool = True,
         final_transcript: str | None = None,
         preflight_transcript: str | None = None,
+        preflight_start_time: float = 0.0,
     ) -> None:
         self._items.append(
             FakeUserSpeech(
@@ -160,6 +161,7 @@ class FakeActions:
                 final=final,
                 final_transcript=final_transcript,
                 preflight_transcript=preflight_transcript,
+                preflight_start_time=preflight_start_time,
             )
         )
 
