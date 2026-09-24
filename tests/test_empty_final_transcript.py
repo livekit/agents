@@ -138,6 +138,35 @@ async def test_empty_final_promotes_full_segment_preflight(transcript: str, pref
     assert user_item.created_at - t_origin < 4.0
 
 
+async def test_empty_final_promotes_incremental_preflight_without_interim() -> None:
+    # AssemblyAI emits an interim only when `words` is non-empty, but a preflight whenever
+    # `utterance` is
+    actions = FakeActions()
+    actions.add_user_speech(
+        0.5,
+        1.5,
+        "",
+        stt_delay=STT_DELAY,
+        final_transcript="",
+        preflight_transcript="Pick up.",
+        preflight_incremental=True,
+    )
+    actions.add_llm("Great, pickup it is.")
+    actions.add_tts(1.0)
+
+    session = create_session(actions, extra_kwargs=OPT_IN)
+    items: list[ConversationItemAddedEvent] = []
+    session.on("conversation_item_added", items.append)
+
+    t_origin = await asyncio.wait_for(run_session(session, _agent()), timeout=SESSION_TIMEOUT)
+
+    assert _user_texts(items) == ["Pick up."]
+    user_item = next(
+        ev for ev in items if isinstance(ev.item, ChatMessage) and ev.item.role == "user"
+    )
+    assert user_item.created_at - t_origin < 4.0
+
+
 async def test_promoted_interim_cancels_transcription_timeout() -> None:
     # a long endpointing delay holds the commit past the timeout
     actions = FakeActions()
@@ -213,6 +242,7 @@ def test_empty_final_keeps_interim_without_vad_speech(
     [
         # the AssemblyAI plugin sends preflights as the words since its last preflight
         pytest.param("Pick up", "up", True, True, "Pick up", id="chunked-preflight"),
+        pytest.param("", "Pick up", True, True, "Pick up", id="incremental-without-interim"),
         pytest.param("", "Pick up", True, False, "Pick up", id="preflight-without-interim"),
         pytest.param("Pick", "Pick up", True, False, "Pick up", id="preflight-adds-words"),
         pytest.param("I said pick up", "pick up", True, False, "pick up", id="drops-prefix"),
@@ -227,9 +257,8 @@ def test_pending_segment_text(
     assert _pending_segment_text(interim, preflight, preflight_is_latest, incremental) == expected
 
 
-def test_unpromoted_empty_final_closes_the_segment() -> None:
-    # VAD has not heard speech, so the empty final is not promoted; its interim must not
-    # survive into a later segment
+def _hand_wired_recognition() -> AudioRecognition:
+    """Enough of AudioRecognition to feed STT events through, with no VAD speech yet."""
     ar = AudioRecognition.__new__(AudioRecognition)
     ar._hooks = MagicMock()
     ar._stt_pipeline = None
@@ -238,14 +267,40 @@ def test_unpromoted_empty_final_closes_the_segment() -> None:
     ar._user_silence_ev = asyncio.Event()
     ar._user_silence_ev.set()
     ar._last_speaking_time = None
+    ar._last_final_transcript_time = None
     ar._turn_detection_mode = "vad"
+    ar._user_turn_committed = False
     ar._last_language = None
     ar._final_transcript_received = asyncio.Event()
+    ar._final_transcript_confidence = []
     ar._audio_transcript = ""
     ar._audio_interim_transcript = ""
+    ar._audio_preflight_transcript = ""
     ar._last_interim_text = ""
     ar._last_preflight_text = ""
+    ar._last_preflight_incremental = False
     ar._preflight_is_latest = False
+    return ar
+
+
+def test_incremental_preflights_add_up_within_a_segment() -> None:
+    ar = _hand_wired_recognition()
+    for chunk in ("Pick", "up"):
+        ar._process_stt_event(
+            SpeechEvent(
+                type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                alternatives=[SpeechData(text=chunk, language=LanguageCode(""))],
+                incremental=True,
+            )
+        )
+
+    assert ar._last_preflight_text == "Pick up"
+
+
+def test_unpromoted_empty_final_closes_the_segment() -> None:
+    # VAD has not heard speech, so the empty final is not promoted; its interim must not
+    # survive into a later segment
+    ar = _hand_wired_recognition()
 
     for text, type_ in (
         ("uh", SpeechEventType.INTERIM_TRANSCRIPT),
