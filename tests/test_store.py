@@ -82,6 +82,36 @@ class StoreSuite:
         ]
         assert "first, corrected" in rows[1]["item_json"]
 
+    async def test_a_lost_write_is_redone_at_the_next_sync(
+        self, conversation: store.Conversation, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        state = conversation.session("s1")
+        await state.load()
+        kept, dropped = (
+            ChatMessage(role="user", content=["a"]),
+            ChatMessage(role="user", content=["b"]),
+        )
+        state.sync([kept, dropped], owner="agent_1", prune=True)
+        await state.flush()
+
+        executor = conversation.executor
+        batch = executor.batch
+
+        async def failing(*statements: object) -> None:
+            raise store.StoreError("unavailable", "the database is moving")
+
+        monkeypatch.setattr(executor, "batch", failing)
+        later = ChatMessage(role="user", content=["c"])
+        state.sync([kept, later], owner="agent_1", prune=True)
+        await state.flush()
+        monkeypatch.setattr(executor, "batch", batch)
+
+        # the next sync rewrites what the lost batch held, the delete included
+        state.sync([kept, later], owner="agent_1", prune=True)
+        await state.flush()
+        rows = await _rows(conversation, "SELECT item_id FROM chat_items ORDER BY created_at")
+        assert [row["item_id"] for row in rows] == [kept.id, later.id]
+
     async def test_checkpoint_rewrites_the_mutable_rows_only(
         self, conversation: store.Conversation
     ) -> None:

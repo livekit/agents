@@ -132,6 +132,8 @@ class SessionState:
         self._pickle_warned = False
         self._released = False
         self._resumed: dict[Delegate, asyncio.Task[None]] = {}
+        # per owner, each item's fingerprint as last queued, so only a changed item is rewritten
+        self._written: dict[str, dict[str, int]] = {}
 
     @property
     def conversation(self) -> Conversation:
@@ -217,10 +219,11 @@ class SessionState:
             self._session_id,
         ):
             item = _ITEM_ADAPTER.validate_json(str(row["item_json"]))
-            if row["owner"] == SESSION_OWNER:
+            owner = str(row["owner"])
+            self._written.setdefault(owner, {})[item.id] = hash(item_json(item))
+            if owner == SESSION_OWNER:
                 history.append(item)
             else:
-                owner = str(row["owner"])
                 agents.setdefault(owner, AgentRecord(agent_id=owner, cls="")).chat_items.append(
                     item
                 )
@@ -262,19 +265,30 @@ class SessionState:
         )
 
     def append(self, item: ChatItem, *, owner: str = SESSION_OWNER) -> None:
-        """Write one chat item, again on its id. Queued; the caller never waits on it."""
+        """Write one chat item, again on its id when it changed. Queued; nothing waits on it."""
+        data = item_json(item)
+        written = self._written.setdefault(owner, {})
+        if written.get(item.id) == hash(data):
+            return
+        written[item.id] = hash(data)
         self._enqueue(
             "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item_json, "
             "created_at) VALUES (?, ?, ?, ?, ?)",
-            (self._session_id, owner, item.id, item_json(item), item.created_at),
+            (self._session_id, owner, item.id, data, item.created_at),
         )
 
-    def remove(self, item_id: str, *, owner: str) -> None:
-        """Drop one chat item from an agent's context. Queued like ``append``."""
-        self._enqueue(
-            "DELETE FROM chat_items WHERE session_id = ? AND owner = ? AND item_id = ?",
-            (self._session_id, owner, item_id),
-        )
+    def sync(self, items: list[ChatItem], *, owner: str, prune: bool) -> None:
+        """Append whatever changed in ``items``; ``prune`` also drops rows no longer in them."""
+        for item in items:
+            self.append(item, owner=owner)
+        if prune:
+            written = self._written.setdefault(owner, {})
+            for item_id in written.keys() - {item.id for item in items}:
+                del written[item_id]
+                self._enqueue(
+                    "DELETE FROM chat_items WHERE session_id = ? AND owner = ? AND item_id = ?",
+                    (self._session_id, owner, item_id),
+                )
 
     async def task_started(self, call_id: str, *, name: str, arguments: str) -> None:
         """Record a call before its body runs, so a crash mid-call leaves it ``running``."""
@@ -467,6 +481,14 @@ class SessionState:
                     extra={"session_id": self._session_id, "statements": len(statements)},
                     exc_info=True,
                 )
+                # the owners in the lost batch are rewritten whole at the next sync, and a lost
+                # delete is kept under a fingerprint no item has, so the next prune retries it
+                chat_rows = [params for sql, params in statements if "INTO chat_items" in sql]
+                deletes = [params for sql, params in statements if "FROM chat_items" in sql]
+                for params in chat_rows + deletes:
+                    self._written.pop(str(params[1]), None)
+                for params in deletes:
+                    self._written.setdefault(str(params[1]), {})[str(params[2])] = 0
 
 
 def _text(value: Value | None) -> str | None:
