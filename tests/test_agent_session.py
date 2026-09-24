@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterable
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -32,16 +33,23 @@ from livekit.agents import (
     vad,
 )
 from livekit.agents.llm import (
+    LLM,
+    ChatChunk,
+    ChoiceDelta,
     FunctionTool,
     FunctionToolCall,
     InputTranscriptionCompleted,
+    LLMStream,
     RawFunctionTool,
+    Tool,
+    ToolChoice,
     ToolContext,
     ToolFlag,
     Toolset,
 )
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
@@ -396,6 +404,92 @@ async def test_tool_call() -> None:
     assert chat_ctx_items[6].type == "message"
     assert chat_ctx_items[6].role == "assistant"
     assert chat_ctx_items[6].text_content == "The weather in Tokyo is sunny today."
+
+
+@pytest.mark.parametrize("max_tool_steps", [1, 2, 3])
+async def test_max_tool_steps_stops_after_configured_tool_rounds(max_tool_steps: int) -> None:
+    class ToolLoopStream(LLMStream):
+        def __init__(
+            self,
+            llm: LLM,
+            *,
+            chat_ctx: ChatContext,
+            tools: list[Tool],
+            conn_options: APIConnectOptions,
+            call_id: int,
+            emit_tool_call: bool,
+        ) -> None:
+            super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+            self._call_id = call_id
+            self._emit_tool_call = emit_tool_call
+
+        async def _run(self) -> None:
+            tool_calls = (
+                [FunctionToolCall(name="count_tool", arguments="{}", call_id=str(self._call_id))]
+                if self._emit_tool_call
+                else []
+            )
+            self._event_ch.send_nowait(
+                ChatChunk(
+                    id=f"tool-loop-{self._call_id}",
+                    delta=ChoiceDelta(
+                        role="assistant",
+                        content="working" if self._emit_tool_call else "done",
+                        tool_calls=tool_calls,
+                    ),
+                )
+            )
+
+    class ToolLoopLLM(LLM):
+        def __init__(self) -> None:
+            super().__init__()
+            self.call_id = 0
+            self.tool_choices: list[NotGivenOr[ToolChoice]] = []
+
+        def chat(
+            self,
+            *,
+            chat_ctx: ChatContext,
+            tools: list[Tool] | None = None,
+            conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+            parallel_tool_calls: NotGivenOr[bool] = NOT_GIVEN,
+            tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+            extra_kwargs: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
+        ) -> LLMStream:
+            self.call_id += 1
+            self.tool_choices.append(tool_choice)
+            return ToolLoopStream(
+                self,
+                chat_ctx=chat_ctx,
+                tools=tools or [],
+                conn_options=conn_options,
+                call_id=self.call_id,
+                emit_tool_call=tool_choice != "none",
+            )
+
+    class CountingAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="Count tool calls.")
+            self.executions: list[int] = []
+
+        @function_tool
+        async def count_tool(self) -> str:
+            self.executions.append(len(self.executions) + 1)
+            return f"result {self.executions[-1]}"
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Count the tool calls.")
+    actions.add_tts(0.1, input="working")
+    actions.add_tts(0.1, input="done")
+
+    session = create_session(actions, extra_kwargs={"max_tool_steps": max_tool_steps})
+    llm = ToolLoopLLM()
+    session._llm = llm
+    agent = CountingAgent()
+    await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
+
+    assert len(agent.executions) == max_tool_steps
+    assert llm.tool_choices[-1] == "none"
 
 
 async def test_slow_tool_keeps_agent_thinking_after_filler() -> None:
