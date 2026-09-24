@@ -353,7 +353,6 @@ class SessionPersistence:
         try:
             if not self._lease_lost:
                 await self.checkpoint()
-            await self._state.release()
         except LeaseLostError:
             logger.error(
                 "another worker took this session before it closed",
@@ -365,7 +364,11 @@ class SessionPersistence:
                 extra={"session_id": self._state.session_id},
                 exc_info=True,
             )
-        self._closed = True
+        finally:
+            self._closed = True
+            # a fenced or failed checkpoint still lets the handle go, or the connection stays open
+            with contextlib.suppress(Exception):
+                await self._state.release()
 
 
 __all__ = ["SessionPersistence", "lookup_rehydrated_agent"]

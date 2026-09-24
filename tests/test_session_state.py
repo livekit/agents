@@ -190,6 +190,23 @@ async def test_a_call_running_at_a_crash_is_interrupted(
     assert task["status"] in ("interrupted", "done")
 
 
+async def test_a_stale_worker_still_lets_the_conversation_go(
+    conversation: store.Conversation,
+) -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi.")], fallbacks=["Hi again."])
+    stale = _session(llm)
+    await stale.start(agent=FareDesk(), state=conversation.session("s1"))
+    await stale.run(user_input="hello")
+
+    # the stale worker idles past its lease, and a second one takes the session
+    resumed = _session(llm)
+    await resumed.start(agent=FareDesk(), state=conversation.session("s1"))
+    await resumed.aclose()
+    await stale.aclose()
+    with pytest.raises(store.StoreError):
+        _ = conversation.executor
+
+
 async def test_a_handoff_resumes_on_the_rebuilt_agent(conversation: store.Conversation) -> None:
     llm = _AnsweringLLM(
         fake_responses=[
