@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import TypeAdapter
 
 from ..llm.chat_context import ChatContext, ChatItem
+from ..llm.utils import compute_chat_ctx_diff
 from ..log import logger
 from .executor import Executor, Row, Statement, StoreError, Value
 from .schema import migrate
@@ -137,8 +138,8 @@ class PersistedSession:
         # while loaded, the handle holds its database's connection open
         self._loaded = False
         self._children: dict[str | None, str] = {}
-        # per owner, each item's row as last saved, which the next save compares against
-        self._saved: dict[str, dict[str, str]] = {}
+        # per owner, a copy of the items as last saved, which the next save diffs against
+        self._saved: dict[str, ChatContext] = {}
 
     @property
     def database_id(self) -> str:
@@ -196,11 +197,11 @@ class PersistedSession:
             "SELECT owner, item FROM chat_items WHERE session_id = ? ORDER BY created_at, rowid",
             self._session_id,
         ):
-            owner, data = str(row["owner"]), str(row["item"])
-            item = _ITEM_ADAPTER.validate_json(data)
-            owned.setdefault(owner, []).append(item)
-            self._saved.setdefault(owner, {})[item.id] = data
+            owned.setdefault(str(row["owner"]), []).append(
+                _ITEM_ADAPTER.validate_json(str(row["item"]))
+            )
         for owner, items in owned.items():
+            self._saved[owner] = ChatContext([_frozen(item) for item in items])
             if owner == SESSION_OWNER:
                 history = items
             else:
@@ -232,34 +233,34 @@ class PersistedSession:
         """Write the items the history and each agent's context gained, changed or lost since
         the last save, and the mutable part, in one batch. ``None`` userdata leaves it as is."""
         statements: list[Statement] = []
-        saved: dict[str, dict[str, str]] = {}
+        saved: dict[str, ChatContext] = {}
         owners = [(SESSION_OWNER, history)] + [(a.agent_id, a.chat_items) for a in agents]
         for owner, items in owners:
-            # a row is the item as to_dict() gives it, no audio or images; one that differs is
-            # rewritten whole, whatever changed in it
-            dumped = ChatContext(list(items)).to_dict(exclude_timestamp=False)["items"]
-            rows = {
-                item.id: (json.dumps(d), item.created_at)
-                for item, d in zip(items, dumped, strict=True)
-            }
-            base = self._saved.get(owner, {})
-            for item_id in base.keys() - rows.keys():
+            base = self._saved.get(owner, ChatContext.empty())
+            diff = compute_chat_ctx_diff(base, ChatContext(list(items)))
+            for item_id in diff.to_remove:
                 statements.append(
                     (
                         "DELETE FROM chat_items WHERE session_id = ? AND owner = ? AND item_id = ?",
                         (self._session_id, owner, item_id),
                     )
                 )
-            for item_id, (data, created_at) in rows.items():
-                if base.get(item_id) != data:
-                    statements.append(
-                        (
-                            "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item, "
-                            "created_at) VALUES (?, ?, ?, ?, ?)",
-                            (self._session_id, owner, item_id, data, created_at),
-                        )
+            # a changed item is rewritten whole, as to_dict() gives it: no audio or images
+            changed_ids = {item_id for _, item_id in diff.to_create + diff.to_update}
+            changed = [item for item in items if item.id in changed_ids]
+            dumped = ChatContext(changed).to_dict(exclude_timestamp=False)["items"]
+            for item, data in zip(changed, dumped, strict=True):
+                statements.append(
+                    (
+                        "INSERT OR REPLACE INTO chat_items (session_id, owner, item_id, item, "
+                        "created_at) VALUES (?, ?, ?, ?, ?)",
+                        (self._session_id, owner, item.id, json.dumps(data), item.created_at),
                     )
-            saved[owner] = {item_id: data for item_id, (data, _) in rows.items()}
+                )
+            kept = {item.id: item for item in base.items}
+            saved[owner] = ChatContext(
+                [_frozen(item) if item.id in changed_ids else kept[item.id] for item in items]
+            )
 
         statements.append(
             (
@@ -317,6 +318,13 @@ class PersistedSession:
             database.sessions -= 1
             if database.sessions == 0:
                 await database.aclose()
+
+
+def _frozen(item: ChatItem) -> ChatItem:
+    # the base keeps its own lists and dicts, so an item edited in place still differs from it
+    return item.model_copy(
+        update={k: v.copy() for k, v in vars(item).items() if isinstance(v, (list, dict))}
+    )
 
 
 def _text(value: Value | None) -> str | None:

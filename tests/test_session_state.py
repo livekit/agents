@@ -262,6 +262,98 @@ async def test_a_save_called_twice_writes_only_the_difference(
     await session.aclose()
 
 
+async def test_saves_from_conversation_item_added_and_the_close_write_each_item_once(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livekit.agents.a2a import TaskUpdate
+    from livekit.agents.delegation import DELEGATE_TOOL_NAME
+    from livekit.agents.delegation.tool import TASK_ID_EXTRA
+
+    from .test_delegation import _Scripted, _ScriptedStream
+
+    class _Named(_ScriptedStream):
+        task_id = "task-1"
+
+        async def __anext__(self) -> TaskUpdate:
+            # the expert acknowledges once the call is recorded and saved
+            await asyncio.sleep(0.2)
+            return await super().__anext__()
+
+    class _Desk(_Scripted):
+        def submit(self, task_input: Any) -> Any:
+            return _Named(list(self._updates))
+
+    delegate = _Desk(
+        TaskUpdate(state="working", text="looking it up"),
+        TaskUpdate(state="completed", text="It is 240 USD."),
+    )
+    call = _tool_call(DELEGATE_TOOL_NAME, "d1", '{"task": "what is the fare"}')
+    llm = _AnsweringLLM(
+        fake_responses=[_says("how much is it", "one sec", calls=[call])],
+        fallbacks=["Sure, let me check.", "It is 240 USD."],
+    )
+    session = AgentSession(llm=llm, delegate=delegate)
+    await session.start(agent=Agent(instructions="voice"), persist=database.session("s1"))
+    executor = await database.executor()
+    written: list[tuple[str, str]] = []
+    batch = executor.batch
+
+    async def recording(*statements: Any) -> Any:
+        written.extend((p[1], p[2]) for sql, p in statements if "INTO chat_items" in sql)
+        return await batch(*statements)
+
+    monkeypatch.setattr(executor, "batch", recording)
+    saves: list[asyncio.Task[None]] = []
+    session.on(
+        "conversation_item_added", lambda _: saves.append(asyncio.create_task(session.save()))
+    )
+    session.generate_reply(user_input="how much is it")
+    for _ in range(100):
+        if any(
+            i.type == "function_call_output" and i.call_id == "d1_final"
+            for i in session.history.items
+        ):
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.gather(*saves)
+    assert saves
+    await session.aclose()
+
+    # the framework never edits an item it recorded, so no save writes one a second time
+    assert written and len(written) == len(set(written))
+    rows = await database.rows(
+        "SELECT json_extract(item, '$.call_id') AS call_id, "
+        f"json_extract(item, '$.extra.\"{TASK_ID_EXTRA}\"') AS task_id FROM chat_items "
+        "WHERE owner = 'session' AND json_extract(item, '$.type') = 'function_call_output'"
+    )
+    assert {row["call_id"]: row["task_id"] for row in rows}["d1_final"] == "task-1"
+
+
+async def test_a_resumed_session_writes_nothing_it_loaded(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi, how can I help?")], fallbacks=[])
+    first = _session(llm)
+    await first.start(agent=FareDesk(), persist=database.session("s1"))
+    await first.run(user_input="hello")
+    await first.aclose()
+
+    second = _session(llm)
+    await second.start(agent=FareDesk(), persist=database.session("s1"))
+    executor = await database.executor()
+    written: list[str] = []
+    batch = executor.batch
+
+    async def recording(*statements: Any) -> Any:
+        written.extend(sql.split()[0] for sql, _ in statements if "chat_items" in sql)
+        return await batch(*statements)
+
+    monkeypatch.setattr(executor, "batch", recording)
+    await second.save()
+    await second.aclose()
+    assert written == []
+
+
 async def test_a_save_that_queued_behind_the_close_is_a_no_op(database: Database) -> None:
     llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi, how can I help?")], fallbacks=[])
     session = _session(llm)
