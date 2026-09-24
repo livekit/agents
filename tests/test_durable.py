@@ -48,9 +48,15 @@ async def hold() -> str:
     return "held"
 
 
+ENTERED: list[str] = []
+
+
 class Desk(Agent):
     def __init__(self) -> None:
         super().__init__(instructions="You book seats.")
+
+    async def on_enter(self) -> None:
+        ENTERED.append(self.id)
 
     @function_tool(flags=ToolFlag.DURABLE)
     async def book(self, ctx: RunContext, flight: str) -> str:
@@ -58,9 +64,6 @@ class Desk(Agent):
         charged = await EffectCall(charge())
         held = await EffectCall(hold())
         return f"{flight}: {charged}, {held}"
-
-
-ENTERED: list[str] = []
 
 
 class Confirm(AgentTask[bool]):
@@ -143,6 +146,8 @@ async def test_a_tool_at_a_boundary_survives_close_and_resume(database: Database
     )
     # the close waited for the hold, so the resumed tool sends nothing again
     assert CALLS == ["charge", "hold"]
+    # the agent resumed with its frame is not entered again
+    assert ENTERED == ["desk"]
 
     # an answered tool has no frame left to save
     await resumed.aclose()

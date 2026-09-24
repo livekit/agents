@@ -80,6 +80,25 @@ class Transferring(Agent):
         return Billing(customer=object())
 
 
+ENTERED: list[str] = []
+
+
+class Greeter(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You greet the caller.")
+
+    async def on_enter(self) -> None:
+        ENTERED.append(self.id)
+
+
+class Rebooker(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You rebook flights.")
+
+    async def on_enter(self) -> None:
+        ENTERED.append(self.id)
+
+
 @pytest.fixture
 async def database(tmp_path: pathlib.Path) -> AsyncIterator[Database]:
     local = store.LocalStore(tmp_path)
@@ -205,6 +224,32 @@ async def test_a_resumed_start_records_no_handoff_and_no_configuration(
     await fourth.start(agent=agent)
     assert recorded(fourth)[0] == 2
     await fourth.aclose()
+
+
+async def test_on_enter_runs_when_an_agent_is_entered_not_when_it_resumes(
+    database: Database,
+) -> None:
+    ENTERED.clear()
+    llm = _AnsweringLLM(fake_responses=[], fallbacks=[])
+    first = _session(llm)
+    await first.start(agent=Greeter(), persist=database.session("s1"))
+    await asyncio.sleep(0)
+    # a new row starts like any session, and a real handoff enters the next agent
+    assert ENTERED == ["greeter"]
+    first.update_agent(Rebooker())
+    assert first._update_activity_atask is not None
+    await first._update_activity_atask
+    assert ENTERED == ["greeter", "rebooker"]
+    await first.aclose()
+
+    # the rebuilt agent the session left off on resumes, and so does one the handler passed
+    for agent in (Greeter(), Rebooker()):
+        resumed = _session(llm)
+        await resumed.start(agent=agent, persist=database.session("s1"))
+        await asyncio.sleep(0)
+        assert resumed.current_agent.id == "rebooker"
+        await resumed.aclose()
+    assert ENTERED == ["greeter", "rebooker"]
 
 
 async def test_userdata_is_json_only(database: Database) -> None:

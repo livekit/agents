@@ -206,6 +206,11 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
     if persisted is not None and (messages := session.history.messages()):
         logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")
+        # a resumed agent is not entered again, so what a returning caller hears is up to us
+        session.generate_reply(
+            instructions="welcome the caller back to Northwind Air and pick up where the "
+            "conversation left off"
+        )
 
 
 if __name__ == "__main__":

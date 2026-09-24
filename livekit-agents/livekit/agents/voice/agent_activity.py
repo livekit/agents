@@ -1021,8 +1021,10 @@ class AgentActivity(RecognitionHooks):
         *,
         reuse_resources: _ReusableResources | None = None,
         trace_context: otel_context.Context | None = None,
+        resumes: bool = False,
     ) -> None:
-        # `start` must only be called by AgentSession
+        # `start` must only be called by AgentSession; an agent that `resumes` where a persisted
+        # session left off is already in the middle of it, so it is not entered again
 
         async with self._lock:
             if self._started:
@@ -1066,6 +1068,8 @@ class AgentActivity(RecognitionHooks):
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
                 self._durable_scheduler = DurableScheduler()
+                if resumes:
+                    return
 
                 @tracer.start_as_current_span(
                     "on_enter",

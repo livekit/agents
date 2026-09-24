@@ -2011,8 +2011,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
-                # a start that resumes the agent the history already ends on is no handoff;
-                # its configuration update is skipped by content, so a changed one still lands
+                # a start that resumes the agent the history already ends on is no handoff and
+                # runs no on_enter; its configuration update is skipped by content, so a changed
+                # one still lands
                 if not resumes:
                     run_state = self._global_run_state
                     handoff_item = AgentHandoff(
@@ -2039,6 +2040,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         trace_context=(
                             handoff_ctx if handoff_ctx is not None else self._session_start_context
                         ),
+                        resumes=resumes,
                     )
                 elif new_activity == "resume":
                     await self._activity.resume(
