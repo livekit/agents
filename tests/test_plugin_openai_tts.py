@@ -17,14 +17,16 @@ pytestmark = pytest.mark.unit
 PCM = b"\x00\x01" * 4800  # 200ms of 16-bit mono at 24kHz
 
 
-def _tts(handler, *, model: str, response_format: str = "pcm") -> TTS:
+def _tts(
+    handler, *, model: str, response_format: str = "pcm", voice: str | dict[str, str] = "ash"
+) -> TTS:
     client = openai.AsyncClient(
         api_key="test",
         base_url="https://compatible.example.com/v1",
         max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
-    return TTS(model=model, client=client, response_format=response_format)
+    return TTS(model=model, voice=voice, client=client, response_format=response_format)
 
 
 async def _synthesize(tts: TTS) -> bytes:
@@ -103,6 +105,18 @@ async def test_stream_format_requested_per_model(model: str, expected: str) -> N
     await _synthesize(_tts(handler, model=model))
 
     assert requests[0]["stream_format"] == expected
+
+
+async def test_custom_voice_is_sent_as_an_object() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, content=PCM, headers={"content-type": "audio/pcm"})
+
+    await _synthesize(_tts(handler, model="gpt-4o-mini-tts", voice={"id": "voice_1234"}))
+
+    assert requests[0]["voice"] == {"id": "voice_1234"}
 
 
 async def test_a_second_prewarm_does_not_replace_one_still_in_flight() -> None:

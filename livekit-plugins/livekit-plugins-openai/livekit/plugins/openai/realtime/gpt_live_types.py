@@ -18,7 +18,7 @@ DelegationTarget = Literal["responses", "client"]
 """``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
 InputRole = Literal["developer", "user", "assistant"]
 """The roles startup history accepts; there is no ``system``."""
-ServiceTier = Literal["auto", "default", "flex", "priority", "ultrafast"]
+ServiceTier = Literal["auto", "default", "fast_tier_temp_pilot", "flex", "priority", "ultrafast"]
 """Processing tier the session asks the service for, sent as the ``OpenAI-Service-Tier`` header."""
 
 # shared parts
