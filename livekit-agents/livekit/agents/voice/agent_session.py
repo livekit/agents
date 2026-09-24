@@ -1348,6 +1348,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
+                # durable tools stop at their last boundary rather than fail with the close
+                agent = self._agent
+                while agent is not None:
+                    if agent._activity is not None and agent._activity._durable_scheduler:
+                        agent._activity._durable_scheduler.close()
+                    agent = agent._old_agent if isinstance(agent, AgentTask) else None
+
                 await self._teardown_activity(reason=reason, drain=drain)
 
                 if self._persistence is not None:
@@ -2019,7 +2026,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent, wait_on_enter=False)
+        # an agent resumed with durable tools already has its activity, which resumes
+        rehydrated = agent._activity is not None and self._activity is None
+        await self._update_activity(
+            agent, new_activity="resume" if rehydrated else "start", wait_on_enter=False
+        )
 
         # watch on_enter so the run captures its output without awaiting it
         if (activity := self._activity) is not None and activity._on_enter_task is not None:

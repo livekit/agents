@@ -34,7 +34,7 @@ from ..types import (
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
-from .speech_handle import SpeechHandle
+from .speech_handle import InputDetails, SpeechHandle
 from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
@@ -779,6 +779,17 @@ class _ToolOutput:
     first_tool_started_fut: asyncio.Future[None]
 
 
+@dataclass
+class _DurableExecutionMetadata:
+    """What a durable tool's speech needs to be rebuilt on resume; pickled with the frame."""
+
+    num_steps: int
+    function_call: str
+    """The ``FunctionCall`` as JSON."""
+    allow_interruptions: bool
+    input_details: InputDetails
+
+
 def perform_tool_executions(
     *,
     session: AgentSession,
@@ -969,6 +980,7 @@ async def _execute_tools_task(
                     run_ctx=run_ctx,
                     raw_arguments=raw_args,
                     mock=mock,
+                    durable_scheduler=activity._durable_scheduler,
                 )
 
                 @tracer.start_as_current_span("function_tool")
@@ -1016,7 +1028,7 @@ async def _execute_tools_task(
                                     "speech_id": speech_handle.id,
                                 },
                             )
-                        elif not isinstance(e, StopResponse):
+                        elif not isinstance(e, StopResponse | asyncio.CancelledError):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},

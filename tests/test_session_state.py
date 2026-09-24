@@ -310,10 +310,8 @@ async def test_a_task_lost_with_its_tool_resumes_the_agent_that_awaited_it(
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
         await resumed.start(agent=FareDesk(), persist=database.session("s1"))
     assert isinstance(resumed.current_agent, Rebooking)
-    assert any(
-        "nearest agent" in r.getMessage() and "AgentTask ends with the tool call" in str(r.skipped)  # type: ignore[attr-defined]
-        for r in caplog.records
-    )
+    (lost,) = [r for r in caplog.records if "not durable" in r.getMessage()]
+    assert (lost.agent_id, lost.resumed_agent_id) == ("confirming", "rebooking")  # type: ignore[attr-defined]
     await resumed.aclose()
     await crashed.aclose()
 

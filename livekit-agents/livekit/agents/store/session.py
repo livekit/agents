@@ -54,7 +54,7 @@ class AgentRecord:
     state: dict[str, Any] | None = None
     """What ``_snapshot_state`` returned, or none when the class cannot be rebuilt."""
     durable_state: bytes | None = None
-    """The pickled durable tools of the agent's activity, read back on load."""
+    """The agent's durable tools, pickled; empty when none runs, None to leave the row's as is."""
     chat_items: list[ChatItem] = field(default_factory=list)
     """Filled on load; a checkpoint writes items through ``append`` instead."""
 
@@ -372,20 +372,36 @@ class PersistedSession:
         for agent in agents:
             statements.append(
                 (
-                    "INSERT INTO agents (session_id, agent_id, cls, parent_agent_id, state) "
-                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT (session_id, agent_id) DO UPDATE SET "
-                    "cls = excluded.cls, parent_agent_id = excluded.parent_agent_id, "
-                    "state = excluded.state",
+                    "INSERT INTO agents (session_id, agent_id, cls, parent_agent_id, state, "
+                    "durable_state) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, agent_id) "
+                    "DO UPDATE SET cls = excluded.cls, parent_agent_id = excluded.parent_agent_id, "
+                    "state = excluded.state, "
+                    "durable_state = COALESCE(excluded.durable_state, agents.durable_state)",
                     (
                         self._session_id,
                         agent.agent_id,
                         agent.cls,
                         agent.parent_agent_id,
                         json.dumps(agent.state) if agent.state is not None else None,
+                        agent.durable_state,
                     ),
                 )
             )
         await self._fenced_batch(statements)
+
+    async def write_durable_state(self, agent_id: str, *, cls: str, durable_state: bytes) -> None:
+        """Write one agent's durable tools, fenced like a checkpoint, once the queue has landed."""
+        await self.flush()
+        await self._fenced_batch(
+            [
+                (
+                    "INSERT INTO agents (session_id, agent_id, cls, durable_state) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT (session_id, agent_id) "
+                    "DO UPDATE SET durable_state = excluded.durable_state",
+                    (self._session_id, agent_id, cls, durable_state),
+                )
+            ]
+        )
 
     async def release(self) -> None:
         """Flush what is queued and let the session go, closing the database after its last."""

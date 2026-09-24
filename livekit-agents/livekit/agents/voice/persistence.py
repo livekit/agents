@@ -10,11 +10,13 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import pickle
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, TypeAdapter
 
 from .. import llm
+from ..durable_scheduler import _REHYDRATING, DurableTask
 from ..log import logger
 from ..store.session import (
     SESSION_OWNER,
@@ -25,7 +27,9 @@ from ..store.session import (
     qualified_name,
 )
 from .agent import Agent, AgentTask
+from .agent_activity import AgentActivity
 from .events import AgentStateChangedEvent, ConversationItemAddedEvent, ToolExecutionUpdatedEvent
+from .generation import _DurableExecutionMetadata
 from .tool_executor import _RunningTasks
 
 if TYPE_CHECKING:
@@ -82,39 +86,122 @@ class SessionPersistence:
             return agent
 
         session._chat_ctx = llm.ChatContext(list(stored.history))
-        # the nearest agent up the stored chain that rebuilds, else the handler's
-        current = agent
-        own = stored.agents.get(stored.current_agent_id or agent.id)
-        skipped: list[str] = []
-        while own is not None and own.agent_id != agent.id:
+
+        # the stored chain, newest first: the current agent, then those its tasks return to
+        records: list[AgentRecord] = []
+        record = stored.agents.get(stored.current_agent_id or agent.id)
+        while record is not None and record not in records:
+            records.append(record)
+            record = stored.agents.get(record.parent_agent_id or "")
+
+        # rebuilt oldest first: an agent that does not rebuild drops itself and all above it
+        chain: list[tuple[Agent, AgentRecord | None]] = []
+        for record in reversed(records):
             reason: str | None = None
+            if record.agent_id == agent.id:
+                chain.append((agent, record))
+                continue
             try:
-                cls = import_qualified(own.cls)
+                cls = import_qualified(record.cls)
             except ImportError:
-                reason = f"{own.cls} does not import"
+                reason = f"{record.cls} does not import"
             else:
                 if not (isinstance(cls, type) and issubclass(cls, Agent)):
-                    reason = f"{own.cls} is not an Agent"
-                elif issubclass(cls, AgentTask):
-                    reason = "an AgentTask ends with the tool call that awaited it"
-                elif own.state is None:
-                    reason = f"{own.cls} could not snapshot its state"
+                    reason = f"{record.cls} is not an Agent"
+                elif record.state is None:
+                    reason = f"{record.cls} could not snapshot its state"
                 else:
                     try:
-                        current = cls._from_state(own.state)
-                        break
+                        chain.append((cls._from_state(record.state), record))
+                        continue
                     except Exception as e:
-                        reason = f"{own.cls}._from_state failed: {e}"
-            skipped.append(f"{own.agent_id}: {reason}")
-            own = stored.agents.get(own.parent_agent_id or "")
-        if skipped:
+                        reason = f"{record.cls}._from_state failed: {e}"
             logger.warning(
                 "the stored agent could not be rebuilt, so the nearest agent that can resumes",
                 extra={
                     "session_id": self._persisted.session_id,
-                    "agent_id": current.id,
-                    "skipped": skipped,
+                    "stored_agent_id": record.agent_id,
+                    "reason": reason,
                 },
+            )
+            break
+        if not chain:
+            chain = [(agent, stored.agents.get(agent.id))]
+
+        for member, own in chain:
+            if own is not None and own.chat_items:
+                member._chat_ctx = llm.ChatContext(list(own.chat_items))
+
+        # durable tools restored oldest first; a task above an agent resumes only when one of
+        # its restored frames awaits it, since the tool that awaited it is what hands back
+        kept = 0
+        token = _REHYDRATING.set((session, {member.id: member for member, _ in chain}))
+        try:
+            for index, (member, own) in enumerate(chain):
+                kept = index + 1
+                newer = chain[index + 1][0] if index + 1 < len(chain) else None
+                answered = {
+                    item.call_id
+                    for item in member._chat_ctx.items
+                    if item.type == "function_call_output"
+                }
+                tasks: list[DurableTask] = []
+                for snapshot in (
+                    pickle.loads(own.durable_state) if own and own.durable_state else []
+                ):
+                    try:
+                        restored: DurableTask = pickle.loads(snapshot)
+                    except Exception:
+                        logger.warning(
+                            "a durable tool's state did not load, so it is lost",
+                            extra={"session_id": self._persisted.session_id},
+                            exc_info=True,
+                        )
+                        continue
+                    metadata: _DurableExecutionMetadata = restored.metadata
+                    call = llm.FunctionCall.model_validate_json(metadata.function_call)
+                    # an answered call ended before its frame was cleared, so it does not rerun
+                    if call.call_id not in answered:
+                        tasks.append(restored)
+                awaiting = next(
+                    (
+                        task
+                        for task in tasks
+                        if newer is not None
+                        and task.next_value is not None
+                        and task.next_value._c is newer
+                    ),
+                    None,
+                )
+                failed = await AgentActivity(member, session)._rehydrate(tasks) if tasks else []
+                if not isinstance(newer, AgentTask):
+                    break
+                call_id = (
+                    llm.FunctionCall.model_validate_json(awaiting.metadata.function_call).call_id
+                    if awaiting is not None
+                    else None
+                )
+                if call_id is not None and call_id not in failed:
+                    logger.info(
+                        "the AgentTask was awaited from a durable tool, so it resumes",
+                        extra={"agent_id": newer.id, "call_id": call_id},
+                    )
+                    newer._rehydrated = True
+                    newer._old_agent = member
+                    continue
+                logger.warning(
+                    "the AgentTask was awaited from a tool that is not durable, so it is lost "
+                    "with the tool and the agent that awaited it resumes",
+                    extra={"agent_id": newer.id, "resumed_agent_id": member.id},
+                )
+                break
+        finally:
+            _REHYDRATING.reset(token)
+        current, own = chain[kept - 1]
+        if current.id != (stored.current_agent_id or agent.id) or not (own and own.chat_items):
+            # a stand-in, or an agent with nothing of its own stored, starts from the history
+            current._chat_ctx = session._chat_ctx.copy(
+                exclude_handoff=True, exclude_config_update=True
             )
 
         delegation = session._opts.delegation | current._delegation
@@ -128,14 +215,6 @@ class SessionPersistence:
                     "the session had a child session on an endpoint it has no delegate for",
                     extra={"session_id": self._persisted.session_id, "endpoint": endpoint},
                 )
-
-        if own is not None and own.chat_items:
-            current._chat_ctx = llm.ChatContext(list(own.chat_items))
-        elif stored.history:
-            # a stand-in, or an agent with nothing of its own stored, starts from the whole history
-            current._chat_ctx = session._chat_ctx.copy(
-                exclude_handoff=True, exclude_config_update=True
-            )
 
         if stored.userdata is not None:
             if session._userdata is None:
@@ -213,12 +292,15 @@ class SessionPersistence:
                 with contextlib.suppress(Exception):
                     state = agent._snapshot_state()
             parent = agent._old_agent if isinstance(agent, AgentTask) else None
+            scheduler = agent._activity._durable_scheduler if agent._activity else None
             records.append(
                 AgentRecord(
                     agent_id=agent.id,
                     cls=qualified_name(type(agent)),
                     parent_agent_id=parent.id if parent is not None else None,
                     state=state,
+                    # a closed activity leaves the frames its tools stopped at
+                    durable_state=scheduler.durable_state() if scheduler is not None else None,
                 )
             )
         session = self._session
@@ -226,6 +308,16 @@ class SessionPersistence:
             current_agent_id=session._agent.id if session._agent else None,
             userdata=_userdata_json(session._userdata),
             agents=records,
+        )
+
+    async def durable_boundary(self, agent: Agent) -> None:
+        """Write the agent's durable tools as they stand at a boundary one of them reached."""
+        scheduler = agent._activity._durable_scheduler if agent._activity else None
+        if self._closed or self._lease_lost or scheduler is None:
+            return
+        self._sync()
+        await self._persisted.write_durable_state(
+            agent.id, cls=qualified_name(type(agent)), durable_state=scheduler.durable_state()
         )
 
     def _schedule_checkpoint(self) -> None:
@@ -267,7 +359,16 @@ class SessionPersistence:
     def _on_quiet_candidate(self, ev: AgentStateChangedEvent | ToolExecutionUpdatedEvent) -> None:
         # a turn that ended with no tool still running is the point nothing is half-written
         self._sync()
-        if self._session._agent_state == "listening" and not _RunningTasks.get(self._session):
+        # and every durable tool is at a boundary, where its frame is what the rows say
+        if (
+            self._session._agent_state == "listening"
+            and not _RunningTasks.get(self._session)
+            and all(
+                agent._activity._durable_scheduler.at_boundary
+                for agent in self._chain()
+                if agent._activity is not None and agent._activity._durable_scheduler is not None
+            )
+        ):
             self._schedule_checkpoint()
 
     async def aclose(self) -> None:

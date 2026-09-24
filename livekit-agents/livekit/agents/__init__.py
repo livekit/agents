@@ -30,6 +30,7 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
+from .durable_scheduler import EffectCall
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -244,6 +245,7 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
+    "EffectCall",
     "AgentTask",
     "AssignmentTimeoutError",
     "UnexpectedModelBehavior",

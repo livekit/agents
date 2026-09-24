@@ -347,14 +347,32 @@ class _ToolExecutor:
         info = tool.info
 
         if ToolFlag.DURABLE in info.flags:
+            # the scheduler drives the frame, so there is no update, filler or cancellation:
+            # releasing the floor mid-tool is not something a restored frame can repeat
+            from .generation import _DurableExecutionMetadata
+
             if durable_scheduler is None:
                 raise RuntimeError("a durable tool requires a durable scheduler")
-            return await self._execute_durable(
-                tool=tool,
-                run_ctx=run_ctx,
-                raw_arguments=raw_arguments,
-                mock=mock,
-                durable_scheduler=durable_scheduler,
+            run_ctx._durable = True
+            fnc_args, fnc_kwargs = prepare_function_arguments(
+                fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
+            )
+            fnc_callable: Callable[[], Any]
+            if mock is not None:
+                from .run_result import _run_mock
+
+                fnc_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
+            else:
+                fnc_callable = functools.partial(tool, *fnc_args, **fnc_kwargs)
+            speech_handle = run_ctx.speech_handle
+            return await durable_scheduler.execute(
+                cast("Callable[[], Any]", fnc_callable),
+                metadata=_DurableExecutionMetadata(
+                    num_steps=speech_handle.num_steps,
+                    function_call=run_ctx.function_call.model_dump_json(),
+                    allow_interruptions=speech_handle.allow_interruptions,
+                    input_details=speech_handle.input_details,
+                ),
             )
 
         call_id = run_ctx.function_call.call_id
@@ -526,48 +544,6 @@ class _ToolExecutor:
         exe_task.add_done_callback(_on_done)
 
         return await first_update_fut
-
-    async def _execute_durable(
-        self,
-        *,
-        tool: FunctionTool | RawFunctionTool,
-        run_ctx: RunContext,
-        raw_arguments: dict[str, Any],
-        mock: Callable[..., Any] | None,
-        durable_scheduler: DurableScheduler,
-    ) -> Any:
-        """Drive a durable tool through the durable scheduler.
-
-        The scheduler replays the tool step by step, checkpointing each awaited durable
-        op (e.g. ``EffectCall``), so it must drive the tool coroutine directly — the normal
-        executor path (detached task + first-update future) can't be checkpointed/replayed.
-        The executor's interactive features (``ctx.update()``, filler, cancellation) aren't
-        available here; ``ctx.update()`` raises (see ``RunContext.update``).
-        """
-        from .generation import _DurableExecutionMetadata
-
-        run_ctx._durable = True
-        fnc_args, fnc_kwargs = prepare_function_arguments(
-            fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
-        )
-        fnc_callable: Callable[[], Any]
-        if mock is not None:
-            from .run_result import _run_mock
-
-            fnc_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
-        else:
-            fnc_callable = functools.partial(tool, *fnc_args, **fnc_kwargs)
-
-        speech_handle = run_ctx.speech_handle
-        return await durable_scheduler.execute(
-            cast("Callable[[], Any]", fnc_callable),
-            metadata=_DurableExecutionMetadata(
-                num_steps=speech_handle.num_steps,
-                function_call=run_ctx.function_call.model_dump_json(),
-                allow_interruptions=speech_handle.allow_interruptions,
-                input_details=speech_handle.input_details,
-            ),
-        )
 
     async def cancel(self, call_id: str) -> bool:
         task = self._running_tasks.get(call_id)

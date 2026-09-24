@@ -262,7 +262,7 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
             self._raw_func = cast(Callable[_P, _R], func.registered_fn.fn)
         else:
             self._raw_func = func
-            if info.flags & ToolFlag.DURABLE:
+            if ToolFlag.DURABLE in info.flags:
                 func = durable(func)
 
         functools.update_wrapper(self, self._raw_func)

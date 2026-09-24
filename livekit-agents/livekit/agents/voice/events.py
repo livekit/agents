@@ -86,6 +86,39 @@ class RunContext(Generic[Userdata_T]):
         # later run open
         self._run_state = session._global_run_state
 
+        # set while the tool runs as a durable function, whose frame cannot release the floor
+        self._durable = False
+
+    def __getstate__(self) -> dict[str, Any]:
+        # only the durable scheduler pickles a RunContext, as part of the tool's frame
+        return {"function_call": self._function_call, "initial_step_idx": self._initial_step_idx}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        from ..durable_scheduler import _REHYDRATING
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+
+        session, _ = _REHYDRATING.get()
+        self.__init__(  # type: ignore[misc]
+            session=session,
+            speech_handle=_SpeechHandleContextVar.get(),
+            function_call=state["function_call"],
+            activity=_AgentActivityContextVar.get(None),
+        )
+        self._initial_step_idx = state["initial_step_idx"]
+        self._durable = True
+
+    @property
+    def idempotency_key(self) -> str:
+        """A key for the next ``EffectCall`` of a durable tool: the same when a resume re-runs it.
+
+        It is the call id and the effect's ordinal within the tool, ``"call_abc:2"``.
+        """
+        from ..durable_scheduler import current_durable_task
+
+        if (task := current_durable_task()) is None:
+            raise RuntimeError("idempotency_key is only defined inside a durable tool")
+        return f"{self._function_call.call_id}:{task.effects}"
+
     @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
@@ -227,6 +260,10 @@ class RunContext(Generic[Userdata_T]):
                 and without that it can answer a report by calling the same tool again. Set
                 it where the report is genuinely something to act on.
         """
+        if self._durable:
+            # releasing the floor mid-tool is not something a replayed frame can repeat
+            raise RuntimeError("ctx.update() is not supported inside a durable tool")
+
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
         for s in self._filler_schedulers:
