@@ -1543,14 +1543,15 @@ class RealtimeSession(
         # - an existing remote item with non-text content (audio/images) that is not
         #   synced into the agent-side ChatContext.
         # Keep empty messages that already exist remotely so we do not delete them.
-        remote_ids = {item.id for item in remote_ctx.items}
+        remote_by_id = {item.id: item for item in remote_ctx.items}
         chat_ctx = llm.ChatContext(
             [
                 item
                 for item in chat_ctx.items
-                if item.type != "message" or item.content or item.id in remote_ids
+                if item.type != "message" or item.content or item.id in remote_by_id
             ]
         )
+        local_by_id = {item.id: item for item in chat_ctx.items}
         diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
@@ -1563,30 +1564,13 @@ class RealtimeSession(
             )
 
         def _create_item(previous_msg_id: str | None, msg_id: str) -> None:
-            chat_item = chat_ctx.get_by_id(msg_id)
-            assert chat_item is not None
             events.append(
                 ConversationItemCreateEvent(
                     type="conversation.item.create",
-                    item=livekit_item_to_openai_item(chat_item),
+                    item=livekit_item_to_openai_item(local_by_id[msg_id]),
                     previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
                     event_id=utils.shortuuid("chat_ctx_create_"),
                 )
-            )
-
-        def _text_changed(msg_id: str) -> bool:
-            # the remote copy keeps only what the server echoed, so only a message's text is
-            # compared; empty content almost always means the content is not synced down, and
-            # recreating it there would be wrong
-            remote_item = remote_ctx.get_by_id(msg_id)
-            item = chat_ctx.get_by_id(msg_id)
-            return (
-                remote_item is not None
-                and remote_item.type == "message"
-                and bool(remote_item.content)
-                and item is not None
-                and item.type == "message"
-                and item.raw_text_content != remote_item.raw_text_content
             )
 
         for msg_id in diff_ops.to_remove:
@@ -1596,10 +1580,18 @@ class RealtimeSession(
             _create_item(previous_msg_id, msg_id)
 
         for previous_msg_id, msg_id in diff_ops.to_update:
-            if not _text_changed(msg_id):
-                continue
-            _delete_item(msg_id)
-            _create_item(previous_msg_id, msg_id)
+            # the remote copy keeps only what the server echoed, so only a message's text is
+            # compared; empty content almost always means the content is not synced down, and
+            # recreating it there would be wrong
+            remote_item, item = remote_by_id[msg_id], local_by_id[msg_id]
+            if (
+                remote_item.type == "message"
+                and remote_item.content
+                and item.type == "message"
+                and item.raw_text_content != remote_item.raw_text_content
+            ):
+                _delete_item(msg_id)
+                _create_item(previous_msg_id, msg_id)
 
         return events
 

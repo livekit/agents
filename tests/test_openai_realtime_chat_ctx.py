@@ -176,3 +176,43 @@ async def test_an_item_anchored_to_a_deleted_one_is_appended() -> None:
     await session.update_chat_ctx(remote_ctx)
 
     assert session._sent_events == []
+
+
+async def test_a_sync_recreates_only_a_message_whose_text_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _create_session()
+    local = [
+        llm.ChatMessage(role="user", content=["move my flight"], id="m1"),
+        llm.FunctionCall(call_id="c1", name="rebook", arguments="{}", id="f1"),
+        llm.FunctionCallOutput(call_id="c1", name="rebook", output="done", is_error=False, id="o1"),
+        llm.ChatMessage(role="assistant", content=["moved you"], id="m2"),
+    ]
+    # the mirror holds what the server echoed: its own timestamps, no extra and no output name
+    prev: str | None = None
+    for item in local:
+        echoed = item.model_copy(update={"created_at": item.created_at + 1})
+        if echoed.type == "function_call_output":
+            echoed.name = ""
+        session._remote_chat_ctx.insert(prev, echoed)
+        prev = item.id
+    local[1].extra["lk.request_id"] = "r1"
+    local[3] = local[3].model_copy(update={"content": ["moved you to NW812"]})
+
+    lookups = 0
+    get_by_id = llm.ChatContext.get_by_id
+
+    def counting(self: llm.ChatContext, item_id: str) -> llm.ChatItem | None:
+        nonlocal lookups
+        lookups += 1
+        return get_by_id(self, item_id)
+
+    monkeypatch.setattr(llm.ChatContext, "get_by_id", counting)
+    events = session._create_update_chat_ctx_events(llm.ChatContext(local))
+
+    assert [(ev.type, getattr(ev, "item_id", None) or ev.item.id) for ev in events] == [
+        ("conversation.item.delete", "m2"),
+        ("conversation.item.create", "m2"),
+    ]
+    # a sync indexes both contexts once rather than searching them item by item
+    assert lookups == 0
