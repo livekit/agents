@@ -41,6 +41,8 @@ from ..log import logger
 DEFAULT_INPUT_AUDIO_TRANSCRIPTION = AudioInputTranscriptionOptions(
     model="whisper-1",
 )
+# default of the models that don't support whisper-1, see `uses_azure_speech`
+AZURE_SPEECH_INPUT_AUDIO_TRANSCRIPTION = AudioInputTranscriptionOptions(model="azure-speech")
 
 DEFAULT_TURN_DETECTION = ServerVad(
     threshold=0.5,
@@ -76,19 +78,41 @@ def to_turn_detection(
     return turn_detection
 
 
+def uses_azure_speech(model: str) -> bool:
+    """Whether the input audio of the model is transcribed with azure-speech, not whisper-1.
+
+    Voice Live documents whisper-1 for gpt-realtime and gpt-realtime-mini, and azure-speech for
+    the non-multimodal (text) models and phi4-mm-realtime, e.g. gpt-4.1 answers whisper-1 with
+    invalid_input_audio_transcription_model. The multimodal models have "realtime" in their
+    name, those without documented transcription models (e.g. gpt-realtime-1.5, azure-realtime)
+    keep whisper-1.
+
+    See https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-how-to and
+    https://learn.microsoft.com/azure/ai-services/speech-service/voice-live-language-support
+    """
+    name = model.lower()
+    return "realtime" not in name or name.startswith("phi")
+
+
 def to_audio_transcription(
     audio_transcription: NotGivenOr[AudioInputTranscriptionOptions | None],
+    *,
+    model: str,
 ) -> AudioInputTranscriptionOptions | None:
     """Convert audio transcription configuration to Azure AudioInputTranscriptionOptions format.
 
     Args:
-        audio_transcription: Audio transcription options. If NOT_GIVEN, returns default config.
-            If None, transcription is disabled. Otherwise, returns the provided config.
+        audio_transcription: Audio transcription options. If NOT_GIVEN, returns the default config
+            of the model, azure-speech or whisper-1 (see `uses_azure_speech`). If None,
+            transcription is disabled. Otherwise, returns the provided config.
+        model: The Voice Live model of the session.
 
     Returns:
         AudioInputTranscriptionOptions or None if transcription is disabled.
     """
     if not is_given(audio_transcription):
+        if uses_azure_speech(model):
+            return AZURE_SPEECH_INPUT_AUDIO_TRANSCRIPTION
         return DEFAULT_INPUT_AUDIO_TRANSCRIPTION
 
     if audio_transcription is None:

@@ -203,8 +203,12 @@ class RealtimeModel(llm.RealtimeModel):
             model: Model name. If None, reads from AZURE_VOICE_LIVE_MODEL (default: "gpt-realtime").
             voice: Voice for audio responses (default: "en-US-AvaMultilingualNeural").
             input_audio_transcription: Configuration for input audio transcription. If NOT_GIVEN,
-                uses default config (whisper-1). Set to None to disable transcription.
-                Use AudioInputTranscriptionOptions to configure model and language.
+                uses azure-speech for the non-multimodal (text) models such as gpt-4.1 and for
+                phi4-mm-realtime, which don't support whisper-1, and whisper-1 for the other
+                models such as gpt-realtime. Set to None to disable transcription. Use
+                AudioInputTranscriptionOptions to configure model and language, OpenAI
+                transcription models such as whisper-1 take a single language, azure-speech up
+                to 10 languages ("en-US,zh-CN").
             modalities: List of modalities to enable (default: ["text", "audio"]).
             turn_detection: Turn detection configuration. Accepts ServerVad, AzureSemanticVad,
                 AzureSemanticVadEn, or AzureSemanticVadMultilingual (default: ServerVad with
@@ -225,6 +229,7 @@ class RealtimeModel(llm.RealtimeModel):
             model = RealtimeModel(
                 endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
                 api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
+                model="gpt-realtime",
                 voice="en-US-AvaNeural",
                 input_audio_transcription=AudioInputTranscriptionOptions(
                     model="whisper-1",
@@ -233,14 +238,15 @@ class RealtimeModel(llm.RealtimeModel):
                 turn_detection=ServerVad(threshold=0.5, silence_duration_ms=500),
             )
 
-            # Multi-language session with auto-detection
+            # Multi-language session, azure-speech takes up to 10 languages, the first is primary
             model = RealtimeModel(
                 endpoint=os.getenv("AZURE_VOICE_LIVE_ENDPOINT"),
                 api_key=os.getenv("AZURE_VOICE_LIVE_API_KEY"),
+                model="gpt-4.1",
                 voice="en-US-AvaMultilingualNeural",
                 input_audio_transcription=AudioInputTranscriptionOptions(
-                    model="whisper-1",
-                    language="en,zh,ja",  # Allow English, Chinese, and Japanese
+                    model="azure-speech",
+                    language="en-US,zh-CN,ja-JP",  # Allow English, Chinese, and Japanese
                 ),
             )
             ```
@@ -251,7 +257,11 @@ class RealtimeModel(llm.RealtimeModel):
             else DEFAULT_MODALITIES
         )
         turn_detection_val = to_turn_detection(turn_detection)
-        input_audio_transcription_val = to_audio_transcription(input_audio_transcription)
+        # Get model from environment if not provided, the transcription default depends on it
+        model_val = model or os.environ.get("AZURE_VOICE_LIVE_MODEL") or "gpt-realtime"
+        input_audio_transcription_val = to_audio_transcription(
+            input_audio_transcription, model=model_val
+        )
 
         super().__init__(
             capabilities=llm.RealtimeCapabilities(
@@ -275,9 +285,6 @@ class RealtimeModel(llm.RealtimeModel):
                 "Azure Voice Live endpoint must be provided via 'endpoint' parameter "
                 "or AZURE_VOICE_LIVE_ENDPOINT environment variable"
             )
-
-        # Get model from environment if not provided
-        model_val = model or os.environ.get("AZURE_VOICE_LIVE_MODEL") or "gpt-realtime"
 
         # Get API key if not using default credential
         api_key_val = api_key

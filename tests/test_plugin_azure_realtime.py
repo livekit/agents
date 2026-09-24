@@ -380,6 +380,49 @@ async def test_turn_detection_and_transcription_can_be_disabled(
         assert config["input_audio_transcription"] is None
 
 
+@pytest.mark.parametrize(
+    ("model", "transcription_model"),
+    [
+        # whisper-1 is documented for gpt-realtime and gpt-realtime-mini, the other realtime
+        # models keep it as the previous default
+        ("gpt-realtime", "whisper-1"),
+        ("gpt-realtime-mini", "whisper-1"),
+        ("gpt-realtime-1.5", "whisper-1"),
+        ("azure-realtime", "whisper-1"),
+        # documented to transcribe with azure-speech, not whisper-1
+        ("gpt-4o", "azure-speech"),
+        ("gpt-4.1", "azure-speech"),
+        ("gpt-5-mini", "azure-speech"),
+        ("phi4-mm-realtime", "azure-speech"),
+    ],
+)
+async def test_default_transcription_depends_on_the_model(
+    voice_live: _FakeVoiceLive, model: str, transcription_model: str
+) -> None:
+    async with _session(voice_live, model=model) as session:
+        assert session.realtime_model.capabilities.user_transcription is True
+
+        config = (await _connected(voice_live)).events[0]["session"]
+        assert config["input_audio_transcription"] == {"model": transcription_model}
+
+
+async def test_default_transcription_follows_the_model_from_env(
+    voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AZURE_VOICE_LIVE_MODEL", "gpt-4.1")
+    async with _session(voice_live) as session:
+        assert session.realtime_model.model == "gpt-4.1"
+
+        config = (await _connected(voice_live)).events[0]["session"]
+        assert config["input_audio_transcription"] == {"model": "azure-speech"}
+
+    # a given configuration is sent as is, whatever the model
+    whisper = AudioInputTranscriptionOptions(model="whisper-1")
+    async with _session(voice_live, input_audio_transcription=whisper):
+        config = (await _connected(voice_live, index=1)).events[0]["session"]
+        assert config["input_audio_transcription"] == {"model": "whisper-1"}
+
+
 async def test_generate_reply_ignores_server_initiated_responses(
     voice_live: _FakeVoiceLive,
 ) -> None:

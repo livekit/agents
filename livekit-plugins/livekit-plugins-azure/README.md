@@ -98,8 +98,9 @@ turn_detection = AzureSemanticVadEn(
 
 # Configure input audio transcription with language constraint
 # This helps prevent language misidentification
+# Use azure-speech with text models such as gpt-4o, whisper-1 with gpt-realtime or gpt-realtime-mini
 input_audio_transcription = AudioInputTranscriptionOptions(
-    model="whisper-1",
+    model="azure-speech",
     language="en-US",  # Constrain to English for reliable detection
 )
 
@@ -126,7 +127,7 @@ session = AgentSession(
 | `model` | Model name | `AZURE_VOICE_LIVE_MODEL` env var, or `gpt-realtime` |
 | `voice` | Azure neural voice name | `en-US-AvaMultilingualNeural` |
 | `modalities` | Output modalities, `["text"]` for text-only responses | `["text", "audio"]` |
-| `input_audio_transcription` | Audio transcription config (model, language), `None` to disable | `whisper-1` with auto-detect |
+| `input_audio_transcription` | Audio transcription config (model, language), `None` to disable | `azure-speech` for non-multimodal models (e.g. `gpt-4.1`) and `phi4-mm-realtime`, `whisper-1` for the other models, with auto-detect |
 | `turn_detection` | VAD configuration object | `ServerVad(threshold=0.5)` |
 | `tool_choice` | Function calling mode ("auto", "none", etc.) | "auto" |
 | `temperature` | Sampling temperature | `0.8` |
