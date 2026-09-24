@@ -306,6 +306,7 @@ class AgentSessionOptions:
     max_tool_steps: int
     user_away_timeout: float | None
     transcription_timeout: float | None
+    commit_interim_on_empty_final: bool
     min_consecutive_speech_delay: float
     use_tts_aligned_transcript: bool | None
     tts_text_transforms: Sequence[TextTransforms] | None
@@ -412,6 +413,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         ivr_detection: bool = False,
         user_away_timeout: float | None = 15.0,
         transcription_timeout: float | None = None,
+        commit_interim_on_empty_final: bool = False,
         session_close_transcript_timeout: float = 2.0,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
@@ -514,6 +516,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 satisfies the timeout for the current turn even if adaptive interruption
                 detection later discards it as part of a backchannel. Requires both VAD
                 and STT. Disabled by default.
+            commit_interim_on_empty_final (bool): When the STT ends a segment with an
+                empty final transcript after VAD heard speech, use the segment's buffered
+                interim or preflight text as the final so the user turn can commit. Some
+                providers do this on short replies, which otherwise leaves the turn open
+                until the user speaks again. The cost is that words the provider
+                deliberately retracted, such as background speech, can reach the
+                conversation. Requires VAD. Defaults to ``False``.
             aec_warmup_duration (float, optional): The duration in seconds that the agent
                 will ignore user's audio interruptions after the agent starts speaking.
                 This is useful to prevent the agent from being interrupted by echo before AEC is ready.
@@ -595,6 +604,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             max_tool_steps=max_tool_steps,
             user_away_timeout=user_away_timeout,
             transcription_timeout=transcription_timeout,
+            commit_interim_on_empty_final=commit_interim_on_empty_final,
             min_consecutive_speech_delay=min_consecutive_speech_delay,
             tts_text_transforms=(
                 tts_text_transforms

@@ -148,6 +148,8 @@ class FakeActions:
         *,
         stt_delay: float = 0.2,
         final: bool = True,
+        final_transcript: str | None = None,
+        preflight_transcript: str | None = None,
     ) -> None:
         self._items.append(
             FakeUserSpeech(
@@ -156,6 +158,8 @@ class FakeActions:
                 transcript=transcript,
                 stt_delay=stt_delay,
                 final=final,
+                final_transcript=final_transcript,
+                preflight_transcript=preflight_transcript,
             )
         )
 

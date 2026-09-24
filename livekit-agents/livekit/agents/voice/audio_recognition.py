@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import math
+import re
 import time
 from collections import deque
 from collections.abc import AsyncIterable, Callable, Iterator
@@ -241,6 +242,29 @@ class _STTPipeline:
         await aio.cancel_and_wait(self._pump_task)
 
 
+def _normalize_words(text: str) -> str:
+    return " ".join(re.findall(r"[^\W_]+", text.lower()))
+
+
+def _ends_with_words(text: str, tail: str) -> bool:
+    """Whether `text` ends with the words of `tail`, ignoring case and punctuation."""
+    words = _normalize_words(text)
+    tail_words = _normalize_words(tail)
+    return bool(tail_words) and (words == tail_words or words.endswith(f" {tail_words}"))
+
+
+def _pending_segment_text(interim: str, preflight: str, preflight_is_latest: bool) -> str:
+    """Buffered text of the open segment, for an empty final to fall back on.
+
+    The latest of the last interim and preflight, unless the preflight only repeats the tail
+    of the interim before it: most providers send a preflight as the whole segment, but the
+    AssemblyAI plugin sends only the words since its last preflight.
+    """
+    if preflight_is_latest and not _ends_with_words(interim, preflight):
+        return preflight
+    return interim
+
+
 class AudioRecognition:
     def __init__(
         self,
@@ -290,6 +314,12 @@ class AudioRecognition:
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        # latest interim and preflight texts of the open segment, and which arrived last, for an
+        # empty final to fall back on
+        self._last_interim_text = ""
+        self._last_preflight_text = ""
+        self._preflight_is_latest = False
+        self._preflight_is_latest = False
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
         self._last_language: LanguageCode | None = None
@@ -1004,6 +1034,9 @@ class AudioRecognition:
     def _clear_user_turn(self) -> None:
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
+        self._last_interim_text = ""
+        self._last_preflight_text = ""
+        self._preflight_is_latest = False
         self._audio_preflight_transcript = ""
         self._final_transcript_confidence = []
         self._last_final_transcript_time = None
@@ -1096,6 +1129,9 @@ class AudioRecognition:
 
             transcript = self._audio_transcript
             self._audio_interim_transcript = ""
+            self._last_interim_text = ""
+            self._last_preflight_text = ""
+            self._preflight_is_latest = False
             chat_ctx = self._hooks.retrieve_chat_ctx().copy()
             self._run_eou_detection(
                 chat_ctx,
@@ -1204,6 +1240,36 @@ class AudioRecognition:
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+            # Providers can close a segment with an empty final after its interim already
+            # carried the words (seen on short replies with AssemblyAI and Deepgram). Nothing
+            # else will finalize that interim, so it stands in for the final. Without VAD
+            # speech in the turn, the interim is more likely noise the provider retracted.
+            if (
+                not ev.alternatives[0].text
+                and self._vad is not None
+                and self._speech_start_time is not None
+                and self._session.options.commit_interim_on_empty_final
+                and (
+                    pending_text := _pending_segment_text(
+                        self._last_interim_text,
+                        self._last_preflight_text,
+                        self._preflight_is_latest,
+                    )
+                )
+            ):
+                logger.debug(
+                    "stt final transcript was empty, using the buffered interim transcript",
+                    extra={"lk.pii.transcript": pending_text},
+                )
+                ev = replace(
+                    ev,
+                    alternatives=[
+                        replace(ev.alternatives[0], text=pending_text),
+                        *ev.alternatives[1:],
+                    ],
+                )
+                self._mark_turn_transcribed()
+
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
             confidence = ev.alternatives[0].confidence
@@ -1237,6 +1303,9 @@ class AudioRecognition:
             self._final_transcript_confidence.append(confidence)
             transcript_changed = self._audio_transcript != self._audio_preflight_transcript
             self._audio_interim_transcript = ""
+            self._last_interim_text = ""
+            self._last_preflight_text = ""
+            self._preflight_is_latest = False
             self._audio_preflight_transcript = ""
 
             if use_stt_speaking_time:
@@ -1293,6 +1362,8 @@ class AudioRecognition:
             # preflight transcript includes all pre-committed transcripts (including final transcript from the previous STT run)
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
+            self._last_preflight_text = transcript
+            self._preflight_is_latest = True
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
@@ -1315,6 +1386,8 @@ class AudioRecognition:
                 else None,
             )
             self._audio_interim_transcript = ev.alternatives[0].text
+            self._last_interim_text = self._audio_interim_transcript
+            self._preflight_is_latest = False
 
         elif ev.type == stt.SpeechEventType.END_OF_SPEECH and self._turn_detection_mode == "stt":
             with tracer.use_span(self._ensure_user_turn_span()):

@@ -33,6 +33,11 @@ class FakeUserSpeech(BaseModel):
     transcript: str  # empty string fires VAD SOS/EOS only — no STT events
     stt_delay: float
     final: bool = True
+    # text of the final transcript when it differs from `transcript` ("" = an empty final);
+    # with an empty `transcript`, the final is sent without an interim
+    final_transcript: str | None = None
+    # preflight transcript sent right after the interim (alone when `transcript` is empty)
+    preflight_transcript: str | None = None
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
         obj = copy.deepcopy(self)
@@ -174,6 +179,14 @@ class FakeRecognizeStream(RecognizeStream):
             )
         )
 
+    def _send_fake_preflight(self, transcript: str) -> None:
+        self._event_ch.send_nowait(
+            SpeechEvent(
+                type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                alternatives=[SpeechData(text=transcript, language=LanguageCode(""))],
+            )
+        )
+
     async def _run(self) -> None:
         self._attempt += 1
         assert isinstance(self._stt, FakeSTT)
@@ -221,18 +234,29 @@ class FakeRecognizeStream(RecognizeStream):
                 final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
                 if curr_time() < final_transcript_time:
                     await asyncio.sleep(final_transcript_time - curr_time())
+                if fake_speech.preflight_transcript is not None:
+                    self._send_fake_preflight(fake_speech.preflight_transcript)
+                if fake_speech.final_transcript is not None:
+                    self.send_fake_transcript(fake_speech.final_transcript, is_final=True)
                 continue
             interim_transcript_time = fake_speech.end_time + fake_speech.stt_delay * 0.5
             if curr_time() < interim_transcript_time:
                 await asyncio.sleep(interim_transcript_time - curr_time())
             self.send_fake_transcript(" ".join(fake_speech.transcript.split()[:2]), is_final=False)
+            if fake_speech.preflight_transcript is not None:
+                self._send_fake_preflight(fake_speech.preflight_transcript)
 
             final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
             if curr_time() < final_transcript_time:
                 await asyncio.sleep(final_transcript_time - curr_time())
             if not fake_speech.final:
                 continue
-            self.send_fake_transcript(fake_speech.transcript, is_final=True)
+            final_text = (
+                fake_speech.transcript
+                if fake_speech.final_transcript is None
+                else fake_speech.final_transcript
+            )
+            self.send_fake_transcript(final_text, is_final=True)
 
         with contextlib.suppress(asyncio.InvalidStateError):
             self._stt._done_fut.set_result(None)
