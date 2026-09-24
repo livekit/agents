@@ -333,3 +333,123 @@ async def test_discarded_unscheduled_usage_only_generation_stays_quiet():
         assert errors == []
     finally:
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_followup_emits_recoverable_error():
+    """A blank LLM generation after a tool reply still leaves the user waiting."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def look_up(self) -> str:
+            """Look up a value for the user."""
+            return "lookup complete"
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0.01,
+                tool_calls=[FunctionToolCall(name="look_up", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="lookup complete", content="", ttft=0, duration=0.01),
+        ]
+    )
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=ToolAgent(instructions="test agent", llm=llm))
+        result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_generate_reply_empty_completion_emits_recoverable_error():
+    """A public generate_reply request should surface its empty completion."""
+    from .fake_llm import FakeLLMResponse
+
+    llm = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="greet", content="", ttft=0, duration=0.01)]
+    )
+    session = AgentSession(llm=llm)
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=Agent(instructions="test agent"))
+        handle = session.generate_reply(instructions="greet")
+        await asyncio.wait_for(handle, timeout=10.0)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_silent_turn_without_llm_generation_emits_no_empty_completion_error():
+    """A turn with no LLM request is not an empty LLM completion."""
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        result = await asyncio.wait_for(
+            session.start(agent=Agent(instructions="silent agent", llm=None), capture_run=True),
+            timeout=10.0,
+        )
+        result.expect.next_event().is_agent_handoff()
+        result.expect.no_more_events()
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_error_handler_can_schedule_recovery_reply():
+    """An app can recover from the event before the empty turn finishes cleanup."""
+    from .fake_llm import FakeLLMResponse
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="", ttft=0, duration=0.01),
+            FakeLLMResponse(input="recover", content="Recovered", ttft=0, duration=0.01),
+        ]
+    )
+    session = AgentSession(llm=llm)
+    agent = Agent(instructions="test agent")
+    errors = []
+    recovery_handles = []
+
+    def on_error(event):
+        errors.append(event)
+        if len(errors) == 1:
+            recovery_handles.append(session.generate_reply(instructions="recover"))
+
+    session.on("error", on_error)
+
+    try:
+        await session.start(agent=agent)
+        await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert len(errors) == 1
+        assert len(recovery_handles) == 1
+        await asyncio.wait_for(recovery_handles[0], timeout=10.0)
+        assert any(
+            item.type == "message" and item.role == "assistant" and item.text_content == "Recovered"
+            for item in agent.chat_ctx.items
+        )
+    finally:
+        await session.aclose()

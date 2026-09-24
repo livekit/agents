@@ -4034,11 +4034,10 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-        # A scheduled user reply with no content needs an application recovery hook.
+        # A scheduled LLM reply with no content needs an application recovery hook.
         # Discarded preemptive work and tool-only completions are valid outcomes.
         if (
-            new_message is not None
-            and speech_handle.scheduled
+            speech_handle.scheduled
             and not speech_handle.interrupted
             and llm_task.done()
             and not llm_task.cancelled()
