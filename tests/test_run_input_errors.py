@@ -1,8 +1,8 @@
 """Test that LLM errors propagate through session.run() → RunResult,
 including the full e2e path through SessionHost → RemoteSession.
 
-Also pins the other side of that contract: a turn the agent stays silent on
-is reported as a silent turn, not as an error."""
+A silent turn still leaves RunResult successful. The session can separately
+emit a recoverable error event so applications can handle an empty LLM completion."""
 
 from __future__ import annotations
 
@@ -170,3 +170,166 @@ async def test_run_silent_turn_is_not_an_error():
     await client.aclose()
     await host.aclose()
     await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_usage_only_user_reply_emits_recoverable_error_and_warning(caplog):
+    """An exhausted user reply with only usage must be visible to the application."""
+    from livekit.agents.llm import ChatChunk, CompletionUsage
+    from livekit.agents.voice.events import ErrorEvent
+
+    class UsageOnlyAgent(Agent):
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            yield ChatChunk(
+                id="usage-only",
+                usage=CompletionUsage(
+                    completion_tokens=3,
+                    prompt_tokens=5,
+                    total_tokens=8,
+                ),
+            )
+
+    session = AgentSession()
+    llm_model = FakeLLM()
+    agent = UsageOnlyAgent(instructions="test agent", llm=llm_model)
+    errors: list[ErrorEvent] = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        with caplog.at_level("WARNING", logger="livekit.agents"):
+            result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+
+        result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].error.type == "llm_error"
+        assert errors[0].error.recoverable is True
+        assert errors[0].source is llm_model
+        assert "empty" in str(errors[0].error.error).lower()
+        assert any("empty" in record.message.lower() for record in caplog.records)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tool_only_user_reply_does_not_emit_empty_completion_error():
+    """A tool call is a valid LLM response even if it has no text."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    class ToolOnlyAgent(Agent):
+        @function_tool
+        async def complete_task(self) -> None:
+            """Complete the user's task."""
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="complete_task", arguments="{}", call_id="call_1")
+                ],
+            )
+        ]
+    )
+    session = AgentSession()
+    agent = ToolOnlyAgent(instructions="test agent", llm=llm)
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["", "   "])
+async def test_blank_custom_llm_reply_emits_recoverable_error(reply):
+    """Blank custom node output cannot silently complete a scheduled user turn."""
+
+    class BlankReplyAgent(Agent):
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            return reply
+
+    session = AgentSession()
+    agent = BlankReplyAgent(instructions="test agent", llm=FakeLLM())
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_llm_does_not_emit_empty_completion_error():
+    """A provider failure is already surfaced and is not a completed blank response."""
+    session = AgentSession(
+        conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
+    )
+    agent = Agent(instructions="test agent", llm=FailingLLM())
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        with pytest.raises(APIStatusError):
+            await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert all("empty" not in str(event.error.error).lower() for event in errors)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_discarded_unscheduled_usage_only_generation_stays_quiet():
+    """Discarded preemptive work does not owe the user a reply."""
+    from livekit.agents.llm import ChatChunk, ChatMessage, CompletionUsage
+
+    class UsageOnlyAgent(Agent):
+        def __init__(self):
+            super().__init__(instructions="test agent", llm=FakeLLM())
+            self.exhausted = asyncio.Event()
+
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            yield ChatChunk(
+                id="usage-only",
+                usage=CompletionUsage(
+                    completion_tokens=3,
+                    prompt_tokens=5,
+                    total_tokens=8,
+                ),
+            )
+            self.exhausted.set()
+
+    session = AgentSession()
+    agent = UsageOnlyAgent()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        assert session._activity is not None
+        handle = session._activity._generate_reply(
+            user_message=ChatMessage(role="user", content=["hello"]),
+            schedule_speech=False,
+        )
+        await asyncio.wait_for(agent.exhausted.wait(), timeout=10.0)
+        handle._cancel()
+        await asyncio.wait_for(handle, timeout=10.0)
+        assert errors == []
+    finally:
+        await session.aclose()
