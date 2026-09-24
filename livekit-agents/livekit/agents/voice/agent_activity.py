@@ -4034,6 +4034,34 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
+        # A scheduled user reply with no content needs an application recovery hook.
+        # Discarded preemptive work and tool-only completions are valid outcomes.
+        if (
+            new_message is not None
+            and speech_handle.scheduled
+            and not speech_handle.interrupted
+            and llm_task.done()
+            and not llm_task.cancelled()
+            and llm_task.exception() is None
+            and llm_task.result()
+            and not llm_gen_data.generated_text.strip()
+            and not llm_gen_data.generated_functions
+        ):
+            message = "LLM returned an empty completion (no text, no tool calls)"
+            logger.warning(
+                message,
+                extra={"speech_id": speech_handle.id, "llm_generation_id": llm_gen_data.id},
+            )
+            if self.llm is not None:
+                self._on_error(
+                    llm.LLMError(
+                        timestamp=time.time(),
+                        label=self.llm.label,
+                        error=RuntimeError(message),
+                        recoverable=True,
+                    )
+                )
+
         if not chain_continues:
             self._session._unanswered_user_metrics = None
 
