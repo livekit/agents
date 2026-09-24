@@ -1,4 +1,4 @@
-"""The agent-db client: its data plane as an ``Executor``, and its management API.
+"""Sessions in agent-db: its data plane as an ``Executor``, and the store over it.
 
 The server severs sockets on drain and eviction and marks those failures retryable, so
 reconnecting is the normal path here, not an error case.
@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import itertools
+import os
 import random
+import re
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import aiohttp
 import jwt
@@ -20,10 +22,15 @@ import jwt
 from ..log import logger
 from ..utils import aio
 from ._proto import livekit_agentdb_pb2 as pb
-from .executor import ExecResult, Row, Statement, StoreError, Value
+from .executor import ExecResult, Executor, Row, Statement, StoreError, Value
+from .session import LEASE_TTL, _Store
 
 if TYPE_CHECKING:
     from google.protobuf.message import Message
+
+    from livekit.api.twirp_client import TwirpClient
+
+_M = TypeVar("_M", bound="Message")
 
 Wire = pb.AgentDB.Wire
 
@@ -34,19 +41,6 @@ MAX_FRAME_BYTES = 16 << 20
 RETRYABLE_CODES = frozenset({"unavailable"})
 """Codes the server uses for a database that is moving, where the request is sent again."""
 RETRY_DELAY = 0.1
-
-
-def access_token(api_key: str, api_secret: str, *, identity: str, ttl: float = TOKEN_TTL) -> str:
-    """Sign a token carrying the ``agent.databaseAdmin`` grant both planes require."""
-    now = int(time.time())
-    claims = {
-        "iss": api_key,
-        "sub": identity,
-        "nbf": now,
-        "exp": now + int(ttl),
-        "agent": {"databaseAdmin": True},
-    }
-    return jwt.encode(claims, api_secret, algorithm="HS256")
 
 
 class _Disconnected(Exception):
@@ -108,12 +102,11 @@ class AgentDBExecutor:
         self._pinger: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
-        """Dial and say Hello. The first connect raises, so a bad URL or token is heard here."""
-        await self._connect()
-        self._supervisor = asyncio.create_task(self._supervise(), name="agentdb_supervise")
-        self._pinger = asyncio.create_task(self._ping(), name="agentdb_ping")
-
-    async def _connect(self) -> None:
+        """Dial and say Hello unless connected; the first connect raises a bad URL or token."""
+        if self._closed:
+            raise StoreError("closed", "the agent-db connection is closed")
+        if self._ready.is_set():
+            return
         if self._http_session is None:
             self._http_session = aiohttp.ClientSession()
         token = self._token()
@@ -146,6 +139,10 @@ class AgentDBExecutor:
         self._ws = ws
         self._ping_interval = reply.hello_ok.ping_interval_ms / 1000
         self._ready.set()
+        # the supervisor redials through connect() too, so the tasks are made on the first only
+        if self._supervisor is None:
+            self._supervisor = asyncio.create_task(self._supervise(), name="agentdb_supervise")
+            self._pinger = asyncio.create_task(self._ping(), name="agentdb_ping")
 
     async def _supervise(self) -> None:
         """Own the socket's lifetime: read it, and redial when it dies."""
@@ -175,7 +172,7 @@ class AgentDBExecutor:
             backoff = 0.1
             while not self._closed:
                 try:
-                    await self._connect()
+                    await self.connect()
                     break
                 except Exception as e:
                     if time.monotonic() > deadline:
@@ -361,61 +358,101 @@ class AgentDBExecutor:
             await self._http_session.close()
 
 
-class AgentDBService:
-    """The management API: create, look up, list and delete databases. Twirp over HTTP."""
+class AgentDB(_Store):
+    """Sessions in agent-db: its management API mints databases, its data plane serves them.
+
+    ``url`` defaults to ``LIVEKIT_AGENTDB_URL`` and the key to ``LIVEKIT_API_KEY``/``_SECRET``;
+    ``ws_url`` defaults to ``url`` as ``ws``/``wss`` with ``/db`` appended.
+    """
 
     def __init__(
         self,
-        url: str,
         *,
-        token: Callable[[], str],
-        http_session: aiohttp.ClientSession | None = None,
+        url: str | None = None,
+        ws_url: str | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        lease_ttl: float = LEASE_TTL,
     ) -> None:
-        from livekit.api.twirp_client import TwirpClient
+        super().__init__(lease_ttl=lease_ttl)
+        url = url or os.environ.get("LIVEKIT_AGENTDB_URL")
+        api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
+        api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")
+        if not url or not api_key or not api_secret:
+            raise ValueError(
+                "agent-db is not configured: pass url, api_key and api_secret, or set "
+                "LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+            )
+        self._url = url
+        self._ws_url = ws_url or re.sub(r"^http", "ws", url.rstrip("/")) + "/db"
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._access_token = ""
+        self._token_expires_at = 0.0
+        self._http_session: aiohttp.ClientSession | None = None
+        self._twirp: TwirpClient | None = None
 
-        self._http_session = http_session or aiohttp.ClientSession()
-        self._owns_http_session = http_session is None
-        self._client = TwirpClient(self._http_session, url, "livekit", failover=False)
-        self._token = token
+    def _token(self) -> str:
+        # one token serves every socket and call until it is near expiry
+        if time.time() > self._token_expires_at:
+            now = int(time.time())
+            claims = {
+                "iss": self._api_key,
+                "sub": "livekit-agents",
+                "nbf": now,
+                "exp": now + int(TOKEN_TTL),
+                "agent": {"databaseAdmin": True},
+            }
+            self._access_token = jwt.encode(claims, self._api_secret, algorithm="HS256")
+            self._token_expires_at = time.time() + TOKEN_TTL / 2
+        return self._access_token
 
-    async def _request(self, method: str, request: Message, response: type[Message]) -> Message:
-        return await self._client.request(
+    async def _connect(self, database_id: str) -> Executor:
+        executor = AgentDBExecutor(ws_url=self._ws_url, database_id=database_id, token=self._token)
+        await executor.connect()
+        return executor
+
+    async def _request(self, method: str, request: Message, response: type[_M]) -> _M:
+        if self._twirp is None:
+            from livekit.api.twirp_client import TwirpClient
+
+            self._http_session = aiohttp.ClientSession()
+            self._twirp = TwirpClient(self._http_session, self._url, "livekit", failover=False)
+        reply = await self._twirp.request(
             "AgentDBService",
             method,
             request,
             {"Authorization": f"Bearer {self._token()}"},
             response,
         )
+        assert isinstance(reply, response)
+        return reply
 
-    async def create_database(
-        self, *, region: str = "", ttl_seconds: int = 0
-    ) -> pb.AgentDB.CreateResponse:
+    async def create_database(self, *, region: str = "", ttl_seconds: int = 0) -> str:
+        """Mint a database and return its id. ``ttl_seconds`` unset means it never expires."""
         request = pb.AgentDB.CreateRequest(region=region, ttl_seconds=ttl_seconds)
-        response = await self._request("CreateDatabase", request, pb.AgentDB.CreateResponse)
-        assert isinstance(response, pb.AgentDB.CreateResponse)
-        return response
+        created = await self._request("CreateDatabase", request, pb.AgentDB.CreateResponse)
+        return created.database_id
 
     async def get_database(self, database_id: str) -> pb.AgentDB.AgentDatabase:
         request = pb.AgentDB.GetRequest(database_id=database_id)
-        response = await self._request("GetDatabase", request, pb.AgentDB.AgentDatabase)
-        assert isinstance(response, pb.AgentDB.AgentDatabase)
-        return response
+        return await self._request("GetDatabase", request, pb.AgentDB.AgentDatabase)
 
     async def list_databases(
         self, *, page_size: int = 0, page_token: str = ""
     ) -> pb.AgentDB.ListResponse:
         request = pb.AgentDB.ListRequest(page_size=page_size, page_token=page_token)
-        response = await self._request("ListDatabases", request, pb.AgentDB.ListResponse)
-        assert isinstance(response, pb.AgentDB.ListResponse)
-        return response
+        return await self._request("ListDatabases", request, pb.AgentDB.ListResponse)
 
     async def delete_database(self, database_id: str) -> None:
         request = pb.AgentDB.DeleteRequest(database_id=database_id)
         await self._request("DeleteDatabase", request, pb.AgentDB.DeleteResponse)
 
     async def aclose(self) -> None:
-        if self._owns_http_session:
+        await super().aclose()
+        if self._http_session is not None:
             await self._http_session.close()
+            self._http_session = self._twirp = None
 
 
-__all__ = ["AgentDBExecutor", "AgentDBService", "access_token"]
+__all__ = ["AgentDB", "AgentDBExecutor"]

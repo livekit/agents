@@ -1,4 +1,4 @@
-"""The store suite over agent-db's wire, against ``mage devLocal`` and ``LIVEKIT_AGENTDB_*``."""
+"""The store suite over agent-db's wire, against ``mage devLocal`` and ``LIVEKIT_AGENTDB_URL``."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 from livekit.agents import store
 from livekit.agents.store import agentdb as agentdb_client
 
-from .test_store import LEASE_TTL, StoreSuite
+from .test_store import LEASE_TTL, Database, StoreSuite
 
 pytestmark = [
     pytest.mark.plugin("agentdb"),
@@ -24,24 +24,30 @@ pytestmark = [
 
 @pytest.fixture
 async def agentdb() -> AsyncIterator[store.AgentDB]:
-    agentdb = store.AgentDB.from_env(lease_ttl=LEASE_TTL)
+    # devLocal takes its own static key rather than the project's, and serves two ports
+    local = "localhost" in os.environ.get("LIVEKIT_AGENTDB_URL", "")
+    key = {"api_key": "devkey", "api_secret": "secret"} if local else {}
+    ws_url = os.environ.get("LIVEKIT_AGENTDB_WS_URL")
+    agentdb = store.AgentDB(ws_url=ws_url, lease_ttl=LEASE_TTL, **key)
     yield agentdb
     await agentdb.aclose()
 
 
+@pytest.fixture
+async def database(agentdb: store.AgentDB) -> AsyncIterator[Database]:
+    database = Database(agentdb, await agentdb.create_database(ttl_seconds=3600))
+    yield database
+    await agentdb.delete_database(database.database_id)
+
+
 class TestAgentDBStore(StoreSuite):
-    @pytest.fixture
-    async def conversation(self, agentdb: store.AgentDB) -> AsyncIterator[store.Conversation]:
-        conversation = await agentdb.create_conversation(ttl_seconds=3600)
-        yield conversation
-        await agentdb.service.delete_database(conversation.database_id)
+    pass
 
 
 async def test_a_query_streams_many_batches(
-    agentdb: store.AgentDB, monkeypatch: pytest.MonkeyPatch
+    database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    conversation = await agentdb.create_conversation(ttl_seconds=3600)
-    executor = conversation.executor
+    executor = await database.executor()
     await executor.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, body TEXT, raw BLOB, x)")
     rows = 20_000
     await executor.exec(
@@ -74,28 +80,24 @@ async def test_a_query_streams_many_batches(
     async for _ in executor.query("SELECT * FROM t"):
         break
     assert [r async for r in executor.query("SELECT COUNT(*) AS n FROM t")] == [{"n": rows}]
-    await agentdb.service.delete_database(conversation.database_id)
 
 
-async def test_reconnects_after_the_socket_is_severed(agentdb: store.AgentDB) -> None:
-    conversation = await agentdb.create_conversation(ttl_seconds=3600)
-    executor = conversation.executor
+async def test_reconnects_after_the_socket_is_severed(database: Database) -> None:
+    persisted = database.session("s1")
+    await persisted.load()
+    executor = await database.executor()
     assert isinstance(executor, agentdb_client.AgentDBExecutor)
-    state = conversation.session("s1")
-    await state.load()
 
     assert executor._ws is not None
     await executor._ws.close()
     # issued while the reconnect is in flight: it waits for the new socket rather than failing
-    await state.checkpoint(current_agent_id="after", userdata=None, agents=[])
+    await persisted.checkpoint(current_agent_id="after", userdata=None, agents=[])
     rows = [r async for r in executor.query("SELECT current_agent_id FROM sessions")]
     assert rows == [{"current_agent_id": "after"}]
-    await agentdb.service.delete_database(conversation.database_id)
 
 
-async def test_a_failing_batch_applies_nothing(agentdb: store.AgentDB) -> None:
-    conversation = await agentdb.create_conversation(ttl_seconds=3600)
-    executor = conversation.executor
+async def test_a_failing_batch_applies_nothing(database: Database) -> None:
+    executor = await database.executor()
     await executor.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)")
     with pytest.raises(store.StoreError):
         await executor.batch(
@@ -103,28 +105,25 @@ async def test_a_failing_batch_applies_nothing(agentdb: store.AgentDB) -> None:
             ("INSERT INTO t VALUES (1)", ()),  # the primary key refuses the second
         )
     assert [r async for r in executor.query("SELECT * FROM t")] == []
-    await agentdb.service.delete_database(conversation.database_id)
 
 
-async def test_the_service_manages_databases(agentdb: store.AgentDB) -> None:
-    created = await agentdb.service.create_database(ttl_seconds=60)
-    assert created.database_id.startswith("DB_")
-    fetched = await agentdb.service.get_database(created.database_id)
-    assert fetched.database_id == created.database_id
-    listed = await agentdb.service.list_databases(page_size=1000)
-    assert created.database_id in {d.database_id for d in listed.databases}
-    await agentdb.service.delete_database(created.database_id)
+async def test_the_store_manages_databases(agentdb: store.AgentDB) -> None:
+    database_id = await agentdb.create_database(ttl_seconds=60)
+    assert database_id.startswith("DB_")
+    fetched = await agentdb.get_database(database_id)
+    assert fetched.database_id == database_id
+    listed = await agentdb.list_databases(page_size=1000)
+    assert database_id in {d.database_id for d in listed.databases}
+    await agentdb.delete_database(database_id)
     with pytest.raises(Exception, match="not_found|not found"):
-        await agentdb.service.get_database(created.database_id)
+        await agentdb.get_database(database_id)
 
 
-async def test_a_request_over_the_frame_limit_fails(agentdb: store.AgentDB) -> None:
-    conversation = await agentdb.create_conversation(ttl_seconds=3600)
-    executor = conversation.executor
+async def test_a_request_over_the_frame_limit_fails(database: Database) -> None:
+    executor = await database.executor()
     await executor.exec("CREATE TABLE t (body BLOB)")
     with pytest.raises(store.StoreError, match="frame"):
         await asyncio.wait_for(
             executor.exec("INSERT INTO t VALUES (?)", b"x" * agentdb_client.MAX_FRAME_BYTES), 10
         )
     assert [r async for r in executor.query("SELECT COUNT(*) AS n FROM t")] == [{"n": 0}]
-    await agentdb.service.delete_database(conversation.database_id)

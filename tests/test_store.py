@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-import pickle
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
 from livekit.agents import store
 from livekit.agents.llm import ChatMessage, FunctionCall
-from livekit.agents.store.executor import SQLiteExecutor, Value
+from livekit.agents.store.executor import Executor, SQLiteExecutor, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
-from livekit.agents.store.session_state import AgentRecord
+from livekit.agents.store.session import AgentRecord, PersistedSession, _Database, _Store
 
 pytestmark = pytest.mark.unit
 
@@ -22,79 +22,83 @@ LEASE_TTL = 0.5
 
 
 @dataclass
-class Booking:
-    reference: str
-    seats: list[str] = field(default_factory=list)
+class Database:
+    """One database of a store, as the suite drives it."""
 
+    store: _Store
+    database_id: str
 
-@dataclass
-class Userdata:
-    airline: str
-    bookings: list[Booking] = field(default_factory=list)
+    def session(self, session_id: str, **kwargs: Any) -> PersistedSession:
+        return self.store.session(self.database_id, session_id, **kwargs)
 
+    async def executor(self) -> Executor:
+        databases = self.store._databases
+        if (database := databases.get(self.database_id)) is None:
+            database = databases[self.database_id] = _Database(
+                self.database_id, connect=lambda: self.store._connect(self.database_id)
+            )
+        return await database.open()
 
-@dataclass
-class Keyed:
-    seats: dict[tuple[str, str], str]
-
-
-async def _rows(conversation: store.Conversation, sql: str, *params: Value) -> list[dict]:
-    executor = await conversation.open()
-    return [row async for row in executor.query(sql, *params)]
+    async def rows(self, sql: str, *params: Value) -> list[dict]:
+        executor = await self.executor()
+        return [row async for row in executor.query(sql, *params)]
 
 
 class StoreSuite:
-    async def test_schema_is_created_and_gated(self, conversation: store.Conversation) -> None:
-        tables = await _rows(
-            conversation, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+    async def test_schema_is_created_and_gated(self, database: Database) -> None:
+        tables = await database.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
         )
-        names = {row["name"] for row in tables}
-        assert {"_meta", "sessions", "chat_items", "agents", "tasks", "delegations"} <= names
-        version = await _rows(conversation, "SELECT value FROM _meta WHERE key = 'schema_version'")
+        assert {row["name"] for row in tables} == {
+            "_meta",
+            "_lease_check",
+            "sessions",
+            "chat_items",
+            "agents",
+        }
+        version = await database.rows("SELECT value FROM _meta WHERE key = 'schema_version'")
         assert version == [{"value": str(SCHEMA_VERSION)}]
 
         # migrating again is a no-op, and a database from a newer framework is refused
-        assert await migrate(conversation.executor) == SCHEMA_VERSION
-        await conversation.executor.exec(
-            "UPDATE _meta SET value = ? WHERE key = 'schema_version'",
-            str(SCHEMA_VERSION + 1),
+        executor = await database.executor()
+        assert await migrate(executor) == SCHEMA_VERSION
+        await executor.exec(
+            "UPDATE _meta SET value = ? WHERE key = 'schema_version'", str(SCHEMA_VERSION + 1)
         )
         with pytest.raises(store.SchemaVersionError):
-            await migrate(conversation.executor)
+            await migrate(executor)
 
-    async def test_append_is_idempotent_on_item_id(self, conversation: store.Conversation) -> None:
-        state = conversation.session("s1")
-        assert await state.load() is None
+    async def test_append_is_idempotent_on_item_id(self, database: Database) -> None:
+        persisted = database.session("s1")
+        assert await persisted.load() is None
         item = ChatMessage(role="user", content=["first"])
-        state.append(item)
-        state.append(item.model_copy(update={"content": ["first, corrected"]}))
-        state.append(item, owner="agent_1")
-        await state.flush()
+        persisted.append(item)
+        persisted.append(item.model_copy(update={"content": ["first, corrected"]}))
+        persisted.append(item, owner="agent_1")
+        await persisted.flush()
 
-        rows = await _rows(
-            conversation,
-            "SELECT owner, item_id, item_json FROM chat_items WHERE session_id = 's1' "
-            "ORDER BY owner",
+        rows = await database.rows(
+            "SELECT owner, item_id, item FROM chat_items WHERE session_id = 's1' ORDER BY owner"
         )
         assert [(row["owner"], row["item_id"]) for row in rows] == [
             ("agent_1", item.id),
             ("session", item.id),
         ]
-        assert "first, corrected" in rows[1]["item_json"]
+        assert "first, corrected" in rows[1]["item"]
 
     async def test_a_lost_write_is_redone_at_the_next_sync(
-        self, conversation: store.Conversation, monkeypatch: pytest.MonkeyPatch
+        self, database: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        state = conversation.session("s1")
-        await state.load()
+        persisted = database.session("s1")
+        await persisted.load()
         kept, dropped = (
             ChatMessage(role="user", content=["a"]),
             ChatMessage(role="user", content=["b"]),
         )
-        state.sync([kept, dropped], owner="agent_1", prune=True)
-        await state.flush()
+        persisted.sync([kept, dropped], owner="agent_1", prune=True)
+        await persisted.flush()
 
-        executor = conversation.executor
+        executor = await database.executor()
         batch = executor.batch
 
         async def failing(*statements: object) -> None:
@@ -102,31 +106,30 @@ class StoreSuite:
 
         monkeypatch.setattr(executor, "batch", failing)
         later = ChatMessage(role="user", content=["c"])
-        state.sync([kept, later], owner="agent_1", prune=True)
-        await state.flush()
+        persisted.sync([kept, later], owner="agent_1", prune=True)
+        await persisted.flush()
         monkeypatch.setattr(executor, "batch", batch)
 
         # the next sync rewrites what the lost batch held, the delete included
-        state.sync([kept, later], owner="agent_1", prune=True)
-        await state.flush()
-        rows = await _rows(conversation, "SELECT item_id FROM chat_items ORDER BY created_at")
+        persisted.sync([kept, later], owner="agent_1", prune=True)
+        await persisted.flush()
+        rows = await database.rows("SELECT item_id FROM chat_items ORDER BY created_at")
         assert [row["item_id"] for row in rows] == [kept.id, later.id]
 
-    async def test_checkpoint_rewrites_the_mutable_rows_only(
-        self, conversation: store.Conversation
-    ) -> None:
-        state = conversation.session("s1", kind="a2a", endpoint="fare-desk")
-        await state.load()
-        state.append(ChatMessage(role="user", content=["hello"]))
-        await state.checkpoint(
+    async def test_checkpoint_rewrites_the_mutable_rows_only(self, database: Database) -> None:
+        persisted = database.session("s1", endpoint="fare-desk")
+        await persisted.load()
+        persisted.append(ChatMessage(role="user", content=["hello"]))
+        await persisted.checkpoint(
             current_agent_id="agent_1",
             userdata={"step": 1},
             agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={})],
         )
-        await conversation.executor.exec(
+        executor = await database.executor()
+        await executor.exec(
             "UPDATE agents SET durable_state = ? WHERE agent_id = 'agent_1'", b"frame"
         )
-        await state.checkpoint(
+        await persisted.checkpoint(
             current_agent_id="agent_2",
             userdata={"step": 2},
             agents=[
@@ -137,47 +140,41 @@ class StoreSuite:
             ],
         )
 
-        (session,) = await _rows(conversation, "SELECT * FROM sessions")
+        (session,) = await database.rows("SELECT * FROM sessions")
         assert session["current_agent_id"] == "agent_2"
         assert session["userdata"] == '{"step": 2}'
-        assert session["userdata_encoding"] == "json"
-        assert session["kind"] == "a2a" and session["endpoint"] == "fare-desk"
-        agents = await _rows(
-            conversation, "SELECT agent_id, parent_agent_id, state_json, durable_state FROM agents"
+        assert session["endpoint"] == "fare-desk" and session["parent_session_id"] is None
+        agents = await database.rows(
+            "SELECT agent_id, parent_agent_id, state, durable_state FROM agents"
         )
-        assert sorted((a["agent_id"], a["parent_agent_id"], a["state_json"]) for a in agents) == [
+        assert sorted((a["agent_id"], a["parent_agent_id"], a["state"]) for a in agents) == [
             ("agent_1", None, '{"n": 1}'),
             ("agent_2", "agent_1", "{}"),
         ]
         # the checkpoint leaves what it does not own alone: durable frames and the history
         assert {a["agent_id"]: a["durable_state"] for a in agents}["agent_1"] == b"frame"
-        assert len(await _rows(conversation, "SELECT * FROM chat_items")) == 1
+        assert len(await database.rows("SELECT * FROM chat_items")) == 1
 
-    async def test_rehydrate_returns_what_was_written(
-        self, conversation: store.Conversation
-    ) -> None:
-        state = conversation.session("s1", kind="voice")
-        await state.load()
+    async def test_rehydrate_returns_what_was_written(self, database: Database) -> None:
+        persisted = database.session("s1")
+        await persisted.load()
         greeting = ChatMessage(role="assistant", content=["hi, how can I help?"])
         question = ChatMessage(role="user", content=["move my flight"])
-        call = FunctionCall(call_id="call_1", name="lookup", arguments="{}")
+        call = FunctionCall(
+            call_id="call_1", name="lookup", arguments="{}", extra={"lk.task_id": "task-1"}
+        )
         for item in (greeting, question, call):
-            state.append(item)
-        state.append(question, owner="agent_1")
-        userdata = Userdata(airline="Northwind", bookings=[Booking("NW812", ["12A"])])
-        await state.checkpoint(
+            persisted.append(item)
+        persisted.append(question, owner="agent_1")
+        userdata = {"airline": "Northwind", "bookings": [{"reference": "NW812"}]}
+        await persisted.checkpoint(
             current_agent_id="agent_1",
             userdata=userdata,
-            agents=[
-                AgentRecord(
-                    agent_id="agent_1", cls="app:FareDesk", state={"tier": "gold"}, tools=["x"]
-                )
-            ],
-            tools=["lookup"],
+            agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={"tier": "gold"})],
         )
-        await state.release()
+        await persisted.release()
 
-        stored = await conversation.session("s1", kind="voice").load()
+        stored = await database.session("s1").load()
         assert stored is not None
         assert [item.id for item in stored.history] == [greeting.id, question.id, call.id]
         assert stored.history[2] == call
@@ -185,37 +182,22 @@ class StoreSuite:
         assert stored.userdata == userdata
         agent = stored.agents["agent_1"]
         assert (agent.cls, agent.state) == ("app:FareDesk", {"tier": "gold"})
-        # tool ids are written for a dashboard; a resumed session takes its tools from code
-        rows = await _rows(
-            conversation, "SELECT tools_json FROM sessions UNION ALL SELECT tools_json FROM agents"
-        )
-        assert [r["tools_json"] for r in rows] == ['["lookup"]', '["x"]']
         assert [item.id for item in agent.chat_items] == [question.id]
-        assert stored.interrupted == []
+        # the delegate call names its expert task, so a dashboard joins through chat_items
+        rows = await database.rows(
+            "SELECT json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
+            "WHERE item_id = ?",
+            call.id,
+        )
+        assert rows == [{"task_id": "task-1"}]
 
-    async def test_userdata_that_json_cannot_restore_is_pickled(
-        self, conversation: store.Conversation
-    ) -> None:
-        state = conversation.session("s1")
-        await state.load()
-        # JSON writes the tuple keys as strings and cannot read them back as tuples
-        userdata = Keyed(seats={("NW812", "12A"): "held"})
-        await state.checkpoint(current_agent_id=None, userdata=userdata, agents=[])
-        await state.release()
-
-        (row,) = await _rows(conversation, "SELECT userdata_encoding FROM sessions")
-        assert row == {"userdata_encoding": "pickle"}
-        stored = await conversation.session("s1").load()
-        assert stored is not None
-        assert pickle.loads(stored.userdata) == userdata
-
-    async def test_lease_fences_a_stale_owner(self, conversation: store.Conversation) -> None:
-        first = conversation.session("s1")
+    async def test_lease_fences_a_stale_owner(self, database: Database) -> None:
+        first = database.session("s1")
         await first.load()
         await first.checkpoint(current_agent_id="a", userdata=None, agents=[])
 
         # the first owner stops renewing, so the second waits out its lease and takes over
-        second = conversation.session("s1")
+        second = database.session("s1")
         loop = asyncio.get_running_loop()
         started = loop.time()
         assert await second.load() is not None
@@ -227,145 +209,81 @@ class StoreSuite:
                 userdata=None,
                 agents=[AgentRecord(agent_id="stale", cls="app:Stale")],
             )
-        (session,) = await _rows(conversation, "SELECT current_agent_id, lease_owner FROM sessions")
+        (session,) = await database.rows("SELECT current_agent_id, lease_owner FROM sessions")
         assert session == {"current_agent_id": "a", "lease_owner": second._lease_owner}
-        assert await _rows(conversation, "SELECT * FROM agents WHERE agent_id = 'stale'") == []
+        assert await database.rows("SELECT * FROM agents WHERE agent_id = 'stale'") == []
 
         await second.checkpoint(current_agent_id="b", userdata=None, agents=[])
         await second.release()
         # a released session is taken at once
-        third = conversation.session("s1")
+        third = database.session("s1")
         started = loop.time()
         await third.load()
         assert loop.time() - started < LEASE_TTL / 2
 
-    async def test_running_tasks_are_reported_on_load(
-        self, conversation: store.Conversation
-    ) -> None:
-        state = conversation.session("s1")
-        await state.load()
-        await state.task_started("call_done", name="lookup", arguments='{"q": 1}')
-        state.task_ended("call_done", status="done", output="found", is_error=False)
-        await state.task_started("call_hung", name="rebook", arguments='{"flight": "NW812"}')
-        await state.release()
-
-        resumed = conversation.session("s1")
-        stored = await resumed.load()
-        assert stored is not None
-        (task,) = stored.interrupted
-        assert (task.call_id, task.name, task.arguments) == (
-            "call_hung",
-            "rebook",
-            '{"flight": "NW812"}',
-        )
-        # a call that ended with no output in the history is reported with what it returned
-        (ended,) = stored.ended
-        assert (ended.call_id, ended.output, ended.is_error) == ("call_done", "found", False)
-        # the row stays running until the new owner has told the model, then settles it
-        (row,) = await _rows(conversation, "SELECT status FROM tasks WHERE call_id = 'call_hung'")
-        assert row["status"] == "running"
-        resumed.task_ended("call_hung", status="interrupted", output="unknown", is_error=True)
-        await resumed.flush()
-        rows = await _rows(
-            conversation, "SELECT call_id, status, idempotency_key, origin FROM tasks ORDER BY 1"
-        )
-        assert rows == [
-            {
-                "call_id": "call_done",
-                "status": "done",
-                "idempotency_key": "call_done",
-                "origin": "llm",
-            },
-            {
-                "call_id": "call_hung",
-                "status": "interrupted",
-                "idempotency_key": "call_hung",
-                "origin": "llm",
-            },
-        ]
-
-    async def test_delegation_link_round_trips(self, conversation: store.Conversation) -> None:
-        caller = conversation.session("voice", kind="voice")
+    async def test_children_are_found_by_parent_and_endpoint(self, database: Database) -> None:
+        caller = database.session("voice")
         await caller.load()
-        assert await caller.child_session("fare-desk") is None
-        caller.delegation_started(
-            "call_1", endpoint="fare-desk", child_session_id="ctx-1", task_id="task-1"
-        )
-        caller.delegation_ended("call_1", status="completed")
-        caller.delegation_started(
-            "call_2", endpoint="baggage", child_session_id="ctx-2", task_id="task-2"
-        )
-        expert = conversation.session("ctx-1", kind="a2a", parent="voice", endpoint="fare-desk")
-        await expert.load()
+        for child, endpoint in (("ctx-1", "fare-desk"), ("ctx-2", "baggage")):
+            expert = database.session(child, parent="voice", endpoint=endpoint)
+            await expert.load()
+            await expert.release()
         await caller.release()
 
-        resumed = conversation.session("voice", kind="voice")
-        await resumed.load()
-        assert await resumed.child_session("fare-desk") == "ctx-1"
-        assert await resumed.child_session("baggage") == "ctx-2"
-        (link,) = await _rows(
-            conversation,
-            "SELECT child_session_id, task_id, status, ended_at FROM delegations "
-            "WHERE call_id = 'call_1'",
-        )
-        assert (link["child_session_id"], link["task_id"], link["status"]) == (
-            "ctx-1",
-            "task-1",
-            "completed",
-        )
-        assert link["ended_at"] is not None
-        tree = await _rows(
-            conversation, "SELECT session_id, parent_session_id FROM sessions ORDER BY 1"
+        stored = await database.session("voice").load()
+        assert stored is not None
+        assert stored.children == {"fare-desk": "ctx-1", "baggage": "ctx-2"}
+        tree = await database.rows(
+            "SELECT session_id, parent_session_id, endpoint FROM sessions ORDER BY 1"
         )
         assert tree == [
-            {"session_id": "ctx-1", "parent_session_id": "voice"},
-            {"session_id": "voice", "parent_session_id": None},
+            {"session_id": "ctx-1", "parent_session_id": "voice", "endpoint": "fare-desk"},
+            {"session_id": "ctx-2", "parent_session_id": "voice", "endpoint": "baggage"},
+            {"session_id": "voice", "parent_session_id": None, "endpoint": None},
         ]
 
-    async def test_the_connection_closes_with_its_last_session(
-        self, conversation: store.Conversation
-    ) -> None:
-        first, second = conversation.session("a"), conversation.session("b")
+    async def test_the_connection_closes_with_its_last_session(self, database: Database) -> None:
+        first, second = database.session("a"), database.session("b")
         await first.load()
         await second.load()
         await first.release()
         await first.release()  # a second release is a no-op, not a second let-go
-        assert conversation.executor is not None
+        connection = database.store._databases[database.database_id]
+        assert connection.executor is not None
         await second.release()
         with pytest.raises(store.StoreError):
-            _ = conversation.executor
+            _ = connection.executor
 
         # the next session opens it again
-        again = conversation.session("a")
+        again = database.session("a")
         assert await again.load() is not None
-        assert conversation.executor is not None
+        assert connection.executor is not None
         await again.release()
 
 
-class TestSQLiteStore(StoreSuite):
+class TestLocalStore(StoreSuite):
     @pytest.fixture
-    async def conversation(self, tmp_path: pathlib.Path) -> AsyncIterator[store.Conversation]:
-        sqlite = store.SQLite(tmp_path, lease_ttl=LEASE_TTL)
-        conversation = await sqlite.create_conversation()
-        yield conversation
-        await sqlite.aclose()
+    async def database(self, tmp_path: pathlib.Path) -> AsyncIterator[Database]:
+        local = store.LocalStore(tmp_path, lease_ttl=LEASE_TTL)
+        yield Database(local, await local.create_database())
+        await local.aclose()
 
 
-async def test_sqlite_reopens_a_conversation_by_id(tmp_path: pathlib.Path) -> None:
-    sqlite = store.SQLite(tmp_path)
-    created = await sqlite.create_conversation()
-    state = created.session("s1")
-    await state.load()
-    state.append(ChatMessage(role="user", content=["hi"]))
-    await state.release()
-    await sqlite.aclose()
+async def test_a_local_database_reopens_by_id(tmp_path: pathlib.Path) -> None:
+    local = store.LocalStore(tmp_path)
+    database_id = await local.create_database()
+    persisted = local.session(database_id, "s1")
+    await persisted.load()
+    persisted.append(ChatMessage(role="user", content=["hi"]))
+    await persisted.release()
+    await local.aclose()
 
-    reopened = await store.SQLite(tmp_path).conversation(created.database_id)
-    stored = await reopened.session("s1").load()
+    reopened = store.LocalStore(tmp_path)
+    stored = await reopened.session(database_id, "s1").load()
     assert stored is not None and [m.text_content for m in stored.history] == ["hi"]  # type: ignore[union-attr]
     await reopened.aclose()
     with pytest.raises(store.StoreError):
-        await store.SQLite(tmp_path).conversation("DB_missing")
+        await store.LocalStore(tmp_path).session("DB_missing", "s1").load()
 
 
 async def test_memory_executor_batch_is_atomic() -> None:

@@ -590,12 +590,6 @@ class Agent:
         }
         return cls(**kwargs)
 
-    def __reduce__(self) -> str | tuple[Any, ...]:
-        # an agent pickled inside userdata is a reference to the rehydrated session's instance
-        from .persistence import lookup_rehydrated_agent
-
-        return (lookup_rehydrated_agent, (type(self), self._id))
-
     def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:

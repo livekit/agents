@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ..a2a import A2AClient, TaskInput
 from .delegate import Delegate, DelegateStream
@@ -18,7 +19,7 @@ class A2ADelegate(Delegate):
 
         AgentSession(llm=realtime_model, delegate=A2ADelegate("http://localhost:8080/fare-desk"))
 
-    A session persisted with ``start(state=...)`` resumes the conversation it last had here.
+    A session persisted with ``start(persist=...)`` resumes the conversation it last had here.
     """
 
     def __init__(
@@ -54,7 +55,8 @@ class A2ADelegate(Delegate):
 
     @property
     def endpoint(self) -> str:
-        return self._url
+        """The endpoint's name, the last segment of its URL, as its server registered it."""
+        return urlsplit(self._url).path.rstrip("/").rsplit("/", 1)[-1]
 
     def resume(self, context_id: str) -> bool:
         if self._client is not None:

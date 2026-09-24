@@ -186,6 +186,8 @@ async def test_a_failing_expert_raises_a_tool_error() -> None:
             return _FailingStream()
 
     class _FailingStream:
+        task_id = ""
+
         async def __aenter__(self) -> Any:
             return self
 
@@ -356,36 +358,39 @@ async def test_an_update_carrying_only_an_item_is_not_relayed() -> None:
         await asyncio.wait_for(session.aclose(), timeout=10.0)
 
 
-async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
+async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context(
     tmp_path: pathlib.Path,
 ) -> None:
     from livekit.agents import store
     from livekit.agents.a2a import A2ASessionContext
+    from livekit.agents.delegation.tool import TASK_ID_EXTRA
+    from livekit.agents.store.executor import SQLiteExecutor
 
     from .test_a2a_server import _fare_desk_llm, _Served, check_fares
 
-    sqlite = store.SQLite(tmp_path)
-    conversation = await sqlite.create_conversation()
+    local = store.LocalStore(tmp_path)
+    database_id = await local.create_database()
     seen: list[tuple[str, str | None, str | None]] = []
     named_at_start: list[str | None] = []
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
-        seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
-        assert ctx.conversation_id is not None
-        opened = await sqlite.conversation(ctx.conversation_id)
+        seen.append((ctx.context_id, ctx.database_id, ctx.caller_session_id))
+        assert ctx.database_id is not None
         session: AgentSession = AgentSession(llm=_fare_desk_llm())
         await session.start(
             agent=Agent(instructions="fare desk", tools=[check_fares]),
-            state=opened.session(ctx.context_id, kind="a2a", parent=ctx.caller_session_id),
+            persist=local.session(
+                ctx.database_id, ctx.context_id, parent=ctx.caller_session_id, endpoint="fare-desk"
+            ),
         )
         served.sessions.append(session)
         ctx.attach(session)
 
-    async def call(url: str, call_id: str) -> A2ADelegate:
+    async def call(url: str, call_id: str) -> tuple[A2ADelegate, AgentSession]:
         delegate = A2ADelegate(url)
         session: AgentSession = AgentSession(llm=_voice_llm(call_id=call_id), delegate=delegate)
         await session.start(
-            agent=Agent(instructions="voice"), state=conversation.session("voice", kind="voice")
+            agent=Agent(instructions="voice"), persist=local.session(database_id, "voice")
         )
         # a resumed session names the stored context before its first delegation
         named_at_start.append(delegate.context_id)
@@ -403,34 +408,44 @@ async def test_a_persisted_caller_links_its_delegation_and_resumes_the_context(
         assert answers == ["It is 240 USD."]
         # closing says goodbye to the expert, which drops and persists its side
         await asyncio.wait_for(session.aclose(), timeout=10.0)
-        return delegate
+        return delegate, session
 
     async with _serving(handler=persisted) as served:
         url = f"{served.base_url}/fare-desk"
-        first = await call(url, "d1")
-        second = await call(url, "d2")
+        first, _ = await call(url, "d1")
+        second, caller = await call(url, "d2")
     await _drain_sse_watcher()
 
     # the restarted caller reached the same expert context, and the expert heard where to write
     assert first.context_id == second.context_id
     assert named_at_start == [None, first.context_id]
-    assert seen == [(first.context_id, conversation.database_id, "voice")] * 2
+    assert seen == [(first.context_id, database_id, "voice")] * 2
+    # each delegate call names the expert task that answered it
+    calls = [i for i in caller.history.items if i.type == "function_call" and i.call_id == "d2"]
+    assert [bool(c.extra.get(TASK_ID_EXTRA)) for c in calls] == [True]
 
-    executor = await conversation.open()
-    links = [row async for row in executor.query("SELECT * FROM delegations ORDER BY call_id")]
-    assert [(r["call_id"], r["child_session_id"], r["status"]) for r in links] == [
-        ("d1", first.context_id, "completed"),
-        ("d2", first.context_id, "completed"),
-    ]
-    assert all(r["endpoint"] == url and r["task_id"] for r in links)
+    executor = SQLiteExecutor(str(tmp_path / f"{database_id}.sqlite"))
     tree = [
         row
         async for row in executor.query(
-            "SELECT session_id, parent_session_id, kind FROM sessions ORDER BY kind"
+            "SELECT session_id, parent_session_id, endpoint FROM sessions ORDER BY session_id"
         )
     ]
     assert tree == [
-        {"session_id": first.context_id, "parent_session_id": "voice", "kind": "a2a"},
-        {"session_id": "voice", "parent_session_id": None, "kind": "voice"},
+        {"session_id": first.context_id, "parent_session_id": "voice", "endpoint": "fare-desk"},
+        {"session_id": "voice", "parent_session_id": None, "endpoint": None},
     ]
-    await sqlite.aclose()
+    tasks = [
+        row
+        async for row in executor.query(
+            "SELECT json_extract(item, '$.call_id') AS call_id, "
+            "json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
+            "WHERE session_id = 'voice' AND owner = 'session' "
+            "AND json_extract(item, '$.call_id') IN ('d1', 'd2') "
+            "AND json_extract(item, '$.type') = 'function_call'"
+        )
+    ]
+    assert sorted(row["call_id"] for row in tasks) == ["d1", "d2"]
+    assert all(row["task_id"] for row in tasks)
+    await executor.aclose()
+    await local.aclose()

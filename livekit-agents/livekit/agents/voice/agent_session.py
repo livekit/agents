@@ -112,7 +112,7 @@ if TYPE_CHECKING:
     from ..delegation import Delegate
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
-    from ..store import SessionState
+    from ..store import PersistedSession
     from .persistence import SessionPersistence
     from .transcription.text_transforms import TextTransforms
 
@@ -821,9 +821,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._chat_ctx
 
     @property
-    def state(self) -> SessionState | None:
-        """The rows this session persists to, as passed to ``start(state=...)``; None if none."""
-        return self._persistence.state if self._persistence is not None else None
+    def persisted(self) -> PersistedSession | None:
+        """The rows this session persists to, as passed to ``start(persist=...)``; None if none."""
+        return self._persistence.persisted if self._persistence is not None else None
 
     @property
     def keyterms(self) -> list[str]:
@@ -889,7 +889,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        state: SessionState | None = None,
+        persist: PersistedSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -905,7 +905,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        state: SessionState | None = None,
+        persist: PersistedSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -920,7 +920,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
-        state: SessionState | None = None,
+        persist: PersistedSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -942,7 +942,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
-            state: This session's rows, from ``Conversation.session()``: a stored session is
+            persist: This session's rows, from a store's ``session()``: a stored session is
                 restored before it starts, and either kind is kept current until it closes.
         """
         async with self._lock:
@@ -951,18 +951,18 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
             self._started_at = time.time()
 
-            if state is not None:
+            if persist is not None:
                 # imported here: a session that persists nothing never loads the store
                 from .persistence import SessionPersistence
 
-                self._persistence = SessionPersistence(self, state)
+                self._persistence = SessionPersistence(self, persist)
                 try:
                     agent = await self._persistence.rehydrate(agent)
                 except BaseException:
                     # a session that never started is never closed, so it lets the state go here
                     self._persistence = None
                     with contextlib.suppress(Exception):
-                        await asyncio.shield(state.release())
+                        await asyncio.shield(persist.release())
                     raise
 
             # configure observability first

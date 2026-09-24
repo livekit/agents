@@ -1,6 +1,6 @@
-"""An ``AgentSession`` bound to its rows in a conversation database.
+"""An ``AgentSession`` bound to its rows in a session database.
 
-Imported only when ``start()`` is given a ``state``; it restores data into the agent and
+Imported only when ``start()`` is given ``persist``; it restores data into the agent and
 session the handler built, and rebuilds an agent from its row only when its class says how.
 """
 
@@ -8,19 +8,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import contextvars
+import dataclasses
 import json
-import pickle
 from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, TypeAdapter
 
 from .. import llm
 from ..log import logger
-from ..store.session_state import (
+from ..store.session import (
     SESSION_OWNER,
     AgentRecord,
     LeaseLostError,
-    SessionState,
-    StoredSession,
+    PersistedSession,
     import_qualified,
     qualified_name,
 )
@@ -31,108 +31,105 @@ from .tool_executor import _RunningTasks
 if TYPE_CHECKING:
     from .agent_session import AgentSession
 
-INTERRUPTED_OUTPUT = "the call was interrupted before it finished; its outcome is unknown"
-
-_REHYDRATING = contextvars.ContextVar["SessionPersistence"]("agents_rehydrating")
-
 # per class, checked once: None when it rebuilds from its row, else why it cannot
 _REBUILD_CHECKS: dict[type[Agent], str | None] = {}
 
 
-def lookup_rehydrated_agent(cls: type[Agent], agent_id: str) -> Agent:
-    """Resolve an agent pickled inside userdata to the session's own instance."""
-    persistence = _REHYDRATING.get(None)
-    if persistence is None:
-        raise RuntimeError("an Agent can only be unpickled while its session is rehydrated")
-    agent = persistence._agents.get(agent_id)
-    record = persistence._stored.agents.get(agent_id) if persistence._stored else None
-    if agent is None and record is not None and record.state is not None:
-        # an agent the handler did not build this time, such as one held in userdata
-        agent = cls._from_state(record.state)
-        agent._chat_ctx = llm.ChatContext(list(record.chat_items))
-        persistence._agents[agent_id] = agent
-    if agent is None or not isinstance(agent, cls):
-        raise RuntimeError(f"no {cls.__name__} with id {agent_id} to rehydrate")
-    return agent
+def _userdata_json(userdata: Any) -> Any:
+    """Userdata as the JSON its row stores; raises ``TypeError`` for anything else."""
+    if userdata is None:
+        return None
+    cls = type(userdata)
+    try:
+        if not (dataclasses.is_dataclass(userdata) or isinstance(userdata, BaseModel)):
+            json.dumps(userdata)
+        adapter = TypeAdapter(cls)
+        data = adapter.dump_python(userdata, mode="json")
+        # JSON that reads back as something else, such as a tuple-keyed dict, is refused
+        if adapter.validate_python(data) != userdata:
+            raise ValueError("it does not read back from JSON as the same value")
+    except Exception as e:
+        raise TypeError(
+            f"userdata of type {qualified_name(cls)} cannot be persisted ({e}); pass a "
+            "dataclass, a pydantic model, or plain JSON data"
+        ) from None
+    return data
 
 
 class SessionPersistence:
     """Keeps one session's rows current: appends as items land, checkpoints when quiet."""
 
-    def __init__(self, session: AgentSession, state: SessionState) -> None:
+    def __init__(self, session: AgentSession, persisted: PersistedSession) -> None:
         self._session = session
-        self._state = state
-        self._stored: StoredSession | None = None
-        self._agents: dict[str, Agent] = {}
+        self._persisted = persisted
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._checkpoint_again = False
         self._lease_lost = False
         self._closed = False
 
     @property
-    def state(self) -> SessionState:
-        return self._state
+    def persisted(self) -> PersistedSession:
+        return self._persisted
 
     async def rehydrate(self, agent: Agent) -> Agent:
         """Claim the session and restore what it had; returns the agent to start."""
-        stored = self._stored = await self._state.load()
-        self._agents[agent.id] = agent
+        session = self._session
+        _userdata_json(session._userdata)
+        stored = await self._persisted.load()
         if stored is None:
             self._check_rebuild(agent)
             self._listen()
             return agent
 
-        session = self._session
         session._chat_ctx = llm.ChatContext(list(stored.history))
-
+        # the nearest agent up the stored chain that rebuilds, else the handler's
         current = agent
-        reason: str | None = None
-        if stored.current_agent_id not in (None, agent.id):
-            # an AgentTask runs inside a tool call that did not survive, so its parent resumes
-            record: AgentRecord | None = stored.agents.get(stored.current_agent_id or "")
-            cls: Any = None
-            while record is not None:
-                try:
-                    cls = import_qualified(record.cls)
-                except ImportError:
-                    cls = None
-                    break
-                if not (isinstance(cls, type) and issubclass(cls, AgentTask)):
-                    break
-                record = stored.agents.get(record.parent_agent_id or "")
-
-            if record is None:
-                reason = "its row is missing"
-            elif record.agent_id == agent.id:
-                pass
-            elif not (isinstance(cls, type) and issubclass(cls, Agent)):
-                reason = f"{record.cls} does not import as an Agent"
-            elif record.state is None:
-                reason = f"{record.cls} could not snapshot its state"
+        own = stored.agents.get(stored.current_agent_id or agent.id)
+        skipped: list[str] = []
+        while own is not None and own.agent_id != agent.id:
+            reason: str | None = None
+            try:
+                cls = import_qualified(own.cls)
+            except ImportError:
+                reason = f"{own.cls} does not import"
             else:
-                try:
-                    current = cls._from_state(record.state)
-                except Exception as e:
-                    reason = f"{record.cls}._from_state failed: {e}"
-            if reason is not None:
-                logger.warning(
-                    "the stored agent could not be rebuilt, so the root agent resumes with the "
-                    "whole conversation instead",
-                    extra={
-                        "session_id": self._state.session_id,
-                        "stored_agent_id": stored.current_agent_id,
-                        "agent_id": agent.id,
-                        "reason": reason,
-                    },
-                )
-        self._agents[current.id] = current
-        # the delegate the activity will resolve, pointed back before anything is sent
-        delegation = session._opts.delegation | current._delegation
-        if (delegate := delegation.get("delegate")) is not None:
-            await self._state.resume_delegate(delegate)
+                if not (isinstance(cls, type) and issubclass(cls, Agent)):
+                    reason = f"{own.cls} is not an Agent"
+                elif issubclass(cls, AgentTask):
+                    reason = "an AgentTask ends with the tool call that awaited it"
+                elif own.state is None:
+                    reason = f"{own.cls} could not snapshot its state"
+                else:
+                    try:
+                        current = cls._from_state(own.state)
+                        break
+                    except Exception as e:
+                        reason = f"{own.cls}._from_state failed: {e}"
+            skipped.append(f"{own.agent_id}: {reason}")
+            own = stored.agents.get(own.parent_agent_id or "")
+        if skipped:
+            logger.warning(
+                "the stored agent could not be rebuilt, so the nearest agent that can resumes",
+                extra={
+                    "session_id": self._persisted.session_id,
+                    "agent_id": current.id,
+                    "skipped": skipped,
+                },
+            )
 
-        own = stored.agents.get(current.id)
-        if reason is None and own is not None and own.chat_items:
+        delegation = session._opts.delegation | current._delegation
+        delegate = delegation.get("delegate")
+        if delegate is not None:
+            # the delegate the activity will resolve, pointed back before anything is sent
+            self._persisted.resume_delegate(delegate)
+        for endpoint in stored.children:
+            if delegate is None or delegate.endpoint != endpoint:
+                logger.warning(
+                    "the session had a child session on an endpoint it has no delegate for",
+                    extra={"session_id": self._persisted.session_id, "endpoint": endpoint},
+                )
+
+        if own is not None and own.chat_items:
             current._chat_ctx = llm.ChatContext(list(own.chat_items))
         elif stored.history:
             # a stand-in, or an agent with nothing of its own stored, starts from the whole history
@@ -140,60 +137,31 @@ class SessionPersistence:
                 exclude_handoff=True, exclude_config_update=True
             )
 
-        # the model is told a running call has no known outcome, and what an ended one returned
-        answers = [(task, INTERRUPTED_OUTPUT, True) for task in stored.interrupted]
-        answers += [(task, task.output or "", task.is_error) for task in stored.ended]
-        for task, output, is_error in answers:
-            for ctx in (session._chat_ctx, current._chat_ctx):
-                if not any(
-                    item.type == "function_call" and item.call_id == task.call_id
-                    for item in ctx.items
-                ):
-                    ctx.insert(
-                        llm.FunctionCall(
-                            call_id=task.call_id, name=task.name, arguments=task.arguments or "{}"
-                        )
-                    )
-                if not any(
-                    item.type == "function_call_output" and item.call_id == task.call_id
-                    for item in ctx.items
-                ):
-                    ctx.insert(
-                        llm.FunctionCallOutput(
-                            call_id=task.call_id,
-                            name=task.name,
-                            output=output,
-                            is_error=is_error,
-                        )
-                    )
-
-        if stored.userdata_encoding is not None:
-            userdata = stored.userdata
-            if stored.userdata_encoding == "pickle":
-                token = _REHYDRATING.set(self)
+        if stored.userdata is not None:
+            if session._userdata is None:
+                session._userdata = stored.userdata
+            else:
                 try:
-                    userdata = pickle.loads(userdata)
-                finally:
-                    _REHYDRATING.reset(token)
-            session._userdata = userdata
+                    adapter = TypeAdapter(type(session._userdata))
+                    session._userdata = adapter.validate_python(stored.userdata)
+                except Exception:
+                    logger.warning(
+                        "the stored userdata does not load into the handler's type, so the "
+                        "handler's userdata is kept",
+                        extra={"session_id": self._persisted.session_id},
+                        exc_info=True,
+                    )
 
         logger.info(
             "rehydrated a persisted session",
             extra={
-                "session_id": self._state.session_id,
+                "session_id": self._persisted.session_id,
                 "items": len(stored.history),
                 "agent_id": current.id,
-                "interrupted": len(stored.interrupted),
-                "ended": len(stored.ended),
             },
         )
         self._check_rebuild(current)
         self._sync()
-        # queued behind the items, so a crash before they land leaves the calls to the next owner
-        for task in stored.interrupted:
-            self._state.task_ended(
-                task.call_id, status="interrupted", output=INTERRUPTED_OUTPUT, is_error=True
-            )
         self._listen()
         return current
 
@@ -213,7 +181,8 @@ class SessionPersistence:
                 _REBUILD_CHECKS[cls] = str(e)
                 logger.warning(
                     f"{cls.__name__} cannot be rebuilt on resume: {e}; define "
-                    "_snapshot_state/_from_state to rebuild it, or it resumes as the root agent",
+                    "_snapshot_state/_from_state to rebuild it, or the nearest agent above it "
+                    "resumes instead",
                     extra={"cls": qualified_name(cls)},
                 )
         return _REBUILD_CHECKS[cls]
@@ -231,9 +200,9 @@ class SessionPersistence:
         """Queue whatever the history and the agents' contexts gained or lost since last time."""
         if self._closed:
             return
-        self._state.sync(self._session._chat_ctx.items, owner=SESSION_OWNER, prune=False)
+        self._persisted.sync(self._session._chat_ctx.items, owner=SESSION_OWNER, prune=False)
         for agent in self._chain():
-            self._state.sync(agent._chat_ctx.items, owner=agent.id, prune=True)
+            self._persisted.sync(agent._chat_ctx.items, owner=agent.id, prune=True)
 
     async def checkpoint(self) -> None:
         self._sync()
@@ -250,15 +219,13 @@ class SessionPersistence:
                     cls=qualified_name(type(agent)),
                     parent_agent_id=parent.id if parent is not None else None,
                     state=state,
-                    tools=[tool.id for tool in agent.tools],
                 )
             )
         session = self._session
-        await self._state.checkpoint(
+        await self._persisted.checkpoint(
             current_agent_id=session._agent.id if session._agent else None,
-            userdata=session._userdata,
+            userdata=_userdata_json(session._userdata),
             agents=records,
-            tools=[tool.id for tool in session.tools],
         )
 
     def _schedule_checkpoint(self) -> None:
@@ -280,13 +247,13 @@ class SessionPersistence:
                 self._lease_lost = True
                 logger.error(
                     "another worker took this session, so it stops checkpointing",
-                    extra={"session_id": self._state.session_id},
+                    extra={"session_id": self._persisted.session_id},
                 )
                 return
             except Exception:
                 logger.warning(
                     "could not checkpoint the session",
-                    extra={"session_id": self._state.session_id},
+                    extra={"session_id": self._persisted.session_id},
                     exc_info=True,
                 )
             if not self._checkpoint_again:
@@ -317,19 +284,19 @@ class SessionPersistence:
         except LeaseLostError:
             logger.error(
                 "another worker took this session before it closed",
-                extra={"session_id": self._state.session_id},
+                extra={"session_id": self._persisted.session_id},
             )
         except Exception:
             logger.warning(
                 "could not checkpoint the session on close",
-                extra={"session_id": self._state.session_id},
+                extra={"session_id": self._persisted.session_id},
                 exc_info=True,
             )
         finally:
             self._closed = True
             # a fenced or failed checkpoint still lets the handle go, or the connection stays open
             with contextlib.suppress(Exception):
-                await self._state.release()
+                await self._persisted.release()
 
 
-__all__ = ["INTERRUPTED_OUTPUT", "SessionPersistence", "lookup_rehydrated_agent"]
+__all__ = ["SessionPersistence"]

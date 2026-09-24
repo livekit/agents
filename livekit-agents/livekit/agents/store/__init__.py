@@ -1,22 +1,21 @@
 """Persisting sessions, so a conversation survives the worker that ran it.
 
-A conversation is one SQLite database, in agent-db or a local file; ``SQLite`` runs the same
-API offline and in tests.
+Every session of one conversation is rows in one SQLite database, served by agent-db or kept
+in a local file by ``LocalStore`` for tests and offline runs.
 """
 
-from .conversation import AgentDB, Conversation, SQLite
+from .agentdb import AgentDB
 from .executor import StoreError
+from .local import LocalStore
 from .schema import SchemaVersionError
-from .session_state import LeaseHeldError, LeaseLostError, SessionKind, SessionState
+from .session import LeaseHeldError, LeaseLostError, PersistedSession
 
 __all__ = [
     "AgentDB",
-    "Conversation",
     "LeaseHeldError",
     "LeaseLostError",
-    "SQLite",
+    "LocalStore",
+    "PersistedSession",
     "SchemaVersionError",
-    "SessionKind",
-    "SessionState",
     "StoreError",
 ]

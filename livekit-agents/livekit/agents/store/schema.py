@@ -1,4 +1,4 @@
-"""The conversation database's schema, versioned in ``_meta`` and migrated forward on open.
+"""A session database's schema, versioned in ``_meta`` and migrated forward on open.
 
 A database outlives the release that wrote it, so a change is a new migration appended below,
 never an edit to an old one.
@@ -15,12 +15,9 @@ MIGRATIONS: dict[int, list[str]] = {
         """CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
             parent_session_id TEXT,
-            kind TEXT NOT NULL,
             endpoint TEXT,
             current_agent_id TEXT,
-            userdata BLOB,
-            userdata_encoding TEXT,
-            tools_json TEXT,
+            userdata TEXT,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             closed_at REAL,
@@ -28,11 +25,12 @@ MIGRATIONS: dict[int, list[str]] = {
             lease_expires_at REAL,
             extra TEXT
         )""",
+        "CREATE INDEX sessions_parent ON sessions (parent_session_id, endpoint)",
         """CREATE TABLE chat_items (
             session_id TEXT NOT NULL,
             owner TEXT NOT NULL,
             item_id TEXT NOT NULL,
-            item_json TEXT NOT NULL,
+            item TEXT NOT NULL,
             created_at REAL NOT NULL,
             PRIMARY KEY (session_id, owner, item_id)
         )""",
@@ -41,35 +39,9 @@ MIGRATIONS: dict[int, list[str]] = {
             agent_id TEXT NOT NULL,
             cls TEXT NOT NULL,
             parent_agent_id TEXT,
-            state_json TEXT,
-            tools_json TEXT,
+            state TEXT,
             durable_state BLOB,
             PRIMARY KEY (session_id, agent_id)
-        )""",
-        """CREATE TABLE tasks (
-            session_id TEXT NOT NULL,
-            call_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            arguments TEXT,
-            status TEXT NOT NULL,
-            started_at REAL NOT NULL,
-            ended_at REAL,
-            output TEXT,
-            is_error INTEGER,
-            idempotency_key TEXT,
-            origin TEXT NOT NULL,
-            PRIMARY KEY (session_id, call_id)
-        )""",
-        """CREATE TABLE delegations (
-            session_id TEXT NOT NULL,
-            call_id TEXT NOT NULL,
-            child_session_id TEXT,
-            task_id TEXT,
-            endpoint TEXT,
-            status TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            ended_at REAL,
-            PRIMARY KEY (session_id, call_id)
         )""",
         # a stale owner's checkpoint writes held = 0 here, which aborts its whole batch
         """CREATE TABLE _lease_check (
@@ -92,7 +64,7 @@ async def migrate(executor: Executor) -> int:
         found = int(str(row["value"]))
     if found > SCHEMA_VERSION:
         raise SchemaVersionError(
-            f"the conversation database is at schema version {found}, and this framework "
+            f"the session database is at schema version {found}, and this framework "
             f"only knows up to {SCHEMA_VERSION}; upgrade livekit-agents to open it"
         )
 
