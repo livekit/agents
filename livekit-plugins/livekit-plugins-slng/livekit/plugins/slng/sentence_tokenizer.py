@@ -29,7 +29,8 @@ script-agnostic rules on top:
 1. Cut after any character Unicode classifies as ``Sentence_Terminal``, whatever
    the script, keeping closing quotes and brackets attached to the sentence.
 2. Cut at a line break. Once livekit's markdown filter has stripped its marker,
-   a heading or a list item has no other end mark.
+   a heading or a list item has no other end mark. A line that opens with a
+   lowercase letter continues a hard-wrapped sentence instead.
 3. Cut at the last space once a span exceeds ``max_chars``, so text with no
    terminator at all (Thai and Lao have none) still streams.
 
@@ -224,6 +225,9 @@ _TITLE_LEAD = re.compile(r"[\s(\[\"'«“‘]*(?:\d{1,3}\.\s+[\s(\[\"'«“‘]*
 # items and table rows carry no terminator, so the break is the only sign the
 # line ended.
 _LINE_BREAK = re.compile(r"[^\S\n]*\n\s*")
+# A list letter or roman numeral opening a line ("a) ", "b. ", "(c) ", "iv. "):
+# lowercase, yet it starts an item rather than continuing the line above.
+_LIST_LETTER = re.compile(r"\(?(?:[a-z]|[ivx]{1,4})[.)]\s")
 
 # Every clause mark above U+007F: what Unicode's Terminal_Punctuation adds to
 # Sentence_Terminal, which is the comma, semicolon and colon of each script (the
@@ -372,13 +376,14 @@ def _boundaries(text: str) -> list[int]:
     one-letter word, and a closing quote followed by a lowercase word. An
     ellipsis on its own ends a sentence only before a capital, a letter of a
     caseless script or a CJK character. Every line break with text on both
-    sides is a cut as well.
+    sides is a cut as well, unless the next line goes on with a wrapped
+    sentence.
     """
     ends = _blingfire_ends(text)
     cuts: list[int] = []
     length = len(text)
-    # Where the current line starts. A line break is a cut too (added after
-    # this scan), so a would-be sentence starts at the later of the two.
+    # Where the current line starts. Most line breaks are cuts too (added
+    # after this scan), so a would-be sentence starts at the later of the two.
     line_start = 0
     i = 0
     while i < length:
@@ -462,10 +467,15 @@ def _boundaries(text: str) -> list[int]:
                 # ("3.14", "example.com") is not taken for a sentence end.
                 cuts.append(j)
         i = j
-    # A line break with text on both sides ends the line's piece.
+    # A line break with text on both sides ends the line's piece, unless the
+    # next line goes on with a wrapped sentence.
     first_visible = length - len(text.lstrip())
     for match in _LINE_BREAK.finditer(text):
-        if match.start() > first_visible and match.end() < length:
+        if (
+            match.start() > first_visible
+            and match.end() < length
+            and not _continues_line(text, match.start(), match.end())
+        ):
             cuts.append(match.end())
     return sorted(set(cuts))
 
@@ -558,7 +568,9 @@ def _single_letter_word(text: str, start: int, end: int) -> bool:
     sentence ending in a one-letter word ("vitamin C."), which waits for the
     next one. Not in a script where a space already marks a phrase break, not
     after a number, where the letter is a unit ("12 h.") ending its sentence,
-    and not the English pronoun, which ends sentences all the time ("So do I.").
+    not after an apostrophe inside a word, where the letter ends a contraction
+    or a possessive ("can't.", "John's."), and not the English pronoun, which
+    ends sentences all the time ("So do I.").
     """
     if text[start:end] != ".":
         return False
@@ -571,10 +583,32 @@ def _single_letter_word(text: str, start: int, end: int) -> bool:
         return False
     if not (k == 0 or text[k - 1].isspace() or text[k - 1] in _OPENERS):
         return False
+    if k > 1 and text[k - 1] in _OPENERS and unicodedata.category(text[k - 2])[0] in "LMN":
+        return False
     m = k - 1
     while m >= 0 and text[m].isspace():
         m -= 1
     return not (m >= 0 and text[m].isdigit())
+
+
+def _continues_line(text: str, start: int, end: int) -> bool:
+    """Whether the line break at ``text[start:end]`` sits inside a hard-wrapped sentence.
+
+    A line opening with a lowercase letter, in a script that opens its
+    sentences with a capital, goes on with the sentence above it ("Your order
+    shipped yesterday and\\nshould arrive on Friday."), so a cut there would put
+    a pause inside it. Not after a colon, which introduces what follows on its
+    own line, and not before a list letter ("a) ", "iv. "). The price is a list
+    whose items start in lowercase, which runs together after its first item
+    once the markdown filter has stripped its bullets.
+    """
+    after = text[end]
+    return (
+        after.islower()
+        and _in_ranges(after, _BICAMERAL)
+        and text[start - 1] != ":"
+        and _LIST_LETTER.match(text, end) is None
+    )
 
 
 def _binds_to_previous(char: str) -> bool:
@@ -784,7 +818,11 @@ def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
     last frame of a reply would have no letter, which some models refuse, and
     by then the frames before it are already sent. A stream holds the last
     piece, so it holds the one before too while the text after it has no
-    letter yet. A reply with no letter at all is left as it is.
+    letter yet. Up to ``max_chars`` of such text joins, whatever the length of
+    the piece it joins, so that piece can run to about twice the limit. A
+    longer run, such as a table of numbers, stays in pieces, since holding it
+    would stall the stream and grow the buffer that every push splits again.
+    A reply with no letter at all is left as it is.
     """
     if not text.strip():
         return []
@@ -805,7 +843,8 @@ def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
         spelled -= 1
     if 0 < spelled < len(result):
         start, end = result[spelled - 1][1], result[-1][2]
-        result[spelled - 1 :] = [(_normalize(text[start:end]), start, end)]
+        if len(_normalize(text[result[spelled][1] : end])) <= max_chars:
+            result[spelled - 1 :] = [(_normalize(text[start:end]), start, end)]
     return result
 
 
@@ -928,8 +967,9 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
     setting: blingfire handles Latin punctuation and its abbreviations, and any
     character Unicode classifies as a sentence terminator ends a sentence in
     every other script. A line break ends a piece too, so a heading or a list
-    item is a frame of its own. Text with no terminator, such as Thai, is cut at
-    a space once it passes ``max_chars``.
+    item is a frame of its own, while a line opening in lowercase continues the
+    sentence above it. Text with no terminator, such as Thai, is cut at a space
+    once it passes ``max_chars``.
 
     Args:
         max_chars: Length at which a piece is cut, at the last space inside
@@ -937,8 +977,9 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
             terminator, so a sentence longer than this is cut as well. Raise it
             to keep long sentences in one frame, lower it to make a
             terminator-free script stream in smaller ones. A cut that would
-            split a character cluster gives way, so a piece can run over.
-            Defaults to 200.
+            split a character cluster gives way, so a piece can run over, and
+            so can a reply's last sentence, which takes up to this much text
+            with no letter after it. Defaults to 200.
         stream_context_len: Minimum buffered text before the stream looks for
             a boundary. Defaults to 10.
         partial_head: Allow a stream to release the opening of a long sentence
