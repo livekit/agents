@@ -26,7 +26,13 @@ from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
-from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+from ..types import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    NOT_GIVEN,
+    APIConnectOptions,
+    NotGiven,
+    NotGivenOr,
+)
 from ..utils import is_given
 from ._realtime_models import is_realtime_model
 from ._utils import (
@@ -335,7 +341,8 @@ class LLM(llm.LLM):
             self._opts.model = model
         if is_given(extra_kwargs):
             self._opts.extra_kwargs = dict(extra_kwargs)
-        if is_given(prompt_cache_breakpoints):
+        # isinstance rather than is_given: mypy cannot narrow the bool | Literal union through it
+        if not isinstance(prompt_cache_breakpoints, NotGiven):
             self._opts.prompt_cache_breakpoints = prompt_cache_breakpoints
 
     @property
