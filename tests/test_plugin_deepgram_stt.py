@@ -579,3 +579,33 @@ async def test_empty_final_does_not_retract_the_previous_connections_interim():
         ]
     finally:
         await stream.aclose()
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        pytest.param(_results("", is_final=False), id="empty-interim-retracts"),
+        pytest.param(
+            {"type": "UtteranceEnd", "channel": [0, 1], "last_word_end": 0.2},
+            id="utterance-end",
+        ),
+    ],
+)
+async def test_empty_final_after_a_segment_boundary_is_dropped(boundary: dict):
+    from livekit.agents.stt import SpeechEventType as T
+
+    stream = _v1_stream(
+        connect=_scripted_connect(
+            [
+                _results("Yep.", is_final=False),
+                boundary,
+                _results("", is_final=True, speech_final=True),
+                _results("done", is_final=True),
+            ]
+        )
+    )
+    try:
+        seen = await _transcripts_until_done(stream)
+        assert [text for type_, text in seen if type_ == T.FINAL_TRANSCRIPT] == ["done"]
+    finally:
+        await stream.aclose()

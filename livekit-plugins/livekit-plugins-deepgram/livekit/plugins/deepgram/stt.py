@@ -487,7 +487,7 @@ class SpeechStream(stt.SpeechStream):
         )
 
         self._request_id = ""
-        # the connection sent an interim with words that no final has closed yet
+        # the connection's latest interim had words, and no final or utterance end has closed it
         self._interim_pending = False
         self._reconnect_event = asyncio.Event()
         # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
@@ -900,10 +900,8 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(final_event)
 
-            if is_final_transcript:
-                self._interim_pending = False
-            elif len(alts) > 0 and alts[0].text:
-                self._interim_pending = True
+            # an empty interim retracts the words, so it clears the flag too
+            self._interim_pending = not is_final_transcript and len(alts) > 0 and bool(alts[0].text)
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
@@ -916,6 +914,7 @@ class SpeechStream(stt.SpeechStream):
         elif data["type"] == "UtteranceEnd":
             # Fired when utterance_end_ms is set and the configured silence duration has elapsed.
             # https://developers.deepgram.com/docs/understand-endpointing-interim-results
+            self._interim_pending = False
             if self._speaking:
                 self._speaking = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
