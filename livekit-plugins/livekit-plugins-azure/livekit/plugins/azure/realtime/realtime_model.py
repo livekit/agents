@@ -98,6 +98,8 @@ _UPDATE_CHAT_CTX_TIMEOUT = 10.0
 _MIN_COMMIT_SAMPLES = SAMPLE_RATE // 10
 # how many 100ms chunks of uncommitted audio (30s) a lost connection hands over to the next one
 _MAX_RESENT_AUDIO_CHUNKS = 300
+# the anchor that inserts a conversation item at the head, an unset one appends it
+_ROOT_ITEM_ID = "root"
 
 
 @dataclass
@@ -185,12 +187,25 @@ class _ConnectionRequests:
     input_audio: deque[ClientEventInputAudioBufferAppend] = field(
         default_factory=lambda: deque(maxlen=_MAX_RESENT_AUDIO_CHUNKS)
     )
+    # appends since the input audio buffer was last committed or cleared, counted past what
+    # `input_audio` drops, so the audio of a turn can be told from the audio that follows it
+    input_audio_appends: int = 0
+    # the (samples, appends) the buffer held when the turn detection of Azure stopped a turn:
+    # the automatic commit that follows consumes exactly that much of it
+    speech_stopped_at: tuple[int, int] | None = None
     # the audio of each unconfirmed commit by event id, sent again ahead of it
     committed_audio: dict[str, list[ClientEventInputAudioBufferAppend]] = field(
         default_factory=dict
     )
     # whether the conversation was replayed (or didn't need to be) and the requests sent again
     replayed: bool = False
+
+    def reset_input_audio(self) -> None:
+        """Forget the input audio buffer, which a commit or a clear leaves empty."""
+        self.input_audio_samples = 0
+        self.input_audio_appends = 0
+        self.input_audio.clear()
+        self.speech_stopped_at = None
 
 
 class RealtimeModel(llm.RealtimeModel):
@@ -409,6 +424,9 @@ class RealtimeSession(
         self._item_create_futures: dict[str, asyncio.Future[None]] = {}
         self._item_create_events: dict[str, str] = {}
         self._pending_items: dict[str, llm.ChatItem] = {}
+        # items sent with the root anchor: Azure names no predecessor for them, and the
+        # mirror must follow even when update_chat_ctx stopped waiting for the confirmation
+        self._head_anchored_items: set[str] = set()
 
         self._update_chat_ctx_lock = asyncio.Lock()
         self._update_fnc_ctx_lock = asyncio.Lock()
@@ -599,6 +617,7 @@ class RealtimeSession(
             requests.unconfirmed[event_id] = event
         elif isinstance(event, ClientEventInputAudioBufferAppend):
             requests.input_audio_samples += _decoded_size(event.audio) // BYTES_PER_SAMPLE
+            requests.input_audio_appends += 1
             requests.input_audio.append(event)
         elif isinstance(event, ClientEventInputAudioBufferCommit):
             if not requests.input_audio_samples:
@@ -613,11 +632,9 @@ class RealtimeSession(
                 event.event_id = event_id
                 requests.unconfirmed[event_id] = event
                 requests.committed_audio[event_id] = list(requests.input_audio)
-            requests.input_audio_samples = 0
-            requests.input_audio.clear()
+            requests.reset_input_audio()
         elif isinstance(event, ClientEventInputAudioBufferClear):
-            requests.input_audio_samples = 0
-            requests.input_audio.clear()
+            requests.reset_input_audio()
 
         try:
             await self._send_direct(conn, event)
@@ -682,6 +699,7 @@ class RealtimeSession(
         self._item_create_futures.clear()
         self._item_create_events.clear()
         self._pending_items.clear()
+        self._head_anchored_items.clear()
 
     async def _replay_conversation(
         self, conn: VoiceLiveConnection, requests: _ConnectionRequests
@@ -834,6 +852,14 @@ class RealtimeSession(
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
     def _handle_input_speech_stopped(self, _: ServerEventInputAudioBufferSpeechStopped) -> None:
+        if (requests := self._requests) is not None:
+            # the commit Azure sends next consumes the buffer up to here, what is appended
+            # after it belongs to the next turn
+            requests.speech_stopped_at = (
+                requests.input_audio_samples,
+                requests.input_audio_appends,
+            )
+
         self.emit(
             "input_speech_stopped",
             llm.InputSpeechStoppedEvent(
@@ -852,8 +878,18 @@ class RealtimeSession(
             requests.committed_audio.pop(commit_id)
             requests.unconfirmed.pop(commit_id, None)
         else:
-            # committed by the turn detection of Azure
-            requests.input_audio.clear()
+            # committed by the turn detection of Azure: it consumed the turn it stopped, the
+            # audio appended since then is the beginning of the next one
+            samples, appends = requests.speech_stopped_at or (
+                requests.input_audio_samples,
+                requests.input_audio_appends,
+            )
+            requests.input_audio_samples = max(requests.input_audio_samples - samples, 0)
+            requests.input_audio_appends = max(requests.input_audio_appends - appends, 0)
+            # `input_audio` only keeps the most recent chunks, the consumed ones are its head
+            while len(requests.input_audio) > requests.input_audio_appends:
+                requests.input_audio.popleft()
+            requests.speech_stopped_at = None
 
     def _handle_conversation_item_created(self, event: ServerEventConversationItemCreated) -> None:
         item = event.item
@@ -870,6 +906,8 @@ class RealtimeSession(
             requests.unconfirmed.pop(requests.item_events.get(item_id, ""), None)
 
         # items of update_chat_ctx are mirrored as the caller built them
+        at_head = item_id in self._head_anchored_items
+        self._head_anchored_items.discard(item_id)
         lk_item: llm.ChatItem | None = self._pending_items.pop(item_id, None)
         if lk_item is None:
             try:
@@ -899,7 +937,9 @@ class RealtimeSession(
             and self._remote_chat_ctx.get(item_id) is None
         ):
             previous_item_id = event.previous_item_id
-            if previous_item_id is None or self._remote_chat_ctx.get(previous_item_id) is None:
+            if previous_item_id is not None and self._remote_chat_ctx.get(previous_item_id) is None:
+                previous_item_id = None
+            if previous_item_id is None and not at_head:
                 # Azure appends an item it isn't told where to insert
                 previous_item_id = self._remote_chat_ctx.tail_id
 
@@ -948,10 +988,26 @@ class RealtimeSession(
         generation.message_ch.close()
         generation.function_ch.close()
 
+    def _mirror_transcripts(self, generation: _ResponseGeneration) -> None:
+        """Mirror what the assistant said, so reconnections replay it."""
+        for item_id, message in generation.messages.items():
+            transcript = message.audio_transcript
+            remote_item = self._remote_chat_ctx.get(item_id)
+            if (
+                transcript
+                and remote_item is not None
+                and isinstance(remote_item.item, llm.ChatMessage)
+                and transcript not in remote_item.item.content
+            ):
+                remote_item.item.content.append(transcript)
+
     def _close_current_generation(self, reason: str | None = None) -> None:
         generation = self._current_generation
         self._current_generation = None
         if isinstance(generation, _ResponseGeneration):
+            # the user heard what was streamed before the response ended, the next Azure
+            # conversation is told about it rather than repeating or contradicting it
+            self._mirror_transcripts(generation)
             self._close_generation(generation)
             if reason:
                 logger.warning(f"in-progress Azure Voice Live generation closed due to {reason}")
@@ -1208,18 +1264,7 @@ class RealtimeSession(
         ):
             return
 
-        # mirror what the assistant said, so reconnections replay it
-        for item_id, message in generation.messages.items():
-            transcript = message.audio_transcript
-            remote_item = self._remote_chat_ctx.get(item_id)
-            if (
-                transcript
-                and remote_item is not None
-                and isinstance(remote_item.item, llm.ChatMessage)
-                and transcript not in remote_item.item.content
-            ):
-                remote_item.item.content.append(transcript)
-
+        self._mirror_transcripts(generation)
         self._close_generation(generation)
         self._current_generation = None
 
@@ -1303,8 +1348,12 @@ class RealtimeSession(
                     if self._remote_chat_ctx.get(replayed_id) is not None:
                         self._remote_chat_ctx.delete(replayed_id)
                     logger.warning(
-                        f"Azure Voice Live rejected a replayed conversation item: {message}",
-                        extra={"item_id": replayed_id, "code": code},
+                        "Azure Voice Live rejected a replayed conversation item",
+                        extra={
+                            "item_id": replayed_id,
+                            "code": code,
+                            "lk.pii.error_message": message,
+                        },
                     )
                     self._check_established()
                     return
@@ -1322,6 +1371,7 @@ class RealtimeSession(
                     requests.item_events.pop(rejected_id, None)
                     self._item_create_events.pop(event_id, None)
                     self._pending_items.pop(rejected_id, None)
+                    self._head_anchored_items.discard(rejected_id)
                     # fails whoever waits for the item now, e.g. a retry joining this creation
                     item_fut = self._item_create_futures.pop(rejected_id, None)
                     if item_fut is not None and not item_fut.done():
@@ -1330,12 +1380,16 @@ class RealtimeSession(
 
             if event_id in self._ignored_error_event_ids:
                 self._ignored_error_event_ids.discard(event_id)
-                logger.debug(f"Azure Voice Live (ignored): {message}")
+                logger.debug(
+                    "Azure Voice Live error (ignored)",
+                    extra={"code": code, "lk.pii.error_message": message},
+                )
                 return
 
             # a rejected conversation.item.create fails its update_chat_ctx
             if (item_id := self._item_create_events.pop(event_id, None)) is not None:
                 self._pending_items.pop(item_id, None)
+                self._head_anchored_items.discard(item_id)
                 if (fut := self._item_create_futures.pop(item_id, None)) and not fut.done():
                     fut.set_exception(llm.RealtimeError(message, code=code))
                 return
@@ -1349,10 +1403,15 @@ class RealtimeSession(
         # cancelling a response that already ended is a harmless race
         lowered = message.lower()
         if code == "response_cancel_not_active" or "no active response" in lowered:
-            logger.debug(f"Azure Voice Live (suppressed): {message}")
+            logger.debug(
+                "Azure Voice Live error (suppressed)",
+                extra={"code": code, "lk.pii.error_message": message},
+            )
             return
 
-        logger.error(f"Azure Voice Live error: {message}", extra={"code": code})
+        logger.error(
+            "Azure Voice Live error", extra={"code": code, "lk.pii.error_message": message}
+        )
         self._emit_error(
             APIError(f"Azure Voice Live error: {message}", body=error, retryable=True),
             recoverable=True,
@@ -1523,6 +1582,11 @@ class RealtimeSession(
                     },
                 )
 
+            # a caller that replaces history (e.g. summarizing it) leaves the items it
+            # dropped in the Azure conversation: opening it with the new ones would leave
+            # the stale tail last, so they are appended and the newest turn stays newest
+            can_prepend = not diff_ops.to_remove
+
             if not diff_ops.to_create:
                 return
 
@@ -1543,21 +1607,31 @@ class RealtimeSession(
                     )
                     continue
 
+                # the diff anchors an item that opens the conversation to the root; without
+                # an anchor at all Azure appends the item, which would reorder the context
+                at_head = previous_item_id is None and can_prepend
+                if at_head:
+                    anchor: str | None = _ROOT_ITEM_ID
+                elif previous_item_id in known_ids:
+                    anchor = previous_item_id
+                else:
+                    # the predecessor never reached Azure, the item follows what did
+                    anchor = None
+
                 event_id = utils.shortuuid("chat_ctx_create_")
                 fut = asyncio.Future[None]()
                 self._item_create_futures[item_id] = fut
                 self._item_create_events[event_id] = item_id
                 self._pending_items[item_id] = chat_item
+                if at_head:
+                    self._head_anchored_items.add(item_id)
                 futs.append(fut)
                 event_ids.append(event_id)
 
                 self._send(
                     ClientEventConversationItemCreate(
                         event_id=event_id,
-                        # without an anchor Azure appends the item
-                        previous_item_id=previous_item_id
-                        if previous_item_id in known_ids
-                        else None,
+                        previous_item_id=anchor,
                         item=azure_item,
                     )
                 )
