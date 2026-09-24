@@ -95,6 +95,7 @@ class FallbackAdapter(
                 aligned_transcript=aligned_transcript,
                 keyterms=any(t.capabilities.keyterms for t in stt),
                 chat_context=any(t.capabilities.chat_context for t in stt),
+                incremental_preflight=any(t.capabilities.incremental_preflight for t in stt),
             )
         )
 

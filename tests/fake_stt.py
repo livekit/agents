@@ -38,8 +38,6 @@ class FakeUserSpeech(BaseModel):
     final_transcript: str | None = None
     # preflight transcript sent right after the interim (alone when `transcript` is empty)
     preflight_transcript: str | None = None
-    # start time of the preflight; later than the interim's 0.0 models a chunked preflight
-    preflight_start_time: float = 0.0
 
     def speed_up(self, factor: float) -> FakeUserSpeech:
         obj = copy.deepcopy(self)
@@ -58,9 +56,12 @@ class FakeSTT(STT):
         fake_timeout: float | None = None,
         fake_user_speeches: list[FakeUserSpeech] | None = None,
         fake_require_audio: bool = False,
+        incremental_preflight: bool = False,
     ) -> None:
         super().__init__(
-            capabilities=STTCapabilities(streaming=True, interim_results=False),
+            capabilities=STTCapabilities(
+                streaming=True, interim_results=False, incremental_preflight=incremental_preflight
+            ),
         )
 
         self._fake_exception = fake_exception
@@ -181,13 +182,11 @@ class FakeRecognizeStream(RecognizeStream):
             )
         )
 
-    def _send_fake_preflight(self, transcript: str, start_time: float) -> None:
+    def _send_fake_preflight(self, transcript: str) -> None:
         self._event_ch.send_nowait(
             SpeechEvent(
                 type=SpeechEventType.PREFLIGHT_TRANSCRIPT,
-                alternatives=[
-                    SpeechData(text=transcript, language=LanguageCode(""), start_time=start_time)
-                ],
+                alternatives=[SpeechData(text=transcript, language=LanguageCode(""))],
             )
         )
 
@@ -239,9 +238,7 @@ class FakeRecognizeStream(RecognizeStream):
                 if curr_time() < final_transcript_time:
                     await asyncio.sleep(final_transcript_time - curr_time())
                 if fake_speech.preflight_transcript is not None:
-                    self._send_fake_preflight(
-                        fake_speech.preflight_transcript, fake_speech.preflight_start_time
-                    )
+                    self._send_fake_preflight(fake_speech.preflight_transcript)
                 if fake_speech.final_transcript is not None:
                     self.send_fake_transcript(fake_speech.final_transcript, is_final=True)
                 continue
@@ -250,9 +247,7 @@ class FakeRecognizeStream(RecognizeStream):
                 await asyncio.sleep(interim_transcript_time - curr_time())
             self.send_fake_transcript(" ".join(fake_speech.transcript.split()[:2]), is_final=False)
             if fake_speech.preflight_transcript is not None:
-                self._send_fake_preflight(
-                    fake_speech.preflight_transcript, fake_speech.preflight_start_time
-                )
+                self._send_fake_preflight(fake_speech.preflight_transcript)
 
             final_transcript_time = fake_speech.end_time + fake_speech.stt_delay
             if curr_time() < final_transcript_time:

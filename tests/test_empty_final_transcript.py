@@ -86,12 +86,11 @@ async def test_empty_final_promotes_cumulative_interim_over_chunked_preflight() 
         stt_delay=STT_DELAY,
         final_transcript="",
         preflight_transcript="up.",
-        preflight_start_time=0.3,
     )
     actions.add_llm("Great, pickup it is.")
     actions.add_tts(1.0)
 
-    session = create_session(actions, extra_kwargs=OPT_IN)
+    session = create_session(actions, extra_kwargs=OPT_IN, stt_incremental_preflight=True)
     items: list[ConversationItemAddedEvent] = []
     session.on("conversation_item_added", items.append)
 
@@ -209,32 +208,28 @@ def test_empty_final_keeps_interim_without_vad_speech(
 
 
 @pytest.mark.parametrize(
-    ("interim", "interim_start", "preflight", "preflight_start", "preflight_is_latest", "expected"),
+    ("interim", "preflight", "preflight_is_latest", "incremental", "expected"),
     [
-        # the AssemblyAI plugin starts each later chunk where the previous preflight ended
-        pytest.param("Pick up", 0.0, "up", 0.3, True, "Pick up", id="chunked-preflight"),
-        pytest.param("", 0.0, "Pick up", 0.0, True, "Pick up", id="preflight-without-interim"),
-        pytest.param("Pick", 0.0, "Pick up", 0.0, True, "Pick up", id="preflight-adds-words"),
-        pytest.param(
-            "I said pick up", 0.0, "pick up", 0.0, True, "pick up", id="preflight-drops-prefix"
-        ),
-        pytest.param("Pick up please", 0.0, "Pick up", 0.0, False, "Pick up please", id="grows"),
-        pytest.param("Pick", 0.0, "Pick up", 0.0, False, "Pick", id="interim-retracts"),
-        pytest.param("", 0.0, "Pick up", 0.0, False, "", id="interim-retracts-all"),
+        # the AssemblyAI plugin sends preflights as the words since its last preflight
+        pytest.param("Pick up", "up", True, True, "Pick up", id="chunked-preflight"),
+        pytest.param("", "Pick up", True, False, "Pick up", id="preflight-without-interim"),
+        pytest.param("Pick", "Pick up", True, False, "Pick up", id="preflight-adds-words"),
+        pytest.param("I said pick up", "pick up", True, False, "pick up", id="drops-prefix"),
+        pytest.param("Pick up please", "Pick up", False, False, "Pick up please", id="grows"),
+        pytest.param("Pick", "Pick up", False, False, "Pick", id="interim-retracts"),
+        pytest.param("", "Pick up", False, False, "", id="interim-retracts-all"),
     ],
 )
 def test_pending_segment_text(
-    interim: str,
-    interim_start: float,
-    preflight: str,
-    preflight_start: float,
-    preflight_is_latest: bool,
-    expected: str,
+    interim: str, preflight: str, preflight_is_latest: bool, incremental: bool, expected: str
 ) -> None:
-    pending = _pending_segment_text(
-        interim, interim_start, preflight, preflight_start, preflight_is_latest
-    )
-    assert pending == expected
+    assert _pending_segment_text(interim, preflight, preflight_is_latest, incremental) == expected
+
+
+def test_assemblyai_reports_incremental_preflights() -> None:
+    from livekit.plugins import assemblyai
+
+    assert assemblyai.STT(api_key="test-key").capabilities.incremental_preflight is True
 
 
 def test_unpromoted_empty_final_closes_the_segment() -> None:
@@ -254,9 +249,7 @@ def test_unpromoted_empty_final_closes_the_segment() -> None:
     ar._audio_transcript = ""
     ar._audio_interim_transcript = ""
     ar._last_interim_text = ""
-    ar._last_interim_start = 0.0
     ar._last_preflight_text = ""
-    ar._last_preflight_start = 0.0
     ar._preflight_is_latest = False
 
     for text, type_ in (

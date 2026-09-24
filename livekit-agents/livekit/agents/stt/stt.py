@@ -140,6 +140,9 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
+    incremental_preflight: bool = False
+    """Whether a preflight transcript carries only the words since the previous preflight instead
+    of the whole segment so far"""
 
 
 class STTError(BaseModel):

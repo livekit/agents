@@ -37,6 +37,7 @@ def create_session(
     extra_kwargs: dict[str, Any] | None = None,
     can_pause_audio: bool = False,
     with_stt: bool = True,
+    stt_incremental_preflight: bool = False,
 ) -> AgentSession:
     user_speeches = actions.get_user_speeches(speed_factor=speed_factor)
     llm_responses = actions.get_llm_responses(speed_factor=speed_factor)
@@ -65,7 +66,11 @@ def create_session(
         **{**default_interruption, **turn_handling.get("interruption", {})}
     )
 
-    stt = FakeSTT(fake_user_speeches=user_speeches) if with_stt else None
+    stt = (
+        FakeSTT(fake_user_speeches=user_speeches, incremental_preflight=stt_incremental_preflight)
+        if with_stt
+        else None
+    )
 
     if "aec_warmup_duration" not in extra:
         extra["aec_warmup_duration"] = None  # disable aec warmup by default
@@ -150,7 +155,6 @@ class FakeActions:
         final: bool = True,
         final_transcript: str | None = None,
         preflight_transcript: str | None = None,
-        preflight_start_time: float = 0.0,
     ) -> None:
         self._items.append(
             FakeUserSpeech(
@@ -161,7 +165,6 @@ class FakeActions:
                 final=final,
                 final_transcript=final_transcript,
                 preflight_transcript=preflight_transcript,
-                preflight_start_time=preflight_start_time,
             )
         )
 
