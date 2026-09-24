@@ -161,9 +161,12 @@ class _FakeVoiceLive:
             conn.input_audio = 0
             await conn.send("input_audio_buffer.cleared")
 
-    async def commit(self, conn: _Connection) -> None:
-        """Commit the input audio buffer, as requested or as the turn detection of Azure does."""
-        conn.input_audio = 0
+    async def commit(self, conn: _Connection, *, keep: int = 0) -> None:
+        """Commit the input audio buffer, as requested or as the turn detection of Azure does.
+
+        `keep` is the audio that arrived past the commit boundary, which stays buffered.
+        """
+        conn.input_audio = keep
         await conn.send(
             "input_audio_buffer.committed",
             previous_item_id=conn.item_ids[-1] if conn.item_ids else None,
@@ -829,6 +832,40 @@ async def test_automatic_commit_leaves_the_next_turn_in_the_buffer(
         ]
         assert base64.b64decode(events[2]["audio"]) == _PCM_20MS * 4
         assert errors == []
+
+
+async def test_speech_stop_consumes_the_audio_azure_reports(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        received: list[Any] = []
+        session.on("azure_server_event_received", received.append)
+
+        conn = await _connected(voice_live)
+        # 200ms of a turn, then 100ms of the next one goes out before the speech stop,
+        # which travels back while the microphone keeps streaming, reaches the client
+        for _ in range(15):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 3)
+        await conn.send("input_audio_buffer.speech_started", audio_start_ms=0, item_id="item_turn")
+        await conn.send("input_audio_buffer.speech_stopped", audio_end_ms=200, item_id="item_turn")
+        await voice_live.commit(conn, keep=len(_PCM_20MS) * 5)
+        await _wait_until(lambda: any(e.type == "input_audio_buffer.committed" for e in received))
+
+        # the 100ms Azure left in the buffer is the next turn: a new connection starts
+        # from it, whole, and it is long enough to commit rather than be dropped
+        await conn.ws.close()
+        second = await _connected(voice_live, 1)
+        await _wait_until(lambda: _input_audio(second.events))
+        session.commit_audio()
+
+        await _wait_until(lambda: _input_audio(second.events)[1:])
+        events = _input_audio(second.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+        ]
+        assert base64.b64decode(events[0]["audio"]) == _PCM_20MS * 5
 
 
 async def test_audio_sent_again_is_bounded(

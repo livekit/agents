@@ -183,16 +183,16 @@ class _ConnectionRequests:
     # samples appended to the input audio buffer since it was last committed or cleared
     input_audio_samples: int = 0
     # the most recent audio appended since the input audio buffer was last committed or
-    # cleared, the buffer of the next connection starts with it when this one closes first
-    input_audio: deque[ClientEventInputAudioBufferAppend] = field(
+    # cleared, the buffer of the next connection starts with it when this one closes first.
+    # Each chunk carries the stream position it ends at, which is what Azure reports against
+    input_audio: deque[tuple[int, ClientEventInputAudioBufferAppend]] = field(
         default_factory=lambda: deque(maxlen=_MAX_RESENT_AUDIO_CHUNKS)
     )
-    # appends since the input audio buffer was last committed or cleared, counted past what
-    # `input_audio` drops, so the audio of a turn can be told from the audio that follows it
-    input_audio_appends: int = 0
-    # the (samples, appends) the buffer held when the turn detection of Azure stopped a turn:
-    # the automatic commit that follows consumes exactly that much of it
-    speech_stopped_at: tuple[int, int] | None = None
+    # samples appended on this connection, never reset: `audio_end_ms` counts from its start
+    appended_samples: int = 0
+    # the stream position the turn detection of Azure last stopped a turn at, which is the
+    # end of the audio it sent the model and so the boundary its commit consumes up to
+    speech_stopped_at: int | None = None
     # the audio of each unconfirmed commit by event id, sent again ahead of it
     committed_audio: dict[str, list[ClientEventInputAudioBufferAppend]] = field(
         default_factory=dict
@@ -201,9 +201,12 @@ class _ConnectionRequests:
     replayed: bool = False
 
     def reset_input_audio(self) -> None:
-        """Forget the input audio buffer, which a commit or a clear leaves empty."""
+        """Forget the input audio buffer, which a commit or a clear leaves empty.
+
+        `appended_samples` counts the stream Azure reports positions against, not the
+        buffer, so a commit or a clear leaves it alone.
+        """
         self.input_audio_samples = 0
-        self.input_audio_appends = 0
         self.input_audio.clear()
         self.speech_stopped_at = None
 
@@ -616,9 +619,10 @@ class RealtimeSession(
             requests.item_events[item_id] = event_id
             requests.unconfirmed[event_id] = event
         elif isinstance(event, ClientEventInputAudioBufferAppend):
-            requests.input_audio_samples += _decoded_size(event.audio) // BYTES_PER_SAMPLE
-            requests.input_audio_appends += 1
-            requests.input_audio.append(event)
+            samples = _decoded_size(event.audio) // BYTES_PER_SAMPLE
+            requests.input_audio_samples += samples
+            requests.appended_samples += samples
+            requests.input_audio.append((requests.appended_samples, event))
         elif isinstance(event, ClientEventInputAudioBufferCommit):
             if not requests.input_audio_samples:
                 # nothing to commit, e.g. the turn was committed already
@@ -631,7 +635,7 @@ class RealtimeSession(
                 event_id = event.event_id or utils.shortuuid("commit_")
                 event.event_id = event_id
                 requests.unconfirmed[event_id] = event
-                requests.committed_audio[event_id] = list(requests.input_audio)
+                requests.committed_audio[event_id] = [e for _, e in requests.input_audio]
             requests.reset_input_audio()
         elif isinstance(event, ClientEventInputAudioBufferClear):
             requests.reset_input_audio()
@@ -681,7 +685,7 @@ class RealtimeSession(
                 unconfirmed.append(event)
 
         # so is the audio of the turn in progress, it doesn't belong to a conversation yet
-        unconfirmed.extend(requests.input_audio)
+        unconfirmed.extend(event for _, event in requests.input_audio)
         self._resend = unconfirmed + requests.unsent + self._resend
 
     def _fail_pending_requests(self, reason: str) -> None:
@@ -851,14 +855,13 @@ class RealtimeSession(
         # interrupting the reply is left to the agent, which knows if it can be interrupted
         self.emit("input_speech_started", llm.InputSpeechStartedEvent())
 
-    def _handle_input_speech_stopped(self, _: ServerEventInputAudioBufferSpeechStopped) -> None:
-        if (requests := self._requests) is not None:
-            # the commit Azure sends next consumes the buffer up to here, what is appended
-            # after it belongs to the next turn
-            requests.speech_stopped_at = (
-                requests.input_audio_samples,
-                requests.input_audio_appends,
-            )
+    def _handle_input_speech_stopped(self, event: ServerEventInputAudioBufferSpeechStopped) -> None:
+        audio_end_ms = getattr(event, "audio_end_ms", None)
+        if (requests := self._requests) is not None and audio_end_ms is not None:
+            # the end of the audio Azure sent the model, and so the boundary the commit it
+            # sends next consumes up to. Taking it from the event rather than from when the
+            # event arrived keeps the audio sent meanwhile, which is the next turn already
+            requests.speech_stopped_at = audio_end_ms * SAMPLE_RATE // 1000
 
         self.emit(
             "input_speech_stopped",
@@ -879,15 +882,19 @@ class RealtimeSession(
             requests.unconfirmed.pop(commit_id, None)
         else:
             # committed by the turn detection of Azure: it consumed the turn it stopped, the
-            # audio appended since then is the beginning of the next one
-            samples, appends = requests.speech_stopped_at or (
-                requests.input_audio_samples,
-                requests.input_audio_appends,
+            # audio appended past that boundary is the beginning of the next one. Without a
+            # boundary to go by, the whole buffer went with the turn
+            boundary = (
+                requests.appended_samples
+                if requests.speech_stopped_at is None
+                else requests.speech_stopped_at
             )
-            requests.input_audio_samples = max(requests.input_audio_samples - samples, 0)
-            requests.input_audio_appends = max(requests.input_audio_appends - appends, 0)
-            # `input_audio` only keeps the most recent chunks, the consumed ones are its head
-            while len(requests.input_audio) > requests.input_audio_appends:
+            buffer_start = requests.appended_samples - requests.input_audio_samples
+            consumed = min(max(boundary - buffer_start, 0), requests.input_audio_samples)
+            requests.input_audio_samples -= consumed
+            # a chunk that straddles the boundary is kept whole: the next connection hears
+            # a little of the committed turn again rather than losing the start of this one
+            while requests.input_audio and requests.input_audio[0][0] <= boundary:
                 requests.input_audio.popleft()
             requests.speech_stopped_at = None
 
