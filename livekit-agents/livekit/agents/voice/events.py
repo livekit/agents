@@ -113,9 +113,9 @@ class RunContext(Generic[Userdata_T]):
 
         It is the call id and the effect's ordinal within the tool, ``"call_abc:2"``.
         """
-        from ..durable_scheduler import current_durable_task
+        from ..durable_scheduler import _CURRENT_TASK
 
-        if (task := current_durable_task()) is None:
+        if (task := _CURRENT_TASK.get(None)) is None:
             raise RuntimeError("idempotency_key is only defined inside a durable tool")
         return f"{self._function_call.call_id}:{task.effects}"
 

@@ -1173,7 +1173,8 @@ class AgentActivity(RecognitionHooks):
 
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
-            val = await self.durable_scheduler.execute(task)
+            assert self._durable_scheduler is not None
+            val = await self._durable_scheduler.execute(task)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
         except asyncio.CancelledError:
             # the scheduler was closed with the session; the frame stays at its last boundary
@@ -1200,12 +1201,6 @@ class AgentActivity(RecognitionHooks):
             model_settings=ModelSettings(tool_choice=self._tool_choice or NOT_GIVEN),
             reset_tool_timestamp=reset_tool_timestamp,
         )
-
-    @property
-    def durable_scheduler(self) -> DurableScheduler:
-        if self._durable_scheduler is None:
-            raise RuntimeError("the activity has no durable scheduler")
-        return self._durable_scheduler
 
     async def _detach_reusable_resources(self, new_activity: AgentActivity) -> _ReusableResources:
         """Detach reusable resources for handoff to *new_activity*."""

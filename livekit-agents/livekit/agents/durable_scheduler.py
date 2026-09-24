@@ -165,11 +165,6 @@ class DurableTask:
         return self
 
 
-def current_durable_task() -> DurableTask | None:
-    """The durable task whose frame is running, or None outside a durable tool."""
-    return _CURRENT_TASK.get(None)
-
-
 class DurableScheduler:
     """Runs one activity's durable tools, and snapshots each at its boundaries."""
 

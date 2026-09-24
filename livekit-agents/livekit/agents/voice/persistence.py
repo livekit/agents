@@ -363,9 +363,9 @@ class SessionPersistence:
             self._schedule_checkpoint()
 
     def _on_quiet_candidate(self, ev: AgentStateChangedEvent | ToolExecutionUpdatedEvent) -> None:
-        # a turn that ended with no tool still running is the point nothing is half-written
+        # a turn that ended with no plain tool running and every durable one at a boundary is
+        # the point nothing is half-written
         self._sync()
-        # and every durable tool is at a boundary, where its frame is what the rows say
         if (
             self._session._agent_state == "listening"
             and not _RunningTasks.get(self._session)
