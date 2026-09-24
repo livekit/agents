@@ -180,10 +180,8 @@ class PersistedSession:
         return self._session_id
 
     async def load(self) -> StoredSession | None:
-        """Claim the session, waiting out a previous owner's lease, and read it back.
-
-        ``None`` means the session is new, and has been created.
-        """
+        """Claim the session, waiting out a previous owner's lease, and read it back; None when
+        the session is new and has just been created."""
         executor = await self._database.open()
         now = time.time()
         created = await executor.exec(
@@ -282,8 +280,8 @@ class PersistedSession:
     def sync(
         self, items: list[ChatItem], *, owner: str = SESSION_OWNER, prune: bool = False
     ) -> None:
-        """Write each item that is new or changed since last queued, again on its id; ``prune``
-        also drops the owner's rows no longer in ``items``. Queued; nothing waits on it."""
+        """Queue a write of each item new or changed since last time, and with ``prune`` a delete
+        of the owner's rows no longer in ``items``."""
         written = self._written.setdefault(owner, {})
         for item in items:
             data = item_json(item)

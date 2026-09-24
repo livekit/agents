@@ -1,8 +1,7 @@
 """The phone agent over text, for the crash drill: each line you type is a caller's turn.
 
-It runs voice.py's Receptionist on a text model with the same delegate and persistence, so
-killing it mid-call and starting it again on the same conversation resumes the call, a durable
-collect_email included. The README's "Persistence" section has the drill.
+It runs voice.py's Receptionist on a text model with the same delegate and persistence, so a
+restart on the same conversation resumes the call, a durable collect_email included.
 """
 
 import argparse

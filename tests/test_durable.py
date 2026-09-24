@@ -200,8 +200,6 @@ async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) ->
     await crashed.aclose()
 
 
-
-
 async def slow_charge(key: str) -> str:
     CALLS.append(("charge", key))
     await CHARGE_GATE.wait()

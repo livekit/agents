@@ -1097,11 +1097,8 @@ class AgentActivity(RecognitionHooks):
             await persistence.durable_boundary(self._agent)
 
     async def _rehydrate(self, tasks: list[DurableTask]) -> list[str]:
-        """Take the activity of an agent resumed with durable tools, and restore them.
-
-        Called by the persistence before the session starts; the session later resumes this
-        activity rather than starting it. Returns the call ids whose frames did not restore.
-        """
+        """Take the activity of an agent resumed with durable tools, which the session then
+        resumes rather than starts, and restore them; returns the calls that did not restore."""
         self._started = True
         self._agent._activity = self
         self._durable_scheduler = DurableScheduler(on_boundary=self._on_durable_boundary)

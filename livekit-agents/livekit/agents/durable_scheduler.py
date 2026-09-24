@@ -1,8 +1,7 @@
 """Durable tools: tool coroutines whose frame is pickled, so a restarted worker resumes them.
 
-A durable tool awaits only ``EffectCall``s. The scheduler runs each effect outside the frame
-and snapshots the frame at every boundary, the moment the tool can be captured: after an
-effect resolved and before the next one is sent, or while it awaits an ``AgentTask``.
+A tool is captured at a boundary: after an ``EffectCall`` resolved and before the next is sent,
+or while it awaits an ``AgentTask``.
 """
 
 from __future__ import annotations
@@ -71,9 +70,8 @@ TaskResult_T = TypeVar("TaskResult_T")
 class EffectCall(Generic[TaskResult_T]):
     """Run an awaitable outside the durable tool's frame, which keeps only its outcome.
 
-    Awaiting it hands the awaitable to the scheduler, which resumes the tool with the result
-    or the exception. The awaitable itself is never pickled, so an effect in flight at a
-    crash runs again on resume; ``RunContext.idempotency_key`` names it stably across the two.
+    An effect in flight at a crash runs again on resume, under the same
+    ``RunContext.idempotency_key``.
     """
 
     def __init__(self, aw: Awaitable[TaskResult_T] | AgentTask[TaskResult_T]) -> None:

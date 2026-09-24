@@ -109,10 +109,8 @@ class RunContext(Generic[Userdata_T]):
 
     @property
     def idempotency_key(self) -> str:
-        """A key for the next ``EffectCall`` of a durable tool: the same when a resume re-runs it.
-
-        It is the call id and the effect's ordinal within the tool, ``"call_abc:2"``.
-        """
+        """The call id and the next ``EffectCall``'s ordinal, ``"call_abc:2"``, the same when a
+        resume runs that effect again. Raises outside a durable tool."""
         from ..durable_scheduler import _CURRENT_TASK
 
         if (task := _CURRENT_TASK.get(None)) is None:

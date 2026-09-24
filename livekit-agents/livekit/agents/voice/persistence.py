@@ -76,8 +76,7 @@ class SessionPersistence:
         self._persisted = persisted
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._checkpoint_again = False
-        # a checkpoint and a boundary write read the frames and land them in turn, so an older
-        # read never lands over a newer one
+        # checkpoints and boundary writes read and land in turn, so an older frame never lands last
         self._write_lock = asyncio.Lock()
         self._lease_lost = False
         self._closed = False
@@ -397,8 +396,7 @@ class SessionPersistence:
             self._schedule_checkpoint()
 
     def _on_quiet_candidate(self, ev: AgentStateChangedEvent | ToolExecutionUpdatedEvent) -> None:
-        # a turn that ended with no plain tool running and every durable one at a boundary is
-        # the point nothing is half-written
+        # nothing is half-written once a turn ends with no plain tool and every durable one idle
         self._sync()
         if (
             self._session._agent_state == "listening"

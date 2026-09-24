@@ -106,9 +106,8 @@ A2ASessionHandler = Callable[[A2ASessionContext], Coroutine[Any, Any, None]]
 class _Context:
     """One context id: the handler run that owns its session, and the requests in flight.
 
-    Held until the caller says goodbye or it goes idle. Closing it closes the session, which
-    checkpoints a persisted one and lets its lease go, so the next request on the context
-    rehydrates it rather than starting over.
+    Held until the caller says goodbye or it goes idle; closing it closes the session, so the
+    next request on the context rehydrates a persisted one.
     """
 
     def __init__(
