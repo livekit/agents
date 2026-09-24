@@ -383,6 +383,9 @@ class AgentActivity(RecognitionHooks):
 
         self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
         self._durable_scheduler: DurableScheduler | None = None
+        self._restored_tools: list[
+            tuple[DurableTask, llm.FunctionCall, SpeechHandle, ToolError | None]
+        ] = []
         # set while scheduling runs, so a restored tool fails only once its agent is active
         self._activated_ev = asyncio.Event()
         self._mcp_tools: list[mcp.MCPToolset] = []
@@ -1094,7 +1097,7 @@ class AgentActivity(RecognitionHooks):
 
     async def _rehydrate(self, tasks: list[DurableTask]) -> list[str]:
         """Take the activity of an agent resumed with durable tools, which the session then
-        resumes rather than starts, and restore them; returns the calls that did not restore."""
+        resumes rather than starts, and ready them; returns the calls that did not restore."""
         self._started = True
         self._agent._activity = self
         self._durable_scheduler = DurableScheduler()
@@ -1140,13 +1143,19 @@ class AgentActivity(RecognitionHooks):
                 _AgentActivityContextVar.reset(tokens[1])
                 _SpeechHandleContextVar.reset(tokens[0])
 
+            self._restored_tools.append((task, fnc_call, speech_handle, unpickle_error))
+        return failed
+
+    def _resume_durable_tools(self) -> None:
+        """Run the tools ``_rehydrate`` readied, once every agent of the session has its activity."""
+        for task, fnc_call, speech_handle, unpickle_error in self._restored_tools:
             speech_task = self._create_speech_task(
                 self._resume_durable_function(task, fnc_call, speech_handle, unpickle_error),
                 speech_handle=speech_handle,
                 name="AgentActivity.resume_durable_tool",
             )
             _set_activity_task_info(speech_task, function_call=fnc_call, inline_task=True)
-        return failed
+        self._restored_tools.clear()
 
     @utils.log_exceptions(logger=logger)
     async def _resume_durable_function(

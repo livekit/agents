@@ -20,6 +20,7 @@ from livekit.agents import (
 )
 from livekit.agents.durable_scheduler import EffectException
 from livekit.agents.llm import ToolError, ToolFlag
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.durable import registry
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -297,3 +298,36 @@ async def test_a_task_awaited_from_a_durable_tool_resumes(database: Database) ->
     assert (output.call_id, output.output) == ("call_1", "changed")
     await _until(lambda: isinstance(resumed.current_agent, ConfirmingDesk))
     await resumed.aclose()
+
+
+async def test_a_rehydrate_that_fails_midway_leaves_no_running_frame(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = AgentSession(llm=_llm("change"))
+    await first.start(agent=ConfirmingDesk(), persist=database.session("s1"))
+    first.generate_reply(user_input="go")
+    await _until(lambda: isinstance(first.current_agent, Confirm))
+    await first.aclose()
+
+    # the desk's frame restores, and the task above it fails to
+    rehydrate = AgentActivity._rehydrate
+    restored: list[AgentActivity] = []
+
+    async def failing(self: AgentActivity, tasks: list[Any]) -> list[str]:
+        if isinstance(self.agent, Confirm):
+            raise RuntimeError("the task's toolset did not set up")
+        restored.append(self)
+        return await rehydrate(self, tasks)
+
+    monkeypatch.setattr(AgentActivity, "_rehydrate", failing)
+    desk = ConfirmingDesk()
+    resumed = AgentSession(llm=_llm("change"))
+    with pytest.raises(RuntimeError, match="did not set up"):
+        await resumed.start(agent=desk, persist=database.session("s1"))
+    await asyncio.sleep(0.05)
+
+    (activity,) = restored
+    assert desk._activity is None and activity._restored_tools == []
+    assert not any(t.get_name() == "AgentActivity.resume_durable_tool" for t in asyncio.all_tasks())
+    assert activity._durable_scheduler is not None
+    assert activity._durable_scheduler.durable_state() == b""

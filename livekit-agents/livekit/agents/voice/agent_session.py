@@ -1205,6 +1205,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             self._started = True
+            if self._persistence is not None:
+                self._persistence.resume_durable_tools()
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 

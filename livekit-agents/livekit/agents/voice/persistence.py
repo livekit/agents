@@ -63,6 +63,8 @@ class SessionPersistence:
         self._persisted = persisted
         # saves diff against the one before, so they land in turn
         self._save_lock = asyncio.Lock()
+        # the activities rehydrate restored, whose durable tools run once the session starts
+        self._restored: list[AgentActivity] = []
 
     @property
     def persisted(self) -> PersistedSession:
@@ -160,11 +162,11 @@ class SessionPersistence:
                 )
                 # a resumed task takes its activity too, so it goes on without running on_enter
                 resumed_task = isinstance(member, AgentTask) and member._rehydrated
-                failed = (
-                    await AgentActivity(member, session)._rehydrate(tasks)
-                    if tasks or resumed_task
-                    else []
-                )
+                failed: list[str] = []
+                if tasks or resumed_task:
+                    activity = AgentActivity(member, session)
+                    self._restored.append(activity)
+                    failed = await activity._rehydrate(tasks)
                 if not isinstance(newer, AgentTask):
                     break
                 call_id = (
@@ -186,6 +188,17 @@ class SessionPersistence:
                     extra={"agent_id": newer.id, "resumed_agent_id": member.id},
                 )
                 break
+        except BaseException:
+            # nothing restored outlives a rehydrate that failed, so no frame runs without a session
+            for activity in self._restored:
+                activity._restored_tools.clear()
+                with contextlib.suppress(Exception):
+                    await activity.aclose()
+                activity.agent._activity = None
+                if isinstance(activity.agent, AgentTask):
+                    activity.agent._rehydrated = False
+            self._restored.clear()
+            raise
         finally:
             _REHYDRATING.reset(token)
         current, own = chain[kept - 1]
@@ -232,6 +245,12 @@ class SessionPersistence:
         )
         self._check_rebuild(current)
         return current, current.id == stored.current_agent_id
+
+    def resume_durable_tools(self) -> None:
+        """Run the durable tools rehydrate restored, once the session has started."""
+        for activity in self._restored:
+            activity._resume_durable_tools()
+        self._restored.clear()
 
     def _check_rebuild(self, agent: Agent) -> str | None:
         """Why the agent's class cannot be rebuilt from its row, or None when it can."""
