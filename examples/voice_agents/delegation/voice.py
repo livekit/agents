@@ -34,6 +34,7 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     DirectiveReceivedEvent,
+    EffectCall,
     JobContext,
     RunContext,
     ToolExecutionUpdatedEvent,
@@ -42,7 +43,7 @@ from livekit.agents import (
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
-from livekit.agents.llm import function_tool
+from livekit.agents.llm import ToolFlag, function_tool
 from livekit.plugins import openai
 
 logger = logging.getLogger("voice")
@@ -80,6 +81,15 @@ def _trace(call_id: str, arrow: str, text: str | None, limit: int = 90) -> None:
     logger.info(f"{_short(call_id, 12):<12} {arrow} {_short(text, limit)}")
 
 
+# stands in for a CRM write, which takes the key so a repeat of the same call does nothing
+_IDENTIFIED: dict[str, str] = {}
+
+
+async def identify(email: str, *, key: str) -> None:
+    if _IDENTIFIED.setdefault(key, email) is email:
+        _trace(key.split(":")[0], "·", f"caller identified as {email} ({key})")
+
+
 class Receptionist(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -111,7 +121,7 @@ class Receptionist(Agent):
             instructions="greet the caller as Northwind Air and ask how you can help"
         )
 
-    @function_tool
+    @function_tool(flags=ToolFlag.DURABLE)
     async def collect_email(self, ctx: RunContext, change: bool = False) -> str:
         """Ask the caller for their email address, reading it back to confirm it.
 
@@ -123,11 +133,13 @@ class Receptionist(Agent):
             change: only when the caller wants a different address from the one already
                 confirmed in this call.
         """
-        async with ctx.foreground():
-            result = await GetEmailTask(chat_ctx=self.chat_ctx)
+        # durable: a call restarted mid-address resumes the task where the caller left off.
+        # ctx.foreground() cannot wrap it, since a context manager in the frame does not pickle
+        result = await EffectCall(GetEmailTask(chat_ctx=self.chat_ctx))
 
         email = result.email_address.strip().lower()
-        _trace(ctx.function_call.call_id, "·", f"caller identified as {email}")
+        # an effect in flight at a crash runs again, so it is keyed to run once per call
+        await EffectCall(identify(email, key=ctx.idempotency_key))
         # said back into the conversation, so the next delegation carries it to the desk
         return f"confirmed with the caller: {email}"
 
