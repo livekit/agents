@@ -1,16 +1,39 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 from xml.etree import ElementTree
 
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, APITimeoutError, tts
+from examples.microsoft import microsoft_ai_smoke as smoke, microsoft_ai_tts_room as room_example
+from livekit import rtc
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    APIConnectOptions,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    JobContext,
+    tts,
+)
+from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import microsoft_ai
 
-from .microsoft_ai_fakes import FakeResponse, fake_session, wav_bytes
+from .fake_io import FakeAudioOutput
+from .microsoft_ai_fakes import (
+    DUMMY_CONFIG,
+    FakeResponse,
+    fake_session,
+    no_http_session as no_http_session,
+    no_network as no_network,
+    wav_bytes,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
@@ -18,17 +41,6 @@ OPTIONS = APIConnectOptions(max_retry=0, timeout=0.5)
 PCM = b"\x81\xff" * 3717
 TTS_URL = "https://tts.example.invalid/cognitiveservices/v1?deployment=dummy"
 VOICE = "en-US-Dummy:test-synthesizer"
-
-
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def forbidden(*args: object, **kwargs: object) -> None:
-        raise AssertionError("Hermetic Microsoft AI tests must not make network requests")
-
-    monkeypatch.setattr(aiohttp.ClientSession, "_request", forbidden)
-    monkeypatch.delenv("MICROSOFT_AI_ENV_FILE", raising=False)
-    for name in ("URL", "REGION", "MODEL", "API_KEY", "VOICE", "SAMPLE_RATE"):
-        monkeypatch.delenv(f"MICROSOFT_AI_TTS_{name}", raising=False)
 
 
 def provider(response: FakeResponse, **options) -> tuple[microsoft_ai.TTS, MagicMock]:
@@ -421,3 +433,336 @@ async def test_documented_wav_output_formats(rate: int, format: str) -> None:
     assert session.post.call_args.kwargs["headers"]["X-Microsoft-OutputFormat"] == format
     assert all(event.frame.sample_rate == rate for event in events)
     assert b"".join(event.frame.data.tobytes() for event in events) == PCM
+
+
+@pytest.mark.usefixtures("no_http_session")
+@pytest.mark.parametrize("voice", ["short-name", "en-US-Dummy:wrong-model", ":file-synthesizer"])
+def test_voice_must_include_the_configured_model(tmp_path: Path, voice: str) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    with pytest.raises(ValueError, match="full voice ID"):
+        microsoft_ai.TTS(env_file=path, voice=voice)
+
+
+@pytest.mark.usefixtures("no_http_session")
+def test_model_validation_is_case_insensitive_but_does_not_invent_aliases(tmp_path: Path) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    instance = microsoft_ai.TTS(
+        env_file=path, model="mai-test-flash", voice="en-US-Dummy:MAI-Test-Flash"
+    )
+    assert instance.model == "mai-test-flash"
+    with pytest.raises(ValueError, match="configured model"):
+        microsoft_ai.TTS(
+            env_file=path, model="mai-test-2.1-flash", voice="en-US-Dummy:MAI-Test-2-Flash"
+        )
+
+
+@pytest.mark.usefixtures("no_http_session")
+@pytest.mark.parametrize("region", ["eastus2", "EastUS2"])
+def test_region_constructs_the_documented_public_cloud_endpoint(region: str) -> None:
+    instance = microsoft_ai.TTS(
+        region=region, api_key="dummy", model="test", voice="en-US-Dummy:test", sample_rate=24000
+    )
+    assert instance._client.url == "https://eastus2.tts.speech.microsoft.com/cognitiveservices/v1"
+
+
+@pytest.mark.usefixtures("no_http_session")
+def test_region_from_file_and_constructor_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(
+        DUMMY_CONFIG.replace(
+            "MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1",
+            "MICROSOFT_AI_TTS_URL=\nMICROSOFT_AI_TTS_REGION=eastus2",
+        ),
+        encoding="utf-8",
+    )
+    assert microsoft_ai.TTS(env_file=path)._client.url == (
+        "https://eastus2.tts.speech.microsoft.com/cognitiveservices/v1"
+    )
+    monkeypatch.setenv("MICROSOFT_AI_TTS_REGION", "westeurope")
+    assert microsoft_ai.TTS(env_file=path)._client.url.startswith("https://westeurope.")
+    assert microsoft_ai.TTS(env_file=path, region="eastus2")._client.url.startswith(
+        "https://eastus2."
+    )
+
+
+@pytest.mark.usefixtures("no_http_session")
+def test_configured_url_wins_over_region_and_is_not_rewritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    instance = microsoft_ai.TTS(env_file=path, region="eastus2")
+    assert instance._client.url == "https://tts.example.invalid/cognitiveservices/v1"
+    monkeypatch.setenv("MICROSOFT_AI_TTS_URL", "https://override.example.invalid/custom?q=dummy")
+    instance = microsoft_ai.TTS(env_file=path, region="eastus2")
+    assert instance._client.url == "https://override.example.invalid/custom?q=dummy"
+    instance = microsoft_ai.TTS(
+        env_file=path, region="eastus2", url="https://argument.example.invalid/exact"
+    )
+    assert instance._client.url == "https://argument.example.invalid/exact"
+
+
+@pytest.mark.usefixtures("no_http_session")
+@pytest.mark.parametrize("region", ["east us 2", "eastus2.example.invalid/path", "../eastus2", ""])
+def test_invalid_region_is_not_interpolated_into_a_host(region: str) -> None:
+    with pytest.raises(ValueError):
+        microsoft_ai.TTS(
+            region=region,
+            api_key="dummy",
+            model="test",
+            voice="en-US-Dummy:test",
+            sample_rate=24000,
+        )
+
+
+def test_smoke_refuses_audio_dumping(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LK_DUMP_TTS", "1")
+    monkeypatch.setattr(sys, "argv", ["microsoft_ai_smoke.py", "--run-live", "--tts"])
+    factory = MagicMock()
+    monkeypatch.setattr(microsoft_ai, "TTS", factory)
+    with pytest.raises(SystemExit) as caught:
+        smoke.main()
+    assert caught.value.code == 2
+    factory.assert_not_called()
+
+
+async def test_tts_smoke_sends_only_the_fixed_approved_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session = fake_session()
+    response = FakeResponse(wav_bytes(b"\x01\x00" * 1001))
+    session.post.return_value = response
+    instance = microsoft_ai.TTS(
+        url="https://tts.example.invalid/speech",
+        model="test",
+        voice="en-US-Dummy:test",
+        sample_rate=24000,
+        headers={},
+        http_session=session,
+    )
+    async with instance:
+        await smoke._check_tts(instance)
+    session.post.assert_called_once()
+    body = ElementTree.fromstring(session.post.call_args.kwargs["data"])
+    assert next(iter(body)).text == smoke.TTS_TEXT
+    assert "json" not in session.post.call_args.kwargs
+    output = capsys.readouterr().out
+    assert smoke.TTS_TEXT not in output
+    assert "PCM16 mono frames at 24000 Hz" in output
+    assert "audio_duration=" in output and "not model TTFA" in output
+    assert response.closed
+    assert smoke.CONNECT_OPTIONS.max_retry == 0
+    assert smoke.MAX_DURATION == 5.0
+
+
+def test_opted_in_cli_runs_only_selected_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LK_DUMP_TTS", raising=False)
+    monkeypatch.setattr(sys, "argv", ["microsoft_ai_smoke.py", "--run-live", "--tts"])
+    run = AsyncMock()
+    monkeypatch.setattr(smoke, "_run", run)
+    smoke.main()
+    run.assert_awaited_once_with(pcm=None, expected=None, check_tts=True, env_file=None)
+
+
+class _Handle:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.awaited = False
+
+    def __await__(self):
+        async def finish() -> None:
+            self.awaited = True
+
+        return finish().__await__()
+
+    def exception(self) -> Exception | None:
+        assert self.awaited
+        return self.error
+
+
+def _mock_example(monkeypatch: pytest.MonkeyPatch):
+    speech = MagicMock(spec=microsoft_ai.TTS)
+    speech.sample_rate = 24000
+    speech.__aenter__.return_value = speech
+    speech.__aexit__.return_value = False
+    provider_factory = MagicMock(return_value=speech)
+    monkeypatch.setattr(room_example.microsoft_ai, "TTS", provider_factory)
+    monkeypatch.setattr(
+        room_example.microsoft_ai,
+        "STT",
+        MagicMock(side_effect=AssertionError("TTS-only example must not construct STT")),
+    )
+    started = asyncio.Event()
+    ready = asyncio.Event()
+    handle = _Handle()
+    session = MagicMock(spec=AgentSession)
+    session.room_io = SimpleNamespace(wait_for_ready=AsyncMock(side_effect=ready.wait))
+    session.say.return_value = handle
+
+    async def start(**kwargs: object) -> None:
+        started.set()
+
+    session.start = AsyncMock(side_effect=start)
+    session_factory = MagicMock(return_value=session)
+    monkeypatch.setattr(room_example, "AgentSession", session_factory)
+    context = MagicMock(spec=JobContext)
+    context.room = MagicMock(spec=rtc.Room)
+    return context, session, speech, provider_factory, session_factory, started, ready, handle
+
+
+async def test_waits_for_subscription_and_says_once_without_input_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session, speech, factory, session_factory, started, ready, handle = _mock_example(
+        monkeypatch
+    )
+    monkeypatch.setenv("MICROSOFT_AI_ENV_FILE", "selected-private-config.env")
+
+    def shutdown(*, reason: str) -> None:
+        assert reason == "TTS greeting complete"
+        session.aclose.assert_awaited_once()
+        speech.__aexit__.assert_awaited_once()
+
+    context.shutdown.side_effect = shutdown
+    task = asyncio.create_task(room_example.entrypoint(context))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        session.say.assert_not_called()
+        ready.set()
+        await asyncio.wait_for(task, 1)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    factory.assert_called_once_with(env_file="selected-private-config.env")
+    kwargs = session_factory.call_args.kwargs
+    assert kwargs["tts"] is speech
+    assert kwargs["vad"] is None
+    assert kwargs["turn_handling"] == {"turn_detection": None}
+    assert kwargs["user_away_timeout"] is None
+    assert "stt" not in kwargs and "llm" not in kwargs
+    assert kwargs["conn_options"].tts_conn_options.max_retry == 0
+    start = session.start.call_args.kwargs
+    assert start["room"] is context.room
+    assert start["record"] is False and start["session_host"] is False
+    options = start["room_options"]
+    assert options.audio_input is False and options.video_input is False
+    assert options.text_input is False and options.text_output is False
+    assert options.audio_output.sample_rate == 24000
+    session.say.assert_called_once_with(
+        "Hello, this is a Microsoft AI voice test.",
+        allow_interruptions=False,
+        add_to_chat_ctx=False,
+    )
+    assert handle.awaited
+    session.aclose.assert_awaited_once()
+    speech.__aexit__.assert_awaited_once()
+    context.shutdown.assert_called_once_with(reason="TTS greeting complete")
+
+
+async def test_cancelling_before_room_ready_closes_without_synthesis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session, speech, _, _, started, _, _ = _mock_example(monkeypatch)
+    task = asyncio.create_task(room_example.entrypoint(context))
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    session.say.assert_not_called()
+    context.shutdown.assert_not_called()
+    session.aclose.assert_awaited_once()
+    speech.__aexit__.assert_awaited_once()
+
+
+async def test_readiness_timeout_is_not_reported_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session, speech, _, _, _, _, _ = _mock_example(monkeypatch)
+    session.room_io.wait_for_ready.side_effect = asyncio.TimeoutError()
+    with pytest.raises(asyncio.TimeoutError):
+        await room_example.entrypoint(context)
+    session.say.assert_not_called()
+    context.shutdown.assert_not_called()
+    session.aclose.assert_awaited_once()
+    speech.__aexit__.assert_awaited_once()
+
+
+async def test_speech_handle_error_is_checked_and_resources_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session, speech, _, _, _, ready, handle = _mock_example(monkeypatch)
+    error = APIStatusError("Microsoft AI TTS request failed", status_code=401)
+    handle.error = error
+    ready.set()
+    with pytest.raises(APIStatusError) as caught:
+        await room_example.entrypoint(context)
+    assert caught.value is error
+    assert handle.awaited
+    context.shutdown.assert_not_called()
+    session.aclose.assert_awaited_once()
+    speech.__aexit__.assert_awaited_once()
+
+
+async def test_start_failure_closes_session_and_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    context, session, speech, _, _, _, _, _ = _mock_example(monkeypatch)
+    session.start.side_effect = RuntimeError("room setup failed")
+    with pytest.raises(RuntimeError, match="room setup failed"):
+        await room_example.entrypoint(context)
+    session.say.assert_not_called()
+    context.shutdown.assert_not_called()
+    session.aclose.assert_awaited_once()
+    speech.__aexit__.assert_awaited_once()
+
+
+async def test_actual_agent_session_say_uses_only_tts_and_emits_audio() -> None:
+    pcm = b"\x81\x01" * 1200
+    response = FakeResponse(wav_bytes(pcm))
+    http = fake_session()
+    http.post.return_value = response
+    speech = microsoft_ai.TTS(
+        url="https://tts.example.invalid/cognitiveservices/v1",
+        model="test-model",
+        voice="en-US-Dummy:test-model",
+        sample_rate=24000,
+        headers={},
+        http_session=http,
+    )
+    output = FakeAudioOutput(sample_rate=24000)
+    capture = AsyncMock(wraps=output.capture_frame)
+    output.capture_frame = capture
+    async with speech:
+        session = AgentSession(
+            tts=speech,
+            vad=None,
+            turn_handling={"turn_detection": None},
+            user_away_timeout=None,
+            conn_options=SessionConnectOptions(
+                tts_conn_options=APIConnectOptions(max_retry=0, timeout=0.5)
+            ),
+        )
+        session.output.audio = output
+        try:
+            await session.start(
+                Agent(instructions="Say the supplied text."), session_host=False, record=False
+            )
+            handle = session.say(
+                room_example.GREETING, allow_interruptions=False, add_to_chat_ctx=False
+            )
+            await asyncio.wait_for(handle, 3)
+            assert handle.exception() is None
+            assert session.stt is None and session.llm is None and session.vad is None
+        finally:
+            await session.aclose()
+    http.post.assert_called_once()
+    root = ElementTree.fromstring(http.post.call_args.kwargs["data"])
+    assert next(iter(root)).text == room_example.GREETING
+    frames = [call.args[0] for call in capture.await_args_list]
+    assert frames
+    assert all(frame.sample_rate == 24000 and frame.num_channels == 1 for frame in frames)
+    assert b"".join(frame.data.tobytes() for frame in frames).startswith(pcm)
+    assert response.closed

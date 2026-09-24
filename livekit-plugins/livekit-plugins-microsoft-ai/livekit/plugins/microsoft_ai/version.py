@@ -14,4 +14,4 @@
 #
 # Adapted from the OpenAI plugin for the Microsoft AI speech-only integration.
 
-__version__ = "0.0.1"
+__version__ = "1.8.3"

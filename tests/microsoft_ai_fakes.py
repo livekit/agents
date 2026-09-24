@@ -4,15 +4,49 @@ import asyncio
 import base64
 import io
 import json
+import os
 import wave
 from collections.abc import AsyncIterator
 from types import TracebackType
 from unittest.mock import AsyncMock, MagicMock
 
 import aiohttp
+import pytest
 
 from livekit import rtc
 from livekit.agents import vad
+from livekit.plugins.microsoft_ai._http import HTTPClient
+
+DUMMY_CONFIG = """\
+MICROSOFT_AI_STT_URL=wss://stt.example.invalid/v1/realtime?intent=transcription
+MICROSOFT_AI_STT_MODEL=file-transcriber
+MICROSOFT_AI_STT_API_KEY="dummy-stt-key"
+MICROSOFT_AI_STT_LANGUAGE=en
+MICROSOFT_AI_TTS_URL=https://tts.example.invalid/cognitiveservices/v1
+MICROSOFT_AI_TTS_MODEL=file-synthesizer
+MICROSOFT_AI_TTS_API_KEY='dummy-tts-key'
+MICROSOFT_AI_TTS_VOICE=en-US-Dummy:file-synthesizer
+MICROSOFT_AI_TTS_SAMPLE_RATE=24000
+"""
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Hermetic Microsoft AI tests must not make network requests")
+
+    monkeypatch.setattr(aiohttp.ClientSession, "_request", forbidden)
+    for name in list(os.environ):
+        if name.startswith("MICROSOFT_AI_"):
+            monkeypatch.delenv(name)
+
+
+@pytest.fixture
+def no_http_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Configuration tests must not create HTTP sessions")
+
+    monkeypatch.setattr(HTTPClient, "session", forbidden)
 
 
 def audio_frame(
