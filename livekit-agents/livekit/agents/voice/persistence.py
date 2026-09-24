@@ -61,8 +61,9 @@ class SessionPersistence:
     def __init__(self, session: AgentSession, persisted: PersistedSession) -> None:
         self._session = session
         self._persisted = persisted
-        # saves diff against the one before, so they land in turn
+        # saves diff against the one before, so they land in turn, and none after the close's
         self._save_lock = asyncio.Lock()
+        self._closed = False
         # the activities rehydrate restored, whose durable tools run once the session starts
         self._restored: list[AgentActivity] = []
 
@@ -276,6 +277,8 @@ class SessionPersistence:
         """Write what the session changed since the last save, with its durable tools held at
         a boundary while they are captured; ``chain`` is the one a close stopped."""
         async with self._save_lock:
+            if self._closed:
+                return
             if chain is None:
                 chain = durable_chain(self._session._agent)
             schedulers = [scheduler for scheduler in chain.values() if scheduler is not None]
@@ -352,6 +355,7 @@ class SessionPersistence:
             )
         finally:
             # a failed save still lets the handle go, or the connection stays open
+            self._closed = True
             with contextlib.suppress(Exception):
                 await self._persisted.release()
 

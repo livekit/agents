@@ -262,6 +262,21 @@ async def test_a_save_called_twice_writes_only_the_difference(
     await session.aclose()
 
 
+async def test_a_save_that_queued_behind_the_close_is_a_no_op(database: Database) -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi, how can I help?")], fallbacks=[])
+    session = _session(llm)
+    await session.start(agent=FareDesk(), persist=database.session("s1"))
+    await session.run(user_input="hello")
+    # an application's save, such as one from conversation_item_added during the teardown,
+    # takes the lock only once the close saved and let the rows go
+    persistence = session._persistence
+    assert persistence is not None
+    await session.aclose()
+    await persistence.save()
+    (row,) = await database.rows("SELECT closed_at FROM sessions")
+    assert row["closed_at"] is not None
+
+
 async def test_a_session_closed_with_an_error_still_saves(database: Database) -> None:
     from livekit.agents.llm import LLMError
     from livekit.agents.voice.agent_session import SessionConnectOptions
