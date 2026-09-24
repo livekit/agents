@@ -203,6 +203,17 @@ async def _transcript(conn: _Connection, response_id: str, item_id: str, text: s
     )
 
 
+async def _text(conn: _Connection, response_id: str, item_id: str, text: str) -> None:
+    await conn.send(
+        "response.text.delta",
+        response_id=response_id,
+        item_id=item_id,
+        output_index=0,
+        content_index=0,
+        delta=text,
+    )
+
+
 async def _done(conn: _Connection, response_id: str, status: str = "completed") -> None:
     await conn.send(
         "response.done",
@@ -832,6 +843,19 @@ async def test_reconnect_restores_the_session_configuration(voice_live: _FakeVoi
         assert config["tool_choice"] == "required"
 
 
+async def test_reconnect_keeps_empty_instructions(voice_live: _FakeVoiceLive) -> None:
+    async with _session(voice_live) as session:
+        conn = await _connected(voice_live)
+        await session.update_instructions("")
+        await _wait_until(lambda: len(conn.events) == 2)
+        assert conn.events[1]["session"]["instructions"] == ""
+
+        await conn.ws.close()
+        new_conn = await _connected(voice_live, index=1)
+
+        assert new_conn.events[0]["session"]["instructions"] == ""
+
+
 async def test_agent_session_answers_after_a_tool_call(voice_live: _FakeVoiceLive) -> None:
     lookups: list[str] = []
 
@@ -1153,14 +1177,7 @@ async def test_text_only_session(voice_live: _FakeVoiceLive) -> None:
     async def on_response(conn: _Connection, event: dict[str, Any], response_id: str) -> None:
         await _created(conn, response_id, _metadata(event))
         await _add_message(conn, response_id, "item_text", part_type="text")
-        await conn.send(
-            "response.text.delta",
-            response_id=response_id,
-            item_id="item_text",
-            output_index=0,
-            content_index=0,
-            delta="Hi there",
-        )
+        await _text(conn, response_id, "item_text", "Hi there")
         await _done(conn, response_id)
 
     voice_live.on_response = on_response
@@ -1172,6 +1189,29 @@ async def test_text_only_session(voice_live: _FakeVoiceLive) -> None:
         assert await _collect(message.audio_stream) == []
         assert "".join(await _collect(message.text_stream)) == "Hi there"
         assert voice_live.connections[0].events[0]["session"]["modalities"] == ["text"]
+
+
+async def test_text_fallback_of_an_audio_session_reports_ttft(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async def on_response(conn: _Connection, event: dict[str, Any], response_id: str) -> None:
+        await _created(conn, response_id, _metadata(event))
+        await _add_message(conn, response_id, "item_text", part_type="text")
+        await _text(conn, response_id, "item_text", "Hi there")
+        await _done(conn, response_id)
+
+    voice_live.on_response = on_response
+    async with _session(voice_live) as session:
+        metrics: list[Any] = []
+        session.on("metrics_collected", metrics.append)
+
+        generation = await asyncio.wait_for(session.generate_reply(), 5)
+        message = await _first(generation.message_stream)
+
+        assert await message.modalities == ["text"]
+        assert "".join(await _collect(message.text_stream)) == "Hi there"
+        await _wait_until(lambda: metrics)
+        assert metrics[0].ttft >= 0
 
 
 async def test_default_credential_is_reused_and_closed(

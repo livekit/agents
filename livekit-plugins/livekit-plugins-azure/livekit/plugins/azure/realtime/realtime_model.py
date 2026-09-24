@@ -699,7 +699,11 @@ class RealtimeSession(
         """Configure the Azure Voice Live session with the current settings."""
         session = RequestSession(
             modalities=list(self._opts.modalities),
-            instructions=self._instructions or "You are a helpful assistant.",
+            instructions=(
+                self._instructions
+                if self._instructions is not None
+                else "You are a helpful assistant."
+            ),
             voice=self._voice_config(),
             input_audio_format=self._opts.input_audio_format,
             output_audio_format=self._opts.output_audio_format,
@@ -1050,12 +1054,9 @@ class RealtimeSession(
         if not delta or message.text_ch.closed:
             return
 
-        # the transcript trails the audio, text only counts as first token without audio
-        if (
-            not is_transcript
-            and message.audio_ch.closed
-            and generation.first_token_timestamp is None
-        ):
+        # transcripts trail their audio, while text deltas are model output on their own,
+        # including the text fallback of an audio session
+        if not is_transcript and generation.first_token_timestamp is None:
             generation.first_token_timestamp = time.time()
 
         message.text_ch.send_nowait(delta)
