@@ -1452,6 +1452,13 @@ class AgentActivity(RecognitionHooks):
                     # inline task through a session close has always been
                     raise ToolError("the activity that awaited the inline task is closing")
 
+                if self._new_turns_blocked:
+                    raise ToolError(
+                        "An agent transition is in progress, so this tool call cannot continue. "
+                        "Wait until the transition is complete before retrying, if the tool is "
+                        "available to the new agent."
+                    )
+
                 # past the queue: a run watching a task still waiting its turn waits for
                 # the user input the task ahead of it needs
                 if (run_state := self._session._global_run_state) and not run_state.done():
@@ -3010,19 +3017,28 @@ class AgentActivity(RecognitionHooks):
         The agent's ``expressive`` overrides the session's when set, matching how the
         agent's ``llm``/``tts`` override the session models.
 
-        Expressive mode requires two things:
-        - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
-          normalization/conversion and expressive chunking run there, so direct
-          provider plugins would receive unconverted markup.
-        - a TTS that actually declares a markup dialect (``llm_instructions()`` is
-          not ``None``): gateway providers without one (e.g. ``rime``, ``deepgram``)
-          get no markup instructions, so no tags can appear in the stream — leaving
-          it "active" would enable xml-aware chunking with nothing to chunk and
-          re-introduce the stray-``<`` streaming stall.
+        Expressive mode requires two things of the TTS:
+
+        - a markup dialect (``llm_instructions()`` is not ``None``). Without one no
+          markers can appear, and xml-aware chunking would re-introduce the stray-``<``
+          streaming stall for nothing.
+        - something to *lower* those markers, or the TTS speaks them aloud. Guaranteed
+          only where the framework owns the input path: the gateway TTS's own stream, and
+          the ``tts.StreamAdapter`` wrapping every non-streaming TTS. A natively
+          streaming plugin owns its own input task — several declare a dialect today
+          without lowering anything. A ``StreamAdapter`` handed in directly is streaming
+          only at its surface; inside it is that same lowering path, so it is exempt.
         """
         from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
-        if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
+        if (
+            self.tts is None
+            or self.tts.markup.llm_instructions() is None
+            or (
+                self.tts.capabilities.streaming
+                and not isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
+            )
+        ):
             return None
 
         expr = (
@@ -3951,7 +3967,8 @@ class AgentActivity(RecognitionHooks):
                     ignore_task_switch = True
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -4644,9 +4661,13 @@ class AgentActivity(RecognitionHooks):
 
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # add tool output to the chat context
+                # record the call with its output, as the pipeline task does. a call rejected
+                # before execution never reached the started callback
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call)
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                self._session._tool_items_added([sanitized_out.fnc_call_out])
+                self._session._tool_items_added(
+                    [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
+                )
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -4654,7 +4675,8 @@ class AgentActivity(RecognitionHooks):
                     )
                     ignore_task_switch = True
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True

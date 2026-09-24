@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from pydantic.alias_generators import to_camel
 
 from google.genai import types
 from livekit.agents import llm
@@ -33,14 +34,16 @@ def create_tools_config(
     """
     gemini_tools: list[types.Tool] = []
 
-    function_tools = [
-        types.FunctionDeclaration.model_validate(schema)
-        for schema in tool_ctx.parse_function_tools(
-            "google",
-            tool_behavior=tool_behavior.value if tool_behavior else None,
-            use_parameters_json_schema=use_parameters_json_schema,
-        )
-    ]
+    function_tools: list[types.FunctionDeclaration] = []
+    for schema in tool_ctx.parse_function_tools(
+        "google",
+        tool_behavior=tool_behavior.value if tool_behavior else None,
+        use_parameters_json_schema=use_parameters_json_schema,
+    ):
+        try:
+            function_tools.append(types.FunctionDeclaration.model_validate(schema))
+        except ValidationError as e:
+            raise ValueError(f"tool {schema.get('name')} has a schema Gemini rejected") from e
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
@@ -148,7 +151,23 @@ class _GeminiJsonSchema:
             return None
         return self.schema
 
+    # every key types.Schema accepts (field name plus its camelCase alias), together with
+    # the JSON Schema keywords this transformer still has to read itself. types.Schema is
+    # declared extra="forbid", so any other keyword -- readOnly, deprecated, $comment,
+    # x-google-* and other vendor extensions -- survives simplify() only to fail
+    # validation later when the FunctionDeclaration is built. `const` is kept because the
+    # conversion below turns it into the single-value `enum` Gemini does support.
+    _ALLOWED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        set(types.Schema.model_fields)
+        | {to_camel(name) for name in types.Schema.model_fields}
+        | {"anyOf", "$ref", "prefixItems", "const"}
+    )
+
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        for key in [k for k in schema if k not in self._ALLOWED_KEYS]:
+            logger.debug(f"dropping unsupported JSON Schema keyword: {key}")
+            schema.pop(key, None)
+
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
@@ -246,6 +265,8 @@ class _GeminiJsonSchema:
         if properties := schema.get("properties"):
             for value in properties.values():
                 self._simplify(value, refs_stack)
+            if "property_ordering" not in schema and "propertyOrdering" not in schema:
+                schema["property_ordering"] = list(properties)
 
     def _array(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         if prefix_items := schema.get("prefixItems"):

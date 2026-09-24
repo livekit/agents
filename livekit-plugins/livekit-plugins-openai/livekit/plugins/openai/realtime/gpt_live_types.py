@@ -6,7 +6,7 @@ service reshapes cannot break a live session; client events serialise with ``exc
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 from pydantic import model_serializer
 
@@ -18,6 +18,8 @@ DelegationTarget = Literal["responses", "client"]
 """``responses`` hands delegated work to a backend model; ``client`` hands it to the application."""
 InputRole = Literal["developer", "user", "assistant"]
 """The roles startup history accepts; there is no ``system``."""
+ServiceTier = Literal["auto", "default", "flex", "priority", "ultrafast"]
+"""Processing tier the session asks the service for, sent as the ``OpenAI-Service-Tier`` header."""
 
 # shared parts
 
@@ -70,7 +72,7 @@ class ResponsesConfig(BaseModel):
     parallel_tool_calls: bool | None = None
     reasoning: Reasoning | None = None
     text: ResponseTextConfigParam | None = None
-    service_tier: Literal["auto", "default", "flex", "priority"] | None = None
+    service_tier: ServiceTier | None = None
     max_output_tokens: int | None = None
 
 
@@ -260,10 +262,11 @@ class ResponseSnapshot(BaseModel):
 
 
 class OutputItem(BaseModel):
-    """Only a completed function-call item carries all of name, call id and arguments."""
+    """Fields needed to dispatch a completed backend function call."""
 
     id: str | None = None
     type: str | None = None
+    status: Literal["in_progress", "completed", "incomplete"] | None = None
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
@@ -274,7 +277,8 @@ class ResponsesEvent(BaseModel):
 
     type: str = ""
     response: ResponseSnapshot | None = None
-    item: OutputItem | None = None
+    # OpenAI's lenient parser needs a weak-referenceable union on Python 3.13.
+    item: Optional[OutputItem] = None  # noqa: UP045
 
 
 class ResponseEventEnvelope(BaseModel):

@@ -44,7 +44,7 @@ def replace_words(
             no_punctuation = word.rstrip("".join(tokenizer.PUNCTUATIONS))
             punctuation_off = len(word) - len(no_punctuation)
             replacement = replacements.get(no_punctuation.lower())
-            if replacement:
+            if replacement is not None:
                 text = (
                     text[: start_index + offset]
                     + replacement

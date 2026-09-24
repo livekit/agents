@@ -46,7 +46,7 @@ from livekit.agents.utils import aio
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
-from livekit.agents.voice.events import FunctionToolsExecutedEvent
+from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.tool_executor import UPDATE_TEMPLATE
 
@@ -470,7 +470,8 @@ async def test_tool_without_a_reply_returns_the_agent_to_listening() -> None:
     assert transitions[-2:] == [("speaking", "thinking"), ("thinking", "listening")]
 
 
-async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
+@pytest.mark.parametrize("reset_away_timer", [False, True])
+async def test_async_tool_defers_user_away_until_its_reply_lands(reset_away_timer: bool) -> None:
     """A background tool speaks for itself, so "away" must wait for that reply (#6883)."""
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.5, "Look up my order")
@@ -498,7 +499,11 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
             """Look an order up in the background."""
             nonlocal tool_returned_at
             await context.update("looking it up")
-            await asyncio.sleep(20.0)
+            await asyncio.sleep(10.0)
+            if reset_away_timer:
+                assert context.session.agent_state == "listening"
+                context.session.reset_away_timer()
+            await asyncio.sleep(10.0)
             tool_returned_at = time.time()
             return "order 42 shipped"
 
@@ -516,6 +521,7 @@ async def test_async_tool_defers_user_away_until_its_reply_lands() -> None:
 
     # the agent is genuinely listening while the tool runs, so nothing but the tool holds
     # the window off; landing restarts it in full rather than firing on what was left
+    assert tool_returned_at > 0
     assert len(away_times) == 1
     assert away_times[0] >= tool_returned_at + 3.0
 
@@ -1511,6 +1517,107 @@ async def test_stt_errors_use_unrecoverable_error_tolerance() -> None:
         await _close_test_session(session)
 
 
+async def test_reset_away_timer_restarts_the_full_timeout() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        user_states: list[str] = []
+        session.on("user_state_changed", lambda ev: user_states.append(ev.new_state))
+        await session.start(MyAgent())
+
+        for _ in range(2):
+            await asyncio.sleep(2.0)
+            session.reset_away_timer()
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        assert user_states == []
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "away"
+        assert user_states == ["away"]
+
+
+@pytest.mark.parametrize("agent_state", ["listening", "speaking", "thinking"])
+async def test_reset_away_timer_returns_away_user_to_listening(agent_state: AgentState) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        transitions: list[tuple[str, str]] = []
+        session.on(
+            "user_state_changed", lambda ev: transitions.append((ev.old_state, ev.new_state))
+        )
+        await session.start(MyAgent())
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+        session._update_agent_state(agent_state)
+        session.reset_away_timer()
+        assert session.user_state == "listening"
+        assert transitions == [("listening", "away"), ("away", "listening")]
+
+        await asyncio.sleep(2.0)
+        assert session.user_state == "listening"
+        await asyncio.sleep(2.0)
+        assert session.user_state == ("away" if agent_state == "listening" else "listening")
+
+
+@pytest.mark.parametrize(
+    ("user_state", "agent_state"),
+    [("speaking", "listening"), ("listening", "speaking"), ("listening", "thinking")],
+)
+async def test_reset_away_timer_preserves_active_turns(
+    user_state: UserState, agent_state: AgentState
+) -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        await session.start(MyAgent())
+        session._update_user_state(user_state)
+        session._update_agent_state(agent_state)
+
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == user_state
+        assert session.agent_state == agent_state
+
+        session._update_user_state("listening")
+        session._update_agent_state("listening")
+        await asyncio.sleep(4.0)
+        assert session.user_state == "away"
+
+
+async def test_reset_away_timer_is_noop_when_disabled() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=None
+    ) as session:
+        await session.start(MyAgent())
+        session.reset_away_timer()
+        await asyncio.sleep(30.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+
+async def test_reset_away_timer_is_noop_outside_session_lifetime() -> None:
+    async with AgentSession(
+        vad=None, turn_handling={"turn_detection": None}, user_away_timeout=3.0
+    ) as session:
+        session.reset_away_timer()
+        assert session._user_away_timer is None
+
+        await session.start(MyAgent())
+        timer = session._user_away_timer
+        session.shutdown()
+        session.reset_away_timer()
+        assert session._user_away_timer is timer
+
+        await session.aclose()
+        session.reset_away_timer()
+        await asyncio.sleep(4.0)
+        assert session.user_state == "listening"
+        assert session._user_away_timer is None
+
+
 async def test_final_transcript_resets_away_timer_when_not_speaking() -> None:
     session = create_session(FakeActions(), extra_kwargs={"user_away_timeout": 15.0})
     try:
@@ -2077,6 +2184,26 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preemptive_generation, expected",
+    [
+        # bool form: the legacy on/off flag
+        (True, {"enabled": True, "preemptive_tts": False}),
+        (False, {"enabled": False, "preemptive_tts": False}),
+        # dict form: an options mapping, documented on the same kwarg (#7343)
+        ({"enabled": False}, {"enabled": False, "preemptive_tts": False}),
+        ({"enabled": True, "preemptive_tts": True}, {"enabled": True, "preemptive_tts": True}),
+    ],
+)
+async def test_deprecated_preemptive_generation_kwarg(
+    preemptive_generation: bool | dict, expected: dict
+) -> None:
+    session = AgentSession(preemptive_generation=preemptive_generation)
+    opts = session.options.preemptive_generation
+    assert {k: opts[k] for k in expected} == expected
+    assert isinstance(opts["enabled"], bool)
 
 
 @pytest.mark.parametrize(

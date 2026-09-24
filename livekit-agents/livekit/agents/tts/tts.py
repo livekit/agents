@@ -19,7 +19,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..telemetry import trace_types, tracer, utils as telemetry_utils
+from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     USERDATA_TIMED_TRANSCRIPT,
@@ -391,11 +391,7 @@ class ChunkedStream(ABC):
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -592,11 +588,7 @@ class SynthesizeStream(ABC):
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
-                    try:
-                        await self._run(output_emitter)
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
+                    await self._run(output_emitter)
 
                 output_emitter.end_input()
                 # wait for all audio frames to be pushed & propagate errors
@@ -908,6 +900,7 @@ class AudioEmitter:
 
         self._write_ch = aio.Chan[
             bytes
+            | rtc.AudioFrame
             | AudioEmitter._FlushSegment
             | AudioEmitter._StartSegment
             | AudioEmitter._EndSegment
@@ -982,6 +975,17 @@ class AudioEmitter:
             return
 
         self._write_ch.send_nowait(data)
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        """Forward an already-framed chunk as-is, skipping the progressive re-chunking of
+        :meth:`push`. For adapters wrapping a TTS whose emitter already framed the audio."""
+        if not self._started:
+            raise RuntimeError("AudioEmitter isn't started")
+
+        if self._write_ch.closed:
+            return
+
+        self._write_ch.send_nowait(frame)
 
     def push_timed_transcript(self, delta_text: TimedString | list[TimedString]) -> None:
         if not self._started:
@@ -1272,7 +1276,9 @@ class AudioEmitter:
                         )
 
                 if self._is_raw_pcm:
-                    if isinstance(data, bytes):
+                    if isinstance(data, rtc.AudioFrame):
+                        _emit_frame(data)
+                    elif isinstance(data, bytes):
                         if audio_byte_stream is None:
                             audio_byte_stream = audio.AudioByteStream(
                                 sample_rate=self._sample_rate,
@@ -1285,22 +1291,30 @@ class AudioEmitter:
 
                         for f in audio_byte_stream.push(data):
                             _emit_frame(f)
-                    elif audio_byte_stream:
-                        if isinstance(data, AudioEmitter._FlushSegment):
+                    elif isinstance(data, AudioEmitter._FlushSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
-                            _flush_frame()
-                            audio_byte_stream.clear()  # reset progressive for next burst
+                            # More bytes can follow this flush. Keep any partial PCM sample.
+                            audio_byte_stream.reset_progressive()
+                        _flush_frame()
 
-                        elif isinstance(data, AudioEmitter._EndSegment):
+                    elif isinstance(data, AudioEmitter._EndSegment):
+                        if audio_byte_stream:
                             for f in audio_byte_stream.flush():
                                 _emit_frame(f)
+                            if audio_byte_stream.buffered_duration > 0:
+                                logger.warning(
+                                    "incomplete PCM sample at end of segment, "
+                                    "discarding trailing bytes",
+                                    extra={"tts": self._label, "request_id": self._request_id},
+                                )
 
-                            _emit_frame(is_final=True)
-                            dump_segment()
-                            segment_ctx = audio_byte_stream = last_frame = None
-                        else:
-                            logger.warning("unknown data type: %s", type(data))
+                        _emit_frame(is_final=True)
+                        dump_segment()
+                        segment_ctx = audio_byte_stream = last_frame = None
+                    else:
+                        logger.warning("unknown data type: %s", type(data))
                 else:
                     if isinstance(data, bytes):
                         if not audio_decoder:

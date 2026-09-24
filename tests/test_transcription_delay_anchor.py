@@ -28,6 +28,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import stt
+from livekit.agents.voice import audio_recognition
 from livekit.agents.voice.audio_recognition import (
     AudioRecognition,
     _compute_end_of_turn_metrics,
@@ -113,7 +114,9 @@ def _preflight_transcript(end_time: float) -> stt.SpeechEvent:
 
 
 @both_modes
-async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) -> None:
+async def test_vad_anchor_survives_a_transcript_without_timestamps(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The reported regression: with the (default) VAD anchor discarded, a
     provider that sends no timestamps anchors the turn at transcript arrival and
     transcription_delay reports ~0 instead of the actual STT latency.
@@ -122,6 +125,8 @@ async def test_vad_anchor_survives_a_transcript_without_timestamps(mode: str) ->
     prefer, so the estimate would be nothing but ``now``.
     """
     now = time.time()
+    # the transcript is stamped with the same clock the anchor was derived from
+    monkeypatch.setattr(audio_recognition.time, "time", lambda: now)
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode=mode)
     vad_anchor = now - 0.6  # VAD end-of-speech, 0.6s of transcription latency ago
     ar._last_speaking_time = vad_anchor
