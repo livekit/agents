@@ -1,3 +1,3 @@
-from .llm import LLM
+from .llm import LLM, AccessPrograms
 
-__all__ = ["LLM"]
+__all__ = ["AccessPrograms", "LLM"]

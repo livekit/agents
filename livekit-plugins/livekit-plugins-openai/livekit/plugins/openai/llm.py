@@ -61,6 +61,7 @@ lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "fast"]
 
 
 @dataclass
@@ -76,7 +77,7 @@ class _LLMOptions:
     store: NotGivenOr[bool]
     metadata: NotGivenOr[dict[str, str]]
     max_completion_tokens: NotGivenOr[int]
-    service_tier: NotGivenOr[str]
+    service_tier: NotGivenOr[ServiceTier | str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
     prompt_cache_retention: NotGivenOr[PromptCacheRetention]
@@ -105,7 +106,7 @@ class LLM(llm.LLM):
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
         max_retries: NotGivenOr[int] = NOT_GIVEN,
-        service_tier: NotGivenOr[str] = NOT_GIVEN,
+        service_tier: NotGivenOr[ServiceTier | str] = NOT_GIVEN,
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,

@@ -71,6 +71,7 @@ _FATAL_ERROR_CODES = frozenset(
 )
 
 Role = Literal["user", "assistant"]
+GPTLiveModels = Literal["gpt-live-1"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
@@ -135,7 +136,7 @@ class _Speech:
 
 @dataclass
 class _LiveOptions:
-    model: str
+    model: GPTLiveModels | str
     voice: str | dict[str, Any]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
@@ -154,7 +155,7 @@ class GPTLiveModel(llm.DuplexModel):
     def __init__(
         self,
         *,
-        model: str = DEFAULT_MODEL,
+        model: GPTLiveModels | str = DEFAULT_MODEL,
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,

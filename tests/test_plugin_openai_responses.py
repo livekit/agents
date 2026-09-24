@@ -105,6 +105,46 @@ async def test_reasoning_object_serialized_without_null_fields() -> None:
     assert None not in sent["reasoning"].values()
 
 
+async def test_access_programs_sent_over_websocket() -> None:
+    model = ResponsesLLM(
+        model="gpt-5.6-cyber",
+        api_key="test-key",
+        access_programs={"cyber": "daybreak_red"},
+    )
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+    stream = model.chat(chat_ctx=chat_ctx)
+
+    assert stream._extra_kwargs["access_programs"] == {"cyber": "daybreak_red"}
+    await stream.aclose()
+    await model.aclose()
+
+
+async def test_access_programs_sent_as_http_extra_body() -> None:
+    client = MagicMock()
+    client._base_url = httpx.URL("https://api.openai.com/v1")
+    client.responses.create = AsyncMock(return_value=_ReplayHTTPStream([]))
+    model = ResponsesLLM(
+        model="gpt-5.6-cyber",
+        client=client,
+        use_websocket=False,
+        access_programs={"cyber": "daybreak_blue"},
+    )
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    try:
+        async with model.chat(chat_ctx=chat_ctx) as stream:
+            async for _ in stream:
+                pass
+        assert client.responses.create.await_args.kwargs["extra_body"] == {
+            "access_programs": {"cyber": "daybreak_blue"}
+        }
+        assert "access_programs" not in client.responses.create.await_args.kwargs
+    finally:
+        await model.aclose()
+
+
 async def test_incomplete_response_is_a_terminal_websocket_event() -> None:
     """`response.incomplete` ends a request just like completed/failed/error.
 
