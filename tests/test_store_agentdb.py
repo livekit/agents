@@ -9,6 +9,7 @@ Start one with ``mage devLocal`` in agent-db, then::
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 
@@ -121,3 +122,15 @@ async def test_the_service_manages_databases(agentdb: store.AgentDB) -> None:
     await agentdb.service.delete_database(created.database_id)
     with pytest.raises(Exception, match="not_found|not found"):
         await agentdb.service.get_database(created.database_id)
+
+
+async def test_a_request_over_the_frame_limit_fails(agentdb: store.AgentDB) -> None:
+    conversation = await agentdb.create_conversation(ttl_seconds=3600)
+    executor = conversation.executor
+    await executor.exec("CREATE TABLE t (body BLOB)")
+    with pytest.raises(store.StoreError, match="frame"):
+        await asyncio.wait_for(
+            executor.exec("INSERT INTO t VALUES (?)", b"x" * agentdb_client.MAX_FRAME_BYTES), 10
+        )
+    assert [r async for r in executor.query("SELECT COUNT(*) AS n FROM t")] == [{"n": 0}]
+    await agentdb.service.delete_database(conversation.database_id)

@@ -244,10 +244,14 @@ class AgentDBExecutor:
                 await self._ws.send_bytes(ping.SerializeToString())
 
     async def _send(self, message: Message) -> None:
+        data = message.SerializeToString()
+        if len(data) > MAX_FRAME_BYTES:
+            # the server drops the socket on an oversized frame, so resending it never ends
+            raise StoreError("frame_too_large", f"a {len(data)} byte request is over the limit")
         if self._ws is None or self._ws.closed:
             raise _Disconnected
         try:
-            await self._ws.send_bytes(message.SerializeToString())
+            await self._ws.send_bytes(data)
         except (ConnectionError, RuntimeError, aiohttp.ClientError) as e:
             raise _Disconnected from e
 
@@ -274,18 +278,16 @@ class AgentDBExecutor:
                 await self._send(build(request_id))
                 reply = await queue.get()
             except _Disconnected:
-                await asyncio.sleep(RETRY_DELAY)
-                continue
+                reply = None
             finally:
                 self._pending.pop(request_id, None)
-            if reply is None:
-                continue
-            if reply.WhichOneof("message") == "error":
-                if reply.error.code in RETRYABLE_CODES and time.monotonic() < retry_until:
-                    await asyncio.sleep(RETRY_DELAY)
-                    continue
+            if reply is not None and reply.WhichOneof("message") != "error":
+                return reply
+            if reply is not None and reply.error.code not in RETRYABLE_CODES:
                 raise StoreError(reply.error.code, reply.error.message)
-            return reply
+            if time.monotonic() > retry_until:
+                raise StoreError("unavailable", "agent-db did not answer within the budget")
+            await asyncio.sleep(RETRY_DELAY)
 
     async def exec(self, sql: str, *params: Value) -> ExecResult:
         reply = await self._call(
@@ -343,6 +345,10 @@ class AgentDBExecutor:
                 if yielded:
                     raise StoreError(
                         "unavailable", "the connection dropped in the middle of a query"
+                    ) from None
+                if time.monotonic() > retry_until:
+                    raise StoreError(
+                        "unavailable", "agent-db did not answer within the budget"
                     ) from None
                 await asyncio.sleep(RETRY_DELAY)
                 continue
