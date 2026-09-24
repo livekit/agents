@@ -1650,6 +1650,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         return self._activity.interrupt(force=force)
 
+    def reset_away_timer(self) -> None:
+        """Reset the user-away timeout after external user activity.
+
+        RoomIO calls this automatically for incoming DTMF from its linked participant.
+
+        If the user is ``"away"``, change their state to ``"listening"``.
+        Restart the full ``user_away_timeout`` when both user and agent are
+        listening. The countdown stays paused while tools are running or the
+        session is waiting for its participant.
+
+        Does nothing if away detection is disabled, the session has not started,
+        or the session is closing.
+        """
+        if not self._started or self._is_closing() or self._opts.user_away_timeout is None:
+            return
+
+        if self._user_state == "away":
+            self._update_user_state("listening")
+        elif self._user_state == "listening" and self._agent_state == "listening":
+            self._set_user_away_timer()
+
     @asynccontextmanager
     async def _claim_user_turn(self) -> AsyncIterator[None]:
         """Declare a programmatic user-driven turn.
@@ -1858,7 +1879,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
                 handoff_ctx = trace.set_span_in_context(handoff_span)
             under_handoff = (
-                tracer.use_span(handoff_span, end_on_exit=False)
+                tracer.use_span(
+                    handoff_span,
+                    end_on_exit=False,
+                    record_exception=False,
+                    set_status_on_exception=False,
+                )
                 if handoff_span is not None
                 else contextlib.nullcontext()
             )
@@ -2026,12 +2052,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # a tool in flight will speak when it lands; the window restarts then (#6883)
             return
 
-        if (
-            (room_io := self._room_io)
-            and room_io.subscribed_fut
-            and not room_io.subscribed_fut.done()
+        if (room_io := self._room_io) and (
+            room_io.linked_participant is None
+            or (room_io.subscribed_fut is not None and not room_io.subscribed_fut.done())
         ):
-            # skip the timer before user join the room
             return
 
         self._user_away_timer = self._loop.call_later(
@@ -2053,6 +2077,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             self._aec_warmup_timer = None
 
     def _on_room_io_participant_linked(self, participant: rtc.RemoteParticipant) -> None:
+        self.reset_away_timer()
+
         if (span := self._session_span) is not None and span.is_recording():
             span.add_event("participant_linked", trace_utils.participant_attributes(participant))
             if participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
