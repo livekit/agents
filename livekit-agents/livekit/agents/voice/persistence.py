@@ -170,14 +170,18 @@ class SessionPersistence:
                             call_id=task.call_id, name=task.name, arguments=task.arguments or "{}"
                         )
                     )
-                ctx.insert(
-                    llm.FunctionCallOutput(
-                        call_id=task.call_id,
-                        name=task.name,
-                        output=INTERRUPTED_OUTPUT,
-                        is_error=True,
+                if not any(
+                    item.type == "function_call_output" and item.call_id == task.call_id
+                    for item in ctx.items
+                ):
+                    ctx.insert(
+                        llm.FunctionCallOutput(
+                            call_id=task.call_id,
+                            name=task.name,
+                            output=INTERRUPTED_OUTPUT,
+                            is_error=True,
+                        )
                     )
-                )
 
         if stored.userdata_encoding is not None:
             userdata = stored.userdata
@@ -200,6 +204,12 @@ class SessionPersistence:
         )
         self._check_rebuild(current)
         self._sync()
+        # queued behind the items above: a crash before they land leaves the calls running,
+        # so the next owner tells the model again
+        for task in stored.interrupted:
+            self._state.task_ended(
+                task.call_id, status="interrupted", output=INTERRUPTED_OUTPUT, is_error=True
+            )
         self._listen()
         return current
 

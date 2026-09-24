@@ -96,7 +96,7 @@ class StoredSession:
     history: list[ChatItem]
     agents: dict[str, AgentRecord]
     interrupted: list[TaskRecord]
-    """Calls that were running when the previous owner stopped; now ``interrupted``."""
+    """Calls still ``running`` under a previous owner, which died before they ended."""
     created_at: float
 
 
@@ -265,23 +265,11 @@ class SessionState:
                     call_id=str(row["call_id"]),
                     name=str(row["name"]),
                     arguments=_text(row["arguments"]),
-                    status="interrupted",
+                    status="running",
                     started_at=float(row["started_at"]),  # type: ignore[arg-type]
                     origin=row["origin"],  # type: ignore[arg-type]
                 )
             )
-        if interrupted:
-            # the lease is ours now, so whatever is still running belonged to a worker that died
-            now = time.time()
-            await executor.exec(
-                "UPDATE tasks SET status = 'interrupted', ended_at = ?, output = ?, is_error = 1 "
-                "WHERE session_id = ? AND status = 'running'",
-                now,
-                INTERRUPTED_OUTPUT,
-                self._session_id,
-            )
-            for task in interrupted:
-                task.ended_at, task.output, task.is_error = now, INTERRUPTED_OUTPUT, True
 
         userdata, has_userdata = self._decode_userdata(session)
         return StoredSession(

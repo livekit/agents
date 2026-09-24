@@ -18,7 +18,7 @@ from livekit.agents import store
 from livekit.agents.llm import ChatMessage, FunctionCall
 from livekit.agents.store.executor import SQLiteExecutor, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
-from livekit.agents.store.session_state import INTERRUPTED_OUTPUT, AgentRecord
+from livekit.agents.store.session_state import AgentRecord
 
 pytestmark = pytest.mark.unit
 
@@ -209,7 +209,7 @@ class StoreSuite:
         await third.load()
         assert loop.time() - started < LEASE_TTL / 2
 
-    async def test_running_tasks_are_interrupted_on_load(
+    async def test_running_tasks_are_reported_on_load(
         self, conversation: store.Conversation
     ) -> None:
         state = conversation.session("s1")
@@ -219,7 +219,8 @@ class StoreSuite:
         await state.task_started("call_hung", name="rebook", arguments='{"flight": "NW812"}')
         await state.release()
 
-        stored = await conversation.session("s1").load()
+        resumed = conversation.session("s1")
+        stored = await resumed.load()
         assert stored is not None
         (task,) = stored.interrupted
         assert (task.call_id, task.name, task.arguments) == (
@@ -227,8 +228,11 @@ class StoreSuite:
             "rebook",
             '{"flight": "NW812"}',
         )
-        assert task.status == "interrupted" and task.is_error
-        assert task.output == INTERRUPTED_OUTPUT
+        # the row stays running until the new owner has told the model, then settles it
+        (row,) = await _rows(conversation, "SELECT status FROM tasks WHERE call_id = 'call_hung'")
+        assert row["status"] == "running"
+        resumed.task_ended("call_hung", status="interrupted", output="unknown", is_error=True)
+        await resumed.flush()
         rows = await _rows(
             conversation, "SELECT call_id, status, idempotency_key, origin FROM tasks ORDER BY 1"
         )

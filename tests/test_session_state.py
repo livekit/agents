@@ -190,6 +190,51 @@ async def test_a_call_running_at_a_crash_is_interrupted(
     assert task["status"] in ("interrupted", "done")
 
 
+async def test_a_crash_right_after_resuming_still_reports_the_interrupted_call(
+    conversation: store.Conversation,
+) -> None:
+    started, release = asyncio.Event(), asyncio.Event()
+
+    @function_tool
+    async def rebook(ctx: RunContext, flight: str) -> str:
+        """Rebook a flight."""
+        started.set()
+        await release.wait()
+        return "rebooked"
+
+    llm = _AnsweringLLM(
+        fake_responses=[
+            _says("rebook NW812", "", calls=[_tool_call("rebook", "call_1", '{"flight": "NW812"}')])
+        ],
+        fallbacks=["done"],
+    )
+    crashed = _session(llm)
+    await crashed.start(
+        agent=Agent(instructions="fare desk", tools=[rebook]), state=conversation.session("s1")
+    )
+    crashed.generate_reply(user_input="rebook NW812")
+    await asyncio.wait_for(started.wait(), 5)
+
+    # the second worker dies before anything it queued lands
+    state = conversation.session("s1")
+    state._enqueue = lambda sql, params: None  # type: ignore[method-assign]
+    dead = _session(llm)
+    await dead.start(agent=Agent(instructions="fare desk", tools=[rebook]), state=state)
+
+    third = _session(llm)
+    await third.start(
+        agent=Agent(instructions="fare desk", tools=[rebook]), state=conversation.session("s1")
+    )
+    outputs = [i for i in third.history.items if i.type == "function_call_output"]
+    assert [(o.call_id, o.output) for o in outputs] == [("call_1", INTERRUPTED_OUTPUT)]
+    await third.aclose()
+    (task,) = await _rows(conversation, "SELECT status FROM tasks")
+    assert task["status"] == "interrupted"
+    release.set()
+    await dead.aclose()
+    await crashed.aclose()
+
+
 async def test_a_stale_worker_still_lets_the_conversation_go(
     conversation: store.Conversation,
 ) -> None:
