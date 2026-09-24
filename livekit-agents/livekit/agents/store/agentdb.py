@@ -42,6 +42,8 @@ MAX_FRAME_BYTES = 16 << 20
 RETRYABLE_CODES = frozenset({"unavailable"})
 """Codes the server uses for a database that is moving, where the request is sent again."""
 RETRY_DELAY = 0.1
+RECONNECT_BUDGET = 60.0
+"""How long a request waits across reconnects, and the supervisor redials, before failing."""
 
 
 class _Disconnected(Exception):
@@ -81,15 +83,11 @@ class AgentDBExecutor:
         ws_url: str,
         database_id: str,
         token: Callable[[], str],
-        http_session: aiohttp.ClientSession | None = None,
-        reconnect_budget: float = 60.0,
     ) -> None:
         self._ws_url = ws_url
         self._database_id = database_id
         self._token = token
-        self._http_session = http_session
-        self._owns_http_session = http_session is None
-        self._reconnect_budget = reconnect_budget
+        self._http_session: aiohttp.ClientSession | None = None
 
         self._ids = itertools.count(1)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
@@ -169,7 +167,7 @@ class AgentDBExecutor:
                 "agent-db socket dropped, reconnecting",
                 extra={"database_id": self._database_id, "close_code": ws.close_code},
             )
-            deadline = time.monotonic() + self._reconnect_budget
+            deadline = time.monotonic() + RECONNECT_BUDGET
             backoff = 0.1
             while not self._closed:
                 try:
@@ -224,7 +222,7 @@ class AgentDBExecutor:
 
     async def _call(self, build: Callable[[int], Message]) -> pb.AgentDB.Wire.ServerMessage:
         """Send one request and wait for its one reply, again across reconnects."""
-        retry_until = time.monotonic() + self._reconnect_budget
+        retry_until = time.monotonic() + RECONNECT_BUDGET
         while True:
             await self._wait_ready()
             request_id = next(self._ids)
@@ -259,7 +257,7 @@ class AgentDBExecutor:
 
     async def query(self, sql: str, *params: Value) -> AsyncIterator[Row]:
         statement = _statement(sql, params)
-        retry_until = time.monotonic() + self._reconnect_budget
+        retry_until = time.monotonic() + RECONNECT_BUDGET
         yielded = False
         while True:
             await self._wait_ready()
@@ -355,7 +353,7 @@ class AgentDBExecutor:
             await self._ws.close()
         if self._supervisor is not None and self._supervisor is not asyncio.current_task():
             await aio.cancel_and_wait(self._supervisor)
-        if self._owns_http_session and self._http_session is not None:
+        if self._http_session is not None:
             await self._http_session.close()
 
 
