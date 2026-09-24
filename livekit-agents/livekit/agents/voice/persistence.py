@@ -188,17 +188,6 @@ class SessionPersistence:
                     extra={"agent_id": newer.id, "resumed_agent_id": member.id},
                 )
                 break
-        except BaseException:
-            # nothing restored outlives a rehydrate that failed, so no frame runs without a session
-            for activity in self._restored:
-                activity._restored_tools.clear()
-                with contextlib.suppress(Exception):
-                    await activity.aclose()
-                activity.agent._activity = None
-                if isinstance(activity.agent, AgentTask):
-                    activity.agent._rehydrated = False
-            self._restored.clear()
-            raise
         finally:
             _REHYDRATING.reset(token)
         current, own = chain[kept - 1]
@@ -245,6 +234,20 @@ class SessionPersistence:
         )
         self._check_rebuild(current)
         return current, current.id == stored.current_agent_id
+
+    async def discard(self) -> None:
+        """Close what the rehydrate restored and let the rows go, for a start that failed."""
+        # nothing restored outlives the start, so no frame runs without a session
+        for activity in self._restored:
+            activity._restored_tools.clear()
+            with contextlib.suppress(Exception):
+                await activity.aclose()
+            activity.agent._activity = None
+            if isinstance(activity.agent, AgentTask):
+                activity.agent._rehydrated = False
+        self._restored.clear()
+        with contextlib.suppress(Exception):
+            await self._persisted.release()
 
     def resume_durable_tools(self) -> None:
         """Run the durable tools rehydrate restored, once the session has started."""

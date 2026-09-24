@@ -387,3 +387,29 @@ async def test_a_tool_that_finished_beside_one_awaiting_a_task_is_saved(
     }
     assert CALLS == ["note"]
     await resumed.aclose()
+
+
+async def test_a_start_that_fails_after_the_rehydrate_lets_everything_go(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = AgentSession(llm=_llm("change"))
+    await first.start(agent=ConfirmingDesk(), persist=database.session("s1"))
+    first.generate_reply(user_input="go")
+    await _until(lambda: isinstance(first.current_agent, Confirm))
+    await first.aclose()
+
+    async def failing(self: AgentSession, *args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("the room did not connect")
+
+    monkeypatch.setattr(AgentSession, "_update_activity_task", failing)
+    desk = ConfirmingDesk()
+    resumed = AgentSession(llm=_llm("change"))
+    with pytest.raises(RuntimeError, match="did not connect"):
+        await resumed.start(agent=desk, persist=database.session("s1"))
+    await asyncio.sleep(0.05)
+
+    assert desk._activity is None
+    assert not any(t.get_name() == "AgentActivity.resume_durable_tool" for t in asyncio.all_tasks())
+    # the handle is let go, so the session reads as closed and its connection is shut
+    (row,) = await database.rows("SELECT closed_at FROM sessions")
+    assert row["closed_at"] is not None
