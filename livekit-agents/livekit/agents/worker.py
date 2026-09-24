@@ -357,6 +357,9 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._worker_token = os.environ.get("LIVEKIT_WORKER_TOKEN") or ""  # hosted agents
         self._deployment = os.environ.get("LIVEKIT_AGENT_DEPLOYMENT") or ""  # hosted agents
+        if self._deployment == "production":
+            # the server keys worker pools by the raw value; production is ""
+            self._deployment = ""
 
         self._host = host
         self._port = port

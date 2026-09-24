@@ -246,3 +246,18 @@ class TestAgentNameFromToml:
                 config = _run_and_capture(server, proto.CliArgs(log_level="INFO"))
             assert config["agent_name"] == "decorator-agent"
             assert any("livekit.toml" in r.getMessage() for r in caplog.records)
+
+
+class TestDeployment:
+    def test_env_deployment(self):
+        with patch.dict(os.environ, {"LIVEKIT_AGENT_DEPLOYMENT": "dev-1234"}):
+            assert AgentServer()._deployment == "dev-1234"
+
+    def test_production_normalized_to_empty(self):
+        with patch.dict(os.environ, {"LIVEKIT_AGENT_DEPLOYMENT": "production"}):
+            assert AgentServer()._deployment == ""
+
+    def test_empty_when_unset(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVEKIT_AGENT_DEPLOYMENT", None)
+            assert AgentServer()._deployment == ""
