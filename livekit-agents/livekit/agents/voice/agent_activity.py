@@ -1314,7 +1314,20 @@ class AgentActivity(RecognitionHooks):
         initial_instructions = (
             instr.render(modality="audio") if isinstance(instr, Instructions) else instr
         )
-        if initial_instructions or initial_tools:
+        # the configuration the context already records, folded from its updates in order
+        recorded_instructions: str | None = None
+        recorded_tools: set[str] = set()
+        for item in self._agent._chat_ctx.items:
+            if item.type == "agent_config_update":
+                if item.instructions is not None:
+                    recorded_instructions = item.instructions
+                recorded_tools |= set(item.tools_added or ())
+                recorded_tools -= set(item.tools_removed or ())
+        unchanged = recorded_instructions == initial_instructions and recorded_tools == set(
+            initial_tools or ()
+        )
+        # a restart with the same configuration, such as a resumed session, records nothing
+        if (initial_instructions or initial_tools) and not unchanged:
             initial_config = llm.AgentConfigUpdate(
                 instructions=initial_instructions,
                 tools_added=initial_tools,
