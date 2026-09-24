@@ -232,6 +232,9 @@ class PersistedSession:
     ) -> None:
         """Write the items the history and each agent's context gained, changed or lost since
         the last save, and the mutable part, in one batch. ``None`` userdata leaves it as is."""
+        if any(agent.agent_id == SESSION_OWNER for agent in agents):
+            # the history's rows are stored under that owner, and an agent's would mix with them
+            raise ValueError(f"the agent id {SESSION_OWNER!r} is reserved in a persisted session")
         statements: list[Statement] = []
         saved: dict[str, ChatContext] = {}
         owners = [(SESSION_OWNER, history)] + [(a.agent_id, a.chat_items) for a in agents]
