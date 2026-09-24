@@ -1756,3 +1756,29 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+async def test_preflight_events_are_incremental():
+    """`utterance` carries only the words since the previous preflight."""
+    from livekit.agents.utils.aio.channel import ChanEmpty
+
+    stream = _make_stream_for_unit_test()
+    stream._process_stream_event(
+        {
+            "type": "Turn",
+            "transcript": "hello",
+            "utterance": "hello",
+            "end_of_turn": False,
+            "words": [{"text": "hello", "start": 0, "end": 480, "confidence": 0.9}],
+        }
+    )
+    events = []
+    while True:
+        try:
+            events.append(stream._event_ch.recv_nowait())
+        except ChanEmpty:
+            break
+
+    kinds = {ev.type: ev.incremental for ev in events}
+    assert kinds[SpeechEventType.PREFLIGHT_TRANSCRIPT] is True
+    assert kinds[SpeechEventType.INTERIM_TRANSCRIPT] is False

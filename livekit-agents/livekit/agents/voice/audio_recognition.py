@@ -242,15 +242,14 @@ class _STTPipeline:
 
 
 def _pending_segment_text(
-    interim: str, preflight: str, preflight_is_latest: bool, incremental_preflight: bool
+    interim: str, preflight: str, preflight_is_latest: bool, preflight_incremental: bool
 ) -> str:
     """Buffered text of the open segment, for an empty final to fall back on.
 
-    The latest of the last interim and preflight, unless the STT's preflights are increments of
-    the segment (see ``STTCapabilities.incremental_preflight``): then the interim, which carries
-    the whole segment.
+    The latest of the last interim and preflight, unless the preflight is only an increment of
+    the segment (``SpeechEvent.incremental``): then the interim, which carries the whole segment.
     """
-    if preflight_is_latest and not incremental_preflight:
+    if preflight_is_latest and not preflight_incremental:
         return preflight
     return interim
 
@@ -269,7 +268,6 @@ class AudioRecognition:
         stt_model: str | None = None,
         stt_provider: str | None = None,
         stt_aligned_transcript: bool = False,
-        stt_incremental_preflight: bool = False,
     ) -> None:
         self._session = session
         self._hooks = hooks
@@ -285,7 +283,6 @@ class AudioRecognition:
         self._stt_model = stt_model
         self._stt_provider = stt_provider
         self._stt_aligned_transcript = stt_aligned_transcript
-        self._stt_incremental_preflight = stt_incremental_preflight
         self._turn_detection_mode = turn_detection if isinstance(turn_detection, str) else None
         self._vad_base_turn_detection = self._turn_detection_mode in ("vad", None)
         self._user_turn_committed = False  # true if user turn ended but EOU task not done
@@ -306,10 +303,11 @@ class AudioRecognition:
         self._final_transcript_confidence: list[float] = []
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
-        # latest interim and preflight texts of the open segment, and which arrived last, for an
-        # empty final to fall back on
+        # latest interim and preflight texts of the open segment, which arrived last, and whether
+        # the preflight was incremental, for an empty final to fall back on
         self._last_interim_text = ""
         self._last_preflight_text = ""
+        self._last_preflight_incremental = False
         self._preflight_is_latest = False
         # used for STTs that support preflight mode, so it could start preemptive generation earlier
         self._audio_preflight_transcript = ""
@@ -852,7 +850,6 @@ class AudioRecognition:
         model: NotGivenOr[str | None] = NOT_GIVEN,
         provider: NotGivenOr[str | None] = NOT_GIVEN,
         aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
-        incremental_preflight: NotGivenOr[bool] = NOT_GIVEN,
         reset_context: bool = False,
     ) -> None:
         self._stt = stt
@@ -864,11 +861,11 @@ class AudioRecognition:
             self._stt_provider = provider
         if is_given(aligned_transcript):
             self._stt_aligned_transcript = aligned_transcript
-        if is_given(incremental_preflight):
-            self._stt_incremental_preflight = incremental_preflight
         # speaker metadata belongs to the old stream; drop it so a new STT starts clean
         if reset_context:
             self.stt_context = None
+        # the replaced STT's segment ends with its stream
+        self._reset_pending_segment()
         if pipeline is None and stt is not None:
             pipeline = _STTPipeline(stt, is_closing=self._session._is_closing)
         elif pipeline is not None and stt is not None:
@@ -1244,7 +1241,7 @@ class AudioRecognition:
                         self._last_interim_text,
                         self._last_preflight_text,
                         self._preflight_is_latest,
-                        self._stt_incremental_preflight,
+                        self._last_preflight_incremental,
                     )
                 )
             ):
@@ -1353,6 +1350,7 @@ class AudioRecognition:
             self._audio_preflight_transcript = (self._audio_transcript + " " + transcript).lstrip()
             self._audio_interim_transcript = transcript
             self._last_preflight_text = transcript
+            self._last_preflight_incremental = ev.incremental
             self._preflight_is_latest = True
 
             if use_stt_speaking_time:
@@ -2008,6 +2006,7 @@ class AudioRecognition:
     def _reset_pending_segment(self) -> None:
         self._last_interim_text = ""
         self._last_preflight_text = ""
+        self._last_preflight_incremental = False
         self._preflight_is_latest = False
 
     def _reset_transcription_timeout(self) -> None:

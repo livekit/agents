@@ -299,7 +299,6 @@ class STT(stt.STT):
                 diarization=is_given(speaker_labels) and speaker_labels is True,
                 keyterms=True,
                 chat_context=carryover_enabled,
-                incremental_preflight=True,
             ),
         )
         if model == "u3-pro":
@@ -1059,6 +1058,7 @@ class SpeechStream(stt.SpeechStream):
 
             final_event = stt.SpeechEvent(
                 type=stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+                incremental=True,
                 alternatives=[
                     stt.SpeechData(
                         language=language,

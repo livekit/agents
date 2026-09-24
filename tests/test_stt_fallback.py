@@ -391,11 +391,3 @@ async def test_stt_stream_recovery_failure_doesnt_block_main() -> None:
     assert events[0].alternatives[0].text == "hello world"
 
     await fallback.aclose()
-
-
-def test_fallback_reports_incremental_preflights_when_any_instance_does() -> None:
-    whole = FakeSTT()
-    chunked = FakeSTT(incremental_preflight=True)
-    adapter = FallbackAdapter([whole, chunked], vad=FakeVAD())
-    assert adapter.capabilities.incremental_preflight is True
-    assert FallbackAdapter([whole], vad=FakeVAD()).capabilities.incremental_preflight is False

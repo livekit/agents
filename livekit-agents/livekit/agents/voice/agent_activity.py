@@ -883,9 +883,6 @@ class AgentActivity(RecognitionHooks):
                     aligned_transcript=bool(resolved_stt.capabilities.aligned_transcript)
                     if isinstance(resolved_stt, stt.STT)
                     else False,
-                    incremental_preflight=resolved_stt.capabilities.incremental_preflight
-                    if isinstance(resolved_stt, stt.STT)
-                    else False,
                     reset_context=True,
                 )
             self._session._keyterm_detector.swap_stt(resolved_stt)
@@ -1320,9 +1317,6 @@ class AgentActivity(RecognitionHooks):
             stt_model=self.stt.model if self.stt else None,
             stt_provider=self.stt.provider if self.stt else None,
             stt_aligned_transcript=bool(self.stt.capabilities.aligned_transcript)
-            if self.stt
-            else False,
-            stt_incremental_preflight=self.stt.capabilities.incremental_preflight
             if self.stt
             else False,
         )

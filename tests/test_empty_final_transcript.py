@@ -86,11 +86,12 @@ async def test_empty_final_promotes_cumulative_interim_over_chunked_preflight() 
         stt_delay=STT_DELAY,
         final_transcript="",
         preflight_transcript="up.",
+        preflight_incremental=True,
     )
     actions.add_llm("Great, pickup it is.")
     actions.add_tts(1.0)
 
-    session = create_session(actions, extra_kwargs=OPT_IN, stt_incremental_preflight=True)
+    session = create_session(actions, extra_kwargs=OPT_IN)
     items: list[ConversationItemAddedEvent] = []
     session.on("conversation_item_added", items.append)
 
@@ -226,12 +227,6 @@ def test_pending_segment_text(
     assert _pending_segment_text(interim, preflight, preflight_is_latest, incremental) == expected
 
 
-def test_assemblyai_reports_incremental_preflights() -> None:
-    from livekit.plugins import assemblyai
-
-    assert assemblyai.STT(api_key="test-key").capabilities.incremental_preflight is True
-
-
 def test_unpromoted_empty_final_closes_the_segment() -> None:
     # VAD has not heard speech, so the empty final is not promoted; its interim must not
     # survive into a later segment
@@ -262,3 +257,18 @@ def test_unpromoted_empty_final_closes_the_segment() -> None:
 
     assert ar._last_interim_text == ""
     ar._hooks.on_final_transcript.assert_not_called()
+
+
+def test_stt_swap_closes_the_segment() -> None:
+    # the replaced STT's interim must not be committed by the new STT's empty final
+    ar = AudioRecognition.__new__(AudioRecognition)
+    ar._stt_pipeline = None
+    ar._stt_consumer_atask = None
+    ar._last_interim_text = "yes"
+    ar._last_preflight_text = "yes"
+    ar._last_preflight_incremental = False
+    ar._preflight_is_latest = True
+
+    ar._update_stt(None, reset_context=True)
+
+    assert (ar._last_interim_text, ar._last_preflight_text) == ("", "")

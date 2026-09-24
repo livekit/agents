@@ -126,6 +126,9 @@ class SpeechEvent:
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
+    incremental: bool = False
+    """For PREFLIGHT_TRANSCRIPT: the transcript carries only the words since the previous
+    preflight instead of the whole segment so far."""
 
 
 @dataclass
@@ -140,9 +143,6 @@ class STTCapabilities:
     """Whether the STT supports keyterm prompting"""
     chat_context: bool = False
     """Whether the STT can natively consume conversation context (see STT._push_conversation_item)"""
-    incremental_preflight: bool = False
-    """Whether a preflight transcript carries only the words since the previous preflight instead
-    of the whole segment so far"""
 
 
 class STTError(BaseModel):
