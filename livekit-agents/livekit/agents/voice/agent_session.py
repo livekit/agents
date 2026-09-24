@@ -1374,22 +1374,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             try:
                 # durable tools stop at their next boundary, where the save captures them
                 chain = durable_chain(self._agent)
-                for scheduler in chain.values():
-                    if scheduler is not None:
-                        await scheduler.pause()
-                        scheduler.close()
+                schedulers = [scheduler for scheduler in chain.values() if scheduler is not None]
+                try:
+                    try:
+                        for scheduler in schedulers:
+                            await scheduler.pause()
+                    finally:
+                        # a close cut short while an effect is in flight loses that tool only
+                        for scheduler in schedulers:
+                            scheduler.close()
 
-                if self._persistence is not None and isinstance(self._agent, AgentTask):
-                    # tearing down hands each task back to its parent, so the save comes first
-                    await self._persistence.aclose(chain)
-                    self._persistence = None
+                    if self._persistence is not None and isinstance(self._agent, AgentTask):
+                        # tearing down hands each task back to its parent, so the save comes first
+                        await self._persistence.aclose(chain)
+                        self._persistence = None
 
-                await self._teardown_activity(reason=reason, drain=drain)
-
-                if self._persistence is not None:
-                    # after the drain, so the last turn is in the save
-                    await self._persistence.aclose(chain)
-                    self._persistence = None
+                    await self._teardown_activity(reason=reason, drain=drain)
+                finally:
+                    if self._persistence is not None:
+                        # after the drain, so the last turn is in the save, and even when the
+                        # close failed or was cut short
+                        await asyncio.shield(self._persistence.aclose(chain))
+                        self._persistence = None
 
                 # the agent's own delegate goes with its activity; this one is the session's
                 if self._delegate is not None:

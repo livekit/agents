@@ -14,6 +14,7 @@ from livekit.agents import (
     Agent,
     AgentSession,
     AgentTask,
+    CloseReason,
     EffectCall,
     RunContext,
     function_tool,
@@ -413,3 +414,28 @@ async def test_a_start_that_fails_after_the_rehydrate_lets_everything_go(
     # the handle is let go, so the session reads as closed and its connection is shut
     (row,) = await database.rows("SELECT closed_at FROM sessions")
     assert row["closed_at"] is not None
+
+
+async def test_a_close_cut_short_in_an_effect_still_saves(
+    database: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    session = AgentSession(llm=_llm("book", '{"flight": "NW812"}'))
+    await session.start(agent=Desk(), persist=database.session("s1"))
+    session.generate_reply(user_input="go")
+    await _until(lambda: "hold" in CALLS)
+    # the hold never returns, so the job's guard on the close is what ends it
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(session.aclose(), 0.2)
+    assert any("so it is lost" in r.getMessage() for r in caplog.records)
+    # what the guard cut short, the process exit would end
+    await session._teardown_activity(reason=CloseReason.JOB_SHUTDOWN, drain=False)
+
+    (row,) = await database.rows("SELECT closed_at FROM sessions")
+    assert row["closed_at"] is not None
+    messages = await database.rows(
+        "SELECT item FROM chat_items WHERE owner = 'session' AND item LIKE '%\"go\"%'"
+    )
+    assert messages
+    (agent,) = await database.rows("SELECT durable_state FROM agents WHERE agent_id = 'desk'")
+    assert agent["durable_state"] == b""
