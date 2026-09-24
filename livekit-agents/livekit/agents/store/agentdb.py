@@ -19,9 +19,10 @@ from typing import TYPE_CHECKING, TypeVar
 import aiohttp
 import jwt
 
+from livekit.protocol import agentdb as pb
+
 from ..log import logger
 from ..utils import aio
-from ._proto import livekit_agentdb_pb2 as pb
 from .executor import ExecResult, Executor, Row, Statement, StoreError, Value
 from .session import LEASE_TTL, _Store
 
