@@ -1048,10 +1048,12 @@ class SpeechStream(stt.SpeechStream):
                         extra={"lk.pii.event": data},
                     )
                     code = data.get("code", -1)
+                    # the gateway sends retryable false for a refusal it repeats on
+                    # every attempt; without the field, retrying is ours to decide
                     raise APIError(
                         "LiveKit Inference STT returned an error",
                         body={"code": code},
-                        retryable=not input_ended.is_set(),
+                        retryable=not input_ended.is_set() and data.get("retryable") is not False,
                     )
 
         ws: aiohttp.ClientWebSocketResponse | None = None
