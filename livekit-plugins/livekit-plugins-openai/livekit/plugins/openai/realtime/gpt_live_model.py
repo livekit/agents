@@ -33,6 +33,7 @@ from openai.types.shared_params import Reasoning
 from ..log import logger
 from ..tools import OpenAITool
 from . import gpt_live_types as types
+from ._gpt_live_telemetry import ProtocolTrace
 
 SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
@@ -438,6 +439,7 @@ class GPTLiveSession(
         # response_pending is set once an output is sent and cleared by the response.create
         self._backend_running_responses: dict[str | None, set[str]] = {}
         self._backend_traces: dict[str | None, _BackendResponseTrace] = {}
+        self._protocol_trace = ProtocolTrace()
         self._backend_open_calls: set[str] = set()
         self._backend_response_pending = False
 
@@ -712,23 +714,28 @@ class GPTLiveSession(
             for response_trace in self._backend_traces.values():
                 response_trace.finish("connection_closed")
             self._backend_traces.clear()
+            self._protocol_trace.close()
             await ws_conn.close()
 
     async def _ws_send(
         self, ws_conn: aiohttp.ClientWebSocketResponse, event: types.ClientEvent | dict[str, Any]
     ) -> None:
         raw = event if isinstance(event, dict) else event.model_dump(exclude_none=True)
+        self._protocol_trace.record("queued", raw)
         self.emit("openai_client_event_queued", raw)
         if lk_oai_debug and raw.get("type") != "session.input_audio.append":
             logger.debug("gpt-live client event", extra={"lk.pii.event": raw})
         try:
             await ws_conn.send_str(json.dumps(raw))
+            self._protocol_trace.record("sent", raw)
         except (aiohttp.ClientError, ConnectionError, asyncio.TimeoutError):
+            self._protocol_trace.record("send_failed", raw)
             raise APIConnectionError("GPT-Live send failed") from None
 
     # inbound events
 
     def _handle_event(self, event: dict[str, Any]) -> None:
+        self._protocol_trace.record("received", event)
         etype = event.get("type", "")
         if lk_oai_debug and etype != "session.output_audio.delta":
             logger.debug("gpt-live server event", extra={"lk.pii.event": event})

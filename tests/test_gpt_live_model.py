@@ -15,7 +15,7 @@ import aiohttp
 import numpy as np
 import pytest
 from aiohttp import web
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -1755,6 +1755,10 @@ def backend_span_exporter() -> Iterator[InMemorySpanExporter]:
         provider.shutdown()
 
 
+def _backend_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
+    return [span for span in exporter.get_finished_spans() if span.name == "llm_request"]
+
+
 def _backend_message(text: str) -> dict[str, Any]:
     return {
         "type": "response.output_item.done",
@@ -1813,7 +1817,7 @@ async def test_backend_trace_records_text_without_tools(
         finally:
             await session.aclose()
             await model.aclose()
-    spans = [s for s in backend_span_exporter.get_finished_spans() if s.name == "llm_request"]
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
     assert len(spans) == 1
     span = spans[0]
     assert span.parent is not None and span.parent.span_id == parent.get_span_context().span_id
@@ -1866,7 +1870,7 @@ async def test_backend_traces_separate_delegations_and_continuations(
         await model.aclose()
     spans = {
         s.attributes["gen_ai.response.id"]: dict(s.attributes)
-        for s in backend_span_exporter.get_finished_spans()
+        for s in _backend_spans(backend_span_exporter)
         if s.attributes
     }
     assert set(spans) == {"r1", "r2", "r3"}
@@ -1914,7 +1918,7 @@ async def test_unfinished_backend_traces_end_once(
     finally:
         await session.aclose()
         await model.aclose()
-    spans = backend_span_exporter.get_finished_spans()
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
     assert len(spans) == 1
     assert spans[0].status.is_ok is False
     assert spans[0].attributes["error.type"] == (
@@ -1966,7 +1970,7 @@ async def test_backend_trace_ends_on_disconnect_before_reconnect(
     finally:
         await session.aclose()
         await model.aclose()
-    spans = backend_span_exporter.get_finished_spans()
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
     assert len(spans) == 2
     assert spans[0].attributes["gen_ai.response.id"] == "r1"
     assert spans[0].attributes["error.type"] == "connection_closed"
@@ -2000,7 +2004,7 @@ async def test_backend_trace_ignores_unfinished_items(
     finally:
         await session.aclose()
         await model.aclose()
-    attrs = backend_span_exporter.get_finished_spans()[0].attributes
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
     assert "gen_ai.output.messages" not in attrs
     assert attrs["gen_ai.response.finish_reasons"] == (
         "stop" if ending == "response.completed" else "error",
@@ -2030,7 +2034,7 @@ async def test_backend_trace_ignores_malformed_calls(
     finally:
         await session.aclose()
         await model.aclose()
-    attrs = backend_span_exporter.get_finished_spans()[0].attributes
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
     assert "gen_ai.output.messages" not in attrs
     assert attrs["gen_ai.response.finish_reasons"] == ("stop",)
 
@@ -2051,7 +2055,7 @@ async def test_backend_trace_deduplicates_calls_like_dispatch(
     finally:
         await session.aclose()
         await model.aclose()
-    attrs = backend_span_exporter.get_finished_spans()[0].attributes
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
     output = json.loads(str(attrs["gen_ai.output.messages"]))
     assert len(output) == 1
     assert len(output[0]["parts"]) == 1
@@ -2082,10 +2086,155 @@ async def test_backend_trace_preserves_valid_edge_case_output(
     finally:
         await session.aclose()
         await model.aclose()
-    attrs = backend_span_exporter.get_finished_spans()[0].attributes
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
     assert json.loads(str(attrs["gen_ai.output.messages"])) == [
         {"role": "assistant", "parts": [expected]}
     ]
     assert attrs["gen_ai.response.finish_reasons"] == (
         "stop" if kind == "refusal" else "tool_call",
     )
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("capture", [True, False])
+async def test_protocol_timeline_correlates_submission_receipts_and_speech(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, capture: bool
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    gen_ai.set_capture_content(capture)
+    model = GPTLiveModel(api_key="sk-test")
+    with tracer.start_as_current_span("session") as parent:
+        session = model.session()
+        try:
+            await session._update_session()
+            await session._session_started_fut
+            session._handle_event(
+                {
+                    "type": "session.delegation.created",
+                    "offset_ms": 50,
+                    "delegation": {"id": "d1", "target": "responses"},
+                }
+            )
+            session._handle_event(
+                _response_event("d1", {"type": "response.created", "response": {"id": "resp1"}})
+            )
+            session._handle_event(_response_event("d1", _backend_message("PRIVATE answer")))
+            session._handle_event(_response_event("d1", _completed("resp1")))
+            # Observe the actual transport path, not a synthetic call to the observer.
+            await session._ws_send(
+                ws,
+                {
+                    "type": "response.item.create",
+                    "event_id": "result1",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": "tool1",
+                        "output": "PRIVATE result",
+                    },
+                },
+            )  # type: ignore[arg-type]
+            await session._ws_send(ws, {"type": "response.create", "event_id": "continue1"})  # type: ignore[arg-type]
+            await session._ws_send(
+                ws,
+                {
+                    "type": "session.commentary.append",
+                    "event_id": "context1",
+                    "delegation_id": "d1",
+                    "content": "PRIVATE context",
+                },
+            )  # type: ignore[arg-type]
+            session._handle_event(
+                {
+                    "type": "session.commentary.appended",
+                    "client_event_id": "context1",
+                    "offset_ms": 100,
+                }
+            )
+            session._handle_event(
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": "PRIVATE speech",
+                    "start_ms": 120,
+                    "end_ms": 150,
+                }
+            )
+        finally:
+            await session.aclose()
+            await model.aclose()
+    spans = [s for s in backend_span_exporter.get_finished_spans() if s.name == "gpt_live.protocol"]
+    assert spans
+    assert all(s.context.trace_id == parent.get_span_context().trace_id for s in spans)
+    events = [dict(s.attributes or {}) for s in spans]
+    commands = [e for e in events if e.get("lk.openai.event_id") == "result1"]
+    assert [e["lk.openai.direction"] for e in commands] == ["queued", "sent"]
+    assert all(e["lk.openai.item.call_id"] == "tool1" for e in commands)
+    assert commands[0]["lk.session_id"] == "live_test"
+    assert any(e.get("lk.openai.client_event_id") == "context1" for e in events)
+    assert any(e.get("lk.openai.delegation.id") == "d1" for e in events)
+    assert any(e.get("lk.openai.response.id") == "resp1" for e in events)
+    assert ("PRIVATE" in str(events)) is capture
+    assert "PRIVATE" not in str([pii.filter_attributes(e) for e in events])
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("event_type", ["response.create", "session.input_audio.append"])
+async def test_protocol_send_failure_never_claims_sent(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, event_type: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        failing_ws = SimpleNamespace(send_str=AsyncMock(side_effect=ConnectionError("PRIVATE")))
+        with pytest.raises(APIConnectionError):
+            await session._ws_send(
+                failing_ws, {"type": event_type, "event_id": "failed-command", "delta": "PRIVATE"}
+            )  # type: ignore[arg-type]
+    finally:
+        await session.aclose()
+        await model.aclose()
+    events = [
+        s.attributes
+        for s in backend_span_exporter.get_finished_spans()
+        if s.name == "gpt_live.protocol"
+        and s.attributes.get("lk.openai.event_id") == "failed-command"
+    ]
+    assert [e["lk.openai.direction"] for e in events] == (
+        ["send_failed"] if event_type == "session.input_audio.append" else ["queued", "send_failed"]
+    )
+    assert "PRIVATE" not in str(events)
+
+
+@pytest.mark.no_concurrent
+def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
+) -> None:
+    from livekit.plugins.openai.realtime._gpt_live_telemetry import ProtocolTrace
+
+    timeline = ProtocolTrace()
+    monkeypatch.setattr(
+        "livekit.plugins.openai.realtime._gpt_live_telemetry.time.time_ns", lambda: 100
+    )
+    timeline.record("received", {"type": "session.started", "session": {"id": "live_audio"}})
+    for _ in range(1000):
+        timeline.record(
+            "received", {"type": "session.output_audio.delta", "delta": "PRIVATE AUDIO"}
+        )
+    timeline.record(
+        "received",
+        _response_event(
+            "d1", {"type": "response.reasoning_text.delta", "delta": "PRIVATE REASONING"}
+        ),
+    )
+    timeline.close()
+    timeline.close()
+    spans = backend_span_exporter.get_finished_spans()
+    audio = [s for s in spans if s.name == "gpt_live.audio_activity"]
+    assert len(audio) == 1
+    assert audio[0].attributes["lk.openai.frame_count"] == 1000
+    assert audio[0].attributes["lk.session_id"] == "live_audio"
+    assert "PRIVATE" not in str([s.attributes for s in spans])
