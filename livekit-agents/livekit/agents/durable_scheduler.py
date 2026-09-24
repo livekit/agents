@@ -61,6 +61,10 @@ class EffectException(Exception):
             exc.__traceback__
         )
 
+    def __reduce__(self) -> tuple[type, tuple[str, str]]:
+        # the snapshot after a failed effect holds one, and __init__ takes both fields back
+        return (self.__class__, (self.exc_type, self.exc_message))
+
     def __str__(self) -> str:
         if self.exc_message:
             return f"{self.exc_type}: {self.exc_message}"

@@ -18,6 +18,7 @@ from livekit.agents import (
     function_tool,
     store,
 )
+from livekit.agents.durable_scheduler import EffectException
 from livekit.agents.llm import ToolFlag
 from livekit.durable import registry
 
@@ -321,5 +322,42 @@ async def test_a_durable_tool_that_finished_beside_a_running_one_survives(
         "call_2": "charged, held",
     }
     assert CALLS.count(("lookup", "call_1:0")) == 1
+    await resumed.aclose()
+    await crashed.aclose()
+
+
+async def refuse(key: str) -> str:
+    CALLS.append(("refuse", key))
+    raise ValueError("the seat is taken")
+
+
+class RetryingDesk(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You book seats.")
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def book(self, ctx: RunContext) -> str:
+        """Book a seat."""
+        try:
+            await EffectCall(refuse(ctx.idempotency_key))
+        except EffectException as e:
+            refused = str(e)
+        held = await EffectCall(hold(ctx.idempotency_key))
+        return f"{refused}, {held}"
+
+
+async def test_a_frame_written_after_a_failed_effect_resumes(database: Database) -> None:
+    crashed = AgentSession(llm=_llm("book"))
+    await crashed.start(agent=RetryingDesk(), persist=database.session("s1"))
+    crashed.generate_reply(user_input="go")
+    await _until(lambda: ("hold", "call_1:1") in CALLS)
+
+    RELEASED.set()
+    resumed = AgentSession(llm=_llm("book"))
+    await resumed.start(agent=RetryingDesk(), persist=database.session("s1"))
+    await _until(lambda: _outputs(resumed))
+    (output,) = _outputs(resumed)
+    assert output.output == "ValueError: the seat is taken, held"
+    assert CALLS.count(("refuse", "call_1:0")) == 1
     await resumed.aclose()
     await crashed.aclose()
