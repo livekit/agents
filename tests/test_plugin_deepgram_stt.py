@@ -441,3 +441,141 @@ async def test_heartbeat_timeout_reconnects_without_spinning():
         assert sockets[0].receives == 1
     finally:
         await stream.aclose()
+
+
+class _ScriptedSocket(_LiveWS):
+    """Delivers the given Deepgram messages, then parks like _LiveWS."""
+
+    def __init__(self, messages: list[dict]) -> None:
+        super().__init__()
+        self._messages = [json.dumps(message) for message in messages]
+
+    async def receive(self):
+        import aiohttp
+
+        if self._messages:
+            return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, self._messages.pop(0), None)
+        return await super().receive()
+
+
+def _results(transcript: str, *, is_final: bool, speech_final: bool = False) -> dict:
+    words = [
+        {"word": word, "punctuated_word": word, "start": i * 0.2, "end": i * 0.2 + 0.2}
+        for i, word in enumerate(transcript.split())
+    ]
+    alternative = {"transcript": transcript, "confidence": 0.9 if words else 0.0, "words": words}
+    return {
+        "type": "Results",
+        "is_final": is_final,
+        "speech_final": speech_final,
+        "channel": {"alternatives": [alternative]},
+        "metadata": {"request_id": "request-id"},
+    }
+
+
+def _scripted_connect(*scripts: list[dict]):
+    """One script of messages per connection."""
+    sockets = [_ScriptedSocket(script) for script in scripts]
+
+    async def _connect():
+        return sockets.pop(0) if sockets else _LiveWS()
+
+    return _connect
+
+
+async def _transcripts_until_done(stream, on_event=None):
+    """The stream's events up to a final transcript of `done`, where every script ends."""
+    from livekit.agents import stt
+
+    seen: list[tuple[stt.SpeechEventType, str | None]] = []
+
+    async def _collect() -> None:
+        async for ev in stream:
+            if on_event is not None:
+                on_event(ev)
+            if ev.type == stt.SpeechEventType.RECOGNITION_USAGE:
+                continue
+            text = ev.alternatives[0].text if ev.alternatives else None
+            seen.append((ev.type, text))
+            if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT and text == "done":
+                return
+
+    await asyncio.wait_for(_collect(), timeout=5)
+    return seen
+
+
+async def test_empty_final_that_retracts_an_interim_is_passed_on():
+    from livekit.agents.stt import SpeechEventType as T
+
+    stream = _v1_stream(
+        connect=_scripted_connect(
+            [
+                _results("Yep.", is_final=False),
+                _results("", is_final=True, speech_final=True),
+                _results("done", is_final=True),
+            ]
+        )
+    )
+    try:
+        assert await _transcripts_until_done(stream) == [
+            (T.START_OF_SPEECH, None),
+            (T.INTERIM_TRANSCRIPT, "Yep."),
+            (T.FINAL_TRANSCRIPT, ""),
+            (T.END_OF_SPEECH, None),
+            (T.START_OF_SPEECH, None),
+            (T.FINAL_TRANSCRIPT, "done"),
+        ]
+    finally:
+        await stream.aclose()
+
+
+async def test_empty_final_with_no_interim_to_retract_is_dropped():
+    from livekit.agents.stt import SpeechEventType as T
+
+    stream = _v1_stream(
+        connect=_scripted_connect(
+            [
+                # silence, then a segment whose final already carried the words
+                _results("", is_final=True),
+                _results("Yep.", is_final=False),
+                _results("Yep.", is_final=True),
+                _results("", is_final=True, speech_final=True),
+                _results("done", is_final=True),
+            ]
+        )
+    )
+    try:
+        assert await _transcripts_until_done(stream) == [
+            (T.START_OF_SPEECH, None),
+            (T.INTERIM_TRANSCRIPT, "Yep."),
+            (T.FINAL_TRANSCRIPT, "Yep."),
+            (T.END_OF_SPEECH, None),
+            (T.START_OF_SPEECH, None),
+            (T.FINAL_TRANSCRIPT, "done"),
+        ]
+    finally:
+        await stream.aclose()
+
+
+async def test_empty_final_does_not_retract_the_previous_connections_interim():
+    from livekit.agents.stt import SpeechEventType as T
+
+    stream = _v1_stream(
+        connect=_scripted_connect(
+            [_results("Yep.", is_final=False)],
+            [_results("", is_final=True), _results("done", is_final=True)],
+        )
+    )
+
+    def _reconnect_after_interim(ev) -> None:
+        if ev.type == T.INTERIM_TRANSCRIPT:
+            stream.update_options(punctuate=False)
+
+    try:
+        assert await _transcripts_until_done(stream, _reconnect_after_interim) == [
+            (T.START_OF_SPEECH, None),
+            (T.INTERIM_TRANSCRIPT, "Yep."),
+            (T.FINAL_TRANSCRIPT, "done"),
+        ]
+    finally:
+        await stream.aclose()

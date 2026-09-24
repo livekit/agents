@@ -487,6 +487,8 @@ class SpeechStream(stt.SpeechStream):
         )
 
         self._request_id = ""
+        # the connection sent an interim with words that no final has closed yet
+        self._interim_pending = False
         self._reconnect_event = asyncio.Event()
         # keyterms set while the user is speaking; applied at END_OF_SPEECH (latest wins)
         self._pending_keyterm: list[str] | None = None
@@ -701,6 +703,7 @@ class SpeechStream(stt.SpeechStream):
             conn_start_time = 0.0
             try:
                 ws = await self._connect_ws()
+                self._interim_pending = False
                 conn_start_time = time.perf_counter()
                 tasks = [
                     asyncio.create_task(send_task(ws)),
@@ -886,6 +889,21 @@ class SpeechStream(stt.SpeechStream):
                         alternatives=alts,
                     )
                     self._event_ch.send_nowait(interim_event)
+            elif is_final_transcript and self._interim_pending and len(alts) > 0:
+                # The segment closed without the words its interim carried. Passing the
+                # empty final on lets the session decide whether to keep them
+                # (commit_interim_on_empty_final).
+                final_event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    request_id=request_id,
+                    alternatives=alts,
+                )
+                self._event_ch.send_nowait(final_event)
+
+            if is_final_transcript:
+                self._interim_pending = False
+            elif len(alts) > 0 and alts[0].text:
+                self._interim_pending = True
 
             # if we receive an endpoint, only end the speech if
             # we either had a SpeechStarted event or we have a seen
