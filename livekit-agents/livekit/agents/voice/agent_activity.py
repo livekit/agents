@@ -1628,6 +1628,7 @@ class AgentActivity(RecognitionHooks):
             await self._tool_executor.drain()
 
             await self._close_session()
+            await self._release_agent_tts()
             await asyncio.gather(*self._interrupt_background_speeches(force=False))
 
             if self._scheduling_atask is not None:
@@ -1647,6 +1648,20 @@ class AgentActivity(RecognitionHooks):
             await self._tool_executor.aclose()
 
             self._agent._activity = None
+
+    async def _release_agent_tts(self) -> None:
+        # an agent-owned TTS is done once its activity closes, unless the next activity
+        # synthesizes with the same instance. The session TTS outlives every activity.
+        agent_tts = self.tts
+        if not isinstance(agent_tts, tts.TTS) or agent_tts is self._session.tts:
+            return
+        next_activity = self._session._next_activity
+        if next_activity is not None and next_activity.tts is agent_tts:
+            return
+        try:
+            await agent_tts.release_idle_connections()
+        except Exception:
+            logger.warning("failed to release agent TTS connections", exc_info=True)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
