@@ -253,6 +253,15 @@ class TTS(
         """Pre-warm connection to the TTS service"""
         pass
 
+    async def release_idle_connections(self) -> None:
+        """Close idle pooled provider connections without closing the TTS.
+
+        Called once an agent-owned TTS is no longer used by any activity. Only idle
+        connections are closed: an in-flight synthesis, including one from another session
+        sharing the instance, keeps its connection. The TTS reconnects on the next synthesis.
+        """
+        pass
+
     async def aclose(self) -> None: ...
 
     async def __aenter__(self) -> TTS:

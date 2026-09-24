@@ -243,6 +243,22 @@ class ConnectionPool(Generic[T]):
         task = asyncio.create_task(_prewarm_impl())
         self._prewarm_task = weakref.ref(task)
 
+    async def release_idle(self) -> None:
+        """Close every idle connection and cancel a pending prewarm.
+
+        Checked-out connections stay with their holders and return to the pool as usual.
+        The pool stays usable and connects again on the next :meth:`get`.
+        """
+        if self._prewarm_task is not None:
+            task = self._prewarm_task()
+            if task:
+                await aio.gracefully_cancel(task)
+
+        async with self._connect_lock:
+            for conn in list(self._available):
+                self.remove(conn)
+            await self._drain_to_close()
+
     async def aclose(self) -> None:
         """Close all connections, draining any pending connection closures."""
         if self._prewarm_task is not None:
