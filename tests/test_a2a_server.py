@@ -522,8 +522,8 @@ async def test_a_dropped_context_rehydrates_on_the_next_request(
     rows = [
         row
         async for row in reopened.query(
-            "SELECT session_id, parent_session_id, lease_owner FROM sessions"
+            "SELECT session_id, parent_session_id, closed_at IS NOT NULL AS closed FROM sessions"
         )
     ]
-    assert rows == [{"session_id": "ctx-1", "parent_session_id": "voice", "lease_owner": None}]
+    assert rows == [{"session_id": "ctx-1", "parent_session_id": "voice", "closed": 1}]
     await reopened.aclose()

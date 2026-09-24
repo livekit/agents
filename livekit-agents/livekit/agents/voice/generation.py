@@ -1019,6 +1019,9 @@ async def _execute_tools_task(
                         # answers a report is bound by what the report asked for
                         output.reply_tool_choice = run_ctx._reply_tool_choice
                     except BaseException as e:
+                        if isinstance(e, asyncio.CancelledError) and run_ctx._durable:
+                            # a durable tool stopped at a boundary is answered when it resumes
+                            return
                         if isinstance(e, ToolError):
                             logger.warning(
                                 "ToolError while executing tool: %s",

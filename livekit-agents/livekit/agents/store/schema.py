@@ -21,8 +21,6 @@ MIGRATIONS: dict[int, list[str]] = {
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL,
             closed_at REAL,
-            lease_owner TEXT,
-            lease_expires_at REAL,
             extra TEXT
         )""",
         "CREATE INDEX sessions_parent ON sessions (parent_session_id, endpoint)",
@@ -42,11 +40,6 @@ MIGRATIONS: dict[int, list[str]] = {
             state TEXT,
             durable_state BLOB,
             PRIMARY KEY (session_id, agent_id)
-        )""",
-        # a stale owner's checkpoint writes held = 0 here, which aborts its whole batch
-        """CREATE TABLE _lease_check (
-            id INTEGER PRIMARY KEY,
-            held INTEGER NOT NULL CONSTRAINT lease_held CHECK (held = 1)
         )""",
     ],
 }

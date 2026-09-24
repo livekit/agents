@@ -367,7 +367,6 @@ class _ToolExecutor:
             speech_handle = run_ctx.speech_handle
             return await durable_scheduler.execute(
                 cast("Callable[[], Any]", fnc_callable),
-                key=run_ctx.function_call.call_id,
                 metadata=_DurableExecutionMetadata(
                     num_steps=speech_handle.num_steps,
                     function_call=run_ctx.function_call.model_dump_json(),

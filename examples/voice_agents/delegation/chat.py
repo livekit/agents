@@ -1,6 +1,7 @@
 """A text client for the fare desk: each line you type is a turn, over A2A, with no microphone.
 
-Run it against ``python expert.py dev``; the README's "Persistence" section has the crash drill.
+Run it against ``python expert.py dev``. Ending the input says goodbye, which closes the context
+and saves it; the README's "Persistence" section has the drill.
 """
 
 import argparse

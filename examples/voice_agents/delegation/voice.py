@@ -19,8 +19,9 @@ Dana Whitfield <dana@example.com> is a Gold member whose Tokyo flight tomorrow i
 the seat moves for nothing. Miguel Ortiz <ortiz@example.com> is on a BASIC fare, which
 cannot be changed or refunded at all. Priya Raman <raman@example.com> holds travel credit.
 
-With agent-db configured and CONVERSATION=DB_... set, the call persists: a second console run
-on the same conversation resumes it, and its delegations reach the same desk context.
+With agent-db configured and CONVERSATION=DB_... set, the call is saved when it ends: a second
+console run on the same conversation resumes it, and its delegations reach the same desk
+context.
 """
 
 import json
@@ -64,7 +65,7 @@ LOCAL_KEY = (
     else {}
 )
 DB = (
-    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), lease_ttl=10, **LOCAL_KEY)
+    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
     if AGENTDB_URL
     else None
 )
@@ -81,13 +82,9 @@ def _trace(call_id: str, arrow: str, text: str | None, limit: int = 90) -> None:
     logger.info(f"{_short(call_id, 12):<12} {arrow} {_short(text, limit)}")
 
 
-# stands in for a CRM write, which takes the key so a repeat of the same call does nothing
-_IDENTIFIED: dict[str, str] = {}
-
-
-async def identify(email: str, *, key: str) -> None:
-    if _IDENTIFIED.setdefault(key, email) is email:
-        _trace(key.split(":")[0], "·", f"caller identified as {email} ({key})")
+async def identify(email: str, *, call_id: str) -> None:
+    """Stands in for a CRM write."""
+    _trace(call_id, "·", f"caller identified as {email}")
 
 
 class Receptionist(Agent):
@@ -133,13 +130,12 @@ class Receptionist(Agent):
             change: only when the caller wants a different address from the one already
                 confirmed in this call.
         """
-        # durable: a call restarted mid-address resumes the task where the caller left off.
+        # durable: a call closed mid-address resumes the task where the caller left off.
         # ctx.foreground() cannot wrap it, since a context manager in the frame does not pickle
         result = await EffectCall(GetEmailTask(chat_ctx=self.chat_ctx))
 
         email = result.email_address.strip().lower()
-        # an effect in flight at a crash runs again, so it is keyed to run once per call
-        await EffectCall(identify(email, key=ctx.idempotency_key))
+        await EffectCall(identify(email, call_id=ctx.function_call.call_id))
         # said back into the history, so the next delegation carries it to the desk
         return f"confirmed with the caller: {email}"
 

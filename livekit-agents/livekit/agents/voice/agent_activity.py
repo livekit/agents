@@ -1062,7 +1062,7 @@ class AgentActivity(RecognitionHooks):
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
-                self._durable_scheduler = DurableScheduler(on_boundary=self._on_durable_boundary)
+                self._durable_scheduler = DurableScheduler()
 
                 @tracer.start_as_current_span(
                     "on_enter",
@@ -1092,16 +1092,12 @@ class AgentActivity(RecognitionHooks):
             finally:
                 start_span.end()
 
-    async def _on_durable_boundary(self) -> None:
-        if (persistence := self._session._persistence) is not None:
-            await persistence.durable_boundary(self._agent)
-
     async def _rehydrate(self, tasks: list[DurableTask]) -> list[str]:
         """Take the activity of an agent resumed with durable tools, which the session then
         resumes rather than starts, and restore them; returns the calls that did not restore."""
         self._started = True
         self._agent._activity = self
-        self._durable_scheduler = DurableScheduler(on_boundary=self._on_durable_boundary)
+        self._durable_scheduler = DurableScheduler()
         async with self._lock:
             await self._setup_toolsets()
 
@@ -1171,10 +1167,10 @@ class AgentActivity(RecognitionHooks):
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
             assert self._durable_scheduler is not None
-            val = await self._durable_scheduler.execute(task, key=fnc_call.call_id)
+            val = await self._durable_scheduler.execute(task)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
         except asyncio.CancelledError:
-            # the scheduler was closed with the session; the frame stays at its last boundary
+            # the scheduler stopped it at a boundary, where the save on close captured its frame
             return
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
@@ -1784,9 +1780,9 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
+            # kept once closed: the frames its tools stopped at are what the save on close writes
             if self._durable_scheduler is not None:
                 self._durable_scheduler.close()
-                self._durable_scheduler = None
 
             # session-scoped toolsets are closed by the session; this only closes
             # the agent's own toolsets + MCP — all of which outlive pause

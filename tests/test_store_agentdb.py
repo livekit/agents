@@ -12,7 +12,7 @@ import pytest
 from livekit.agents import store
 from livekit.agents.store import agentdb as agentdb_client
 
-from .test_store import LEASE_TTL, Database, StoreSuite
+from .test_store import Database, StoreSuite
 
 pytestmark = [
     pytest.mark.plugin("agentdb"),
@@ -28,7 +28,7 @@ async def agentdb() -> AsyncIterator[store.AgentDB]:
     local = "localhost" in os.environ.get("LIVEKIT_AGENTDB_URL", "")
     key = {"api_key": "devkey", "api_secret": "secret"} if local else {}
     ws_url = os.environ.get("LIVEKIT_AGENTDB_WS_URL")
-    agentdb = store.AgentDB(ws_url=ws_url, lease_ttl=LEASE_TTL, **key)
+    agentdb = store.AgentDB(ws_url=ws_url, **key)
     yield agentdb
     await agentdb.aclose()
 
@@ -91,7 +91,7 @@ async def test_reconnects_after_the_socket_is_severed(database: Database) -> Non
     assert executor._ws is not None
     await executor._ws.close()
     # issued while the reconnect is in flight: it waits for the new socket rather than failing
-    await persisted.checkpoint(current_agent_id="after", userdata=None, agents=[])
+    await persisted.save(current_agent_id="after", userdata=None, history=[], agents=[])
     rows = [r async for r in executor.query("SELECT current_agent_id FROM sessions")]
     assert rows == [{"current_agent_id": "after"}]
 

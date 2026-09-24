@@ -108,16 +108,6 @@ class RunContext(Generic[Userdata_T]):
         self._durable = True
 
     @property
-    def idempotency_key(self) -> str:
-        """The call id and the next ``EffectCall``'s ordinal, ``"call_abc:2"``, the same when a
-        resume runs that effect again. Raises outside a durable tool."""
-        from ..durable_scheduler import _CURRENT_TASK
-
-        if (task := _CURRENT_TASK.get(None)) is None:
-            raise RuntimeError("idempotency_key is only defined inside a durable tool")
-        return f"{self._function_call.call_id}:{task.effects}"
-
-    @property
     def session(self) -> AgentSession[Userdata_T]:
         return self._session
 

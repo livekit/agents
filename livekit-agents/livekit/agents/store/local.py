@@ -8,14 +8,14 @@ from pathlib import Path
 from ..utils import shortuuid
 from .executor import Executor, SQLiteExecutor, StoreError
 from .schema import migrate
-from .session import LEASE_TTL, _Store
+from .session import _Store
 
 
 class LocalStore(_Store):
     """Databases as SQLite files under ``directory``. No server needed."""
 
-    def __init__(self, directory: str | os.PathLike[str], *, lease_ttl: float = LEASE_TTL):
-        super().__init__(lease_ttl=lease_ttl)
+    def __init__(self, directory: str | os.PathLike[str]):
+        super().__init__()
         self._directory = Path(directory)
 
     async def _connect(self, database_id: str) -> Executor:

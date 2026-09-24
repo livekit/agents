@@ -33,6 +33,7 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..delegation.delegate import DelegationOptions, resolve_delegation_options
+from ..durable_scheduler import durable_chain
 from ..job import get_job_context
 from ..llm import (
     LLM,
@@ -825,6 +826,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """The rows this session persists to, as passed to ``start(persist=...)``; None if none."""
         return self._persistence.persisted if self._persistence is not None else None
 
+    async def save(self) -> None:
+        """Save the session to its rows now, as closing it does; a no-op without ``persist``."""
+        if self._persistence is not None:
+            await self._persistence.save()
+
     @property
     def keyterms(self) -> list[str]:
         """The effective keyterms (user-defined + auto-detected) currently applied to the STT."""
@@ -943,7 +949,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
             persist: This session's rows, from a store's ``session()``: a stored session is
-                restored before it starts, and either kind is kept current until it closes.
+                restored before it starts, and the session is saved to them when it closes.
         """
         async with self._lock:
             if self._started:
@@ -1351,18 +1357,23 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
-                # durable tools stop at their last boundary rather than fail with the close
-                agent = self._agent
-                while agent is not None:
-                    if agent._activity is not None and agent._activity._durable_scheduler:
-                        agent._activity._durable_scheduler.close()
-                    agent = agent._old_agent if isinstance(agent, AgentTask) else None
+                # durable tools stop at their next boundary, where the save captures them
+                chain = durable_chain(self._agent)
+                for scheduler in chain.values():
+                    if scheduler is not None:
+                        await scheduler.pause()
+                        scheduler.close()
+
+                if self._persistence is not None and isinstance(self._agent, AgentTask):
+                    # tearing down hands each task back to its parent, so the save comes first
+                    await self._persistence.aclose(chain)
+                    self._persistence = None
 
                 await self._teardown_activity(reason=reason, drain=drain)
 
                 if self._persistence is not None:
-                    # after the drain, so the last turn is in the checkpoint
-                    await self._persistence.aclose()
+                    # after the drain, so the last turn is in the save
+                    await self._persistence.aclose(chain)
                     self._persistence = None
 
                 # the agent's own delegate goes with its activity; this one is the session's

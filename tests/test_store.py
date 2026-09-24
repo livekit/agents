@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import pathlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,14 +11,12 @@ import aiohttp
 import pytest
 
 from livekit.agents import store
-from livekit.agents.llm import ChatMessage, FunctionCall
-from livekit.agents.store.executor import Executor, SQLiteExecutor, Value
+from livekit.agents.llm import ChatItem, ChatMessage, FunctionCall
+from livekit.agents.store.executor import ExecResult, Executor, SQLiteExecutor, Statement, Value
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
 from livekit.agents.store.session import AgentRecord, PersistedSession, _Database, _Store
 
 pytestmark = pytest.mark.unit
-
-LEASE_TTL = 0.5
 
 
 @dataclass
@@ -50,13 +47,7 @@ class StoreSuite:
         tables = await database.rows(
             "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
         )
-        assert {row["name"] for row in tables} == {
-            "_meta",
-            "_lease_check",
-            "sessions",
-            "chat_items",
-            "agents",
-        }
+        assert {row["name"] for row in tables} == {"_meta", "sessions", "chat_items", "agents"}
         version = await database.rows("SELECT value FROM _meta WHERE key = 'schema_version'")
         assert version == [{"value": str(SCHEMA_VERSION)}]
 
@@ -69,35 +60,55 @@ class StoreSuite:
         with pytest.raises(store.SchemaVersionError):
             await migrate(executor)
 
-    async def test_append_is_idempotent_on_item_id(self, database: Database) -> None:
+    async def test_a_save_writes_only_what_changed(
+        self, database: Database, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         persisted = database.session("s1")
         assert await persisted.load() is None
-        item = ChatMessage(role="user", content=["first"])
-        persisted.sync([item])
-        persisted.sync([item.model_copy(update={"content": ["first, corrected"]})])
-        persisted.sync([item], owner="agent_1")
-        await persisted.flush()
+        kept = ChatMessage(role="user", content=["first"])
+        dropped = ChatMessage(role="user", content=["second"])
+        await _save(persisted, [kept, dropped], agent_items=[kept])
 
+        executor = await database.executor()
+        batches: list[tuple[Statement, ...]] = []
+        batch = executor.batch
+
+        async def recording(*statements: Statement) -> list[ExecResult]:
+            batches.append(statements)
+            return await batch(*statements)
+
+        monkeypatch.setattr(executor, "batch", recording)
+        corrected = kept.model_copy(update={"content": ["first, corrected"]})
+        later = ChatMessage(role="assistant", content=["third"])
+        await _save(persisted, [corrected, later], agent_items=[kept])
+        await _save(persisted, [corrected, later], agent_items=[kept])
+
+        chat_writes = [
+            [(sql.split()[0], params[2]) for sql, params in statements if "chat_items" in sql]
+            for statements in batches
+        ]
+        # the first save deletes, rewrites and adds one item each; the second has nothing to add
+        assert sorted(chat_writes[0]) == sorted(
+            [("DELETE", dropped.id), ("INSERT", kept.id), ("INSERT", later.id)]
+        )
+        assert chat_writes[1] == []
         rows = await database.rows(
-            "SELECT owner, item_id, item FROM chat_items WHERE session_id = 's1' ORDER BY owner"
+            "SELECT owner, item_id, item FROM chat_items ORDER BY owner, created_at"
         )
         assert [(row["owner"], row["item_id"]) for row in rows] == [
-            ("agent_1", item.id),
-            ("session", item.id),
+            ("agent_1", kept.id),
+            ("session", kept.id),
+            ("session", later.id),
         ]
         assert "first, corrected" in rows[1]["item"]
 
-    async def test_a_lost_write_is_redone_at_the_next_sync(
+    async def test_a_failed_save_is_written_again_by_the_next(
         self, database: Database, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         persisted = database.session("s1")
         await persisted.load()
-        kept, dropped = (
-            ChatMessage(role="user", content=["a"]),
-            ChatMessage(role="user", content=["b"]),
-        )
-        persisted.sync([kept, dropped], owner="agent_1", prune=True)
-        await persisted.flush()
+        first = ChatMessage(role="user", content=["a"])
+        await _save(persisted, [first])
 
         executor = await database.executor()
         batch = executor.batch
@@ -106,35 +117,32 @@ class StoreSuite:
             raise store.StoreError("unavailable", "the database is moving")
 
         monkeypatch.setattr(executor, "batch", failing)
-        later = ChatMessage(role="user", content=["c"])
-        persisted.sync([kept, later], owner="agent_1", prune=True)
-        await persisted.flush()
+        second = ChatMessage(role="user", content=["b"])
+        with pytest.raises(store.StoreError):
+            await _save(persisted, [second])
         monkeypatch.setattr(executor, "batch", batch)
 
-        # the next sync rewrites what the lost batch held, the delete included
-        persisted.sync([kept, later], owner="agent_1", prune=True)
-        await persisted.flush()
-        rows = await database.rows("SELECT item_id FROM chat_items ORDER BY created_at")
-        assert [row["item_id"] for row in rows] == [kept.id, later.id]
+        await _save(persisted, [second])
+        rows = await database.rows("SELECT item_id FROM chat_items")
+        assert [row["item_id"] for row in rows] == [second.id]
 
-    async def test_checkpoint_rewrites_the_mutable_rows_only(self, database: Database) -> None:
+    async def test_a_save_rewrites_the_mutable_rows(self, database: Database) -> None:
         persisted = database.session("s1", endpoint="fare-desk")
         await persisted.load()
-        persisted.sync([ChatMessage(role="user", content=["hello"])])
-        await persisted.checkpoint(
+        await persisted.save(
             current_agent_id="agent_1",
             userdata={"step": 1},
+            history=[],
             agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={})],
         )
-        executor = await database.executor()
-        await executor.exec(
-            "UPDATE agents SET durable_state = ? WHERE agent_id = 'agent_1'", b"frame"
-        )
-        await persisted.checkpoint(
+        await persisted.save(
             current_agent_id="agent_2",
-            userdata={"step": 2},
+            userdata=None,
+            history=[],
             agents=[
-                AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={"n": 1}),
+                AgentRecord(
+                    agent_id="agent_1", cls="app:FareDesk", state={"n": 1}, durable_state=b"frame"
+                ),
                 AgentRecord(
                     agent_id="agent_2", cls="app:Rebook", parent_agent_id="agent_1", state={}
                 ),
@@ -143,20 +151,18 @@ class StoreSuite:
 
         (session,) = await database.rows("SELECT * FROM sessions")
         assert session["current_agent_id"] == "agent_2"
-        assert session["userdata"] == '{"step": 2}'
+        # none leaves the stored userdata as is
+        assert session["userdata"] == '{"step": 1}'
         assert session["endpoint"] == "fare-desk" and session["parent_session_id"] is None
         agents = await database.rows(
-            "SELECT agent_id, parent_agent_id, state, durable_state FROM agents"
+            "SELECT agent_id, parent_agent_id, state, durable_state FROM agents ORDER BY agent_id"
         )
-        assert sorted((a["agent_id"], a["parent_agent_id"], a["state"]) for a in agents) == [
-            ("agent_1", None, '{"n": 1}'),
-            ("agent_2", "agent_1", "{}"),
+        assert [tuple(agent.values()) for agent in agents] == [
+            ("agent_1", None, '{"n": 1}', b"frame"),
+            ("agent_2", "agent_1", "{}", b""),
         ]
-        # the checkpoint leaves what it does not own alone: durable frames and the history
-        assert {a["agent_id"]: a["durable_state"] for a in agents}["agent_1"] == b"frame"
-        assert len(await database.rows("SELECT * FROM chat_items")) == 1
 
-    async def test_rehydrate_returns_what_was_written(self, database: Database) -> None:
+    async def test_a_load_returns_what_was_saved(self, database: Database) -> None:
         persisted = database.session("s1")
         await persisted.load()
         greeting = ChatMessage(role="assistant", content=["hi, how can I help?"])
@@ -164,18 +170,26 @@ class StoreSuite:
         call = FunctionCall(
             call_id="call_1", name="lookup", arguments="{}", extra={"lk.task_id": "task-1"}
         )
-        for item in (greeting, question, call):
-            persisted.sync([item])
-        persisted.sync([question], owner="agent_1")
         userdata = {"airline": "Northwind", "bookings": [{"reference": "NW812"}]}
-        await persisted.checkpoint(
+        await persisted.save(
             current_agent_id="agent_1",
             userdata=userdata,
-            agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", state={"tier": "gold"})],
+            history=[greeting, question, call],
+            agents=[
+                AgentRecord(
+                    agent_id="agent_1",
+                    cls="app:FareDesk",
+                    state={"tier": "gold"},
+                    chat_items=[question],
+                )
+            ],
         )
         await persisted.release()
+        (row,) = await database.rows("SELECT closed_at FROM sessions")
+        assert row["closed_at"] is not None
 
-        stored = await database.session("s1").load()
+        again = database.session("s1")
+        stored = await again.load()
         assert stored is not None
         assert [item.id for item in stored.history] == [greeting.id, question.id, call.id]
         assert stored.history[2] == call
@@ -184,6 +198,8 @@ class StoreSuite:
         agent = stored.agents["agent_1"]
         assert (agent.cls, agent.state) == ("app:FareDesk", {"tier": "gold"})
         assert [item.id for item in agent.chat_items] == [question.id]
+        (row,) = await database.rows("SELECT closed_at FROM sessions")
+        assert row["closed_at"] is None
         # the delegate call names its expert task, so a dashboard joins through chat_items
         rows = await database.rows(
             "SELECT json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
@@ -191,36 +207,7 @@ class StoreSuite:
             call.id,
         )
         assert rows == [{"task_id": "task-1"}]
-
-    async def test_lease_fences_a_stale_owner(self, database: Database) -> None:
-        first = database.session("s1")
-        await first.load()
-        await first.checkpoint(current_agent_id="a", userdata=None, agents=[])
-
-        # the first owner stops renewing, so the second waits out its lease and takes over
-        second = database.session("s1")
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        assert await second.load() is not None
-        assert loop.time() - started >= LEASE_TTL / 2
-
-        with pytest.raises(store.LeaseLostError):
-            await first.checkpoint(
-                current_agent_id="stale",
-                userdata=None,
-                agents=[AgentRecord(agent_id="stale", cls="app:Stale")],
-            )
-        (session,) = await database.rows("SELECT current_agent_id, lease_owner FROM sessions")
-        assert session == {"current_agent_id": "a", "lease_owner": second._lease_owner}
-        assert await database.rows("SELECT * FROM agents WHERE agent_id = 'stale'") == []
-
-        await second.checkpoint(current_agent_id="b", userdata=None, agents=[])
-        await second.release()
-        # a released session is taken at once
-        third = database.session("s1")
-        started = loop.time()
-        await third.load()
-        assert loop.time() - started < LEASE_TTL / 2
+        await again.release()
 
     async def test_children_are_found_by_parent_and_endpoint(self, database: Database) -> None:
         caller = database.session("voice")
@@ -262,10 +249,21 @@ class StoreSuite:
         await again.release()
 
 
+async def _save(
+    persisted: PersistedSession, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()
+) -> None:
+    await persisted.save(
+        current_agent_id="agent_1",
+        userdata=None,
+        history=history,
+        agents=[AgentRecord(agent_id="agent_1", cls="app:FareDesk", chat_items=agent_items)],
+    )
+
+
 class TestLocalStore(StoreSuite):
     @pytest.fixture
     async def database(self, tmp_path: pathlib.Path) -> AsyncIterator[Database]:
-        local = store.LocalStore(tmp_path, lease_ttl=LEASE_TTL)
+        local = store.LocalStore(tmp_path)
         yield Database(local, await local.create_database())
         await local.aclose()
 
@@ -275,7 +273,7 @@ async def test_a_local_database_reopens_by_id(tmp_path: pathlib.Path) -> None:
     database_id = await local.create_database()
     persisted = local.session(database_id, "s1")
     await persisted.load()
-    persisted.sync([ChatMessage(role="user", content=["hi"])])
+    await _save(persisted, [ChatMessage(role="user", content=["hi"])])
     await persisted.release()
     await local.aclose()
 

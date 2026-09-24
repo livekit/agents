@@ -1,7 +1,7 @@
-"""Durable tools: tool coroutines whose frame is pickled, so a restarted worker resumes them.
+"""Durable tools: tool coroutines whose frame is pickled, so a loaded session resumes them.
 
 A tool is captured at a boundary: after an ``EffectCall`` resolved and before the next is sent,
-or while it awaits an ``AgentTask``.
+or while it awaits an ``AgentTask``. A save holds every tool at one, so no effect runs twice.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import contextvars
 import functools
 import pickle
 import reprlib
-from collections.abc import Awaitable, Callable, Collection, Generator
+from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -69,11 +69,7 @@ TaskResult_T = TypeVar("TaskResult_T")
 
 
 class EffectCall(Generic[TaskResult_T]):
-    """Run an awaitable outside the durable tool's frame, which keeps only its outcome.
-
-    An effect in flight at a crash runs again on resume, under the same
-    ``RunContext.idempotency_key``.
-    """
+    """Run an awaitable outside the durable tool's frame, which keeps only its outcome."""
 
     def __init__(self, aw: Awaitable[TaskResult_T] | AgentTask[TaskResult_T]) -> None:
         self._c: Awaitable[TaskResult_T] | AgentTask[TaskResult_T] | None = aw
@@ -134,17 +130,12 @@ class DurableInvalidStateError(RuntimeError):
     pass
 
 
-_CURRENT_TASK = contextvars.ContextVar["DurableTask"]("agents_durable_task")
-
-
 @dataclass
 class DurableTask:
     generator: Generator | bytes
     fnc_name: str
     next_value: EffectCall | None = None
     metadata: Any = None
-    effects: int = 0
-    """How many effects the tool has sent, which numbers the next one."""
     at_boundary: asyncio.Event = field(default_factory=asyncio.Event)
     snapshot: bytes = b""
     """The task pickled at its latest boundary."""
@@ -156,7 +147,7 @@ class DurableTask:
             if not isinstance(self.generator, bytes)
             else self.generator
         )
-        return (self.__class__, (g, self.fnc_name, self.next_value, self.metadata, self.effects))
+        return (self.__class__, (g, self.fnc_name, self.next_value, self.metadata))
 
     def unpickle_generator(self) -> Self:
         if isinstance(self.generator, bytes):
@@ -167,24 +158,17 @@ class DurableTask:
 class DurableScheduler:
     """Runs one activity's durable tools, and snapshots each at its boundaries."""
 
-    def __init__(
-        self,
-        *,
-        on_boundary: Callable[[], Awaitable[None]] | None = None,
-        loop: asyncio.AbstractEventLoop | None = None,
-    ) -> None:
+    def __init__(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
         self._loop = loop or asyncio.get_event_loop()
         self._tasks: dict[asyncio.Task[Any], DurableTask] = {}
-        # per key, a finished tool's last snapshot, kept until its output is recorded
-        self._finished: dict[str, bytes] = {}
-        self._on_boundary = on_boundary
+        # cleared to hold every tool at its next boundary
+        self._running = asyncio.Event()
+        self._running.set()
+        # the frames of the tools a close stopped at a boundary
+        self._stopped: list[bytes] = []
 
     def execute(
-        self,
-        fnc: Callable[[], DurableCoroutine] | DurableTask,
-        *,
-        key: str,
-        metadata: Any | None = None,
+        self, fnc: Callable[[], DurableCoroutine] | DurableTask, *, metadata: Any | None = None
     ) -> asyncio.Task[Any]:
         from .voice.agent import _pass_through_activity_task_info
 
@@ -201,52 +185,53 @@ class DurableScheduler:
 
             task = DurableTask(fnc().__await__(), fnc_name=fnc_name, metadata=metadata)
 
-        def on_done(_: asyncio.Task[Any]) -> None:
-            del self._tasks[exe_task]
-            if not exe_task.cancelled() and task.snapshot:
-                # resumed from here, the tool ends the same way without sending an effect again
-                self._finished[key] = task.snapshot
-
         exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
         self._tasks[exe_task] = task
-        exe_task.add_done_callback(on_done)
+        exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task, None))
         _pass_through_activity_task_info(exe_task)
         return exe_task
 
-    @property
-    def at_boundary(self) -> bool:
-        """Whether every durable tool can be captured now."""
-        return all(task.at_boundary.is_set() for task in self._tasks.values())
+    async def pause(self) -> None:
+        """Hold every tool at its next boundary, and return once each is at one."""
+        self._running.clear()
+        waiting = [task for task in self._tasks.values() if not task.at_boundary.is_set()]
+        if waiting:
+            logger.info(
+                "waiting for durable tools to finish their effect in flight",
+                extra={"functions": [task.fnc_name for task in waiting]},
+            )
+            await asyncio.gather(*(task.at_boundary.wait() for task in waiting))
 
-    def durable_state(self, answered: Collection[str]) -> bytes:
-        """Every running tool as of its latest boundary and every finished one whose key is not
-        ``answered``, or empty when there is none."""
-        for key in self._finished.keys() & set(answered):
-            del self._finished[key]
+    def resume(self) -> None:
+        self._running.set()
+
+    def durable_state(self) -> bytes:
+        """Every tool as of its latest boundary, pickled, or empty when there is none."""
         snapshots = [task.snapshot for task in self._tasks.values() if task.snapshot]
-        snapshots += self._finished.values()
+        snapshots += self._stopped
         return pickle.dumps(snapshots) if snapshots else b""
 
     def close(self) -> None:
-        for task in self._tasks.keys():
-            task.cancel()
+        """Stop every tool; one at a boundary keeps its frame, one mid-effect is lost."""
+        for exe_task, task in self._tasks.items():
+            if task.at_boundary.is_set() and task.snapshot:
+                self._stopped.append(task.snapshot)
+            else:
+                logger.warning(
+                    "a durable tool stopped before its effect returned, so it is lost",
+                    extra={"function": task.fnc_name},
+                )
+            exe_task.cancel()
+        self._tasks.clear()
 
-    async def _boundary(self, task: DurableTask) -> None:
-        # the frame is written before the next effect is sent, so a crash re-runs only that one
+    def _capture(self, task: DurableTask) -> None:
         task.at_boundary.set()
         try:
             task.snapshot = pickle.dumps(task)
         except Exception:
-            # the tool keeps running; a crash before its next boundary resumes an older one
+            # a tool that does not pickle here keeps running, and has no frame to save
+            task.snapshot = b""
             logger.exception("could not snapshot a durable tool", extra={"function": task.fnc_name})
-            return
-        if self._on_boundary is not None:
-            try:
-                await self._on_boundary()
-            except Exception:
-                logger.exception(
-                    "could not persist a durable tool", extra={"function": task.fnc_name}
-                )
 
     async def _execute(self, task: DurableTask) -> Any:
         from .voice.agent import _pass_through_activity_task_info
@@ -256,50 +241,54 @@ class DurableScheduler:
         g = task.generator
         assert not isinstance(g, bytes)
         nv: EffectCall | Any = task.next_value
-        token = _CURRENT_TASK.set(task)
-        try:
-            while True:
-                try:
-                    if nv is None or (isinstance(nv, EffectCall) and nv._done):
-                        await self._boundary(task)
-                        task.at_boundary.clear()
-                        if nv is None:
-                            nv = g.send(None)
-                        else:
-                            nv = g.throw(nv._c_exc) if nv._c_exc else g.send(nv._c_result)
-                    # else: restored while awaiting an AgentTask, which is awaited again
-
-                    if isinstance(nv, EffectCall):
-                        if task.next_value is not nv:
-                            task.next_value = nv
-                            task.effects += 1
-                        if isinstance(nv._c, AgentTask):
-                            # a pending AgentTask pickles, so awaiting one is a boundary too
-                            await self._boundary(task)
-                        try:
-                            if not nv._c or nv._c_ctx is None:
-                                raise RuntimeError("invalid EffectCall state")
-                            exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c, loop=self._loop)
-                            _pass_through_activity_task_info(exe_task)
-                            nv._set_result(await exe_task)
-                        except Exception as e:
-                            if not isinstance(e, (ToolError, StopResponse)):
-                                logger.exception("error executing step of durable function")
-                            nv._set_exception(e)
-                        task.at_boundary.clear()
-                        assert nv._done
+        while True:
+            try:
+                if nv is None or (isinstance(nv, EffectCall) and nv._done):
+                    self._capture(task)
+                    await self._running.wait()
+                    task.at_boundary.clear()
+                    if nv is None:
+                        nv = g.send(None)
                     else:
-                        exc = DurableInvalidStateError(
-                            f"Unsupported awaitable yielded: {nv!r}.\n"
-                            "Durable functions may only await supported operations.\n"
-                            "You awaited something that can't be checkpointed/replayed.\n"
-                            ">> Wrap it in EffectCall(...)."
-                        )
-                        nv = EffectCall(None)  # type: ignore[arg-type]
-                        nv._set_exception(exc)
-                        task.next_value = nv
+                        nv = g.throw(nv._c_exc) if nv._c_exc else g.send(nv._c_result)
+                # else: restored while awaiting an AgentTask, which is awaited again
 
-                except StopIteration as e:
-                    return e.value
-        finally:
-            _CURRENT_TASK.reset(token)
+                if isinstance(nv, EffectCall):
+                    task.next_value = nv
+                    if isinstance(nv._c, AgentTask):
+                        # a pending AgentTask pickles, so awaiting one is a boundary too
+                        self._capture(task)
+                    try:
+                        if not nv._c or nv._c_ctx is None:
+                            raise RuntimeError("invalid EffectCall state")
+                        exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c, loop=self._loop)
+                        _pass_through_activity_task_info(exe_task)
+                        nv._set_result(await exe_task)
+                    except Exception as e:
+                        if not isinstance(e, (ToolError, StopResponse)):
+                            logger.exception("error executing step of durable function")
+                        nv._set_exception(e)
+                    task.at_boundary.clear()
+                    assert nv._done
+                else:
+                    exc = DurableInvalidStateError(
+                        f"Unsupported awaitable yielded: {nv!r}.\n"
+                        "Durable functions may only await supported operations.\n"
+                        "You awaited something that can't be checkpointed/replayed.\n"
+                        ">> Wrap it in EffectCall(...)."
+                    )
+                    nv = EffectCall(None)  # type: ignore[arg-type]
+                    nv._set_exception(exc)
+                    task.next_value = nv
+
+            except StopIteration as e:
+                return e.value
+
+
+def durable_chain(agent: Agent | None) -> dict[Agent, DurableScheduler | None]:
+    """The agent and the agents its tasks return to, each with its activity's durable tools."""
+    chain: dict[Agent, DurableScheduler | None] = {}
+    while agent is not None and agent not in chain:
+        chain[agent] = agent._activity._durable_scheduler if agent._activity else None
+        agent = agent._old_agent if isinstance(agent, AgentTask) else None
+    return chain

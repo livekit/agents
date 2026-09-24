@@ -21,8 +21,6 @@ from .test_store import Database
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
-LEASE_TTL = 0.3
-
 
 @dataclass
 class Userdata:
@@ -84,7 +82,7 @@ class Transferring(Agent):
 
 @pytest.fixture
 async def database(tmp_path: pathlib.Path) -> AsyncIterator[Database]:
-    local = store.LocalStore(tmp_path, lease_ttl=LEASE_TTL)
+    local = store.LocalStore(tmp_path)
     yield Database(local, await local.create_database())
     await local.aclose()
 
@@ -103,7 +101,7 @@ def _session(llm: _AnsweringLLM, userdata: Any = None) -> AgentSession:
     return AgentSession(llm=llm, userdata=userdata or Userdata(airline="Northwind"))
 
 
-async def test_turns_are_written_as_they_happen(database: Database) -> None:
+async def test_a_close_saves_the_items_and_the_mutable_part(database: Database) -> None:
     llm = _AnsweringLLM(
         fake_responses=[
             _says("hello", "Hi, how can I help?"),
@@ -115,11 +113,14 @@ async def test_turns_are_written_as_they_happen(database: Database) -> None:
     await session.start(agent=FareDesk(), persist=database.session("s1"))
     await session.run(user_input="hello")
     await session.run(user_input="what is the change fee")
+    # nothing is written while the session runs
+    assert await database.rows("SELECT * FROM chat_items") == []
+    assert await database.rows("SELECT * FROM agents") == []
     await session.aclose()
 
     (row,) = await database.rows("SELECT * FROM sessions")
     assert row["current_agent_id"] == "fare_desk"
-    assert row["lease_owner"] is None and row["closed_at"] is not None
+    assert row["closed_at"] is not None
     assert row["userdata"] == '{"airline": "Northwind", "rebooked": []}'
     history = await database.rows(
         "SELECT item FROM chat_items WHERE owner = 'session' ORDER BY created_at"
@@ -230,100 +231,83 @@ async def test_userdata_is_json_only(database: Database) -> None:
     await second.aclose()
 
 
-async def test_userdata_that_stops_being_json_keeps_the_rest_checkpointed(
-    database: Database,
+async def test_a_save_called_twice_writes_only_the_difference(
+    database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi, how can I help?")], fallbacks=[])
+    session = _session(llm)
+    await session.start(agent=FareDesk(), persist=database.session("s1"))
+    executor = await database.executor()
+    written: list[list[str]] = []
+    batch = executor.batch
+
+    async def recording(*statements: Any) -> Any:
+        written.append([params[2] for sql, params in statements if "INTO chat_items" in sql])
+        return await batch(*statements)
+
+    monkeypatch.setattr(executor, "batch", recording)
+    await session.save()
+    await session.run(user_input="hello")
+    await session.save()
+    await session.save()
+
+    history = {item.id for item in session.history.items}
+    first, second, third = written
+    # the second save writes the turn, once for the history and once for the agent's context
+    assert set(second).isdisjoint(first) and set(second) <= history
+    assert {"hello", "Hi, how can I help?"} <= {
+        m.text_content for m in session.history.messages() if m.id in second
+    }
+    assert third == []
+    await session.aclose()
+
+
+async def test_a_session_closed_with_an_error_still_saves(database: Database) -> None:
+    from livekit.agents.llm import LLMError
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi, how can I help?")], fallbacks=[])
+    session = AgentSession(
+        llm=llm,
+        userdata=Userdata(airline="Northwind"),
+        conn_options=SessionConnectOptions(max_unrecoverable_errors=1),
+    )
+    await session.start(agent=FareDesk(), persist=database.session("s1"))
+    await session.run(user_input="hello")
+    error = LLMError(
+        timestamp=0.0, label="test", error=RuntimeError("llm unavailable"), recoverable=False
+    )
+    session._on_error(error)
+    session._on_error(error)
+    assert session._closing_task is not None
+    await session._closing_task
+
+    (row,) = await database.rows("SELECT current_agent_id, closed_at FROM sessions")
+    assert row["current_agent_id"] == "fare_desk" and row["closed_at"] is not None
+    items = await database.rows("SELECT item FROM chat_items WHERE owner = 'session'")
+    assert any("Hi, how can I help?" in r["item"] for r in items)
+
+
+async def test_userdata_that_stops_being_json_keeps_the_rest_saved(database: Database) -> None:
     session = _session(_AnsweringLLM(fake_responses=[], fallbacks=[]))
     await session.start(agent=FareDesk(), persist=database.session("s1"))
-    await session._persistence.checkpoint()  # type: ignore[union-attr]
-    (before,) = await database.rows("SELECT userdata, lease_expires_at FROM sessions")
+    await session.save()
+    (before,) = await database.rows("SELECT userdata, updated_at FROM sessions")
 
     # a tool puts something JSON cannot hold in the userdata, and the agent changes
     session.userdata.rebooked.append(object())  # type: ignore[arg-type]
     session.update_agent(Transferring())
     assert session._update_activity_atask is not None
     await session._update_activity_atask
-    await session._persistence.checkpoint()  # type: ignore[union-attr]
+    await session.save()
 
-    # the userdata keeps its last good value, and the agent and the lease are still written
+    # the userdata keeps its last good value, and the agent is still written
     (after,) = await database.rows("SELECT * FROM sessions")
     assert after["current_agent_id"] == "transferring"
     assert after["userdata"] == before["userdata"]
-    assert after["lease_expires_at"] > before["lease_expires_at"]
+    assert after["updated_at"] > before["updated_at"]
     session.userdata.rebooked.clear()
     await session.aclose()
-
-
-async def test_a_call_running_at_a_crash_leaves_nothing_behind(database: Database) -> None:
-    started, release = asyncio.Event(), asyncio.Event()
-
-    @function_tool
-    async def rebook(ctx: RunContext, flight: str) -> str:
-        """Rebook a flight."""
-        started.set()
-        await release.wait()
-        return "rebooked"
-
-    llm = _AnsweringLLM(
-        fake_responses=[
-            _says("rebook NW812", "", calls=[_tool_call("rebook", "call_1", '{"flight": "NW812"}')])
-        ],
-        fallbacks=["done"],
-    )
-    crashed = _session(llm)
-    await crashed.start(
-        agent=Agent(instructions="fare desk", tools=[rebook]), persist=database.session("s1")
-    )
-    crashed.generate_reply(user_input="rebook NW812")
-    await asyncio.wait_for(started.wait(), 5)
-
-    # the first worker never closes: the second waits out its lease and takes the session
-    resumed = _session(llm)
-    agent = Agent(instructions="fare desk", tools=[rebook])
-    await resumed.start(agent=agent, persist=database.session("s1"))
-    # the call and its output are committed together when it ends, so a crash leaves neither
-    for ctx in (resumed.history, agent.chat_ctx):
-        assert not any(getattr(i, "call_id", None) == "call_1" for i in ctx.items)
-    assert any(m.text_content == "rebook NW812" for m in resumed.history.messages())
-
-    release.set()
-    await resumed.aclose()
-    await crashed.aclose()
-
-
-async def test_a_stale_worker_still_lets_the_database_go(database: Database) -> None:
-    llm = _AnsweringLLM(fake_responses=[_says("hello", "Hi.")], fallbacks=["Hi again."])
-    stale = _session(llm)
-    await stale.start(agent=FareDesk(), persist=database.session("s1"))
-    await stale.run(user_input="hello")
-
-    # the stale worker idles past its lease, and a second one takes the session
-    resumed = _session(llm)
-    await resumed.start(agent=FareDesk(), persist=database.session("s1"))
-    await resumed.aclose()
-    await stale.aclose()
-    with pytest.raises(store.StoreError):
-        _ = database.store._databases[database.database_id].executor
-
-
-async def test_a_start_that_cannot_claim_the_session_lets_it_go(database: Database) -> None:
-    holder = database.session("s1")
-    await holder.load()
-
-    async def renew() -> None:
-        while True:
-            await holder.checkpoint(current_agent_id=None, userdata=None, agents=[])
-            await asyncio.sleep(LEASE_TTL / 3)
-
-    renewing = asyncio.create_task(renew())
-    session = _session(_AnsweringLLM(fake_responses=[], fallbacks=[]))
-    with pytest.raises(store.LeaseHeldError):
-        await session.start(agent=FareDesk(), persist=database.session("s1"))
-    assert session.persisted is None
-    renewing.cancel()
-    await holder.release()
-    with pytest.raises(store.StoreError):
-        _ = database.store._databases[database.database_id].executor
 
 
 async def test_a_handoff_resumes_on_the_rebuilt_agent(database: Database) -> None:
@@ -367,17 +351,19 @@ async def test_a_task_lost_with_its_tool_resumes_the_agent_that_awaited_it(
         ],
         fallbacks=["Rebooking here.", "Please confirm."],
     )
-    crashed = _session(llm)
-    await crashed.start(agent=FareDesk(), persist=database.session("s1"))
-    await crashed.run(user_input="move me to NW812")
-    crashed.generate_reply(user_input="go ahead")
+    first = _session(llm)
+    await first.start(agent=FareDesk(), persist=database.session("s1"))
+    await first.run(user_input="move me to NW812")
+    first.generate_reply(user_input="go ahead")
     await asyncio.wait_for(CONFIRMING.wait(), 5)
     for _ in range(50):
-        if isinstance(crashed.current_agent, Confirming):
+        if isinstance(first.current_agent, Confirming):
             break
         await asyncio.sleep(0.02)
-    assert isinstance(crashed.current_agent, Confirming)
-    await crashed._persistence.checkpoint()  # type: ignore[union-attr]
+    assert isinstance(first.current_agent, Confirming)
+    await first.aclose()
+    (row,) = await database.rows("SELECT current_agent_id FROM sessions")
+    assert row["current_agent_id"] == "confirming"
 
     # the task ran in a tool that is not durable, so the nearest agent that rebuilds resumes
     resumed = _session(llm)
@@ -387,7 +373,6 @@ async def test_a_task_lost_with_its_tool_resumes_the_agent_that_awaited_it(
     (lost,) = [r for r in caplog.records if "not durable" in r.getMessage()]
     assert (lost.agent_id, lost.resumed_agent_id) == ("confirming", "rebooking")  # type: ignore[attr-defined]
     await resumed.aclose()
-    await crashed.aclose()
 
 
 async def test_a_class_that_cannot_be_rebuilt_warns_and_falls_back(
@@ -403,7 +388,7 @@ async def test_a_class_that_cannot_be_rebuilt_warns_and_falls_back(
         await first.run(user_input="billing please")
         assert isinstance(first.current_agent, Billing)
         history = [item.id for item in first.history.items]
-        # the check runs at the handoff's checkpoint, which the close waits for
+        # the check runs at the save on close
         await first.aclose()
     assert any(
         "Billing cannot be rebuilt on resume" in r.getMessage()

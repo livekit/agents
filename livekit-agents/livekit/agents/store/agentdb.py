@@ -24,7 +24,7 @@ from livekit.protocol import agentdb as pb
 from ..log import logger
 from ..utils import aio
 from .executor import ExecResult, Executor, Row, Statement, StoreError, Value
-from .session import LEASE_TTL, _Store
+from .session import _Store
 
 if TYPE_CHECKING:
     from google.protobuf.message import Message
@@ -371,9 +371,8 @@ class AgentDB(_Store):
         ws_url: str | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
-        lease_ttl: float = LEASE_TTL,
     ) -> None:
-        super().__init__(lease_ttl=lease_ttl)
+        super().__init__()
         url = url or os.environ.get("LIVEKIT_AGENTDB_URL")
         api_key = api_key or os.environ.get("LIVEKIT_API_KEY")
         api_secret = api_secret or os.environ.get("LIVEKIT_API_SECRET")

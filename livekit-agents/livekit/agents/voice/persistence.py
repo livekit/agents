@@ -17,19 +17,11 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, TypeAdapter
 
 from .. import llm
-from ..durable_scheduler import _REHYDRATING, DurableTask
+from ..durable_scheduler import _REHYDRATING, DurableScheduler, DurableTask, durable_chain
 from ..log import logger
-from ..store.session import (
-    SESSION_OWNER,
-    AgentRecord,
-    LeaseLostError,
-    PersistedSession,
-)
+from ..store.session import AgentRecord, PersistedSession
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
-from .events import AgentStateChangedEvent, ConversationItemAddedEvent, ToolExecutionUpdatedEvent
-from .generation import _DurableExecutionMetadata
-from .tool_executor import _RunningTasks
 
 if TYPE_CHECKING:
     from .agent_session import AgentSession
@@ -63,37 +55,27 @@ def _userdata_json(userdata: Any) -> Any:
     return data
 
 
-def _answered(agent: Agent) -> set[str]:
-    """The calls whose output the agent's context already records."""
-    return {item.call_id for item in agent._chat_ctx.items if item.type == "function_call_output"}
-
-
 class SessionPersistence:
-    """Keeps one session's rows current: appends as items land, checkpoints when quiet."""
+    """Restores one session from its rows when it starts, and saves it to them."""
 
     def __init__(self, session: AgentSession, persisted: PersistedSession) -> None:
         self._session = session
         self._persisted = persisted
-        self._checkpoint_task: asyncio.Task[None] | None = None
-        self._checkpoint_again = False
-        # checkpoints and boundary writes read and land in turn, so an older frame never lands last
-        self._write_lock = asyncio.Lock()
-        self._lease_lost = False
-        self._closed = False
+        # saves diff against the one before, so they land in turn
+        self._save_lock = asyncio.Lock()
 
     @property
     def persisted(self) -> PersistedSession:
         return self._persisted
 
     async def rehydrate(self, agent: Agent) -> tuple[Agent, bool]:
-        """Claim the session and restore what it had; returns the agent to start, and whether
+        """Load the session and restore what it had; returns the agent to start, and whether
         it is the one the session left off on."""
         session = self._session
         _userdata_json(session._userdata)
         stored = await self._persisted.load()
         if stored is None:
             self._check_rebuild(agent)
-            self._listen()
             return agent, False
 
         session._chat_ctx = llm.ChatContext(list(stored.history))
@@ -154,25 +136,18 @@ class SessionPersistence:
             for index, (member, own) in enumerate(chain):
                 kept = index + 1
                 newer = chain[index + 1][0] if index + 1 < len(chain) else None
-                answered = _answered(member)
                 tasks: list[DurableTask] = []
                 for snapshot in (
                     pickle.loads(own.durable_state) if own and own.durable_state else []
                 ):
                     try:
-                        restored: DurableTask = pickle.loads(snapshot)
+                        tasks.append(pickle.loads(snapshot))
                     except Exception:
                         logger.warning(
                             "a durable tool's state did not load, so it is lost",
                             extra={"session_id": self._persisted.session_id},
                             exc_info=True,
                         )
-                        continue
-                    metadata: _DurableExecutionMetadata = restored.metadata
-                    call = llm.FunctionCall.model_validate_json(metadata.function_call)
-                    # an answered call ended before its frame was cleared, so it does not rerun
-                    if call.call_id not in answered:
-                        tasks.append(restored)
                 awaiting = next(
                     (
                         task
@@ -256,14 +231,7 @@ class SessionPersistence:
             },
         )
         self._check_rebuild(current)
-        self._sync()
-        self._listen()
         return current, current.id == stored.current_agent_id
-
-    def _listen(self) -> None:
-        self._session.on("conversation_item_added", self._on_item_added)
-        self._session.on("agent_state_changed", self._on_quiet_candidate)
-        self._session.on("tool_execution_updated", self._on_quiet_candidate)
 
     def _check_rebuild(self, agent: Agent) -> str | None:
         """Why the agent's class cannot be rebuilt from its row, or None when it can."""
@@ -282,158 +250,62 @@ class SessionPersistence:
                 )
         return _REBUILD_CHECKS[cls]
 
-    def _chain(self) -> list[Agent]:
-        """The current agent and the agents its ``AgentTask``s return to."""
-        chain: list[Agent] = []
-        agent = self._session._agent
-        while agent is not None and agent not in chain:
-            chain.append(agent)
-            agent = agent._old_agent if isinstance(agent, AgentTask) else None
-        return chain
-
-    def _sync(self) -> None:
-        """Queue whatever the history and the agents' contexts gained or lost since last time."""
-        if self._closed:
-            return
-        self._persisted.sync(self._session._chat_ctx.items, owner=SESSION_OWNER, prune=False)
-        for agent in self._chain():
-            self._persisted.sync(agent._chat_ctx.items, owner=agent.id, prune=True)
-
-    async def checkpoint(self) -> None:
-        async with self._write_lock:
-            self._sync()
-            records: list[AgentRecord] = []
-            for agent in self._chain():
-                state: dict[str, Any] | None = None
-                if self._check_rebuild(agent) is None:
-                    with contextlib.suppress(Exception):
-                        state = agent._snapshot_state()
-                parent = agent._old_agent if isinstance(agent, AgentTask) else None
-                scheduler = agent._activity._durable_scheduler if agent._activity else None
-                records.append(
-                    AgentRecord(
-                        agent_id=agent.id,
-                        cls=_qualified_name(type(agent)),
-                        parent_agent_id=parent.id if parent is not None else None,
-                        state=state,
-                        # a closed activity leaves the frames its tools stopped at
-                        durable_state=(
-                            scheduler.durable_state(_answered(agent))
-                            if scheduler is not None
-                            else None
-                        ),
+    async def save(self, chain: dict[Agent, DurableScheduler | None] | None = None) -> None:
+        """Write what the session changed since the last save, with its durable tools held at
+        a boundary while they are captured; ``chain`` is the one a close stopped."""
+        async with self._save_lock:
+            if chain is None:
+                chain = durable_chain(self._session._agent)
+            schedulers = [scheduler for scheduler in chain.values() if scheduler is not None]
+            try:
+                for scheduler in schedulers:
+                    await scheduler.pause()
+                records: list[AgentRecord] = []
+                for agent, frames in chain.items():
+                    state: dict[str, Any] | None = None
+                    if self._check_rebuild(agent) is None:
+                        with contextlib.suppress(Exception):
+                            state = agent._snapshot_state()
+                    parent = agent._old_agent if isinstance(agent, AgentTask) else None
+                    records.append(
+                        AgentRecord(
+                            agent_id=agent.id,
+                            cls=_qualified_name(type(agent)),
+                            parent_agent_id=parent.id if parent is not None else None,
+                            state=state,
+                            durable_state=frames.durable_state() if frames else b"",
+                            chat_items=agent._chat_ctx.items,
+                        )
                     )
+                session = self._session
+                try:
+                    userdata = _userdata_json(session._userdata)
+                except TypeError as e:
+                    # the rest still saves; the userdata keeps its last saved value
+                    logger.warning(str(e), extra={"session_id": self._persisted.session_id})
+                    userdata = None
+                await self._persisted.save(
+                    current_agent_id=next(iter(chain)).id if chain else None,
+                    userdata=userdata,
+                    history=session._chat_ctx.items,
+                    agents=records,
                 )
-            session = self._session
-            try:
-                userdata = _userdata_json(session._userdata)
-            except TypeError as e:
-                # the rest still lands and renews the lease; the userdata keeps its last value
-                logger.warning(str(e), extra={"session_id": self._persisted.session_id})
-                userdata = None
-            await self._persisted.checkpoint(
-                current_agent_id=session._agent.id if session._agent else None,
-                userdata=userdata,
-                agents=records,
-            )
+            finally:
+                for scheduler in schedulers:
+                    scheduler.resume()
 
-    async def durable_boundary(self, agent: Agent) -> None:
-        """Write the agent's durable tools as they stand at a boundary one of them reached."""
-        scheduler = agent._activity._durable_scheduler if agent._activity else None
-        if self._closed or self._lease_lost or scheduler is None:
-            return
-        async with self._write_lock:
-            self._sync()
-            try:
-                await self._persisted.write_durable_state(
-                    agent.id,
-                    cls=_qualified_name(type(agent)),
-                    durable_state=scheduler.durable_state(_answered(agent)),
-                )
-            except LeaseLostError:
-                # the new owner resumes these tools, so here they stop before another effect
-                self._lease_lost = True
-                logger.error(
-                    "another worker took this session, so its durable tools stop here",
-                    extra={"session_id": self._persisted.session_id},
-                )
-                scheduler.close()
-
-    def _schedule_checkpoint(self) -> None:
-        if self._closed or self._lease_lost:
-            return
-        if self._checkpoint_task is not None and not self._checkpoint_task.done():
-            self._checkpoint_again = True
-            return
-        self._checkpoint_task = asyncio.create_task(
-            self._run_checkpoints(), name="session_checkpoint"
-        )
-
-    async def _run_checkpoints(self) -> None:
-        while True:
-            self._checkpoint_again = False
-            try:
-                await self.checkpoint()
-            except LeaseLostError:
-                self._lease_lost = True
-                logger.error(
-                    "another worker took this session, so it stops checkpointing",
-                    extra={"session_id": self._persisted.session_id},
-                )
-                return
-            except Exception:
-                logger.warning(
-                    "could not checkpoint the session",
-                    extra={"session_id": self._persisted.session_id},
-                    exc_info=True,
-                )
-            if not self._checkpoint_again:
-                return
-
-    def _on_item_added(self, ev: ConversationItemAddedEvent) -> None:
-        self._sync()
-        if ev.item.type == "agent_handoff":
-            self._schedule_checkpoint()
-
-    def _on_quiet_candidate(self, ev: AgentStateChangedEvent | ToolExecutionUpdatedEvent) -> None:
-        # nothing is half-written once a turn ends with no plain tool and every durable one idle
-        self._sync()
-        if (
-            self._session._agent_state == "listening"
-            and not _RunningTasks.get(self._session)
-            and all(
-                agent._activity._durable_scheduler.at_boundary
-                for agent in self._chain()
-                if agent._activity is not None and agent._activity._durable_scheduler is not None
-            )
-        ):
-            self._schedule_checkpoint()
-
-    async def aclose(self) -> None:
-        """Checkpoint once more and let the session go."""
-        self._session.off("conversation_item_added", self._on_item_added)
-        self._session.off("agent_state_changed", self._on_quiet_candidate)
-        self._session.off("tool_execution_updated", self._on_quiet_candidate)
-        if self._checkpoint_task is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.shield(self._checkpoint_task)
+    async def aclose(self, chain: dict[Agent, DurableScheduler | None]) -> None:
+        """Save once more and let the session go."""
         try:
-            if not self._lease_lost:
-                await self.checkpoint()
-        except LeaseLostError:
-            logger.error(
-                "another worker took this session before it closed",
-                extra={"session_id": self._persisted.session_id},
-            )
+            await self.save(chain)
         except Exception:
             logger.warning(
-                "could not checkpoint the session on close",
+                "could not save the session on close",
                 extra={"session_id": self._persisted.session_id},
                 exc_info=True,
             )
         finally:
-            self._closed = True
-            # a fenced or failed checkpoint still lets the handle go, or the connection stays open
+            # a failed save still lets the handle go, or the connection stays open
             with contextlib.suppress(Exception):
                 await self._persisted.release()
 

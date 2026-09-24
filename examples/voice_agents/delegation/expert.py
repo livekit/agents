@@ -25,7 +25,8 @@ so the phone agent can say "holding a seat" while the seat is being held. That r
 relayed as the tool wrote it rather than handed to a model to restate.
 
 With LIVEKIT_AGENTDB_URL set, each context persists as a session in the conversation the caller
-names and survives a restart of the desk; see the README's "Persistence" section.
+names, saved when the context closes and loaded when it is reopened; see the README's
+"Persistence" section.
 """
 
 import asyncio
@@ -63,8 +64,7 @@ load_dotenv()
 # random one in dev
 server = AgentServer(port=8321)
 
-# without agent-db the desk keeps contexts in memory; the short lease lets a desk restarted
-# after a crash take one back within seconds
+# without agent-db the desk keeps contexts in memory, and a closed one is gone
 AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
 # devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
 # todo: devLocal should accept the project key; until then a local agent-db takes its own
@@ -74,7 +74,7 @@ LOCAL_KEY = (
     else {}
 )
 DB = (
-    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), lease_ttl=10, **LOCAL_KEY)
+    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
     if AGENTDB_URL
     else None
 )
