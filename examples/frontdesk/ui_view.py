@@ -29,21 +29,6 @@ logger = logging.getLogger("frontdesk.ui")
 _VIEW_METHOD = "set_appointment_status"
 
 
-def _relative(local: datetime.datetime, now: datetime.datetime) -> str:
-    """Human "tomorrow" / "in 3 weeks" phrasing for a slot."""
-    delta = local - now
-    days = delta.days
-    if local.date() == now.date():
-        return "in less than an hour" if delta.seconds < 3600 else "later today"
-    if local.date() == (now.date() + datetime.timedelta(days=1)):
-        return "tomorrow"
-    if days < 7:
-        return f"in {days} days"
-    if days < 14:
-        return "in 1 week"
-    return f"in {days // 7} weeks"
-
-
 class UIView:
     """Pushes markdown to the playground card associated with this example."""
 
