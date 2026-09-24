@@ -958,7 +958,14 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 from .persistence import SessionPersistence
 
                 self._persistence = SessionPersistence(self, state)
-                agent = await self._persistence.rehydrate(agent)
+                try:
+                    agent = await self._persistence.rehydrate(agent)
+                except BaseException:
+                    # a session that never started is never closed, so it lets the state go here
+                    self._persistence = None
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(state.release())
+                    raise
 
             # configure observability first
             record_is_given = is_given(record)

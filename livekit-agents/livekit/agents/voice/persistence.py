@@ -89,11 +89,9 @@ class SessionPersistence:
         """Claim the session and restore what it had; returns the agent to start."""
         stored = self._stored = await self._state.load()
         self._agents[agent.id] = agent
-        self._session.on("conversation_item_added", self._on_item_added)
-        self._session.on("agent_state_changed", self._on_agent_state_changed)
-        self._session.on("tool_execution_updated", self._on_tool_execution_updated)
         if stored is None:
             self._check_rebuild(agent)
+            self._listen()
             return agent
 
         session = self._session
@@ -202,7 +200,13 @@ class SessionPersistence:
         )
         self._check_rebuild(current)
         self._sync()
+        self._listen()
         return current
+
+    def _listen(self) -> None:
+        self._session.on("conversation_item_added", self._on_item_added)
+        self._session.on("agent_state_changed", self._on_agent_state_changed)
+        self._session.on("tool_execution_updated", self._on_tool_execution_updated)
 
     async def resume_delegate(self, delegate: Delegate | None) -> None:
         """Point a delegate back at the conversation this session last had with its endpoint.

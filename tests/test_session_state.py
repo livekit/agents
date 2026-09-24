@@ -207,6 +207,28 @@ async def test_a_stale_worker_still_lets_the_conversation_go(
         _ = conversation.executor
 
 
+async def test_a_start_that_cannot_claim_the_session_lets_it_go(
+    conversation: store.Conversation,
+) -> None:
+    holder = conversation.session("s1")
+    await holder.load()
+
+    async def renew() -> None:
+        while True:
+            await holder.checkpoint(current_agent_id=None, userdata=None, agents=[])
+            await asyncio.sleep(LEASE_TTL / 3)
+
+    renewing = asyncio.create_task(renew())
+    session = _session(_AnsweringLLM(fake_responses=[], fallbacks=[]))
+    with pytest.raises(store.LeaseHeldError):
+        await session.start(agent=FareDesk(), state=conversation.session("s1"))
+    assert session.state is None
+    renewing.cancel()
+    await holder.release()
+    with pytest.raises(store.StoreError):
+        _ = conversation.executor
+
+
 async def test_a_handoff_resumes_on_the_rebuilt_agent(conversation: store.Conversation) -> None:
     llm = _AnsweringLLM(
         fake_responses=[
