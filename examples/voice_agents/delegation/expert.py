@@ -888,7 +888,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
     if state is not None and (messages := session.history.messages()):
         # a fresh session has said nothing yet, so any message here came back from the store
         _trace("", "↺", f"rehydrated {ctx.context_id}: {len(messages)} messages back", limit=200)
-    # TODO(v1): runs in the server process; the same handler moves to a job process with #4337
+    # todo: the expert runs in the server process; a job process per conversation is planned
     ctx.attach(session)
 
 
