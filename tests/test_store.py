@@ -263,6 +263,23 @@ class StoreSuite:
         assert connection.executor is not None
         await again.release()
 
+    async def test_a_handle_holds_the_connection_only_while_loaded(
+        self, database: Database
+    ) -> None:
+        persisted = database.session("a")
+        database.session("b")  # never started, so it holds nothing
+        await persisted.load()
+        await persisted.release()
+        connection = database.store._databases[database.database_id]
+        with pytest.raises(store.StoreError):
+            _ = connection.executor
+
+        # a handle a restarted session loads again is let go again
+        await persisted.load()
+        await persisted.release()
+        with pytest.raises(store.StoreError):
+            _ = connection.executor
+
 
 async def _save(
     persisted: PersistedSession, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()

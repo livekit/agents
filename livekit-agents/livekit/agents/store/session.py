@@ -122,7 +122,6 @@ class _Store:
             database = self._databases[database_id] = _Database(
                 database_id, connect=lambda: self._connect(database_id)
             )
-        database.sessions += 1
         return PersistedSession(database, session_id, parent=parent, endpoint=endpoint)
 
     async def aclose(self) -> None:
@@ -141,7 +140,8 @@ class PersistedSession:
         self._session_id = session_id
         self._parent = parent
         self._endpoint = endpoint
-        self._released = False
+        # while loaded, the handle holds its database's connection open
+        self._loaded = False
         self._children: dict[str | None, str] = {}
         # per owner, each item's row as last saved, which the next save compares against
         self._saved: dict[str, dict[str, str]] = {}
@@ -156,6 +156,9 @@ class PersistedSession:
 
     async def load(self) -> StoredSession | None:
         """Read the session back, or create it and return None when it is new."""
+        if not self._loaded:
+            self._loaded = True
+            self._database.sessions += 1
         executor = await self._database.open()
         now = time.time()
         created = await executor.exec(
@@ -301,9 +304,9 @@ class PersistedSession:
 
     async def release(self) -> None:
         """Mark the session closed and let it go, closing the database after its last."""
-        if self._released:
+        if not self._loaded:
             return
-        self._released = True
+        self._loaded = False
         try:
             await self._database.executor.exec(
                 "UPDATE sessions SET closed_at = ? WHERE session_id = ?",
@@ -312,7 +315,7 @@ class PersistedSession:
             )
         finally:
             database = self._database
-            database.sessions = max(database.sessions - 1, 0)
+            database.sessions -= 1
             if database.sessions == 0:
                 await database.aclose()
 
