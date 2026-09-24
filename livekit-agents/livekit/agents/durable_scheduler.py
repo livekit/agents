@@ -20,6 +20,7 @@ from typing_extensions import Self
 
 from livekit.durable.function import DurableCoroutine, durable
 
+from .llm.tool_context import StopResponse, ToolError
 from .log import logger
 from .voice.agent import Agent, AgentTask
 
@@ -77,7 +78,7 @@ class EffectCall(Generic[TaskResult_T]):
     def __init__(self, aw: Awaitable[TaskResult_T] | AgentTask[TaskResult_T]) -> None:
         self._c: Awaitable[TaskResult_T] | AgentTask[TaskResult_T] | None = aw
         self._c_result: Any = None
-        self._c_exc: EffectException | None = None
+        self._c_exc: Exception | None = None
         self._c_ctx: contextvars.Context | None = None
         self._done: bool = False
 
@@ -91,9 +92,15 @@ class EffectCall(Generic[TaskResult_T]):
         self._done = True
 
     def _set_exception(self, exc: BaseException) -> None:
-        self._c_exc = EffectException(type(exc).__name__, str(exc)).with_traceback(
-            exc.__traceback__
-        )
+        # the framework's own exceptions reach the frame as themselves, so the model sees them
+        stored: Exception
+        if isinstance(exc, ToolError):
+            stored = ToolError(exc.message)
+        elif isinstance(exc, StopResponse):
+            stored = StopResponse()
+        else:
+            stored = EffectException(type(exc).__name__, str(exc))
+        self._c_exc = stored.with_traceback(exc.__traceback__)
         self._done = True
 
     def __getstate__(self) -> dict[str, Any]:
@@ -119,7 +126,7 @@ class EffectCall(Generic[TaskResult_T]):
         if not self._done:
             return f"EffectCall(status=pending, aw={self._c})"
         if self._c_exc is not None:
-            return f"EffectCall(status=error, exception=EffectException({self._c_exc.exc_type}))"
+            return f"EffectCall(status=error, exception={self._c_exc!r})"
         return f"EffectCall(status=done, result={reprlib.repr(self._c_result)})"
 
 
@@ -276,7 +283,8 @@ class DurableScheduler:
                             _pass_through_activity_task_info(exe_task)
                             nv._set_result(await exe_task)
                         except Exception as e:
-                            logger.exception("error executing step of durable function")
+                            if not isinstance(e, (ToolError, StopResponse)):
+                                logger.exception("error executing step of durable function")
                             nv._set_exception(e)
                         task.at_boundary.clear()
                         assert nv._done

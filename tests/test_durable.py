@@ -19,7 +19,7 @@ from livekit.agents import (
     store,
 )
 from livekit.agents.durable_scheduler import EffectException
-from livekit.agents.llm import ToolFlag
+from livekit.agents.llm import ToolError, ToolFlag
 from livekit.durable import registry
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -378,3 +378,28 @@ async def test_a_worker_that_lost_the_session_stops_its_durable_tool(database: D
     assert CALLS.count(("hold", "call_1:1")) == 1
     await owner.aclose()
     await stale.aclose()
+
+
+async def refuse_with_tool_error() -> str:
+    CALLS.append(("refuse", ""))
+    raise ToolError("the seat is taken")
+
+
+class RefusingDesk(Agent):
+    def __init__(self) -> None:
+        super().__init__(instructions="You book seats.")
+
+    @function_tool(flags=ToolFlag.DURABLE)
+    async def book(self, ctx: RunContext) -> str:
+        """Book a seat."""
+        return await EffectCall(refuse_with_tool_error())
+
+
+async def test_an_effect_raising_a_tool_error_reaches_the_model_as_it(database: Database) -> None:
+    session = AgentSession(llm=_llm("book"))
+    await session.start(agent=RefusingDesk(), persist=database.session("s1"))
+    session.generate_reply(user_input="go")
+    await _until(lambda: _outputs(session))
+    (output,) = _outputs(session)
+    assert (output.is_error, output.output) == (True, "the seat is taken")
+    await session.aclose()
