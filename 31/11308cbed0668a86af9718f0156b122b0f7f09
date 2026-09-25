@@ -1,0 +1,23 @@
+tests/test_twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_b6ebbc094c49e8 431-432
+pyproject.toml
+  s_c84637313b0ea6::t_b6ebbc094c49e8 104
+uv.lock
+  s_c84637313b0ea6::t_8cb3d2290c46e9 117,338-349,6094,6097-6098,6102-6105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3111308cbed0668a86af9718f0156b122b0f7f09",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
