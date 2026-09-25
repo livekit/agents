@@ -277,7 +277,9 @@ class GetNameTask(AgentTask[GetNameResult]):
         return (
             f"The name has been updated to {full_name}\n"
             f"{read_back}\n"
-            f"Prompt the user for confirmation, do not call `confirm_name` directly"
+            f"If the user already confirmed exactly this value, call `confirm_name` "
+            f"now; otherwise prompt the user for confirmation and don't call `confirm_name` before "
+            f"they confirm"
         )
 
     def _build_confirm_tool(

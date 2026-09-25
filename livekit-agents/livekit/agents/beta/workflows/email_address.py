@@ -136,7 +136,9 @@ class GetEmailTask(AgentTask[GetEmailResult]):
         return (
             f"The email has been updated to {email}\n"
             f"{read_back}\n"
-            f"Prompt the user for confirmation, do not call `confirm_email_address` directly"
+            f"If the user already confirmed exactly this value, call `confirm_email_address` "
+            f"now; otherwise prompt the user for confirmation and don't call `confirm_email_address` before "
+            f"they confirm"
         )
 
     def _build_confirm_tool(self, *, email: str) -> llm.FunctionTool:

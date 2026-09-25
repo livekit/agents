@@ -147,7 +147,9 @@ class GetAddressTask(AgentTask[GetAddressResult]):
         return (
             f"The address has been updated to {address}\n"
             f"{read_back}\n"
-            f"Prompt the user for confirmation, do not call `confirm_address` directly"
+            f"If the user already confirmed exactly this value, call `confirm_address` "
+            f"now; otherwise prompt the user for confirmation and don't call `confirm_address` before "
+            f"they confirm"
         )
 
     def _build_confirm_tool(self, *, address: str) -> llm.FunctionTool:

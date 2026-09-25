@@ -164,7 +164,9 @@ class GetPhoneNumberTask(AgentTask[GetPhoneNumberResult]):
         return (
             f"The phone number has been updated to {cleaned}\n"
             f"{read_back}\n"
-            f"Prompt the user for confirmation, do not call `confirm_phone_number` directly"
+            f"If the user already confirmed exactly this value, call `confirm_phone_number` "
+            f"now; otherwise prompt the user for confirmation and don't call `confirm_phone_number` before "
+            f"they confirm"
         )
 
     def _build_confirm_tool(self, *, phone_number: str) -> llm.FunctionTool:
