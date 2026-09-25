@@ -11,7 +11,7 @@ from typing import Any
 from ..job import JobContext, JobProcess, RunningJobInfo
 from ..log import logger
 from ..telemetry import metrics
-from ..utils import aio, log_exceptions, shortuuid
+from ..utils import aio, log_exceptions
 from . import channel, proto
 from .inference_executor import InferenceExecutor
 from .job_executor import JobStatus
@@ -63,11 +63,6 @@ class ProcJobExecutor(SupervisedProc):
         self._session_end_timeout = session_end_timeout
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
-        self._id = shortuuid("PCEXEC_")
-
-    @property
-    def id(self) -> str:
-        return self._id
 
     @property
     def process_kind(self) -> SupervisedProcKind:
