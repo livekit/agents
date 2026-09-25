@@ -1,0 +1,21 @@
+pyproject.toml
+  s_c84637313b0ea6::t_834555234a7d76 104-105
+uv.lock
+  s_c84637313b0ea6::t_04775720ef638c 117,5151-5159,6091,6095,6098
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aebcb367c3006b32e3ab54d9589c78e11b48ec50",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
