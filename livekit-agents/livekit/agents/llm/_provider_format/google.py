@@ -25,8 +25,11 @@ def to_chat_ctx(
     *,
     inject_dummy_user_message: bool = True,
     thought_signatures: dict[str, bytes] | None = None,
+    fold_dynamic_instructions: bool = True,
 ) -> tuple[list[dict], GoogleFormatData]:
-    chat_ctx = convert_mid_conversation_instructions(chat_ctx)
+    chat_ctx = convert_mid_conversation_instructions(
+        chat_ctx, fold_dynamic_instructions=fold_dynamic_instructions
+    )
 
     turns: list[dict] = []
     system_messages: list[str] = []

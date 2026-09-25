@@ -196,6 +196,41 @@ class TestCachedContentRequestSuppression:
         assert config.cached_content == "cachedContents/abc123"
 
     @pytest.mark.asyncio
+    async def test_dynamic_instructions_become_a_turn_when_cached_content_set(self) -> None:
+        """The static prompt lives in the cache, so ``Instructions.dynamic`` has to
+        reach the model as a turn: folded into the dropped system_instruction it
+        would never be seen."""
+        from livekit.agents.llm.chat_context import Instructions
+        from livekit.agents.voice.generation import update_instructions
+
+        llm = LLM(
+            model="gemini-2.5-flash",
+            api_key="test",
+            cached_content="cachedContents/abc123",
+        )
+
+        chat_ctx = ChatContext.empty()
+        update_instructions(
+            chat_ctx,
+            instructions=Instructions("system prompt that lives in cache", dynamic="Caller: Alex"),
+            add_if_missing=True,
+        )
+        chat_ctx.add_message(role="user", content="hi")
+
+        fake, captured = self._patched_stream_capture()
+        with patch.object(llm._client.aio.models, "generate_content_stream", fake):
+            stream = llm.chat(chat_ctx=chat_ctx)
+            try:
+                async for _ in stream:
+                    pass
+            finally:
+                await stream.aclose()
+
+        assert captured["config"].system_instruction is None
+        texts = [part.text for content in captured["contents"] for part in content.parts]
+        assert texts == ["<instructions>\nCaller: Alex\n</instructions>", "hi"]
+
+    @pytest.mark.asyncio
     async def test_request_omits_tools_when_cached_content_set(self) -> None:
         """With a cache attached, the outgoing request must NOT include
         ``tools`` even if the LLMStream was constructed with function
