@@ -315,7 +315,7 @@ class AvatarSession(BaseAvatarSession):
         # and nothing is lost. wait_remote_track buffers until the video track
         # appears; replace_audio_tail keeps the TranscriptSynchronizer /
         # RecorderAudioOutput chain intact.
-        agent_session.output.replace_audio_tail(
+        self._attach_audio_output(
             DataStreamAudioOutput(
                 room=room,
                 destination_identity=self._avatar_participant_identity,
