@@ -424,6 +424,7 @@ class TestSessionHostEvents:
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
                     update_ids=["c1_update_1", "c1_final"],
+                    call_ids=["c1"],
                     status="completed",
                     speech_id="speech_1",
                 )

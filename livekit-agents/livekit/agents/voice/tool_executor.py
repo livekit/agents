@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import weakref
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -19,6 +19,7 @@ from ..llm.tool_context import (
     RawFunctionTool,
     StopResponse,
     Tool,
+    ToolChoice,
     ToolError,
     ToolFlag,
     ToolResult,
@@ -177,6 +178,22 @@ async def get_running_tasks(ctx: RunContext) -> list[dict]:
     ]
 
 
+async def cancel_tool_call(session: AgentSession, call_id: str) -> bool:
+    """Cancel one tool call running in this session.
+
+    False when nothing by that call id is running, when the tool does not allow
+    cancellation, or when the speech that issued it disallows interruptions.
+    """
+    task = _RunningTasks.get(session, {}).get(call_id)
+    if task is None:
+        return False
+
+    try:
+        return await task.executor.cancel(call_id)
+    except ToolError:
+        return False
+
+
 @function_tool(name="lk_agents_cancel_task")
 async def cancel_task(ctx: RunContext, call_id: str) -> str:
     """Cancel a running tool call by call_id."""
@@ -184,6 +201,7 @@ async def cancel_task(ctx: RunContext, call_id: str) -> str:
     if task is None:
         raise ToolError(f"Task {call_id} not found")
 
+    # unlike cancel_tool_call, a refusal is worth saying: the model asked for this one
     if not await task.executor.cancel(call_id):
         raise ToolError(f"Task {call_id} not found or already completed")
     return f"Task {call_id} cancelled successfully."
@@ -255,6 +273,23 @@ class _PendingUpdate:
     ctx: RunContext
     items: list[ChatItem]
     target: Agent  # agent that received the eager chat_ctx insert
+    tool_choice: ToolChoice | None
+    """What the reply may call: an update's request, or None for a result to act on."""
+
+
+def _reply_tool_choice(requests: Iterable[ToolChoice | None]) -> ToolChoice | None:
+    """The tool choice of one reply step answering several tool outputs.
+
+    Each entry states what the reply to it may call. The step honours a single shared
+    request, and is otherwise unconstrained: outputs that disagree cannot all be satisfied,
+    and one of them wanting the tools is enough to need them.
+    """
+    distinct: list[ToolChoice | None] = []
+    for request in requests:
+        # a named choice is a dict, so this compares rather than hashes
+        if request not in distinct:
+            distinct.append(request)
+    return distinct[0] if len(distinct) == 1 else None
 
 
 class _ToolExecutor:
@@ -405,7 +440,9 @@ class _ToolExecutor:
             # final return goes through the coalescer as a synthetic output
             pair = run_ctx._make_update_pair(output, call_id_suffix="_final")
             run_ctx._updates.append(pair)
-            await self._enqueue_reply(run_ctx, [pair[0], pair[1]])
+            # a return is a result to act on, unlike a report, so the reply that phrases it
+            # is as free to call something as the reply to an ordinary tool would be
+            await self._enqueue_reply(run_ctx, [pair[0], pair[1]], tool_choice=None)
             return output
 
         exe_task = asyncio.create_task(_execute_tool(), name=f"tool_exec_{fnc_name}")
@@ -520,7 +557,14 @@ class _ToolExecutor:
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self,
+        ctx: RunContext,
+        items: list[ChatItem],
+        *,
+        silent: bool = False,
+        tool_choice: ToolChoice | None = None,
+    ) -> None:
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
@@ -532,10 +576,16 @@ class _ToolExecutor:
         await target.update_chat_ctx(chat_ctx)
         ctx.session.history.insert(items)
 
-        if not any(item.type == "function_call_output" and item.reply_required for item in items):
+        # recorded above for the model; a silent update, or one no output asks a reply to,
+        # is not queued to be voiced
+        if silent or not any(
+            item.type == "function_call_output" and item.reply_required for item in items
+        ):
             return
 
-        self._pending_updates.append(_PendingUpdate(ctx=ctx, items=items, target=target))
+        self._pending_updates.append(
+            _PendingUpdate(ctx=ctx, items=items, target=target, tool_choice=tool_choice)
+        )
 
         if self._reply_task is None or self._reply_task.done():
             self._reply_task = asyncio.create_task(
@@ -567,10 +617,8 @@ class _ToolExecutor:
         updates = self._pending_updates[:]
         self._pending_updates.clear()
 
-        pending_items: list[ChatItem] = []
-        for update in updates:
-            pending_items.extend(update.items)
-
+        # one reply covering everything buffered
+        pending_items = [item for u in updates for item in u.items]
         if not pending_items:
             return
 
@@ -600,16 +648,21 @@ class _ToolExecutor:
             else self._tool_options["reply_maybe_covered_template"]
         )
 
-        call_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        update_ids = [item.call_id for item in pending_items if item.type == "function_call_output"]
+        call_ids = list(dict.fromkeys(u.ctx.function_call.call_id for u in updates))
+        tool_choice = _reply_tool_choice(u.tool_choice for u in updates)
         speech = session.generate_reply(
-            instructions=_render(template, {"call_ids": call_ids}),
-            tool_choice="none",
+            instructions=_render(template, {"call_ids": update_ids}),
+            tool_choice=tool_choice if tool_choice is not None else NOT_GIVEN,
             chat_ctx=chat_ctx,
         )
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolReplyUpdated(
-                    update_ids=call_ids, status="scheduled", speech_id=speech.id
+                    update_ids=update_ids,
+                    call_ids=call_ids,
+                    status="scheduled",
+                    speech_id=speech.id,
                 )
             ),
         )
@@ -626,7 +679,12 @@ class _ToolExecutor:
             },
         )
 
-        def _on_speech_done(speech: SpeechHandle) -> None:
+        def _on_speech_done(
+            speech: SpeechHandle,
+            *,
+            update_ids: list[str] = update_ids,
+            call_ids: list[str] = call_ids,
+        ) -> None:
             reply_status: Literal["completed", "interrupted", "skipped"]
             if speech.interrupted:
                 reply_status = "interrupted"
@@ -646,7 +704,10 @@ class _ToolExecutor:
             session._tool_execution_updated(
                 ToolExecutionUpdatedEvent(
                     update=ToolReplyUpdated(
-                        update_ids=call_ids, status=reply_status, speech_id=speech.id
+                        update_ids=update_ids,
+                        call_ids=call_ids,
+                        status=reply_status,
+                        speech_id=speech.id,
                     )
                 ),
             )

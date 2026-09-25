@@ -589,6 +589,7 @@ class SessionHost:
                 ended.message = event.update.message
             updated = pb(ended=ended)
         elif isinstance(event.update, ToolReplyUpdated):
+            # the proto carries no call_ids; a remote reader sees the update ids only
             updated = pb(
                 reply_updated=pb.ReplyUpdated(
                     update_ids=event.update.update_ids,
