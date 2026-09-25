@@ -14,7 +14,9 @@
 # limitations under the License.
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -143,6 +145,9 @@ class LLM(llm.LLM):
 
         self._sampling_params_warned = False
         self._forced_tool_choice_warned = False
+        self._client: Any | None = None
+        self._client_lock = asyncio.Lock()
+        self._client_exit_stack = AsyncExitStack()
         self._session = _resolve_session(session)
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
@@ -172,6 +177,39 @@ class LLM(llm.LLM):
             if is_given(supports_sampling_params)
             else not _model_rejects_sampling_params(bedrock_model)
         )
+
+    async def _get_client(self) -> Any:
+        """Return the shared ``bedrock-runtime`` client, creating it on first use.
+
+        The client is kept for the lifetime of this ``LLM`` and closed by
+        ``aclose()``. Building one per turn meant every reply paid for a fresh
+        TCP + TLS handshake and then threw the connection away, and it left the
+        plugin unable to take part in ``LLM.prewarm()``.
+        """
+        if self._client is None:
+            async with self._client_lock:
+                if self._client is None:
+                    config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+                    self._client = await self._client_exit_stack.enter_async_context(
+                        self._session.create_client("bedrock-runtime", config=config)
+                    )
+        return self._client
+
+    async def _prewarm_impl(self) -> None:
+        # CountTokens is the only bedrock-runtime operation that reaches the
+        # service without generating anything: it resolves DNS, completes the TLS
+        # handshake and leaves a keep-alive connection in the pool for the first
+        # real turn. Failures are swallowed by LLM.prewarm().
+        client = await self._get_client()
+        await client.count_tokens(
+            modelId=self.model,
+            input={"converse": {"messages": [{"role": "user", "content": [{"text": "ping"}]}]}},
+        )
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        self._client = None
+        await self._client_exit_stack.aclose()
 
     @property
     def model(self) -> str:
@@ -291,7 +329,6 @@ class LLM(llm.LLM):
             self,
             chat_ctx=chat_ctx,
             tools=tools or [],
-            session=self._session,
             conn_options=conn_options,
             extra_kwargs=opts,
         )
@@ -303,7 +340,6 @@ class LLMStream(llm.LLMStream):
         llm: LLM,
         *,
         chat_ctx: ChatContext,
-        session: AioSession,
         conn_options: APIConnectOptions,
         tools: list[llm.Tool],
         extra_kwargs: dict[str, Any],
@@ -311,7 +347,6 @@ class LLMStream(llm.LLMStream):
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._llm: LLM = llm
         self._opts = extra_kwargs
-        self._session = session
         self._tool_call_id: str | None = None
         self._fnc_name: str | None = None
         self._fnc_raw_arguments: str | None = None
@@ -320,25 +355,24 @@ class LLMStream(llm.LLMStream):
     async def _run(self) -> None:
         retryable = True
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.create_client("bedrock-runtime", config=config) as client:
-                response = await client.converse_stream(**self._opts)
-                request_id = response["ResponseMetadata"]["RequestId"]
-                if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-                    raise APIStatusError(
-                        f"aws bedrock llm: error generating content: {response}",
-                        status_code=response["ResponseMetadata"]["HTTPStatusCode"],
-                        # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
-                        # body=response,
-                        retryable=False,
-                        request_id=request_id,
-                    )
+            client = await self._llm._get_client()
+            response = await client.converse_stream(**self._opts)
+            request_id = response["ResponseMetadata"]["RequestId"]
+            if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+                raise APIStatusError(
+                    f"aws bedrock llm: error generating content: {response}",
+                    status_code=response["ResponseMetadata"]["HTTPStatusCode"],
+                    # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
+                    # body=response,
+                    retryable=False,
+                    request_id=request_id,
+                )
 
-                async for chunk in response["stream"]:
-                    chat_chunk = self._parse_chunk(request_id, chunk)
-                    if chat_chunk is not None:
-                        retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+            async for chunk in response["stream"]:
+                chat_chunk = self._parse_chunk(request_id, chunk)
+                if chat_chunk is not None:
+                    retryable = False
+                    self._event_ch.send_nowait(chat_chunk)
 
         except Exception as e:
             raise APIConnectionError(
