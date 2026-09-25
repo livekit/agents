@@ -109,6 +109,12 @@ CerebrasChatModels = Literal[
     "gemma-4-31b",
 ]
 
+UrunChatModels = Literal[
+    "qwen3.8-27b:nvfp4",
+    "agents-a1:fp8",
+    "diffusiongemma-26b:bf16",
+]
+
 PerplexityChatModels = Literal[
     "llama-3.1-sonar-small-128k-online",
     "llama-3.1-sonar-small-128k-chat",
