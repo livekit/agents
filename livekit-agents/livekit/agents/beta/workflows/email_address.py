@@ -89,6 +89,11 @@ class GetEmailTask(AgentTask[GetEmailResult]):
                 "Get the user's email address. First scan the conversation - if they already gave "
                 "one earlier, read it back and ask them to confirm it rather than asking from "
                 "scratch. Only ask fresh when the conversation has no email address yet."
+                + (
+                    " When confirming, spell the address out character by character."
+                    if self._spell_read_back
+                    else ""
+                )
             )
         )
 

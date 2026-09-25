@@ -175,6 +175,11 @@ class GetNameTask(AgentTask[GetNameResult]):
                 "the source in the conversation (the earlier step, the booking they "
                 "mentioned), not a presumption about how the name appears in the "
                 "destination. Only ask fresh when the conversation has no name yet."
+                + (
+                    " When confirming, spell each name part out letter by letter."
+                    if self._spell_read_back
+                    else ""
+                )
             )
         )
 
