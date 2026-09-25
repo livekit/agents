@@ -63,9 +63,11 @@ class Instructions:
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
 
-    ``dynamic`` holds text that changes from call to call. It is rendered last, and
-    :meth:`render_content` separates it from the rest with a :class:`CacheBreakpoint`,
-    so a provider that supports prompt cache breakpoints reuses everything before it.
+    ``dynamic`` holds text that changes from call to call. It is rendered last, after a
+    single newline, and :meth:`render_content` separates it from the rest with a
+    :class:`CacheBreakpoint`, so a provider that supports prompt cache breakpoints reuses
+    everything before it. Joining the items of :meth:`render_content` with a newline
+    gives exactly :meth:`render`.
     """
 
     def __init__(
@@ -94,8 +96,10 @@ class Instructions:
             data: Template variables to fill. Missing placeholders log a warning
                 and are replaced with empty strings.
         """
+        # one newline, not the section separator: provider formatters join content items
+        # with one newline, and render() must read the same as render_content()
         parts = [self._render_static(modality=modality), self._render_dynamic()]
-        result = "\n\n".join(p for p in parts if p)
+        result = "\n".join(p for p in parts if p)
 
         if data:
             result = utils.misc.safe_render(result, data)
@@ -112,7 +116,7 @@ class Instructions:
 
         Without ``dynamic`` this is the single string :meth:`render` returns. With it, the
         static text and the dynamic text become separate items around a
-        :class:`CacheBreakpoint`; a provider formatter joins them with a newline.
+        :class:`CacheBreakpoint`; joined with a newline they read exactly as :meth:`render`.
         """
         static = self._render_static(modality=modality)
         dynamic = self._render_dynamic()
@@ -189,7 +193,9 @@ class Instructions:
                 and self.dynamic == other.dynamic
             )
         if isinstance(other, str):
-            return self.common == other
+            # a plain string has no sections, so only section-free instructions equal it;
+            # the realtime handoff path reuses a session on this equality
+            return self.common == other and not self.audio and not self.text and not self.dynamic
         return NotImplemented
 
 

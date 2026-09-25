@@ -25,11 +25,11 @@ BREAKPOINT = {"mode": "explicit"}
 def test_render_appends_dynamic_after_the_modality_addition():
     instr = Instructions(COMMON, audio=AUDIO, dynamic=DYNAMIC)
 
-    assert instr.render(modality="audio") == f"{COMMON}\n\n{AUDIO}\n\n{DYNAMIC}"
+    assert instr.render(modality="audio") == f"{COMMON}\n\n{AUDIO}\n{DYNAMIC}"
 
 
 def test_render_without_modality_still_includes_dynamic():
-    assert Instructions(COMMON, dynamic=DYNAMIC).render() == f"{COMMON}\n\n{DYNAMIC}"
+    assert Instructions(COMMON, dynamic=DYNAMIC).render() == f"{COMMON}\n{DYNAMIC}"
 
 
 def test_render_without_dynamic_is_unchanged():
@@ -64,6 +64,40 @@ def test_render_content_fills_data_in_both_parts():
         CacheBreakpoint(),
         "Caller: Alex.",
     ]
+
+
+def test_render_content_joins_back_to_render():
+    instr = Instructions(COMMON, audio=AUDIO, dynamic=DYNAMIC)
+
+    items = instr.render_content(modality="audio")
+    joined = "\n".join(item for item in items if isinstance(item, str))
+
+    assert joined == instr.render(modality="audio")
+
+
+def test_stored_text_content_matches_render():
+    ctx = ChatContext()
+    update_instructions(
+        ctx, instructions=Instructions(COMMON, dynamic=DYNAMIC), add_if_missing=True
+    )
+
+    msg = ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID)
+    assert msg is not None and msg.type == "message"
+    assert msg.text_content == Instructions(COMMON, dynamic=DYNAMIC).render()
+
+
+def test_instructions_with_dynamic_do_not_equal_their_common_text():
+    assert Instructions(COMMON, dynamic=DYNAMIC) != COMMON
+    assert COMMON != Instructions(COMMON, dynamic=DYNAMIC)
+
+
+def test_instructions_with_a_modality_addition_do_not_equal_their_common_text():
+    assert Instructions(COMMON, audio=AUDIO) != COMMON
+
+
+def test_section_free_instructions_equal_their_text():
+    assert Instructions(COMMON) == COMMON
+    assert Instructions(COMMON, audio="", dynamic="") == COMMON
 
 
 def test_str_stays_the_common_text():
