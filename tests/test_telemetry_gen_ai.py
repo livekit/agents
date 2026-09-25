@@ -69,7 +69,13 @@ def test_builders_produce_the_conventions_shapes() -> None:
         "arguments": {"loc": "Paris"},
     }
     # a serialized payload is deserialized, as the convention asks of instrumentations
-    assert messages[2]["parts"][0]["response"] == {"temp": 14}
+    # `name` is carried too, so a result is labelled by the tool that produced it
+    assert messages[2]["parts"][0] == {
+        "type": "tool_call_response",
+        "id": "call_1",
+        "response": {"temp": 14},
+        "name": "get_weather",
+    }
 
     call = llm.FunctionCall(call_id="call_9", name="lookup", arguments='{"q": "x"}')
     output = gen_ai.to_output_messages(text="one moment", function_calls=[call])
@@ -108,6 +114,16 @@ def test_builders_produce_the_conventions_shapes() -> None:
 )
 def test_finish_reasons_use_the_conventions_values(kwargs: dict, expected: str) -> None:
     assert gen_ai.finish_reason_for(**kwargs) == expected
+
+
+def test_a_tool_response_omits_an_unknown_name() -> None:
+    """`name` is an extension the part's open schema allows, not a required field —
+    an empty one is left off rather than reported as a blank label."""
+    ctx = llm.ChatContext.empty()
+    ctx.insert(llm.FunctionCallOutput(call_id="call_2", output="ok", is_error=False))
+
+    part = gen_ai.to_input_messages(ctx)[0]["parts"][0]
+    assert part == {"type": "tool_call_response", "id": "call_2", "response": "ok"}
 
 
 def test_inference_span_uses_the_registry_names() -> None:

@@ -457,25 +457,32 @@ async def _tts_inference_task(
     provider: str | None = None,
 ) -> bool:
     current_span = trace.get_current_span()
-    if model:
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-    if provider:
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
+    gen_ai_telemetry.set_request_attributes(
+        current_span,
+        operation=trace_types.GenAIOperationName.SYNTHESIZE,
+        provider=provider,
+        model=model,
+        stream=True,
+        output_type=trace_types.GenAIOutputType.SPEECH,
+    )
 
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
     if text_transforms:
         input = _apply_text_transforms(input, text_transforms)
 
     start_time: float | None = None
+    # the words handed to the TTS, partial after an interruption — what was synthesized
+    spoken: list[str] = []
     input_tee = itertools.tee(input, 2)
 
-    async def _get_start_time() -> None:
+    async def _read_input() -> None:
         nonlocal start_time
-        async for _ in input_tee[0]:
-            start_time = time.perf_counter()
-            break
+        async for chunk in input_tee[0]:
+            if start_time is None:
+                start_time = time.perf_counter()
+            spoken.append(chunk)
 
-    _start_time_task = asyncio.create_task(_get_start_time())
+    _input_task = asyncio.create_task(_read_input())
     try:
         tts_node = node(input_tee[1], model_settings)
         if asyncio.iscoroutine(tts_node):
@@ -512,7 +519,11 @@ async def _tts_inference_task(
             audio_duration += audio_frame.duration
         return audio_duration > 0
     finally:
-        await aio.gracefully_cancel(_start_time_task)
+        await aio.gracefully_cancel(_input_task)
+        gen_ai_telemetry.set_content_attributes(
+            current_span,
+            input_messages=gen_ai_telemetry.to_speech_messages("".join(spoken), role="assistant"),
+        )
         await input_tee.aclose()
 
 
