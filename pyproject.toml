@@ -49,6 +49,7 @@ livekit-plugins-palabra = { workspace = true }
 livekit-plugins-perplexity = { workspace = true }
 livekit-plugins-protoface = { workspace = true }
 livekit-plugins-resemble = { workspace = true }
+livekit-plugins-reson8 = { workspace = true }
 livekit-plugins-respeecher = { workspace = true }
 livekit-plugins-rime = { workspace = true }
 livekit-plugins-runway = { workspace = true }
