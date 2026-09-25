@@ -10,6 +10,7 @@ import pytest
 
 from livekit import rtc
 from livekit.agents import NOT_GIVEN, Agent, AgentSession, utils
+from livekit.agents.types import TOPIC_CHAT
 from livekit.agents.voice.io import PlaybackFinishedEvent
 from livekit.agents.voice.room_io._input import (
     _ParticipantAudioInputStream,
@@ -25,6 +26,7 @@ from livekit.agents.voice.room_io.types import (
     AudioInputOptions,
     NoiseCancellationParams,
     RoomOptions,
+    TextInputEvent,
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
@@ -353,6 +355,89 @@ async def test_roomio_aclose_unregisters_disconnect_and_closes_transcription_out
     room_io._tr_synchronizer.aclose.assert_awaited_once()
     room_io._user_tr_output.aclose.assert_awaited_once()
     room_io._agent_tr_output.aclose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("participant_identity", "link_state", "sender_identity", "accepted"),
+    [
+        ("Alice", "pre_link", "Bob", False),
+        ("Alice", "pre_link", "Alice", True),
+        ("Alice", "linked", "Bob", False),
+        ("Alice", "linked", "Alice", True),
+        ("Alice", "disconnected", "Bob", False),
+        (None, "pre_link", "Bob", True),
+        (None, "linked", "Bob", False),
+        (None, "linked", "Alice", True),
+        ("Alice", "unset", "Bob", True),
+    ],
+)
+async def test_roomio_chat_participant_filter(
+    participant_identity: str | None, link_state: str, sender_identity: str, accepted: bool
+) -> None:
+    room = _FakeRoom()
+    participants = {
+        identity: MagicMock(
+            spec=rtc.RemoteParticipant,
+            identity=identity,
+            sid=f"PA_{identity}",
+            attributes={},
+            kind=rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            disconnect_reason=rtc.DisconnectReason.CLIENT_INITIATED,
+        )
+        for identity in ("Alice", "Bob")
+    }
+    agent_session = MagicMock(spec=AgentSession)
+    text_input_cb = MagicMock(return_value=None)
+    room_io = RoomIO(
+        agent_session,
+        room,
+        options=RoomOptions(
+            participant_identity=participant_identity
+            if participant_identity is not None
+            else NOT_GIVEN,
+            audio_input=False,
+            audio_output=False,
+            text_output=False,
+            close_on_disconnect=False,
+        ),
+    )
+    await room_io.start()
+    room_io.register_text_input(text_input_cb)
+    try:
+        await asyncio.sleep(0)
+        assert room_io.linked_participant is None
+        room.remote_participants[sender_identity] = participants[sender_identity]
+
+        if link_state != "pre_link":
+            room.remote_participants["Alice"] = participants["Alice"]
+            room.emit("participant_connected", participants["Alice"])
+            await asyncio.wait_for(room_io.wait_for_ready(), timeout=1.0)
+            assert room_io.linked_participant is participants["Alice"]
+        if link_state == "disconnected":
+            del room.remote_participants["Alice"]
+            room.emit("participant_disconnected", participants["Alice"])
+            assert room_io.linked_participant is None
+        elif link_state == "unset":
+            room_io.unset_participant()
+            assert room_io.linked_participant is None
+
+        reader = MagicMock(spec=rtc.TextStreamReader, read_all=AsyncMock(return_value="hello"))
+        room.emit(f"text:{TOPIC_CHAT}", reader, sender_identity)
+        await asyncio.gather(*room_io._tasks)
+
+        if accepted:
+            reader.read_all.assert_awaited_once()
+            text_input_cb.assert_called_once_with(
+                agent_session,
+                TextInputEvent(
+                    text="hello", info=reader.info, participant=participants[sender_identity]
+                ),
+            )
+        else:
+            text_input_cb.assert_not_called()
+            reader.read_all.assert_not_awaited()
+    finally:
+        await room_io.aclose()
 
 
 @pytest.mark.parametrize("event_source", ["linked", "other", "unattributed"])
