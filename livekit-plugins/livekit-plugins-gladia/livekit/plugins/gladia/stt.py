@@ -366,6 +366,11 @@ class STT(stt.STT):
             async with self._ensure_session().ws_connect(
                 session_url,
                 timeout=aiohttp.ClientWSTimeout(ws_receive=receive_timeout, ws_close=10),
+                # Without this a silently dropped socket (half-open TCP, no FIN/RST) is
+                # only noticed once ws_receive expires, which is five times the connect
+                # timeout. The heartbeat closes the socket as soon as a ping goes
+                # unanswered, and that surfaces as WSMsgType.ERROR below.
+                heartbeat=30.0,
             ) as ws:
                 # Combine audio frames to get a single frame with all raw PCM data
                 combined_frame = rtc.combine_audio_frames(buffer)
@@ -389,6 +394,7 @@ class STT(stt.STT):
 
                 # Wait for final transcript
                 utterances = []
+                got_final = False
 
                 # Receive messages until we get the post_final_transcript message
                 try:
@@ -406,6 +412,7 @@ class STT(stt.STT):
                             ):
                                 pass
                             elif data["type"] == "post_final_transcript":
+                                got_final = True
                                 break
                             elif data["type"] == "error":
                                 raise APIConnectionError(
@@ -436,6 +443,19 @@ class STT(stt.STT):
                         raise APITimeoutError(
                             f"Timeout waiting for Gladia final transcript ({receive_timeout}s)"
                         ) from None
+
+                if not got_final:
+                    # aiohttp closes the socket itself when a heartbeat ping goes unanswered, so
+                    # `async for` ends on WSMsgType.CLOSED before the ERROR branch above runs.
+                    # Without this the caller gets an empty transcript instead of a retryable
+                    # error, which is what the ws_receive timeout used to raise.
+                    exc = ws.exception()
+                    if exc is not None:
+                        raise APIConnectionError("Gladia connection lost") from exc
+                    if not utterances:
+                        raise APIConnectionError(
+                            "Gladia socket closed before the final transcript arrived"
+                        )
 
                 # Create a speech event from the collected final utterances
                 return self._create_speech_event(
@@ -744,6 +764,9 @@ class SpeechStream(stt.SpeechStream):
         self._request_id = ""
         self._reconnect_event = asyncio.Event()
         self._ws: aiohttp.ClientWebSocketResponse | None = None
+        # set once this side has asked Gladia to stop, so the recv loop can tell an
+        # expected shutdown from a socket that went away underneath it
+        self._closing_ws = False
 
     def update_options(
         self,
@@ -874,8 +897,16 @@ class SpeechStream(stt.SpeechStream):
                 backoff_time = 1.0
 
                 # Connect to the WebSocket
-                async with self._session.ws_connect(session_url) as ws:
+                async with self._session.ws_connect(
+                    session_url,
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: _recv_messages_task parks on receive forever, and
+                    # the retry in _main_task only runs when something raises. Matches the
+                    # Deepgram and Telnyx STT plugins.
+                    heartbeat=30.0,
+                ) as ws:
                     self._ws = ws
+                    self._closing_ws = False
                     logger.info(f"Connected to Gladia session {self._request_id}")
 
                     send_task = asyncio.create_task(self._send_audio_task())
@@ -949,7 +980,6 @@ class SpeechStream(stt.SpeechStream):
 
         has_ended = False
         last_frame: rtc.AudioFrame | None = None
-        closing_ws = False
 
         try:
             async for data in self._input_ch:
@@ -989,11 +1019,11 @@ class SpeechStream(stt.SpeechStream):
                         has_ended = False
 
             # Tell Gladia we're done sending audio when the stream ends
-            closing_ws = True
+            self._closing_ws = True
             if self._ws:
                 await self._ws.send_str(json.dumps({"type": "stop_recording"}))
         except (aiohttp.ClientError, ConnectionError) as e:
-            if closing_ws or self._session.closed:
+            if self._closing_ws or self._session.closed:
                 return
             raise APIConnectionError("Gladia connection closed unexpectedly") from e
 
@@ -1009,6 +1039,15 @@ class SpeechStream(stt.SpeechStream):
                     self._process_gladia_message(data)
                 except Exception as e:
                     logger.exception(f"Error processing Gladia message: {e}")
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                if self._closing_ws or self._session.closed:
+                    return
+                # The heartbeat closes the socket when a ping goes unanswered, and that
+                # arrives here rather than as a close frame. Raising a retryable error
+                # (instead of logging it as an unexpected type and waiting for the CLOSED
+                # that follows) lets _main_task reconnect with the reason attached;
+                # ws.exception() is the only place it survives.
+                raise APIConnectionError("Gladia connection lost") from self._ws.exception()
             elif msg.type in (
                 aiohttp.WSMsgType.CLOSED,
                 aiohttp.WSMsgType.CLOSE,
