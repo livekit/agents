@@ -176,6 +176,7 @@ class BackgroundAudioPlayer:
         self._lock = asyncio.Lock()
 
         self._mixer_atask: asyncio.Task[None] | None = None
+        self._closed = False
 
         self._play_tasks: list[asyncio.Task[None]] = []
 
@@ -260,6 +261,9 @@ class BackgroundAudioPlayer:
             PlayHandle: An object representing the playback handle. This can be
             awaited or stopped manually.
         """  # noqa: E501
+        if self._closed:
+            raise RuntimeError("BackgroundAudio is closed")
+
         if not self._mixer_atask:
             raise RuntimeError("BackgroundAudio is not started")
 
@@ -342,6 +346,10 @@ class BackgroundAudioPlayer:
             if not self._mixer_atask:
                 return  # not started
 
+            # set before the first await: play() gates on this, so no new play task can be
+            # appended after cancel_and_wait has snapshotted the list below
+            self._closed = True
+
             await cancel_and_wait(*self._play_tasks)
 
             await cancel_and_wait(self._mixer_atask)
@@ -368,7 +376,9 @@ class BackgroundAudioPlayer:
         return None
 
     def _agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        if not self._thinking_sound:
+        if self._closed or not self._thinking_sound:
+            # aclose() unregisters this listener, but only after awaiting; a state change
+            # arriving in between must not start a new sound
             return
 
         if ev.new_state == "thinking":
