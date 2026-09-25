@@ -777,6 +777,7 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
+        fold_dynamic_instructions: bool = True,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload

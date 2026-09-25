@@ -51,6 +51,7 @@ def convert_mid_conversation_instructions(
     *,
     role: llm.ChatRole = "user",
     template: str = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+    fold_dynamic_instructions: bool = True,
 ) -> llm.ChatContext:
     """Convert mid-conversation system messages to the given role to preserve their position.
 
@@ -69,7 +70,9 @@ def convert_mid_conversation_instructions(
     The one exception is the per-call instructions message
     (:data:`~livekit.agents.llm.chat_context.DYNAMIC_INSTRUCTIONS_MESSAGE_ID`)
     directly after the preamble: it is folded into the preamble so the per-call
-    context keeps system priority on providers that take one system text.
+    context keeps system priority on providers that take one system text. Pass
+    ``fold_dynamic_instructions=False`` when the preamble will not reach the model
+    (Gemini ``cached_content``); the message is then rewritten like any other.
     """
     preamble_allowed = True
     items: list[llm.ChatItem] = []
@@ -79,7 +82,7 @@ def convert_mid_conversation_instructions(
             if preamble_allowed:
                 preamble_allowed = False
                 items.append(item)
-            elif _is_dynamic_after_preamble(items, item):
+            elif fold_dynamic_instructions and _is_dynamic_after_preamble(items, item):
                 items[0] = _merge_content(items[0], item)
             elif text := item.raw_text_content:
                 items.append(

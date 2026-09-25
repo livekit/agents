@@ -281,6 +281,18 @@ def test_mistralai_format_folds_dynamic_into_the_instructions():
     assert "<instructions>" not in str(entries)
 
 
+def test_google_format_can_keep_dynamic_as_a_turn_for_cached_content():
+    # Gemini cached_content requests carry no system_instruction at all
+    turns, extra = _dynamic_ctx().to_provider_format("google", fold_dynamic_instructions=False)
+
+    assert extra.system_messages == [COMMON]
+    assert [t["role"] for t in turns] == ["user"]
+    assert [p["text"] for p in turns[0]["parts"]] == [
+        f"<instructions>\n{DYNAMIC}\n</instructions>",
+        "Hi, I need to reschedule.",
+    ]
+
+
 def test_per_turn_instructions_after_dynamic_still_become_a_user_turn():
     # generate_reply(instructions=...) on turn 1: two leading system messages, no user yet
     ctx = ChatContext()
