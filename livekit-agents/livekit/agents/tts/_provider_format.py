@@ -1299,6 +1299,14 @@ def strip_all_markup(text: str) -> str:
 
 _ATTR_PATTERN = r"(?:\"[^\"]*\"|'[^']*'|[^'\">])*"
 _SSML_BREAK_RE = re.compile(rf"<\s*/?\s*break\b{_ATTR_PATTERN}\/?>", re.IGNORECASE)
+_SSML_SENTENCE_RE = re.compile(
+    rf"<\s*s\b{_ATTR_PATTERN}>(.*?)</\s*s\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SSML_PARAGRAPH_RE = re.compile(
+    rf"<\s*p\b{_ATTR_PATTERN}>(.*?)</\s*p\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
 _SSML_STRUCTURAL_RE = re.compile(
     rf"<\s*(?P<tag>p|s)\b{_ATTR_PATTERN}>(.*?)</\s*(?P=tag)\s*>",
     re.IGNORECASE | re.DOTALL,
@@ -1451,9 +1459,17 @@ def strip_chat_markup(text: str, *, tts: Any = None, ssml: bool | None = None) -
                 break
             text = replaced
 
-        # Replace structural SSML tags (<p>, <s>) with inner text + space separator
+        # Process sentences (<s>) before enclosing paragraphs (<p>) to preserve word
+        # boundaries when structural tags are nested (e.g. <p>one<s>two</s>three</p>),
+        # keeping word boundaries on both sides with " \1 ".
         while True:
-            replaced = _SSML_STRUCTURAL_RE.sub(r"\2 ", text)
+            replaced = _SSML_SENTENCE_RE.sub(r" \1 ", text)
+            if replaced == text:
+                break
+            text = replaced
+
+        while True:
+            replaced = _SSML_PARAGRAPH_RE.sub(r" \1 ", text)
             if replaced == text:
                 break
             text = replaced

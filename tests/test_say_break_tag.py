@@ -111,6 +111,16 @@ def test_strip_chat_markup_structural_ssml_boundaries() -> None:
     assert strip_chat_markup("<s>First.</s><s>Second.</s>", ssml=True) == "First. Second."
 
 
+def test_strip_chat_markup_nested_structural_ssml() -> None:
+    """Nested <s> tags within <p> tags should preserve word boundaries with adjacent text."""
+    assert strip_chat_markup("<speak><p>one<s>two</s>three</p></speak>") == "one two three"
+    assert strip_chat_markup("<speak><p>one<s>two</s></p></speak>") == "one two"
+    assert strip_chat_markup("<speak><p><s>one</s>two</p></speak>") == "one two"
+    assert strip_chat_markup("<p>one<s>two</s>three</p>", ssml=True) == "one two three"
+    assert strip_chat_markup("one<s>two</s>three", ssml=True) == "one two three"
+    assert strip_chat_markup("one<p>two</p>three", ssml=True) == "one two three"
+
+
 def test_strip_chat_markup_preserves_literal_markup_when_ssml_disabled() -> None:
     """Preserve literal HTML/XML markup when SSML is not enabled."""
     assert strip_chat_markup("Use <p> and </p> tags") == "Use <p> and </p> tags"
