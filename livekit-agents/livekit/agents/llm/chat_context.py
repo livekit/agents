@@ -63,11 +63,11 @@ class Instructions:
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
 
-    ``dynamic`` holds text that changes from call to call. It is rendered last, after a
-    single newline, and :meth:`render_content` separates it from the rest with a
-    :class:`CacheBreakpoint`, so a provider that supports prompt cache breakpoints reuses
-    everything before it. Joining the items of :meth:`render_content` with a newline
-    gives exactly :meth:`render`.
+    ``dynamic`` holds text that changes from call to call, such as the time or the
+    caller's number. :meth:`render` appends it after a single newline. The voice pipeline
+    stores it as its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix
+    (see :func:`livekit.agents.voice.generation.update_instructions`).
     """
 
     def __init__(
@@ -96,9 +96,9 @@ class Instructions:
             data: Template variables to fill. Missing placeholders log a warning
                 and are replaced with empty strings.
         """
-        # one newline, not the section separator: provider formatters join content items
-        # with one newline, and render() must read the same as render_content()
-        parts = [self._render_static(modality=modality), self._render_dynamic()]
+        # one newline, not the section separator: the pipeline stores dynamic as the next
+        # message, and provider formatters join messages' text with one newline
+        parts = [self.render_static(modality=modality), self.dynamic or ""]
         result = "\n".join(p for p in parts if p)
 
         if data:
@@ -106,37 +106,14 @@ class Instructions:
 
         return result
 
-    def render_content(
-        self,
-        *,
-        modality: Literal["audio", "text"] | None = None,
-        data: dict[str, object] | None = None,
-    ) -> list[ChatContent]:
-        """Render instructions as message content, with a cache breakpoint before ``dynamic``.
-
-        Without ``dynamic`` this is the single string :meth:`render` returns. With it, the
-        static text and the dynamic text become separate items around a
-        :class:`CacheBreakpoint`; joined with a newline they read exactly as :meth:`render`.
-        """
-        static = self._render_static(modality=modality)
-        dynamic = self._render_dynamic()
-        if data:
-            static = utils.misc.safe_render(static, data)
-            dynamic = utils.misc.safe_render(dynamic, data) if dynamic else dynamic
-        if not dynamic:
-            return [static]
-        return [static, CacheBreakpoint(), dynamic]
-
-    def _render_static(self, *, modality: Literal["audio", "text"] | None) -> str:
+    def render_static(self, *, modality: Literal["audio", "text"] | None = None) -> str:
+        """Render the common text and the modality addition, without ``dynamic``."""
         parts = [self.common]
         if modality is not None:
             addition = self.audio if modality == "audio" else self.text
             if addition:
                 parts.append(addition)
         return "\n\n".join(p for p in parts if p)
-
-    def _render_dynamic(self) -> str:
-        return self.dynamic or ""
 
     @staticmethod
     def resolve_template(template: str, **kwargs: object) -> Instructions:
@@ -531,7 +508,7 @@ class ChatContext:
             kwargs["extra"] = extra
 
         if isinstance(content, Instructions):
-            message = ChatMessage(role=role, content=content.render_content(), **kwargs)
+            message = ChatMessage(role=role, content=[content.render()], **kwargs)
         elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:

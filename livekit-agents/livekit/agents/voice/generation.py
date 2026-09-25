@@ -1219,6 +1219,12 @@ INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 The ID of the instructions message in the chat context. (only for stateless LLMs)
 """
 
+DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
+"""
+The ID of the per-call instructions message (``Instructions.dynamic``), kept right after
+the instructions message.
+"""
+
 
 def update_instructions(
     chat_ctx: ChatContext,
@@ -1230,33 +1236,49 @@ def update_instructions(
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    Instructions are rendered for the given modality before storage; a ``dynamic``
-    section is stored behind a cache breakpoint (see :meth:`Instructions.render_content`).
+    Instructions are rendered for the given modality before storage. A ``dynamic`` section
+    becomes its own system message right after the instructions message, so the
+    instructions message stays identical across calls and can end a cached prompt prefix.
+    Inside one system message the per-call text would defeat the cache: with tools in the
+    request, a cache breakpoint partway through a system message is not matched.
     """
-    content = (
-        instructions.render_content(modality=modality)
-        if isinstance(instructions, Instructions)
-        else [instructions]
-    )
+    if isinstance(instructions, Instructions):
+        text = instructions.render_static(modality=modality)
+        dynamic = instructions.dynamic or None
+    else:
+        text, dynamic = instructions, None
 
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+    idx = _update_instructions_message(chat_ctx, text=text, add_if_missing=add_if_missing)
+    if idx is not None and dynamic:
+        chat_ctx.items.insert(
+            idx + 1,
+            llm.ChatMessage(id=DYNAMIC_INSTRUCTIONS_MESSAGE_ID, role="system", content=[dynamic]),
+        )
+
+
+def _update_instructions_message(
+    chat_ctx: ChatContext, *, text: str, add_if_missing: bool
+) -> int | None:
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
     if idx is not None:
-        if chat_ctx.items[idx].type == "message":
-            chat_ctx.items[idx] = llm.ChatMessage(
-                id=INSTRUCTIONS_MESSAGE_ID,
-                role="system",
-                content=content,
-                created_at=chat_ctx.items[idx].created_at,
-            )
-        else:
+        if chat_ctx.items[idx].type != "message":
             raise ValueError(
                 "expected the instructions inside the chat_ctx to be of type 'message'"
             )
-    elif add_if_missing:
-        chat_ctx.items.insert(
-            0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=content),
+        chat_ctx.items[idx] = llm.ChatMessage(
+            id=INSTRUCTIONS_MESSAGE_ID,
+            role="system",
+            content=[text],
+            created_at=chat_ctx.items[idx].created_at,
         )
+        return idx
+    if add_if_missing:
+        chat_ctx.items.insert(
+            0, llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text])
+        )
+        return 0
+    return None
 
 
 def mark_instructions_cache_boundary(chat_ctx: ChatContext) -> None:
@@ -1275,12 +1297,14 @@ def mark_instructions_cache_boundary(chat_ctx: ChatContext) -> None:
 
 
 def remove_instructions(chat_ctx: ChatContext) -> None:
+    _remove_by_id(chat_ctx, INSTRUCTIONS_MESSAGE_ID)
+    _remove_by_id(chat_ctx, DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+
+
+def _remove_by_id(chat_ctx: ChatContext, item_id: str) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
-    while True:
-        if msg := chat_ctx.get_by_id(INSTRUCTIONS_MESSAGE_ID):
-            chat_ctx.items.remove(msg)
-        else:
-            break
+    while (msg := chat_ctx.get_by_id(item_id)) is not None:
+        chat_ctx.items.remove(msg)
 
 
 EXPRESSIVE_INSTRUCTIONS_MESSAGE_ID = "lk.expressive.instructions"  #  value must not change
