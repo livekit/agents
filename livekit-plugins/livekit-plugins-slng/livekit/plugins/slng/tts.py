@@ -144,6 +144,9 @@ _WS_CLOSED_TYPES = (
     aiohttp.WSMsgType.CLOSING,
 )
 _WS_END_TYPES = (*_WS_CLOSED_TYPES, aiohttp.WSMsgType.ERROR)
+# Close codes that end a connection without a fault. Any other close after a
+# reply's audio has started leaves that reply cut short.
+_NORMAL_CLOSE_CODES = frozenset({aiohttp.WSCloseCode.OK, aiohttp.WSCloseCode.GOING_AWAY})
 # How often the idle reader sends a keepalive. The gateway's idle timer counts
 # text and binary frames only, so the transport-level ping above does not hold
 # a silent socket open.
@@ -2228,26 +2231,33 @@ class SynthesizeStream(tts.SynthesizeStream):
             logger.debug("[TTS] _tokenize_input starting, waiting for input...")
             segment: _SegmentInput | None = None
             text_count = 0
-            async for the_input in self._input_ch:
-                if isinstance(the_input, str):
-                    text_count += 1
-                    if text_count == 1:
-                        logger.debug(
-                            "[TTS] first text received", extra={"lk.pii.text": the_input[:50]}
-                        )
-                    if segment is None:
-                        segment = _SegmentInput(stream=self._open_tokenizer_stream())
-                        self._segments_ch.send_nowait(segment)
-                        logger.debug("[TTS] New token stream created")
-                    segment.stream.push_text(the_input)
-                elif isinstance(the_input, self._FlushSentinel):
-                    logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
-                    if segment is not None:
-                        # Mark before ending the input: the sender reads this to
-                        # know the next tokens it pulls are the reply's last.
-                        segment.input_ended = True
-                        segment.stream.end_input()
-                    segment = None
+            try:
+                async for the_input in self._input_ch:
+                    if isinstance(the_input, str):
+                        text_count += 1
+                        if text_count == 1:
+                            logger.debug(
+                                "[TTS] first text received", extra={"lk.pii.text": the_input[:50]}
+                            )
+                        if segment is None:
+                            segment = _SegmentInput(stream=self._open_tokenizer_stream())
+                            self._segments_ch.send_nowait(segment)
+                            logger.debug("[TTS] New token stream created")
+                        segment.stream.push_text(the_input)
+                    elif isinstance(the_input, self._FlushSentinel):
+                        logger.debug(f"[TTS] Flush sentinel received after {text_count} texts")
+                        if segment is not None:
+                            # Mark before ending the input: the sender reads this to
+                            # know the next tokens it pulls are the reply's last.
+                            segment.input_ended = True
+                            segment.stream.end_input()
+                        segment = None
+            finally:
+                if segment is not None:
+                    # Left mid-reply, by a cancel: close the tokenizer stream as
+                    # well, so that nothing is left waiting on its next token.
+                    with contextlib.suppress(Exception):
+                        await segment.stream.aclose()
 
             logger.debug(f"[TTS] _tokenize_input done: {text_count} total texts")
             self._segments_ch.close()
@@ -2286,9 +2296,10 @@ class SynthesizeStream(tts.SynthesizeStream):
     def _open_tokenizer_stream(self) -> tokenize.WordStream | tokenize.SentenceStream:
         """Start one reply's tokenizer stream, saying whether it may run ahead.
 
-        The plugin's own tokenizer can release the opening of a long sentence
-        before the sentence is finished, which on a model that starts on part of
-        a sentence is worth most of half a second on the first audio of a reply.
+        The plugin's own tokenizer can release the opening of a sentence at the
+        start of a reply before the sentence is finished, which on a model that
+        starts on part of a sentence is worth most of half a second on the first
+        audio of a reply.
         It is only allowed to when the gateway has said it understands such a
         frame: one that has not would either drop it or refuse it, and sending
         an opening as an ordinary frame is the fragment that sentence framing
@@ -2359,6 +2370,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         # reading, so the socket cannot be kept for the next reply.
         flush_sent = False
         ended_early = False
+        # Set once the gateway has ended this attempt's reply, by audio_end or
+        # by closing. Nothing is written after that: a flush would reach a
+        # socket with no turn open, and text would start a turn nobody reads.
+        reply_ended = False
+        # When this attempt last wrote to the gateway and last had audio back,
+        # so that the receive timeout only counts time the gateway owes.
+        last_sent_at = 0.0
+        last_received_at = 0.0
 
         def capture_ws_timing(conn: _HeldConnection) -> None:
             # Only meaningful when this segment opened the socket: a reused one
@@ -2410,7 +2429,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             )
 
         async def guarded_send(conn: _HeldConnection, data: str) -> None:
-            nonlocal in_flight
+            nonlocal in_flight, last_sent_at
             # Set before the write, not after: a cancel can land inside send_str
             # once the transport is applying backpressure, and the bytes may
             # already be on the wire. Assuming they were costs one needless
@@ -2428,13 +2447,27 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if conn.reused and audio_chunks_seen == 0:
                     raise _StaleConnection() from exc
                 raise
+            last_sent_at = time.perf_counter()
             conn.text_sent = True
             input_sent_event.set()
+
+        def abandon_after_end() -> None:
+            """Drop what is queued once the gateway has ended the reply.
+
+            Speech among it is speech the caller will not hear, so the reply
+            fails rather than passing as complete.
+            """
+            if any(_contains_speech(queued.text) for queued in pending_frames):
+                raise APIConnectionError("SLNG ended the reply before all of its text was sent")
+            pending_frames.clear()
 
         async def write_pending(conn: _HeldConnection) -> None:
             """Write queued frames, dropping each only once it is on the wire."""
             nonlocal flush_sent
             while pending_frames:
+                if reply_ended:
+                    abandon_after_end()
+                    return
                 frame, flush, partial = pending_frames[0]
                 if partial and not conn.accepts_partial_text:
                     # This socket has not said it can take an opening, and an
@@ -2446,7 +2479,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # because the reader waits for this sender to write first.
                     if len(pending_frames) > 1:
                         nxt = pending_frames[1]
-                        pending_frames[1] = _TextFrame(frame + nxt.text, nxt.flush, nxt.partial)
+                        pending_frames[1] = nxt._replace(text=frame + nxt.text)
                         pending_frames.pop(0)
                         continue
                     if not flush:
@@ -2455,13 +2488,20 @@ class SynthesizeStream(tts.SynthesizeStream):
                     partial = False
                 self._mark_started()
                 payload: dict[str, object] = {"type": "text", "text": frame}
-                if partial and conn.accepts_partial_text:
+                if partial:
                     # "more of this sentence follows", so the gateway can start
                     # on it without hearing it as a whole utterance. Only ever
-                    # set for a gateway that said it understands the field: an
-                    # older one would drop or refuse it.
+                    # set for a gateway that said it understands the field (an
+                    # older one would drop or refuse it); the branch above has
+                    # already dealt with every other socket.
                     payload["partial"] = True
                 await guarded_send(conn, json.dumps(payload))
+                if reply_ended:
+                    # The gateway ended the reply while this frame was being
+                    # written, so it reached a finished turn, and no flush may
+                    # follow it.
+                    abandon_after_end()
+                    return
                 if flush:
                     # The turn's terminator, as its own message rather than a
                     # flag on the text frame. Both forms are in the bridge
@@ -2475,7 +2515,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                     flush_sent = True
                     await guarded_send(conn, self._FLUSH_MSG)
                 pending_frames.pop(0)
-                sent_frames.append(_TextFrame(frame, flush, partial))
+                sent_frames.append(_TextFrame(frame, flush=flush, partial=partial))
                 mark_first_text_sent()
 
         async def send_task(conn: _HeldConnection) -> None:
@@ -2506,7 +2546,9 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # reply: send its frame straight away without the flush.
                     ready_frame = batcher.push(data.token, separator=separator_after(data))
                     if ready_frame is not None:
-                        pending_frames.append(_TextFrame(ready_frame, False, is_partial_head(data)))
+                        pending_frames.append(
+                            _TextFrame(ready_frame, flush=False, partial=is_partial_head(data))
+                        )
                         await write_pending(conn)
                     continue
 
@@ -2524,10 +2566,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 for item in tail:
                     framed = batcher.push(item.token, separator=separator_after(item))
                     if framed is not None:
-                        frames.append(_TextFrame(framed, False, is_partial_head(item)))
+                        frames.append(
+                            _TextFrame(framed, flush=False, partial=is_partial_head(item))
+                        )
                 last = batcher.finish()
                 if last is not None:
-                    frames.append(_TextFrame(last, False))
+                    frames.append(_TextFrame(last, flush=False))
                 if frames:
                     # The reply ends here, so its last frame carries the flush
                     # and cannot be an opening: there is no remainder to follow.
@@ -2540,7 +2584,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             if not frames_complete:
                 last = batcher.finish()
                 if last is not None:
-                    pending_frames.append(_TextFrame(last, False))
+                    pending_frames.append(_TextFrame(last, flush=False))
                 if pending_frames:
                     # Whatever is still queued is the end of this reply: a tail
                     # the batcher was holding, or an opening held back for a
@@ -2550,13 +2594,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     pending_frames[-1] = pending_frames[-1]._replace(flush=True, partial=False)
                     frames_complete = True
                     await write_pending(conn)
-                elif sent_frames:
+                elif sent_frames and not reply_ended:
                     # Every frame is already on the wire but none of them
-                    # carried the terminator, so it goes now. A tokenizer that
-                    # emitted its last token before input_ended was observed
-                    # lands here, and so does a reply that ends straight after
-                    # an opening this plugin's tokenizer released (the rest was
-                    # only whitespace): the flush also completes that opening.
+                    # carried the terminator, so it goes now, unless the
+                    # gateway already ended the reply. A tokenizer that emitted
+                    # its last token before input_ended was observed lands here.
                     flush_sent = True
                     await guarded_send(conn, self._FLUSH_MSG)
                     sent_frames[-1] = sent_frames[-1]._replace(flush=True)
@@ -2570,8 +2612,9 @@ class SynthesizeStream(tts.SynthesizeStream):
             nonlocal audio_chunks_seen, in_flight, outcome, ws_close_code
 
             def push_audio(data: bytes) -> None:
-                nonlocal audio_chunks_seen
+                nonlocal audio_chunks_seen, last_received_at
                 audio_chunks_seen += 1
+                last_received_at = time.perf_counter()
                 mark_first_audio_seen()
                 output_emitter.push(data)
 
@@ -2579,16 +2622,18 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # in_flight = False is what stops the interrupt path sending a
                 # cancel for a reply the gateway already finished, so every exit
                 # from the loop below goes through here.
-                nonlocal audio_end_ms, in_flight
+                nonlocal audio_end_ms, in_flight, reply_ended
                 audio_end_ms = audio_end_ms or _elapsed_ms(segment_started_at)
                 in_flight = False
+                reply_ended = True
                 output_emitter.end_segment()
 
             def note_reply_end() -> None:
                 # The gateway ends a turn on the flush, and when the provider
                 # behind it closes. The second can come before this reply
-                # finished writing; the reply then ends with the audio it has,
-                # and the socket is closed rather than kept.
+                # finished writing. The socket is then closed rather than kept,
+                # and if speech was still to be sent, write_pending fails the
+                # reply when it finds it.
                 nonlocal ended_early, outcome
                 if flush_sent:
                     return
@@ -2611,10 +2656,19 @@ class SynthesizeStream(tts.SynthesizeStream):
             while True:
                 try:
                     msg = await ws.receive(timeout=self._conn_options.timeout)
-                except (TimeoutError, asyncio.TimeoutError):
+                except (TimeoutError, asyncio.TimeoutError) as exc:
                     # A reused socket that never answers died silently while idle.
                     if conn.reused and audio_chunks_seen == 0:
-                        raise _StaleConnection() from None
+                        raise _StaleConnection() from exc
+                    # Only time the gateway owes counts. Once it has answered
+                    # everything sent while the LLM is still writing (as it does
+                    # while producing a tool call's arguments), the silence is
+                    # the LLM's; and text sent a moment ago gets a full timeout.
+                    owed = last_sent_at > last_received_at
+                    if not owed and not segment.input_ended:
+                        continue
+                    if owed and time.perf_counter() - last_sent_at < self._conn_options.timeout:
+                        continue
                     raise
                 if msg.type in _WS_END_TYPES:
                     close_info = _log_ws_end(ws, msg, context="segment", segment_id=segment_id)
@@ -2627,12 +2681,22 @@ class SynthesizeStream(tts.SynthesizeStream):
                             f"SLNG websocket failed after {audio_chunks_seen} audio chunk(s): "
                             f"{close_info['ws_error'] or 'connection lost'}"
                         )
+                    if audio_chunks_seen > 0 and ws_close_code not in _NORMAL_CLOSE_CODES:
+                        # Closed mid-reply for a reason, such as a restart
+                        # (1012), an internal error (1011) or a duration limit
+                        # (1008): the audio so far is a fragment, however the
+                        # connection ended.
+                        raise APIConnectionError(
+                            f"SLNG websocket closed with code {ws_close_code} after "
+                            f"{audio_chunks_seen} audio chunk(s)"
+                        )
                     if audio_chunks_seen > 0:
                         # No audio_end arrived, so whether the reply finished
                         # is the gateway's word against a closed socket. Some
-                        # models do end a turn by closing, so this is not an
-                        # error, but it is not the clean path either: say which
-                        # one happened rather than calling it terminal output.
+                        # models do end a turn by closing, so a normal close is
+                        # not an error, but it is not the clean path either: say
+                        # which one happened rather than calling it terminal
+                        # output.
                         outcome = "closed_no_audio_end"
                         logger.info(
                             "[TTS] recv_task: websocket closed after %s chunk(s) with no "
@@ -2640,6 +2704,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                             audio_chunks_seen,
                             extra={"segment_id": segment_id, **close_info},
                         )
+                        note_reply_end()
                         mark_segment_end()
                         break
                     if conn.reused:
@@ -2741,6 +2806,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # them starts clear; the replay re-queues the frames first.
                 input_sent_event.clear()
                 flush_sent = False
+                reply_ended = False
                 acquire_started_at = time.perf_counter()
                 conn = await self._tts._acquire_connection(timeout=self._conn_options.timeout)
                 # Reported in this reply's TTSMetrics.
@@ -2837,6 +2903,16 @@ class _FallbackStreamBase:
         """Whether the input has anything to say, so that no audio is a failure."""
         return True
 
+    @property
+    def _started_time(self) -> float:
+        """When the current attempt first sent text, as livekit's own streams report it.
+
+        livekit's ``tts.FallbackAdapter`` reads it on the streams it wraps to
+        measure time to first audio, so a plain class needs it too. It is 0
+        until an attempt has started.
+        """
+        return float(getattr(self._stream, "_started_time", 0.0) or 0.0)
+
     def __aiter__(self) -> _FallbackStreamBase:
         return self
 
@@ -2902,10 +2978,15 @@ class _FallbackStreamBase:
                     raise
                 await self._handle_failure(APIConnectionError("TTS produced no audio"))
                 continue
-            except (TimeoutError, asyncio.TimeoutError) as exc:
+            except (TimeoutError, asyncio.TimeoutError):
                 if self._started or self._deadline is None:
                     raise
-                await self._handle_failure(exc, allow_retry=False)
+                await self._handle_failure(
+                    APITimeoutError(
+                        f"SLNG TTS produced no audio within {self._parent._first_audio_timeout_s} s"
+                    ),
+                    allow_retry=False,
+                )
                 continue
             except Exception as exc:
                 if self._started:

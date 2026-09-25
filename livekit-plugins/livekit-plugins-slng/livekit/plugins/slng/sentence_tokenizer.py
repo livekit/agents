@@ -34,10 +34,8 @@ script-agnostic rules on top:
 3. Cut at the last space once a span exceeds ``max_chars``, so text with no
    terminator at all (Thai and Lao have none) still streams.
 
-An ASCII stop also gets a few checks blingfire lacks: a list number or a
-one-letter word before it is not a sentence end, nor is a title opening a
-sentence or a quote closing in the middle of one, while a stop after a CJK
-character, a Greek question mark and an ellipsis before a new sentence are.
+An ASCII stop also gets a few checks blingfire lacks, listed in order in
+``_boundaries``.
 
 No minimum sentence length: a sentence boundary is a natural pause, and a
 character-count minimum is exactly what starves scripts with short sentences.
@@ -214,6 +212,28 @@ _BICAMERAL: _Ranges = (
 )
 _SPACE_IS_BREAK: _Ranges = ((0x0E00, 0x0EFF), (0x1000, 0x109F), (0x1780, 0x17FF))
 _OPENERS = frozenset("(\"'«“‘")
+# Abbreviations that blingfire takes for a sentence end but that never end one:
+# Indonesian honorifics and parts of an address, always followed by a name.
+# Matched with their capital, so an acronym such as "BPK" still ends a sentence.
+_NAME_ABBREVIATIONS = frozenset(
+    {
+        "Bpk",
+        "Sdr",
+        "Sdri",
+        "Yth",
+        "Hj",
+        "Tn",
+        "Ny",
+        "Nn",
+        "Dra",
+        "Kec",
+        "Kab",
+        "Kel",
+        "Kp",
+        "Ds",
+        "Gg",
+    }
+)
 _ELLIPSIS = "…"
 # How much of what follows a title-shaped word blingfire is shown when asked
 # about it again.
@@ -313,14 +333,23 @@ _ASCII_CLAUSE_MARKS = frozenset(",;:")
 # a word boundary is the next best thing.
 _HEAD_LOOKAHEAD_CHARS = 80
 _HEAD_MIN_CHARS = 60
-# No opening is shorter than this, so a clause mark nearer the start is passed
-# over. Two reasons. A model that starts on part of a sentence voices the opening
-# as it arrives, and has only been shown to sound right on clause-sized openings:
-# a word-sized one can come out word by word. And a turn whose opening reaches
-# the model on its own is neither served from the TTS cache nor stored in it,
-# because its full text is not known when the lookup runs, so a greeting split at
-# its first comma would never be cached. Kept whole, it is.
+# The shortest opening at a clause break, by default. A clause mark nearer the
+# start, such as the comma after "Hi there", is passed over, for two reasons. A
+# model that starts on part of a sentence voices the opening as it arrives, so
+# the opening is kept clause-sized. And a turn whose opening reaches the model on
+# its own is neither served from the TTS cache nor stored in it, because its full
+# text is not known when the lookup runs, so "Hi there, how can I help?" kept
+# whole stays cacheable. ``SentenceTokenizer(partial_head_min_chars=...)`` lowers
+# it for a model that renders each frame as its own utterance (Rime Coda with
+# segment="immediate"), where earlier releases of this plugin started speaking at
+# the first comma.
 _HEAD_MIN_CLAUSE_CHARS = 25
+# An opening shorter than this, possible only with a lowered minimum, leaves room
+# for one more in the same sentence: alone, its second or so of audio would be
+# followed by silence until the full stop. And until this much of a reply has
+# gone out, the next sentence may open early too, since "Baik kak." plays for
+# less than a second.
+_SHORT_HEAD_CHARS = 25
 
 _Span = tuple[int, int]
 
@@ -369,11 +398,13 @@ def _blingfire_ends(text: str) -> frozenset[int] | None:
 def _boundaries(text: str) -> list[int]:
     """Offsets to cut at, one after each sentence-ending run of punctuation.
 
-    A run holding another script's terminator always ends a sentence, and so
-    does a Greek question mark. A run of ASCII stops is blingfire's call, after
+    A run holding another script's terminator ends a sentence, and so does a
+    Greek question mark, unless a closing quote in the run is followed by more
+    of the sentence ("「はい。」と言った。"). A run of ASCII stops is blingfire's call, after
     the checks it lacks, in this order: a quote closing mid-sentence, a stop
     after a CJK character, a title opening a sentence, a list number, a
-    one-letter word, and a closing quote followed by a lowercase word. An
+    one-letter word, an abbreviation that always precedes a name, and a closing
+    quote followed by a lowercase word. An
     ellipsis on its own ends a sentence only before a capital, a letter of a
     caseless script or a CJK character. Every line break with text on both
     sides is a cut as well, unless the next line goes on with a wrapped
@@ -458,6 +489,8 @@ def _boundaries(text: str) -> list[int]:
             elif _is_list_marker(text, i, j, line_start):
                 pass
             elif _single_letter_word(text, i, j):
+                pass
+            elif _precedes_a_name(text, i, j):
                 pass
             elif saw_closer and continues:
                 # 'He said "Stop!" and left.' goes on after the quote.
@@ -589,6 +622,20 @@ def _single_letter_word(text: str, start: int, end: int) -> bool:
     while m >= 0 and text[m].isspace():
         m -= 1
     return not (m >= 0 and text[m].isdigit())
+
+
+def _precedes_a_name(text: str, start: int, end: int) -> bool:
+    """Whether the stop at ``text[start:end]`` ends an honorific such as "Bpk.".
+
+    Blingfire knows "Dr." and "Jl." but not "Bpk." or "Kec.", and cuts after
+    them ("hubungi Bpk. Budi"), which puts a pause inside the sentence.
+    """
+    if text[start:end] != ".":
+        return False
+    k = start
+    while k > 0 and text[k - 1].isalpha():
+        k -= 1
+    return text[k:start] in _NAME_ABBREVIATIONS and (k == 0 or not text[k - 1].isalnum())
 
 
 def _continues_line(text: str, start: int, end: int) -> bool:
@@ -734,12 +781,15 @@ def _clause_end(text: str, index: int) -> int | None:
 
     A clause mark of any script counts, and so does a dash with whitespace on
     both sides, which is how an LLM writes a clause break with an em dash or an
-    en dash. A dash inside a word or a range ("well-known", "10-20") has none.
+    en dash. A dash inside a word or a range ("well-known", "10-20") has none,
+    and neither does an ASCII hyphen, which between spaces is as often a range
+    ("Senin - Jumat", "08.00 - 17.00") as a clause break.
     """
     char = text[index]
     after = index + 1
     if char in _ASCII_CLAUSE_MARKS:
-        return after + 1 if text[after : after + 1].isspace() else None
+        spaced = text[after : after + 1].isspace()
+        return after + 1 if spaced and _same_line_follows(text, after) else None
     if char in _CLAUSE_MARKS:
         # A closing quote or a combining mark after it belongs to the opening,
         # and until the next character arrives it is not known whether one
@@ -747,33 +797,51 @@ def _clause_end(text: str, index: int) -> int | None:
         while after < len(text) and text[after] in _CLOSERS:
             after += 1
         after = _safe_cut(text, after, len(text))
-        return after if after < len(text) else None
-    if unicodedata.category(char) == "Pd":
+        return after if _same_line_follows(text, after) else None
+    if unicodedata.category(char) == "Pd" and char != "-":
         # Not the first thing on its line either, where a dash is a list bullet.
         line = text[:index].rsplit("\n", 1)[-1]
         spaced = line[-1:].isspace() and bool(line.strip())
-        return after + 1 if spaced and text[after : after + 1].isspace() else None
+        followed = text[after : after + 1].isspace() and _same_line_follows(text, after)
+        return after + 1 if spaced and followed else None
     return None
 
 
-def _head_cut(text: str) -> int | None:
+def _same_line_follows(text: str, index: int) -> bool:
+    """Whether more text follows ``text[index:]``'s spaces on the same line.
+
+    An opening marked partial promises that the rest of its sentence follows.
+    Before a line break it cannot know that: the next line may start a sentence
+    of its own ("To reset your password:" then "1. Open the app."), and the
+    line-break rule then sends the piece whole once that line starts.
+    """
+    while index < len(text) and text[index].isspace():
+        if text[index] == "\n":
+            return False
+        index += 1
+    return index < len(text)
+
+
+def _head_cut(text: str, min_clause_chars: int = _HEAD_MIN_CLAUSE_CHARS) -> int | None:
     """How much of an unfinished sentence can be released now, or None to wait.
 
-    The first clause break that leaves at least ``_HEAD_MIN_CLAUSE_CHARS`` of
-    text, else, once ``_HEAD_MIN_CHARS`` have accumulated, the last word
-    boundary inside the lookahead.
+    The first clause break that leaves at least ``min_clause_chars`` of text,
+    else, once ``_HEAD_MIN_CHARS`` have accumulated, the last word boundary
+    inside the lookahead that has more of the line after it.
     """
     limit = min(len(text), _HEAD_LOOKAHEAD_CHARS)
     for index in range(limit):
         cut = _clause_end(text, index)
-        if cut is not None and len(_normalize(text[:cut])) >= _HEAD_MIN_CLAUSE_CHARS:
+        if cut is not None and len(_normalize(text[:cut])) >= min_clause_chars:
             return cut
     if len(text) < _HEAD_MIN_CHARS:
         return None
     # The last word boundary inside the lookahead. A single word running through
     # the whole window leaves nothing safe to cut, so nothing is released.
     index = limit
-    while index > _HEAD_MIN_CHARS and not text[index - 1].isspace():
+    while index > _HEAD_MIN_CHARS and not (
+        text[index - 1].isspace() and _same_line_follows(text, index - 1)
+    ):
         index -= 1
     return index if index > _HEAD_MIN_CHARS else None
 
@@ -809,7 +877,7 @@ def separator_after(token: TokenData) -> str:
 def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
     """Split ``text`` into ``(sentence, start, end)`` offsets into ``text``.
 
-    ``BufferedSentenceStream`` consumes its buffer up to each ``end``, so every
+    ``_SentenceStream`` consumes its buffer up to each ``end``, so every
     ``end`` advances and is the next span's ``start``, save where a span held
     nothing but whitespace and was dropped.
 
@@ -849,7 +917,7 @@ def _split(text: str, *, max_chars: int) -> list[tuple[str, int, int]]:
 
 
 class _SentenceStream(SentenceStream):
-    """Emits whole sentences, and the opening of a long one as soon as it exists.
+    """Emits whole sentences, and the opening of one as soon as it exists.
 
     The buffer holds raw text plus an offset saying how much of it has already
     been handed out, and every piece is a slice of that raw text. That offset is
@@ -870,18 +938,26 @@ class _SentenceStream(SentenceStream):
         split: Callable[[str], list[tuple[str, int, int]]],
         min_ctx_len: int,
         partial_head: bool,
+        min_head_chars: int = _HEAD_MIN_CLAUSE_CHARS,
     ) -> None:
         super().__init__()
         self._split_fnc = split
         self._min_ctx_len = min_ctx_len
         self._partial_head = partial_head
+        self._min_head_chars = min_head_chars
+        self._reset_segment()
+
+    def _reset_segment(self) -> None:
+        """Start a segment: a new id, an empty buffer, and openings allowed."""
         self._segment_id = shortuuid()
         self._buf = ""
         self._handed_out = 0
-        # Cleared once this segment has had its opening, or once a sentence has
-        # gone out without needing one. Only the first chunk of a reply is worth
-        # releasing early: by the second, audio is already playing.
-        self._head_allowed = partial_head
+        # Whether an opening may be released now (see _maybe_emit_head).
+        self._head_allowed = self._partial_head
+        # Whether no opening has gone out in this segment yet.
+        self._first_head = True
+        # Characters handed out in this segment, openings included.
+        self._emitted_chars = 0
 
     def push_text(self, text: str) -> None:
         self._check_not_closed()
@@ -897,10 +973,7 @@ class _SentenceStream(SentenceStream):
         self._check_not_closed()
         self._emit_sentences()
         self._emit(self._buf[self._handed_out :], partial=False)
-        self._buf = ""
-        self._handed_out = 0
-        self._head_allowed = self._partial_head
-        self._segment_id = shortuuid()
+        self._reset_segment()
 
     def end_input(self) -> None:
         self.flush()
@@ -927,16 +1000,27 @@ class _SentenceStream(SentenceStream):
             start = end
         self._buf = self._buf[start:]
         self._handed_out = max(0, self._handed_out - start)
-        self._head_allowed = False
+        # After "Baik kak." the next sentence would otherwise wait for its full
+        # stop while less than a second of audio plays.
+        self._head_allowed = self._partial_head and self._emitted_chars < _SHORT_HEAD_CHARS
 
     def _maybe_emit_head(self) -> None:
-        """Release the opening of the sentence being written, once per segment."""
+        """Release the opening of the sentence being written, while openings are allowed.
+
+        Openings are for the start of a reply, before audio is playing. The
+        first sentence may have one. One shorter than ``_SHORT_HEAD_CHARS``
+        ("Baik kak,", possible only with a lowered minimum) allows one more if
+        it was the segment's first, since its audio is too short to cover the
+        time until the full stop. And while fewer than ``_SHORT_HEAD_CHARS``
+        characters have gone out, a finished sentence lets the next one open
+        early as well.
+        """
         if not self._head_allowed:
             return
         pending = self._buf[self._handed_out :]
         if _ends_a_sentence(pending):
             return
-        cut = _head_cut(pending)
+        cut = _head_cut(pending, self._min_head_chars)
         if cut is None:
             return
         # A cut after an ASCII mark or at a word takes the space with it, and a
@@ -945,11 +1029,14 @@ class _SentenceStream(SentenceStream):
         spaced = pending[cut - 1].isspace() or pending[cut : cut + 1].isspace()
         self._emit(pending[:cut], partial=True, separator=" " if spaced else "")
         self._handed_out += cut
-        self._head_allowed = False
+        short = len(_normalize(pending[:cut])) < _SHORT_HEAD_CHARS
+        self._head_allowed = short and self._first_head
+        self._first_head = False
 
     def _emit(self, text: str, *, partial: bool, separator: str = " ") -> None:
         piece = _normalize(text)
         if piece:
+            self._emitted_chars += len(piece)
             self._event_ch.send_nowait(
                 _SentencePiece(
                     token=piece,
@@ -982,11 +1069,20 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
             with no letter after it. Defaults to 200.
         stream_context_len: Minimum buffered text before the stream looks for
             a boundary. Defaults to 10.
-        partial_head: Allow a stream to release the opening of a long sentence
-            before the sentence is finished, so that a model able to start on
-            part of a sentence begins speaking sooner. A stream still does so
-            only when ``stream(partial_head=True)`` asks for it, which the
-            plugin does when the server supports it. Defaults to True.
+        partial_head: Allow a stream to release the opening of a sentence at
+            the start of a reply before the sentence is finished, so that a
+            model able to start on part of a sentence begins speaking sooner. A
+            stream still does so only when ``stream(partial_head=True)`` asks
+            for it, which the plugin does when the server supports it. Defaults
+            to True.
+        partial_head_min_chars: The shortest opening released at a clause
+            break. The default, 25, keeps a short reply such as "Hi there, how
+            can I help?" in one frame, and so cacheable. Lower it, to 8 for
+            example, for a model that renders each frame as its own utterance,
+            such as Rime Coda with ``segment="immediate"``: speech then starts
+            at the first comma, as it did with earlier releases of this plugin,
+            and an opening that short is followed by one more at the next
+            clause break.
     """
 
     def __init__(
@@ -995,36 +1091,49 @@ class SentenceTokenizer(tokenize.SentenceTokenizer):
         max_chars: int = 200,
         stream_context_len: int = 10,
         partial_head: bool = True,
+        partial_head_min_chars: int = _HEAD_MIN_CLAUSE_CHARS,
     ) -> None:
         super().__init__()
         if max_chars <= 0:
             raise ValueError("max_chars must be positive")
+        if partial_head_min_chars <= 0:
+            raise ValueError("partial_head_min_chars must be positive")
         self._max_chars = max_chars
         self._stream_context_len = stream_context_len
         self._partial_head = partial_head
+        self._partial_head_min_chars = partial_head_min_chars
 
     def _split(self, text: str) -> list[tuple[str, int, int]]:
         return _split(text, max_chars=self._max_chars)
 
     def tokenize(self, text: str, *, language: str | None = None) -> list[str]:
-        """Split ``text`` into sentences. ``language`` is accepted and ignored."""
+        """Split ``text`` into sentences.
+
+        Args:
+            text: The text to split.
+            language: Accepted for the livekit interface and ignored: the rules
+                work in every script without it.
+        """
         return [piece for piece, _start, _end in self._split(text)]
 
     def stream(self, *, language: str | None = None, partial_head: bool = False) -> SentenceStream:
-        """Incremental splitter. ``language`` is accepted and ignored.
+        """Start an incremental splitter.
 
         The stream holds its last sentence until the next one begins or input
         ends, like every livekit tokenizer; the plugin's sender relies on that
         to know which frame the reply's terminating flush follows.
 
-        ``partial_head=True`` lets the stream release a long opening early, as
-        a token marked partial that only this plugin's sender understands. So
-        it is off by default, and any other consumer, such as
-        ``tts.StreamAdapter``, only ever receives whole sentences. The
-        tokenizer's own setting still has to allow it.
+        Args:
+            language: Accepted for the livekit interface and ignored.
+            partial_head: Let the stream release an opening early, as a token
+                marked partial that only this plugin's sender understands. It
+                is off by default, so any other consumer, such as
+                ``tts.StreamAdapter``, only ever receives whole sentences. The
+                tokenizer's own ``partial_head`` setting still has to allow it.
         """
         return _SentenceStream(
             split=self._split,
             min_ctx_len=self._stream_context_len,
             partial_head=self._partial_head and partial_head,
+            min_head_chars=self._partial_head_min_chars,
         )
