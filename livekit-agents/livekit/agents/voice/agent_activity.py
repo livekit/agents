@@ -3927,7 +3927,7 @@ class AgentActivity(RecognitionHooks):
         # back to the tool that awaited it; otherwise it ends here and nothing answers the turn
         chain_continues = False
         if len(tool_output.output) > 0:
-            max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
+            max_steps_reached = speech_handle.num_steps > self._session.options.max_tool_steps
 
             if max_steps_reached:
                 logger.warning(
