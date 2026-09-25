@@ -1,9 +1,9 @@
 import os
 
 from dotenv import load_dotenv
-from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, create_server
+from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, start_session
 
-from livekit.agents import cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.beta.workflows import TwilioConnectorWarmTransferTask, WarmTransferResult
 
 load_dotenv()
@@ -53,7 +53,12 @@ class TwilioSupportAgent(SupportAgent):
         )
 
 
-server = create_server(TwilioSupportAgent)
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="sip-inbound")
+async def entrypoint(ctx: JobContext) -> None:
+    await start_session(ctx, TwilioSupportAgent())
 
 
 if __name__ == "__main__":

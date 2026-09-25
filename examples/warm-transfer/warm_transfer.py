@@ -1,9 +1,9 @@
 import os
 
 from dotenv import load_dotenv
-from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, create_server
+from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, start_session
 
-from livekit.agents import cli
+from livekit.agents import AgentServer, JobContext, cli
 from livekit.agents.beta.workflows import WarmTransferResult, WarmTransferTask
 
 load_dotenv()
@@ -33,7 +33,12 @@ class SIPSupportAgent(SupportAgent):
         )
 
 
-server = create_server(SIPSupportAgent)
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="sip-inbound")
+async def entrypoint(ctx: JobContext) -> None:
+    await start_session(ctx, SIPSupportAgent())
 
 
 if __name__ == "__main__":

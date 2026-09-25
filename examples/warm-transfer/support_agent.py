@@ -1,9 +1,7 @@
 import logging
-from collections.abc import Callable
 
 from livekit.agents import (
     Agent,
-    AgentServer,
     AgentSession,
     JobContext,
     room_io,
@@ -67,31 +65,23 @@ class SupportAgent(Agent):
         raise NotImplementedError
 
 
-def create_server(create_agent: Callable[[], Agent]) -> AgentServer:
-    server = AgentServer()
-
-    @server.rtc_session(agent_name="sip-inbound")
-    async def entrypoint(ctx: JobContext) -> None:
-        session = AgentSession(
-            llm="openai/gpt-4.1-mini",
-            stt="deepgram/nova-3:en",
-            tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
-        )
-        await session.start(
-            agent=create_agent(),
-            room=ctx.room,
-            room_options=room_io.RoomOptions(
-                audio_input=room_io.AudioInputOptions(
-                    # enable Krisp BVC noise cancellation
-                    noise_cancellation=noise_cancellation.BVCTelephony(),
-                ),
-                delete_room_on_close=False,  # keep the room open for the customer and supervisor
+async def start_session(ctx: JobContext, agent: Agent) -> None:
+    session = AgentSession(
+        llm="openai/gpt-4.1-mini",
+        stt="deepgram/nova-3:en",
+        tts="cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
+    )
+    await session.start(
+        agent=agent,
+        room=ctx.room,
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # enable Krisp BVC noise cancellation
+                noise_cancellation=noise_cancellation.BVCTelephony(),
             ),
-        )
-
-    # this example requires explicit dispatch using named agents
-    # supervisor will be placed in a separate room, and we do not want it to dispatch the default agent
-    return server
+            delete_room_on_close=False,  # keep the room open for the customer and supervisor
+        ),
+    )
 
 
 INSTRUCTIONS = """
