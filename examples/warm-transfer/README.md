@@ -66,7 +66,7 @@ pass `original_caller_number` (the inbound call's `From`) together with
 ```python
 result = await TwilioConnectorWarmTransferTask(
     SUPERVISOR_PHONE_NUMBER,
-    twilio_from_number=AGENT_PHONE_NUMBER,
+    twilio_from_number=TWILIO_FROM_NUMBER,
     original_caller_number=inbound_from,
     twilio_call_token=inbound_call_token,
     chat_ctx=self.chat_ctx,
