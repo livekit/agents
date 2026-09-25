@@ -221,6 +221,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=resolved_final_transcript_mode == "legacy",
                 interim_results=resolved_final_transcript_mode != "legacy",
                 aligned_transcript="word" if is_whisper else False,
                 offline_recognize=False,
