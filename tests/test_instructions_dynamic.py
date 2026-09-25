@@ -6,10 +6,9 @@ import pytest
 
 from livekit.agents import Agent, function_tool
 from livekit.agents.llm import CacheBreakpoint, ChatContext, Tool
-from livekit.agents.llm.chat_context import Instructions
+from livekit.agents.llm.chat_context import DYNAMIC_INSTRUCTIONS_MESSAGE_ID, Instructions
 from livekit.agents.voice.agent_session import _append_instructions
 from livekit.agents.voice.generation import (
-    DYNAMIC_INSTRUCTIONS_MESSAGE_ID,
     INSTRUCTIONS_MESSAGE_ID,
     mark_instructions_cache_boundary,
     remove_instructions,
@@ -239,6 +238,120 @@ def test_openai_wire_shape_for_dynamic_instructions():
         {"type": "text", "text": COMMON, "prompt_cache_breakpoint": BREAKPOINT}
     ]
     assert messages[1] == {"role": "system", "content": DYNAMIC}
+
+
+def _dynamic_ctx() -> ChatContext:
+    ctx = ChatContext()
+    update_instructions(
+        ctx, instructions=Instructions(COMMON, dynamic=DYNAMIC), add_if_missing=True
+    )
+    ctx.add_message(role="user", content="Hi, I need to reschedule.")
+    return ctx
+
+
+def test_google_format_folds_dynamic_into_the_system_instruction():
+    turns, extra = _dynamic_ctx().to_provider_format("google")
+
+    assert extra.system_messages == [f"{COMMON}\n{DYNAMIC}"]
+    assert [t["role"] for t in turns] == ["user"]
+    assert "<instructions>" not in str(turns)
+
+
+def test_anthropic_format_folds_dynamic_into_the_system_instruction():
+    messages, extra = _dynamic_ctx().to_provider_format("anthropic")
+
+    assert extra.system_messages == [f"{COMMON}\n{DYNAMIC}"]
+    assert [m["role"] for m in messages] == ["user"]
+    assert "<instructions>" not in str(messages)
+
+
+def test_aws_format_folds_dynamic_into_the_system_instruction():
+    messages, extra = _dynamic_ctx().to_provider_format("aws")
+
+    assert extra.system_messages == [f"{COMMON}\n{DYNAMIC}"]
+    assert [m["role"] for m in messages] == ["user"]
+    assert "<instructions>" not in str(messages)
+
+
+def test_mistralai_format_folds_dynamic_into_the_instructions():
+    entries, extra = _dynamic_ctx().to_provider_format("mistralai")
+
+    assert extra.instructions == f"{COMMON}\n{DYNAMIC}"
+    assert [e["role"] for e in entries] == ["user"]
+    assert "<instructions>" not in str(entries)
+
+
+def test_per_turn_instructions_after_dynamic_still_become_a_user_turn():
+    # generate_reply(instructions=...) on turn 1: two leading system messages, no user yet
+    ctx = ChatContext()
+    update_instructions(
+        ctx, instructions=Instructions(COMMON, dynamic=DYNAMIC), add_if_missing=True
+    )
+    ctx.add_message(role="system", content="Greet the caller.")
+
+    entries, extra = ctx.to_provider_format("mistralai")
+
+    assert extra.instructions == f"{COMMON}\n{DYNAMIC}"
+    assert entries == [
+        {
+            "type": "message.input",
+            "role": "user",
+            "content": "<instructions>\nGreet the caller.\n</instructions>",
+        }
+    ]
+
+
+def test_dynamic_message_away_from_the_preamble_is_converted_like_any_other():
+    ctx = ChatContext()
+    ctx.add_message(role="system", content=COMMON, id=INSTRUCTIONS_MESSAGE_ID)
+    ctx.add_message(role="user", content="Hi.")
+    ctx.add_message(role="system", content=DYNAMIC, id=DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+
+    entries, extra = ctx.to_provider_format("mistralai")
+
+    assert extra.instructions == COMMON
+    assert entries[-1]["content"] == f"<instructions>\n{DYNAMIC}\n</instructions>"
+
+
+def test_truncate_keeps_dynamic_instructions_with_the_static_ones():
+    ctx = _dynamic_ctx()
+    ctx.add_message(role="assistant", content="Sure, what day?")
+    ctx.add_message(role="user", content="Friday.")
+    ctx.add_message(role="assistant", content="Friday at ten works.")
+
+    ctx.truncate(max_items=2)
+
+    assert [m.id for m in ctx.items[:2]] == [
+        INSTRUCTIONS_MESSAGE_ID,
+        DYNAMIC_INSTRUCTIONS_MESSAGE_ID,
+    ]
+    assert [m.role for m in ctx.items[2:]] == ["user", "assistant"]  # type: ignore[union-attr]
+
+
+def test_truncate_does_not_duplicate_instructions_already_in_the_tail():
+    ctx = _dynamic_ctx()
+
+    ctx.truncate(max_items=3)
+
+    assert [m.id for m in ctx.items[:2]] == [
+        INSTRUCTIONS_MESSAGE_ID,
+        DYNAMIC_INSTRUCTIONS_MESSAGE_ID,
+    ]
+    assert len(ctx.items) == 3
+
+
+def test_truncate_without_dynamic_keeps_only_the_first_instructions():
+    ctx = ChatContext()
+    update_instructions(ctx, instructions=COMMON, add_if_missing=True)
+    ctx.add_message(role="system", content="Not the dynamic message.")
+    ctx.add_message(role="user", content="u1")
+    ctx.add_message(role="user", content="u2")
+    ctx.add_message(role="user", content="u3")
+
+    ctx.truncate(max_items=2)
+
+    assert [m.id for m in ctx.items[:1]] == [INSTRUCTIONS_MESSAGE_ID]
+    assert len(ctx.items) == 3
 
 
 class _CapturingLLM(FakeLLM):

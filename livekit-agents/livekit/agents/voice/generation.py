@@ -22,7 +22,7 @@ from ..llm import (
     ToolError,
     utils as llm_utils,
 )
-from ..llm.chat_context import Instructions
+from ..llm.chat_context import DYNAMIC_INSTRUCTIONS_MESSAGE_ID, Instructions
 from ..log import logger
 from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
 from ..types import (
@@ -1219,11 +1219,8 @@ INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 The ID of the instructions message in the chat context. (only for stateless LLMs)
 """
 
-DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
-"""
-The ID of the per-call instructions message (``Instructions.dynamic``), kept right after
-the instructions message.
-"""
+# DYNAMIC_INSTRUCTIONS_MESSAGE_ID lives in llm.chat_context: the provider formatters that
+# take one system text fold that message back into the preamble, and truncate() keeps it
 
 
 def update_instructions(

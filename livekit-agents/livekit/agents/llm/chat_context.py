@@ -464,6 +464,13 @@ ChatItem = Annotated[
 ]
 
 
+DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
+"""
+The ID of the message holding ``Instructions.dynamic``, kept right after the instructions
+message. Formatters that extract one system preamble fold it back in.
+"""
+
+
 class ChatContext:
     def __init__(self, items: NotGivenOr[list[ChatItem]] = NOT_GIVEN):
         self._items: list[ChatItem] = items if is_given(items) else []
@@ -623,22 +630,14 @@ class ChatContext:
         """Truncate the chat context to the last N items in place.
 
         Removes leading function calls to avoid partial function outputs.
-        Preserves the first instruction message (system/developer) by adding it back
-        to the beginning.
+        Preserves the first instruction message (system/developer), and the dynamic
+        instructions message right after it, by adding them back to the beginning.
         """
 
         if len(self._items) <= max_items:
             return self
 
-        instructions = next(
-            (
-                item
-                for item in self._items
-                if item.type == "message" and item.role in ("system", "developer")
-            ),
-            None,
-        )
-
+        instructions = self._leading_instructions()
         new_items = self._items[-max_items:]
 
         # chat_ctx shouldn't start with function_call or function_call_output
@@ -648,11 +647,28 @@ class ChatContext:
         ]:
             new_items.pop(0)
 
-        if instructions and not any(item.id == instructions.id for item in new_items):
-            new_items.insert(0, instructions)
+        for item in reversed(instructions):
+            if not any(existing.id == item.id for existing in new_items):
+                new_items.insert(0, item)
 
         self._items[:] = new_items
         return self
+
+    def _leading_instructions(self) -> list[ChatItem]:
+        idx = next(
+            (
+                i
+                for i, item in enumerate(self._items)
+                if item.type == "message" and item.role in ("system", "developer")
+            ),
+            None,
+        )
+        if idx is None:
+            return []
+        kept = self._items[idx : idx + 2]
+        if len(kept) == 2 and kept[1].id != DYNAMIC_INSTRUCTIONS_MESSAGE_ID:
+            return kept[:1]
+        return kept
 
     def merge(
         self,

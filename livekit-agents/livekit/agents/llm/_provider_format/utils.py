@@ -65,6 +65,11 @@ def convert_mid_conversation_instructions(
     Anthropic, and AWS fall back to ``inject_dummy_user_message``
     (a literal ``"."`` user turn the model frequently responds to with
     "you didn't say anything").
+
+    The one exception is the per-call instructions message
+    (:data:`~livekit.agents.llm.chat_context.DYNAMIC_INSTRUCTIONS_MESSAGE_ID`)
+    directly after the preamble: it is folded into the preamble so the per-call
+    context keeps system priority on providers that take one system text.
     """
     preamble_allowed = True
     items: list[llm.ChatItem] = []
@@ -74,6 +79,8 @@ def convert_mid_conversation_instructions(
             if preamble_allowed:
                 preamble_allowed = False
                 items.append(item)
+            elif _is_dynamic_after_preamble(items, item):
+                items[0] = _merge_content(items[0], item)
             elif text := item.raw_text_content:
                 items.append(
                     llm.ChatMessage(
@@ -90,6 +97,21 @@ def convert_mid_conversation_instructions(
         items.append(item)
 
     return llm.ChatContext(items)
+
+
+def _is_dynamic_after_preamble(items: list[llm.ChatItem], item: llm.ChatMessage) -> bool:
+    # attribute access, not a module-level import: chat_context imports this package
+    return (
+        item.id == llm.chat_context.DYNAMIC_INSTRUCTIONS_MESSAGE_ID
+        and len(items) == 1
+        and items[0].type == "message"
+        and items[0].role in ("system", "developer")
+    )
+
+
+def _merge_content(preamble: llm.ChatItem, item: llm.ChatMessage) -> llm.ChatMessage:
+    assert preamble.type == "message"
+    return preamble.model_copy(update={"content": [*preamble.content, *item.content]})
 
 
 def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
