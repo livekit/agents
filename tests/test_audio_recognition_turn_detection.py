@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from livekit.agents import LanguageCode, vad
+from livekit.agents import LanguageCode, stt, vad
 from livekit.agents.utils import aio
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.turn import (
@@ -59,6 +59,8 @@ def _make_full_recognition_for_eou() -> AudioRecognition:
     ar._hooks.on_end_of_turn.return_value = False  # don't commit
     ar._stt = None
     ar._stt_pipeline = None
+    ar._stt_flush_requested = False
+    ar._audio_interim_transcript = ""
     ar._turn_backchannel_over_agent = False
     ar._transcription_timeout_handle = None
     ar._audio_transcript = ""
@@ -713,3 +715,171 @@ class TestVadMinSilenceRequirement:
         # Aborted before building a stream — and without calling .stream().
         assert ar._turn_detector_stream is None
         detector.stream.assert_not_called()
+
+
+class TestSTTFlushAtEOT:
+    def _recognition(self, probability: float = 0.9) -> AudioRecognition:
+        ar = _make_full_recognition_for_eou()
+        ar._stt = MagicMock()
+        ar._stt_pipeline = MagicMock(manual_flush=True)
+        ar._stt_pipeline.flush.return_value = True
+        ar._vad_base_turn_detection = True
+        ar._audio_interim_transcript = "hello there"
+        ar._last_speaking_time = time.time()
+        ar._turn_detector_prediction_fut, _ = _resolved_prediction(probability)
+        return ar
+
+    async def test_positive_eot_flushes_before_final_and_does_not_commit_empty_turn(self) -> None:
+        ar = self._recognition()
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await ar._end_of_turn_task
+        ar._stt_pipeline.flush.assert_called_once_with()
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+        ar._audio_transcript = "hello there"
+        ar._audio_interim_transcript = ""
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        await ar._end_of_turn_task
+        ar._hooks.on_end_of_turn.assert_called_once()
+        ar._stt_pipeline.flush.assert_called_once_with()
+
+    async def test_negative_eot_flushes_before_maximum_delay(self) -> None:
+        ar = self._recognition(0.1)
+        ar._endpointing.max_delay = 0.3
+        flushed = asyncio.Event()
+        ar._stt_pipeline.flush.side_effect = lambda: (flushed.set(), True)[1]
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.sleep(0.05)
+        ar._stt_pipeline.flush.assert_not_called()
+        await asyncio.wait_for(flushed.wait(), 0.2)
+        assert not ar._end_of_turn_task.done()
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+        # A final re-enters EOT detection but keeps the same maximum deadline.
+        ar._audio_transcript = "hello there"
+        ar._audio_interim_transcript = ""
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="stt")
+        await ar._end_of_turn_task
+        ar._stt_pipeline.flush.assert_called_once_with()
+        ar._hooks.on_end_of_turn.assert_called_once()
+
+    async def test_resumed_speech_cancels_fallback_flush(self) -> None:
+        ar = self._recognition(0.1)
+        ar._endpointing.max_delay = 0.1
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.sleep(0)
+        pending = ar._end_of_turn_task
+        await ar._on_vad_event(_start_of_speech())
+        await aio.cancel_and_wait(pending)
+        ar._stt_pipeline.flush.assert_not_called()
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+    async def test_text_detector_uses_only_final_text(self) -> None:
+        ar = self._recognition()
+        ar._turn_detector = MagicMock()
+        ar._turn_detector.supports_language = AsyncMock(return_value=True)
+        ar._turn_detector.predict_end_of_turn = AsyncMock(return_value=0.9)
+        ar._turn_detector.unlikely_threshold = AsyncMock(return_value=0.5)
+        ar._audio_transcript = "first sentence"
+        chat_ctx = _make_chat_ctx_stub()
+        ar._run_eou_detection(chat_ctx, trigger="vad")
+        await ar._end_of_turn_task
+        chat_ctx.add_message.assert_called_once_with(role="user", content="first sentence")
+        ar._turn_detector.predict_end_of_turn.assert_awaited_once()
+        ar._stt_pipeline.flush.assert_called_once_with()
+
+    @pytest.mark.parametrize("interim", ["", "ghost interim"])
+    async def test_missing_final_flushes_without_committing_interim(self, interim) -> None:
+        ar = self._recognition()
+        ar._turn_detector = MagicMock()
+        ar._audio_interim_transcript = interim
+        ar._endpointing.max_delay = 6.0
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        try:
+            await asyncio.wait_for(ar._end_of_turn_task, 0.1)
+        finally:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+        ar._turn_detector.predict_end_of_turn.assert_not_called()
+        ar._stt_pipeline.flush.assert_called_once_with()
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+    async def test_unsupported_stt_waits_for_transcript(self) -> None:
+        ar = self._recognition()
+        ar._stt_pipeline.manual_flush = False
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        assert ar._end_of_turn_task is None
+        ar._stt_pipeline.flush.assert_not_called()
+
+    async def test_fallback_is_anchored_to_speech_end(self) -> None:
+        ar = self._recognition(0.1)
+        ar._endpointing.max_delay = 6.0
+        ar._last_speaking_time = time.time() - 2.8
+        flushed = asyncio.Event()
+        ar._stt_pipeline.flush.side_effect = lambda: (flushed.set(), True)[1]
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        try:
+            await asyncio.sleep(0.05)
+            ar._stt_pipeline.flush.assert_not_called()
+            await asyncio.wait_for(flushed.wait(), 0.3)
+            assert not ar._end_of_turn_task.done()
+            ar._hooks.on_end_of_turn.assert_not_called()
+        finally:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+
+    async def test_close_cancels_fallback_flush(self) -> None:
+        ar = self._recognition(0.1)
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        await asyncio.sleep(0)
+        ar._closing.set()
+        await ar._end_of_turn_task
+        ar._stt_pipeline.flush.assert_not_called()
+        ar._hooks.on_end_of_turn.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "unavailable", ["timeout", "missing", "language", "threshold", "error"]
+    )
+    async def test_unavailable_prediction_keeps_minimum_endpointing(self, unavailable) -> None:
+        ar = self._recognition()
+        ar._audio_transcript = "hello there"
+        ar._audio_interim_transcript = ""
+        ar._endpointing.max_delay = 6.0
+        if unavailable == "timeout":
+            ar._turn_detector_prediction_fut = asyncio.Future()
+        elif unavailable == "missing":
+            ar._turn_detector_prediction_fut = None
+        elif unavailable == "language":
+            ar._turn_detector_stream.supports_language.return_value = False
+        elif unavailable == "threshold":
+            ar._turn_detector_stream.unlikely_threshold.return_value = None
+        else:
+            ar._turn_detector = MagicMock()
+            ar._turn_detector.supports_language = AsyncMock(return_value=True)
+            ar._turn_detector.predict_end_of_turn = AsyncMock(
+                side_effect=RuntimeError("test failure")
+            )
+
+        ar._run_eou_detection(_make_chat_ctx_stub(), trigger="vad")
+        try:
+            await asyncio.wait_for(ar._end_of_turn_task, 0.1)
+        finally:
+            await aio.cancel_and_wait(ar._end_of_turn_task)
+        ar._stt_pipeline.flush.assert_called_once_with()
+        ar._hooks.on_end_of_turn.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "event_type",
+        [stt.SpeechEventType.INTERIM_TRANSCRIPT, stt.SpeechEventType.PREFLIGHT_TRANSCRIPT],
+    )
+    @pytest.mark.parametrize("audio_detector", [True, False])
+    async def test_interim_text_does_not_restart_eot(self, event_type, audio_detector) -> None:
+        ar = self._recognition(0.1)
+        if not audio_detector:
+            ar._turn_detector = MagicMock()
+        ar._run_eou_detection = MagicMock()
+        ar._process_stt_event(
+            stt.SpeechEvent(
+                type=event_type,
+                alternatives=[stt.SpeechData(language="en", text="hello there")],
+            )
+        )
+        ar._run_eou_detection.assert_not_called()

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import math
 import time
 from collections import deque
-from collections.abc import AsyncIterable, Callable, Iterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -160,6 +161,9 @@ class RecognitionHooks(Protocol):
     def retrieve_chat_ctx(self) -> llm.ChatContext: ...
 
 
+_STTPipelineContextVar = contextvars.ContextVar["_STTPipeline"]("stt_pipeline")
+
+
 class _STTPipeline:
     """Transferable STT pipeline that survives agent handoff.
 
@@ -173,7 +177,8 @@ class _STTPipeline:
         self._stt_node = stt_node
         # don't recreate the stream while the session is closing
         self._is_closing = is_closing or (lambda: False)
-        self._audio_ch = aio.Chan[rtc.AudioFrame]()
+        self._audio_ch = aio.Chan[rtc.AudioFrame | stt.RecognizeStream._FlushSentinel]()
+        self._recognize_stream: stt.RecognizeStream | None = None
         self._event_ch = aio.Chan[stt.SpeechEvent]()
         self._pump_task = asyncio.create_task(self._stt_pump())
         self._pump_task.add_done_callback(lambda _: self._event_ch.close())
@@ -181,8 +186,30 @@ class _STTPipeline:
         self.input_started_at: float | None = None
 
     @property
-    def audio_ch(self) -> aio.Chan[rtc.AudioFrame]:
+    def audio_ch(self) -> aio.Chan[rtc.AudioFrame | stt.RecognizeStream._FlushSentinel]:
         return self._audio_ch
+
+    @property
+    def manual_flush(self) -> bool:
+        return (
+            self._recognize_stream is not None
+            and self._recognize_stream._stt.capabilities.manual_flush
+        )
+
+    def flush(self) -> bool:
+        if not self.manual_flush:
+            return False
+        self._audio_ch.send_nowait(stt.RecognizeStream._FlushSentinel())
+        return True
+
+    async def _audio_input(self) -> AsyncIterator[rtc.AudioFrame]:
+        """Apply flushes in audio order without exposing sentinels to custom STT nodes."""
+        async for data in self._audio_ch:
+            if isinstance(data, stt.RecognizeStream._FlushSentinel):
+                if self.manual_flush and self._recognize_stream is not None:
+                    self._recognize_stream.flush()
+            else:
+                yield data
 
     @property
     def event_ch(self) -> aio.Chan[stt.SpeechEvent]:
@@ -198,9 +225,10 @@ class _STTPipeline:
         """
         from .agent import ModelSettings
 
+        _STTPipelineContextVar.set(self)
         while True:
             try:
-                node = self._stt_node(self._audio_ch, ModelSettings())
+                node = self._stt_node(self._audio_input(), ModelSettings())
                 if asyncio.iscoroutine(node):
                     node = await node
 
@@ -295,6 +323,7 @@ class AudioRecognition:
         self._last_language: LanguageCode | None = None
 
         self._stt_pipeline: _STTPipeline | None = None
+        self._stt_flush_requested = False
         self._vad_ch: aio.Chan[rtc.AudioFrame] | None = None
         self._vad_stream: VADStream | None = None
 
@@ -1002,6 +1031,9 @@ class AudioRecognition:
         return stream
 
     def _clear_user_turn(self) -> None:
+        if self._end_of_turn_task is not None:
+            self._end_of_turn_task.cancel()
+        self._stt_flush_requested = False
         self._audio_transcript = ""
         self._audio_interim_transcript = ""
         self._audio_preflight_transcript = ""
@@ -1045,16 +1077,17 @@ class AudioRecognition:
             return fut
 
         async def _commit_user_turn() -> None:
-            if self._last_final_transcript_time is None or (
-                time.time() - self._last_final_transcript_time > 0.5
+            can_flush = self._stt_pipeline is not None and self._stt_pipeline.manual_flush
+            if (
+                can_flush
+                or self._last_final_transcript_time is None
+                or (time.time() - self._last_final_transcript_time > 0.5)
             ):
-                # if the last final transcript is received more than 0.5s ago
-                # append a silence frame to the stt to flush the buffer
-
                 self._final_transcript_received.clear()
 
-                # flush the stt by pushing silence
-                if audio_detached and self._sample_rate:
+                if can_flush and self._stt_pipeline is not None:
+                    self._stt_flush_requested = self._stt_pipeline.flush()
+                elif audio_detached and self._sample_rate:
                     silence = utils.audio.silence_frame(0.2, self._sample_rate)
                     num_frames = max(0, int(math.ceil(stt_flush_duration / silence.duration)))
                     for _ in range(num_frames):
@@ -1380,6 +1413,7 @@ class AudioRecognition:
     @utils.log_exceptions(logger=logger)
     async def _on_vad_event(self, ev: vad.VADEvent) -> None:
         if ev.type == vad.VADEventType.START_OF_SPEECH:
+            self._stt_flush_requested = False
             speech_start_time = time.time() - ev.speech_duration - ev.inference_duration
             self._active_vad_speech_started_at = speech_start_time
             if not self._vad_speech_started:
@@ -1503,8 +1537,17 @@ class AudioRecognition:
         trigger: Literal["vad", "stt", "manual"],
         skip_reply: bool = False,
     ) -> None:
-        if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
-            # stt enabled but no transcript yet
+        auto_flush = (
+            self._vad_base_turn_detection
+            and self._stt_pipeline is not None
+            and self._stt_pipeline.manual_flush
+        )
+        if (
+            self._stt
+            and not self._audio_transcript
+            and self._turn_detection_mode != "manual"
+            and (not auto_flush or self._stt_flush_requested)
+        ):
             return
 
         chat_ctx = chat_ctx.copy()
@@ -1542,6 +1585,7 @@ class AudioRecognition:
                 endpointing_delay=endpointing_delay,
             )
 
+            negative_eot = False
             end_of_turn_probability: float | None = None
             unlikely_threshold: float | None = None
             backchannel_threshold: float | None = None
@@ -1605,6 +1649,7 @@ class AudioRecognition:
                             and unlikely_threshold is not None
                             and end_of_turn_probability < unlikely_threshold
                         ):
+                            negative_eot = True
                             endpointing_delay = self._endpointing.max_delay
 
                         eou_span_attributes: dict[str, Any] = {
@@ -1710,6 +1755,24 @@ class AudioRecognition:
                                 prediction_event.detection_delay,
                             )
 
+            if auto_flush and not self._stt_flush_requested:
+                if negative_eot:
+                    # Keep context through short pauses. Reserve the rest of the maximum
+                    # endpointing delay for the final transcript, without awaiting an ack.
+                    flush_delay = endpointing_delay / 2
+                    if last_speaking_time is not None:
+                        flush_delay += last_speaking_time - time.time()
+                    if flush_delay > 0:
+                        try:
+                            await asyncio.wait_for(self._closing.wait(), timeout=flush_delay)
+                            return
+                        except asyncio.TimeoutError:
+                            pass
+                if self._closing.is_set():
+                    return
+                if self._stt_pipeline is not None:
+                    self._stt_flush_requested = self._stt_pipeline.flush()
+
             if eou_wait_span.is_recording():  # the wait may have ended with resumed speech
                 eou_wait_span.set_attribute(trace_types.ATTR_EOU_DELAY, endpointing_delay)
 
@@ -1723,6 +1786,10 @@ class AudioRecognition:
                 except asyncio.TimeoutError:
                     delay_completed = True
                     pass
+
+            if self._stt and not self._audio_transcript and self._turn_detection_mode != "manual":
+                # A later final transcript will re-enter EOT detection.
+                return
 
             confidence_avg = (
                 sum(self._final_transcript_confidence) / len(self._final_transcript_confidence)
