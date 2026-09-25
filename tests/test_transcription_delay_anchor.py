@@ -142,7 +142,12 @@ async def test_vad_anchor_survives_a_transcript_without_timestamps(
         last_final_transcript_time=ar._last_final_transcript_time,
         now=time.time(),
     )
-    assert metrics.transcription_delay == pytest.approx(0.6, abs=0.1)
+    # The callback may take longer under CI load; transcription_delay includes
+    # that time because it ends at the recorded final-transcript arrival.
+    assert metrics.transcription_delay == pytest.approx(
+        ar._last_final_transcript_time - vad_anchor, abs=0.01
+    )
+    assert metrics.transcription_delay >= 0.6
 
 
 @both_modes

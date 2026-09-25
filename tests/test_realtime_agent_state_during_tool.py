@@ -17,8 +17,22 @@ from collections.abc import Sequence
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, utils
-from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    LatencyBudgetEvent,
+    ToolResult,
+    function_tool,
+    llm,
+    utils,
+)
+from livekit.agents.llm import (
+    FunctionCall,
+    GenerationCreatedEvent,
+    InputSpeechStartedEvent,
+    InputSpeechStoppedEvent,
+    MessageGeneration,
+)
 
 from .fake_io import FakeAudioOutput
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
@@ -235,3 +249,299 @@ async def test_realtime_tool_reply_from_the_server_keeps_the_agent_thinking() ->
         await asyncio.sleep(4.0)  # longer than user_away_timeout
         assert session.agent_state == "thinking"
         assert "away" not in user_states
+
+
+async def test_manual_tool_reply_keeps_realtime_latency_budget_turn() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(auto_tool_reply_generation=False))
+    tool_called = asyncio.Event()
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            tool_called.set()
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    speeches = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("speech_created", speeches.append)
+        await session.start(ToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(
+            FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+        )
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        await asyncio.wait_for(tool_called.wait(), timeout=5)
+        await asyncio.sleep(0.05)
+        for _ in range(500):
+            if rt_session._reply_futs:
+                break
+            await asyncio.sleep(0)
+        assert rt_session._reply_futs
+        rt_session._reply_futs[0].set_result(
+            _generation(response_id="manual-tool-reply", text="It is sunny", audio_duration=0.2)
+        )
+        assert speeches
+        await asyncio.wait_for(speeches[0].speech_handle.wait_for_playout(), timeout=5)
+
+    assert len(events) == 1
+    assert events[0].level == "exceeded"
+    assert events[0].speech_id is not None
+
+
+@pytest.mark.parametrize("barge_in", [False, True])
+async def test_google_auto_tool_reply_does_not_restart_latency_budget(barge_in: bool) -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    speeches = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("speech_created", speeches.append)
+        await session.start(ToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        first_generation = _generation(
+            response_id="first",
+            text="Let me check",
+            audio_duration=0.02,
+            function_calls=[
+                FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+            ],
+        )
+        first_generation.user_initiated = False
+        rt_session.emit("generation_created", first_generation)
+        await asyncio.wait_for(speeches[0].speech_handle.wait_for_playout(), timeout=5)
+        assert len(events) == 1
+
+        for _ in range(500):
+            if session._activity and session._activity._realtime_auto_tool_reply_pending:
+                break
+            await asyncio.sleep(0.01)
+        assert session._activity and session._activity._realtime_auto_tool_reply_pending
+
+        if barge_in:
+            # A real barge-in cancels the old tool continuation and starts a new turn.
+            rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+            rt_session.emit(
+                "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+            )
+        else:
+            # Google emits a synthetic speech-start before an automatic tool generation.
+            rt_session.emit("input_speech_started", InputSpeechStartedEvent(is_synthetic=True))
+        tool_message_ch = utils.aio.Chan[MessageGeneration]()
+        tool_function_ch = utils.aio.Chan[FunctionCall]()
+        tool_function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=tool_message_ch,
+                function_stream=tool_function_ch,
+                user_initiated=False,
+            ),
+        )
+        await asyncio.sleep(0.02)
+        tool_text_ch = utils.aio.Chan[str]()
+        tool_audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        tool_modalities = asyncio.Future[list[str]]()
+        tool_modalities.set_result(["audio", "text"])
+        tool_message_ch.send_nowait(
+            MessageGeneration(
+                message_id="tool-reply",
+                text_stream=tool_text_ch,
+                audio_stream=tool_audio_ch,
+                modalities=tool_modalities,
+            )
+        )
+        tool_message_ch.close()
+        tool_text_ch.send_nowait("It is sunny")
+        tool_text_ch.close()
+        samples = int(_SAMPLE_RATE * 0.01)
+        tool_audio_ch.send_nowait(
+            rtc.AudioFrame(
+                data=b"\x00\x01" * samples,
+                sample_rate=_SAMPLE_RATE,
+                num_channels=1,
+                samples_per_channel=samples,
+            )
+        )
+        tool_audio_ch.close()
+        await asyncio.wait_for(speeches[-1].speech_handle.wait_for_playout(), timeout=5)
+        rt_session.emit(
+            "input_speech_stopped",
+            InputSpeechStoppedEvent(user_transcription_enabled=False, is_synthetic=True),
+        )
+        await asyncio.sleep(0.05)
+        assert len(events) == (2 if barge_in else 1)
+
+        # The next actual user turn must still be able to start its own watch.
+        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        assert len(events) == (3 if barge_in else 2)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "update_error"])
+async def test_missing_auto_tool_reply_does_not_poison_later_turns(failure: str) -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup_weather(self) -> str:
+            """Return the current weather."""
+            return "sunny"
+
+    events: list[LatencyBudgetEvent] = []
+    async with AgentSession(llm=model, latency_budget={"budget": 0.01}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        await session.start(ToolAgent())
+        rt_session = model.active_session
+        if failure == "update_error":
+            rt_session.update_error = llm.RealtimeError("update failed")
+
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(
+            FunctionCall(call_id="weather-1", name="lookup_weather", arguments="{}")
+        )
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        for _ in range(500):
+            if session._activity and session._activity._realtime_auto_tool_reply_pending:
+                break
+            await asyncio.sleep(0.01)
+        if failure == "timeout":
+            assert session._activity and session._activity._realtime_auto_tool_reply_pending
+            await asyncio.sleep(5.1)
+        else:
+            await asyncio.sleep(0.02)
+
+        assert session._activity is not None
+        assert not session._activity._realtime_auto_tool_reply_pending
+        assert session._activity._pending_auto_tool_reply_fut is None
+
+        previous_events = len(events)
+        rt_session.emit("input_speech_started", InputSpeechStartedEvent())
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        await asyncio.sleep(0.02)
+        assert len(events) == previous_events + 1
+
+
+async def test_old_auto_tool_reply_cleanup_keeps_new_expectation() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="test"))
+        assert session._activity is not None
+        activity = session._activity
+        old_reply = asyncio.get_running_loop().create_future()
+        new_reply = asyncio.get_running_loop().create_future()
+        activity._pending_auto_tool_reply_fut = new_reply
+        activity._realtime_auto_tool_reply_pending = True
+
+        activity._clear_realtime_auto_tool_reply(old_reply)
+        assert activity._pending_auto_tool_reply_fut is new_reply
+        assert activity._realtime_auto_tool_reply_pending
+
+        activity._clear_realtime_auto_tool_reply(new_reply)
+        assert activity._pending_auto_tool_reply_fut is None
+        assert not activity._realtime_auto_tool_reply_pending
+
+
+async def test_silent_realtime_tool_turn_cancels_latency_watch() -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+
+    class SilentToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def send_dtmf(self) -> ToolResult:
+            """Send a DTMF digit without a spoken reply."""
+            return ToolResult("sent", reply_required=False)
+
+    events: list[LatencyBudgetEvent] = []
+    tool_executed = asyncio.Event()
+    async with AgentSession(llm=model, latency_budget={"budget": 0.1}) as session:
+        session.output.audio = FakeAudioOutput()
+        session.on("latency_budget", events.append)
+        session.on("function_tools_executed", lambda _: tool_executed.set())
+        await session.start(SilentToolAgent())
+
+        rt_session = model.active_session
+        rt_session.emit(
+            "input_speech_stopped", InputSpeechStoppedEvent(user_transcription_enabled=False)
+        )
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(FunctionCall(call_id="dtmf-1", name="send_dtmf", arguments="{}"))
+        function_ch.close()
+        rt_session.emit(
+            "generation_created",
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=False,
+            ),
+        )
+
+        await asyncio.wait_for(tool_executed.wait(), timeout=5)
+        await asyncio.sleep(0.2)
+        assert events == []
+        assert session._latency_budget_watch is None

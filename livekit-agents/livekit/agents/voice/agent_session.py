@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import math
 import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Sequence
 from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
@@ -25,7 +26,7 @@ from google.protobuf.json_format import ParseDict
 from google.protobuf.struct_pb2 import Struct
 from opentelemetry import context as otel_context, trace
 from opentelemetry.sdk.trace import ReadableSpan
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from livekit import rtc
 from livekit.protocol.agent_pb import agent_session as agent_pb
@@ -74,6 +75,7 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    LatencyBudgetEvent,
     ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
@@ -158,6 +160,27 @@ _RECORDING_ALL_OFF: RecordingOptions = {
     "transcript": False,
     "redaction": False,
 }
+
+
+class LatencyBudgetOptions(TypedDict, total=False):
+    """Thresholds watched from the end of user speech until first agent output.
+
+    A warning and an exceeded event may both be emitted for one turn before output begins.
+    """
+
+    budget: Required[float]
+    """Maximum acceptable latency in seconds. Required when configured."""
+    warning: float
+    """Optional warning threshold in seconds. Must not exceed ``budget``."""
+
+
+@dataclass
+class _LatencyBudgetWatch:
+    stopped_at: float
+    speech_id: str | None = None
+    warning_sent: bool = False
+    exceeded_sent: bool = False
+    task: asyncio.Task[None] | None = None
 
 
 def _resolve_recording_options(record: bool | RecordingOptions) -> RecordingOptions:
@@ -313,6 +336,7 @@ class AgentSessionOptions:
     aec_warmup_duration: float | None
     session_close_transcript_timeout: float
     recording_options: RecordingOptions
+    latency_budget: LatencyBudgetOptions | None
 
     @property
     def endpointing(self) -> EndpointingOptions:
@@ -413,6 +437,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         user_away_timeout: float | None = 15.0,
         transcription_timeout: float | None = None,
         session_close_transcript_timeout: float = 2.0,
+        latency_budget: LatencyBudgetOptions | None = None,
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
@@ -521,6 +546,13 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             session_close_transcript_timeout (float, optional): Seconds to wait for the
                 final STT transcript when closing the session (after audio is detached).
                 Default ``2.0`` s (independent of ``commit_user_turn``'s ``transcript_timeout``).
+            latency_budget (LatencyBudgetOptions, optional): Watches elapsed time from the
+                end of user speech until the agent's first output. Emits a ``latency_budget``
+                event as each configured threshold is reached, even if output has not begun;
+                a turn can emit both ``warning`` and ``exceeded`` events. The event's
+                ``speech_id`` may be ``None`` if no reply has been associated yet. If output
+                begins before a threshold, that threshold does not emit an event. Disabled
+                by default.
             preemptive_generation (NotGivenOr[bool | PreemptiveGenerationOptions]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             min_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
             max_endpointing_delay (NotGivenOr[float]): Deprecated, use turn_handling=TurnHandlingOptions(...) instead.
@@ -608,6 +640,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             aec_warmup_duration=resolved_aec_warmup_duration,
             session_close_transcript_timeout=session_close_transcript_timeout,
             recording_options=_RECORDING_ALL_OFF.copy(),
+            latency_budget=self._resolve_latency_budget(latency_budget),
         )
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
@@ -724,6 +757,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._early_assistant_metrics: MetricsReport | None = None
         # the latest user turn no agent speech has reported e2e_latency for yet
         self._unanswered_user_metrics: MetricsReport | None = None
+        self._latency_budget_watch: _LatencyBudgetWatch | None = None
 
         # trace
         self._user_speaking_span: trace.Span | None = None
@@ -765,6 +799,132 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
         self._recorded_events.append(arg)
         super().emit(event, arg)
+
+    @staticmethod
+    def _resolve_latency_budget(
+        options: LatencyBudgetOptions | None,
+    ) -> LatencyBudgetOptions | None:
+        if options is None:
+            return None
+        budget = options.get("budget")
+        warning = options.get("warning")
+        if budget is None or not math.isfinite(budget) or budget <= 0:
+            raise ValueError("latency_budget['budget'] must be finite and greater than zero")
+        if warning is not None and (not math.isfinite(warning) or warning <= 0 or warning > budget):
+            raise ValueError(
+                "latency_budget['warning'] must be finite, greater than zero, and no greater "
+                "than budget"
+            )
+        return LatencyBudgetOptions(**options)
+
+    def _start_latency_budget_watch(self, stopped_at: float) -> None:
+        if self._opts.latency_budget is None:
+            return
+        current = self._latency_budget_watch
+        if current is not None and current.stopped_at == stopped_at:
+            return
+        self._cancel_latency_budget_watch()
+        watch = _LatencyBudgetWatch(stopped_at=stopped_at)
+        self._latency_budget_watch = watch
+        watch.task = asyncio.create_task(self._run_latency_budget_watch(watch))
+
+    def _bind_latency_budget_speech(self, stopped_at: float | None, speech_id: str) -> None:
+        watch = self._latency_budget_watch
+        if watch is not None and watch.stopped_at == stopped_at and watch.speech_id is None:
+            watch.speech_id = speech_id
+
+    def _cancel_latency_budget_watch(self, stopped_at: float | None = None) -> None:
+        watch = self._latency_budget_watch
+        if stopped_at is not None and (watch is None or watch.stopped_at != stopped_at):
+            return
+        self._latency_budget_watch = None
+        if watch is not None and watch.task is not None:
+            watch.task.cancel()
+
+    async def _run_latency_budget_watch(self, watch: _LatencyBudgetWatch) -> None:
+        options = self._opts.latency_budget
+        if options is None:
+            return
+        thresholds: list[tuple[Literal["warning", "exceeded"], float]] = []
+        if (warning := options.get("warning")) is not None and warning < options["budget"]:
+            thresholds.append(("warning", warning))
+        thresholds.append(("exceeded", options["budget"]))
+        try:
+            for level, threshold in thresholds:
+                await asyncio.sleep(max(0.0, watch.stopped_at + threshold - time.time()))
+                if self._latency_budget_watch is not watch:
+                    return
+                if level == "warning":
+                    watch.warning_sent = True
+                else:
+                    watch.exceeded_sent = True
+                self._emit_latency_budget(
+                    level=level,
+                    latency=max(threshold, time.time() - watch.stopped_at),
+                    threshold=threshold,
+                    speech_id=watch.speech_id,
+                )
+        except asyncio.CancelledError:
+            return
+
+    def _finish_latency_budget_watch(
+        self, *, stopped_at: float, started_at: float, speech_id: str
+    ) -> bool:
+        watch = self._latency_budget_watch
+        if watch is None or watch.stopped_at != stopped_at:
+            return False
+        watch.speech_id = speech_id
+        options = self._opts.latency_budget
+        if options is not None:
+            latency = started_at - stopped_at
+            if latency >= options["budget"] and not watch.exceeded_sent:
+                self._evaluate_latency_budget(latency=latency, speech_id=speech_id)
+            elif not watch.warning_sent and not watch.exceeded_sent:
+                self._evaluate_latency_budget(latency=latency, speech_id=speech_id)
+        self._cancel_latency_budget_watch()
+        return True
+
+    def _emit_latency_budget(
+        self,
+        *,
+        level: Literal["warning", "exceeded"],
+        latency: float,
+        threshold: float,
+        speech_id: str | None,
+    ) -> None:
+        options = self._opts.latency_budget
+        if options is None:
+            return
+        self.emit(
+            "latency_budget",
+            LatencyBudgetEvent(
+                level=level,
+                latency=latency,
+                threshold=threshold,
+                budget=options["budget"],
+                speech_id=speech_id,
+            ),
+        )
+
+    def _evaluate_latency_budget(self, *, latency: float, speech_id: str) -> None:
+        options = self._opts.latency_budget
+        if options is None:
+            return
+
+        budget = options["budget"]
+        warning = options.get("warning")
+        if latency >= budget:
+            level: Literal["warning", "exceeded"] = "exceeded"
+            threshold = budget
+        elif warning is not None and latency >= warning:
+            level = "warning"
+            threshold = warning
+        else:
+            return
+
+        self._emit_latency_budget(
+            level=level, latency=latency, threshold=threshold, speech_id=speech_id
+        )
 
     @property
     def userdata(self) -> Userdata_T:
@@ -1351,6 +1511,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Stop the activity and the models; the first step of closing."""
         self._closing = True
         self._cancel_user_away_timer()
+        self._cancel_latency_budget_watch()
         self._on_aec_warmup_expired()  # always clear aec warmup when closing the session
 
         if self._amd is not None:
