@@ -11,6 +11,7 @@ import pytest
 from google.genai import types
 
 from livekit.agents import llm, utils
+from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.plugins.google.realtime.api_proto import ClientEvents
 from livekit.plugins.google.realtime.realtime_api import RealtimeModel, RealtimeSession
 from livekit.plugins.google.utils import create_function_response
@@ -112,6 +113,49 @@ async def _drain_generation(
 
     function_calls = [call.name async for call in event.function_stream]
     return text, audio_frames, function_calls
+
+
+async def test_usage_metadata_reports_thoughts_as_reasoning_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        metrics: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", metrics.append)
+        session._start_new_generation()
+
+        session._handle_usage_metadata(
+            types.UsageMetadata(
+                prompt_token_count=397,
+                response_token_count=49,
+                thoughts_token_count=26,
+                total_token_count=446,
+            )
+        )
+
+        assert len(metrics) == 1
+        assert metrics[0].input_tokens == 397
+        assert metrics[0].output_tokens == 49
+        assert metrics[0].reasoning_tokens == 26
+        assert metrics[0].total_tokens == 446
+
+
+async def test_usage_metadata_distinguishes_zero_from_omitted_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with _make_session(monkeypatch) as session:
+        metrics: list[RealtimeModelMetrics] = []
+        session.on("metrics_collected", metrics.append)
+
+        session._start_new_generation()
+        session._handle_usage_metadata(
+            types.UsageMetadata(response_token_count=10, thoughts_token_count=0)
+        )
+        session._start_new_generation()
+        session._handle_usage_metadata(types.UsageMetadata(response_token_count=10))
+
+        assert len(metrics) == 2
+        assert metrics[0].reasoning_tokens == 0
+        assert metrics[1].reasoning_tokens is None
 
 
 async def test_unspoken_model_text_is_omitted_in_audio_session(
