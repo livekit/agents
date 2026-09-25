@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import context as otel_context
+
 from livekit import api, rtc
 
 from ... import utils
 from ...job import get_job_context
 from ...log import logger
-from ...telemetry import trace_types
+from ...telemetry import rpc as rpc_tracing, trace_types, tracer, utils as telemetry_utils
 from ...types import (
     ATTRIBUTE_AGENT_STATE,
     ATTRIBUTE_PUBLISH_ON_BEHALF,
@@ -101,7 +103,11 @@ class RoomIO:
                     f"text stream handler for topic '{TOPIC_CHAT}' already set, ignoring"
                 )
 
-    async def start(self) -> None:
+    async def start(self, *, trace_context: otel_context.Context | None = None) -> None:
+        """``trace_context`` is the parent for the startup spans (``wait_for_participant``,
+        ``wait_for_audio_track``, ``publish_audio_output``); it is never made current here,
+        since the tasks started below live for the whole session."""
+        self._start_trace_context = trace_context
         # -- create inputs --
         input_audio_options = self._options.get_audio_input_options()
         if input_audio_options and input_audio_options.pre_connect_audio:
@@ -181,6 +187,7 @@ class RoomIO:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -211,6 +218,7 @@ class RoomIO:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
+        self._room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
@@ -307,17 +315,17 @@ class RoomIO:
             self.unset_participant()
             return
 
-        if (
-            self._participant_identity is not None
-            and self._participant_identity != participant_identity
-        ):
-            # reset future if switching to a different participant
-            self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        linked = self.linked_participant
+        if linked is None or linked.identity != participant_identity:
+            if self._participant_available_fut.done():
+                self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+            self._agent_session._cancel_user_away_timer()
 
             # check if new participant is already connected
             for participant in self._room.remote_participants.values():
                 if participant.identity == participant_identity:
                     self._participant_available_fut.set_result(participant)
+                    self._agent_session._on_room_io_participant_linked(participant)
                     break
 
         # update participant identity and handlers
@@ -341,6 +349,7 @@ class RoomIO:
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
         if self._audio_input:
             self._audio_input.set_participant(None)
         if self._video_input:
@@ -353,19 +362,38 @@ class RoomIO:
     async def _init_task(self) -> None:
         await self._room_connected_fut
 
-        # check existing participants
-        for participant in self._room.remote_participants.values():
-            self._on_participant_connected(participant)
+        with tracer.detached_span(
+            "wait_for_participant",
+            context=self._start_trace_context,
+            attributes={
+                trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: self._participant_identity is not None
+            },
+        ) as wait_span:
+            # check existing participants
+            for participant in self._room.remote_participants.values():
+                self._on_participant_connected(participant)
 
-        participant = await self._participant_available_fut
-        self.set_participant(participant.identity)
+            participant = await self._participant_available_fut
+            wait_span.set_attributes(telemetry_utils.participant_attributes(participant))
+
+        # the initial track wait belongs to the startup bar; later participant switches don't
+        for stream in (self._audio_input, self._video_input):
+            if stream is not None:
+                stream.set_trace_context(self._start_trace_context)
+        try:
+            self.set_participant(participant.identity)
+        finally:
+            for stream in (self._audio_input, self._video_input):
+                if stream is not None:
+                    stream.set_trace_context(None)
 
         # init outputs
         if self._agent_tr_output:
             self._agent_tr_output.set_participant(self._room.local_participant.identity)
 
         if self._audio_output:
-            await self._audio_output.start()
+            await self._audio_output.start(trace_context=self._start_trace_context)
+        self._start_trace_context = None
 
         if not self._ready_fut.done():
             self._ready_fut.set_result(None)
@@ -386,9 +414,23 @@ class RoomIO:
             if ev.is_final:
                 self._user_tr_output.flush()
 
+    def _emit_session_event(self, name: str, attributes: dict[str, Any]) -> None:
+        """Timestamped marker on the agent_session span (the tests' session stand-ins have none)."""
+        add_event = getattr(self._agent_session, "_add_session_event", None)
+        if add_event is not None:
+            add_event(name, attributes)
+
     def _on_connection_state_changed(self, state: rtc.ConnectionState.ValueType) -> None:
-        if self._room.isconnected() and not self._room_connected_fut.done():
-            self._room_connected_fut.set_result(None)
+        self._emit_session_event(
+            "connection_state_changed",
+            {trace_types.ATTR_CONNECTION_STATE: rtc.ConnectionState.Name(state)},
+        )
+        if self._room.isconnected():
+            # on every connect and reconnect; install is idempotent (one interceptor
+            # instance, deduped by the SDK), so JobContext.connect() installing too is fine
+            rpc_tracing.install(self._room.local_participant)
+            if not self._room_connected_fut.done():
+                self._room_connected_fut.set_result(None)
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         if self._participant_available_fut.done():
@@ -415,7 +457,17 @@ class RoomIO:
     def _on_participant_disconnected(self, participant: rtc.RemoteParticipant) -> None:
         if not (linked := self.linked_participant) or participant.identity != linked.identity:
             return
+        self._emit_session_event(
+            "participant_disconnected",
+            {
+                **telemetry_utils.participant_attributes(participant),
+                trace_types.ATTR_DISCONNECT_REASON: rtc.DisconnectReason.Name(
+                    participant.disconnect_reason or rtc.DisconnectReason.UNKNOWN_REASON
+                ),
+            },
+        )
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
 
         if (
             self._options.close_on_disconnect
@@ -435,6 +487,13 @@ class RoomIO:
                 },
             )
             self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+
+    def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
+        linked = self.linked_participant
+        if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
+            return
+
+        self._agent_session.reset_away_timer()
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_ch:

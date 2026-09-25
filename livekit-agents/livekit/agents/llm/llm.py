@@ -18,12 +18,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import (
-    gen_ai as gen_ai_telemetry,
-    trace_types,
-    tracer,
-    utils as telemetry_utils,
-)
+from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -224,8 +219,21 @@ class LLM(
         await self.aclose()
 
 
+class _LLMEventChannel(aio.Chan[ChatChunk]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.output_sent = False
+
+    def send_nowait(self, value: ChatChunk) -> None:
+        super().send_nowait(value)
+        # A provider can raise before the consumer or metrics task reads the chunk.
+        if value.delta and (value.delta.content or value.delta.tool_calls):
+            self.output_sent = True
+
+
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
+    _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
     def __init__(
         self,
@@ -240,7 +248,8 @@ class LLMStream(ABC):
         self._tools = tools
         self._conn_options = conn_options
 
-        self._event_ch = aio.Chan[ChatChunk]()
+        self._event_ch = _LLMEventChannel()
+        self._retry_on_chunk_sent = True
         self._tee_aiter = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
@@ -276,7 +285,7 @@ class LLMStream(ABC):
         """The GenAI inference span's request side, per the OTel GenAI conventions."""
         gen_ai_telemetry.set_request_attributes(
             span,
-            operation=trace_types.GenAIOperationName.CHAT,
+            operation=self._genai_operation_name,
             provider=self._llm.provider,
             model=self._llm.model,
             stream=True,
@@ -302,9 +311,6 @@ class LLMStream(ABC):
                     self._provider_request_ids = []
                     try:
                         await self._run()
-                    except Exception as e:
-                        telemetry_utils.record_exception(attempt_span, e)
-                        raise
                     finally:
                         if self._provider_request_ids:
                             attempt_span.set_attribute(
@@ -315,6 +321,9 @@ class LLMStream(ABC):
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
                     return
+
+                if not self._retry_on_chunk_sent and self._event_ch.output_sent:
+                    e.retryable = False
 
                 retry_interval = self._conn_options._interval_for_retry(i)
 

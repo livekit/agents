@@ -32,9 +32,87 @@ ATTR_DEPLOYMENT_ID = "lk.deployment_id"
 ATTR_ROOM_NAME = "lk.pii.room_name"
 ATTR_SESSION_OPTIONS = "lk.session_options"
 
+# join keys shared with the server, SIP, and client traces
+ATTR_ROOM_SID = "lk.room_sid"
+ATTR_DISPATCH_ID = "lk.dispatch_id"
+ATTR_WORKER_ID = "lk.job.worker_id"
+ATTR_JOB_AGENT_ID = "lk.job.agent_id"
+ATTR_SIP_PREFIX = "lk.sip."
+"""Prefix under which a linked SIP participant's ``sip.*`` attributes are copied (call id,
+trunk id and number, rule id, hostname, status, headers)."""
+ATTR_SIP_PHONE_NUMBER = "lk.pii.sip.phoneNumber"
+"""The end user's phone number (``sip.phoneNumber``), the one SIP attribute that is PII."""
+
+# job dispatch timeline (job_entrypoint and job_dispatch spans). The stage instants are
+# timestamped events (job_received, job_accepted, job_assigned, process_assigned,
+# entrypoint_started); these attributes are the seconds between adjacent stages, so the
+# chain reads off the span without timestamp arithmetic. They sum to the dispatch latency.
+ATTR_JOB_ACCEPT_LATENCY = "lk.job.accept_latency"
+"""Seconds from the availability request to the worker's accept (the request handler)."""
+ATTR_JOB_ASSIGNMENT_LATENCY = "lk.job.assignment_latency"
+"""Seconds from the accept to the server's assignment (a server round trip)."""
+ATTR_JOB_LAUNCH_LATENCY = "lk.job.launch_latency"
+"""Seconds from the assignment to a process taking the job (pool acquisition)."""
+ATTR_JOB_ENTRYPOINT_LATENCY = "lk.job.entrypoint_latency"
+"""Seconds from the process taking the job to the user entrypoint running in it."""
+ATTR_JOB_DISPATCH_LATENCY = "lk.job.dispatch_latency"
+"""Seconds from the availability request to the entrypoint running: the whole chain."""
+
+# keyterm detection (keyterm_detection span): counts only, the terms themselves are the
+# customer's vocabulary and travel as lk.pii.keyterms in the session report
+ATTR_KEYTERMS_COUNT = "lk.keyterms.count"
+"""Keyterms in effect after the pass (static + confirmed)."""
+ATTR_KEYTERMS_ADDED = "lk.keyterms.added"
+ATTR_KEYTERMS_REMOVED = "lk.keyterms.removed"
+
+# room connect / room io
+ATTR_ROOM_AUTO_SUBSCRIBE = "lk.room.auto_subscribe"
+ATTR_ROOM_E2EE = "lk.room.e2ee"
+ATTR_ROOM_REMOTE_PARTICIPANT_COUNT = "lk.room.remote_participant_count"
+ATTR_ROOM_IO_PARTICIPANT_FILTER = "lk.room_io.participant_filter"
+"""Whether RoomIO waited for a specific participant identity (true) or the first eligible one."""
+ATTR_TRACK_SID = "lk.track_sid"
+ATTR_TRACK_SOURCE = "lk.track_source"
+ATTR_FIRST_FRAME_DELAY = "lk.first_frame_delay"
+"""Seconds from linking the participant to the first media frame received from them."""
+ATTR_PRE_CONNECT_AUDIO_DURATION = "lk.pre_connect_audio.duration"
+ATTR_CONNECTION_STATE = "lk.connection_state"
+ATTR_DISCONNECT_REASON = "lk.disconnect_reason"
+ATTR_OLD_STATE = "lk.old_state"
+ATTR_NEW_STATE = "lk.new_state"
+
+# rpc (``rpc.method`` from the OpenTelemetry RPC semantic conventions, plus lk.rpc.* details)
+ATTR_RPC_METHOD = "rpc.method"
+ATTR_RPC_REQUEST_ID = "lk.rpc.request_id"
+ATTR_RPC_CALLER_IDENTITY = "lk.rpc.caller_identity"
+ATTR_RPC_DESTINATION_IDENTITY = "lk.rpc.destination_identity"
+ATTR_RPC_PAYLOAD = "lk.pii.rpc.payload"
+"""Request payload, truncated to ``telemetry.rpc.MAX_PAYLOAD_ATTR_LEN`` characters."""
+ATTR_RPC_PAYLOAD_SIZE = "lk.rpc.payload_size"
+ATTR_RPC_RESPONSE = "lk.pii.rpc.response"
+"""Response payload, truncated like the request."""
+ATTR_RPC_RESPONSE_SIZE = "lk.rpc.response_size"
+ATTR_RPC_RESPONSE_TIMEOUT = "lk.rpc.response_timeout"
+ATTR_RPC_ERROR_CODE = "lk.rpc.error_code"
+ATTR_RPC_HANDLER_REGISTERED = "lk.rpc.handler_registered"
+"""False when a caller invoked a method this participant never registered."""
+
+# session close / job shutdown
+ATTR_CLOSE_REASON = "lk.close_reason"
+ATTR_CLOSE_DRAIN = "lk.close.drain"
+ATTR_SHUTDOWN_REASON = "lk.shutdown.reason"
+"""The string passed to ``JobContext.shutdown(reason=...)``; developer-authored, like a log line."""
+ATTR_SHUTDOWN_USER_INITIATED = "lk.shutdown.user_initiated"
+ATTR_CALLBACK_NAME = "lk.callback.name"
+
 # agent turn
 ATTR_AGENT_TURN_ID = "lk.generation_id"
+"""On ``agent_turn``: the latest generation (LLM step) of the speech; each step is also a
+``generation`` event carrying its own id."""
 ATTR_AGENT_PARENT_TURN_ID = "lk.parent_generation_id"
+ATTR_GENERATION_COUNT = "lk.generation_count"
+"""On ``agent_turn``: how many generations (LLM steps) the speech took; more than one means
+tool calls were executed before the final reply."""
 ATTR_USER_INPUT = "lk.pii.user_input"
 ATTR_INSTRUCTIONS = "lk.pii.instructions"
 ATTR_SPEECH_INTERRUPTED = "lk.interrupted"
@@ -73,6 +151,23 @@ ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"
 ATTR_EOU_SOURCE = "lk.eou.source"
 ATTR_EOU_DETECTION_DELAY = "lk.eou.detection_delay"
 ATTR_EOU_FROM_CACHE = "lk.eou.from_cache"
+# eou_wait span: from the user's last speech to the turn decision
+ATTR_EOU_OUTCOME = "lk.eou.outcome"
+"""How the wait ended: ``committed``, ``user_resumed``, or ``dropped``."""
+ATTR_EOU_WAIT_DURATION = "lk.eou.wait_duration"
+"""Seconds from the end of the user's speech to the turn decision."""
+ATTR_EOU_REARM_COUNT = "lk.eou.rearm_count"
+ATTR_EOU_NOT_COMMITTED_COUNT = "lk.eou.not_committed_count"
+"""Turn decisions the wait rejected (the detector said the user was not done) before it ended."""
+ATTR_EOU_RESUME_COUNT = "lk.eou.resume_count"
+"""On user_turn: endpointing waits the user cut short by speaking again."""
+ATTR_ON_USER_TURN_COMPLETED_DELAY = "lk.on_user_turn_completed_delay"
+"""Seconds the on_user_turn_completed hook took; on the reply's agent_turn with the other stages."""
+"""Times the endpointing wait restarted on a later trigger (late transcript, VAD)."""
+
+# speech scheduling
+ATTR_SPEECH_QUEUE_WAIT = "lk.speech.queue_wait"
+"""Seconds a speech handle waited in the queue before generation was authorized."""
 
 # metrics
 ATTR_LLM_METRICS = "lk.llm_metrics"
@@ -326,6 +421,21 @@ ATTR_AMD_REASON = "lk.amd.reason"
 ATTR_AMD_SPEECH_DURATION = "lk.amd.speech_duration"
 ATTR_AMD_DELAY = "lk.amd.delay"
 ATTR_AMD_TRANSCRIPT = "lk.pii.amd.transcript"
+
+# Interruptions (agent_turn)
+ATTR_INTERRUPTION_SOURCE = "lk.interruption.source"
+"""What interrupted the speech: ``audio_activity`` (barge-in), ``user_turn`` (a committed
+turn preempting the reply), or ``programmatic`` (session.interrupt(), a tool, teardown)."""
+ATTR_PLAYOUT_POSITION = "lk.playout.position"
+"""Seconds of audio that had actually played when the speech was interrupted."""
+
+# Agent handoff (update_agent span)
+ATTR_PREVIOUS_AGENT_LABEL = "lk.previous_agent_label"
+
+# Fallback adapters (the attempt span)
+ATTR_FALLBACK_LABEL = "lk.fallback.label"
+"""Label of the provider that served the request."""
+ATTR_FALLBACK_INDEX = "lk.fallback.index"
 
 # Adaptive Interruption attributes
 ATTR_IS_INTERRUPTION = "lk.is_interruption"

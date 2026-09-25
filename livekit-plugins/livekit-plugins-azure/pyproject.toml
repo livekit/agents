@@ -22,8 +22,15 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "livekit-agents[openai]>=1.8.1",
+    "livekit-agents[openai]>=1.8.3",
     "azure-cognitiveservices-speech>=1.48.2",
+]
+
+[project.optional-dependencies]
+realtime = [
+    # 1.2.0 adds response metadata, which pairs generate_reply with its response
+    "azure-ai-voicelive[aiohttp]>=1.2.0",
+    "azure-identity>=1.15.0",
 ]
 
 [project.urls]

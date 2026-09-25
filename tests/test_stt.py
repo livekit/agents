@@ -41,6 +41,8 @@ pytestmark = pytest.mark.stt
 SAMPLE_RATE = 24000
 WER_THRESHOLD = 0.25
 MAX_RETRIES = 2
+STREAM_CHUNK_DURATION_MS = 10
+TRAILING_SILENCE_DURATION_MS = 2000
 
 
 def parameter_factory(plugin):
@@ -83,10 +85,23 @@ STTs: list[Callable[[], stt.STT]] = [
     ),
 ]
 
-# entries whose recognize() path is identical to an existing STTs entry, so they only
-# add value to test_stream (openai realtime shares the REST path with openai.STT())
+# Additional model configurations used only by streaming tests.
 STREAM_ONLY_STTs: list[Callable[[], stt.STT]] = [
     pytest.param(lambda: openai.STT(use_realtime=True), id="livekit.plugins.openai.realtime"),
+    pytest.param(
+        lambda: inference.STT(model="deepgram/nova-3"), id="livekit.agents.inference.deepgram"
+    ),
+    pytest.param(
+        lambda: inference.STT(model="cartesia/ink-whisper"),
+        id="livekit.agents.inference.cartesia",
+    ),
+    pytest.param(
+        lambda: inference.STT(
+            model="assemblyai/universal-streaming", extra_kwargs={"format_turns": True}
+        ),
+        id="livekit.agents.inference.assemblyai",
+    ),
+    pytest.param(lambda: inference.STT(model="xai/stt-1"), id="livekit.agents.inference.xai"),
 ]
 
 
@@ -186,7 +201,9 @@ async def test_recognize(stt_factory: Callable[[], stt.STT], request):
 async def test_stream(stt_factory: Callable[[], STT], request):
     sample_rate = SAMPLE_RATE
     plugin_id = request.node.callspec.id.split("-")[0]
-    frames, transcript, _ = await make_test_speech(chunk_duration_ms=10, sample_rate=sample_rate)
+    frames, transcript, _ = await make_test_speech(
+        chunk_duration_ms=STREAM_CHUNK_DURATION_MS, sample_rate=sample_rate
+    )
 
     # TODO: differentiate missing key vs other errors
     try:
@@ -208,7 +225,16 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                 ):
                     for frame in frames:
                         stream.push_frame(frame)
-                        await asyncio.sleep(0.005)
+                        await asyncio.sleep(frame.duration)
+
+                    silence = rtc.AudioFrame.create(
+                        sample_rate=sample_rate,
+                        num_channels=1,
+                        samples_per_channel=sample_rate * STREAM_CHUNK_DURATION_MS // 1000,
+                    )
+                    for _ in range(TRAILING_SILENCE_DURATION_MS // STREAM_CHUNK_DURATION_MS):
+                        stream.push_frame(silence)
+                        await asyncio.sleep(silence.duration)
 
                     stream.end_input()
                     state["closing"] = True
@@ -244,7 +270,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                             got_final_transcript = True
                             final_count += 1
                             # Some providers don't send END_OF_SPEECH, break after final transcript
-                            if state["closing"]:
+                            if state["closing"] and not isinstance(stt, inference.STT):
                                 break
 
                         if event.type == agents.stt.SpeechEventType.END_OF_SPEECH:
@@ -252,7 +278,11 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                             recv_end = True
                             await asyncio.sleep(1)
                             # some providers emit END_OF_SPEECH before the segment's final transcript
-                            if state["closing"] and final_count >= sos_count:
+                            if (
+                                state["closing"]
+                                and final_count >= sos_count
+                                and not isinstance(stt, inference.STT)
+                            ):
                                 break
 
                     dt = time.time() - start_time
@@ -275,7 +305,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
                     nonlocal timed_out
                     stream = None
                     try:
-                        async with asyncio.timeout(60):
+                        async with asyncio.timeout(120):
                             stream = stt.stream()
                             await asyncio.gather(
                                 _stream_input(frames, stream), _stream_output(stream)
@@ -288,7 +318,7 @@ async def test_stream(stt_factory: Callable[[], STT], request):
 
                 await _run_test()
                 if timed_out:
-                    pytest.fail(f"{label} streaming timed out after 60 seconds")
+                    pytest.fail(f"{label} streaming timed out after 120 seconds")
                 return
             except (AssertionError, Exception):
                 if attempt < MAX_RETRIES - 1:
