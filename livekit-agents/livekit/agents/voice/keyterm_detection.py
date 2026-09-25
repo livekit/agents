@@ -506,7 +506,12 @@ def _parse_tool_call(
         return [], [], []
 
     def _terms(key: str) -> list[str]:
-        return [t for t in data.get(key, []) if isinstance(t, str) and t.strip()]
+        value = data.get(key)
+        if not isinstance(value, list):
+            # null or a bare string (also what a repaired truncated call decodes to):
+            # iterating either would raise, or yield one keyterm per character
+            return []
+        return [t for t in value if isinstance(t, str) and t.strip()]
 
     return _terms("pending"), _terms("confirm"), _terms("remove")
 
