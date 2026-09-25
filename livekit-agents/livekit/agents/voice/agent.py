@@ -571,6 +571,9 @@ class Agent:
 
             tool_choice = model_settings.tool_choice if model_settings else NOT_GIVEN
             activity_llm = activity.llm
+            from .generation import _record_generation_llm
+
+            _record_generation_llm(activity_llm)
 
             conn_options = activity.session.conn_options.llm_conn_options
             async with activity_llm.chat(

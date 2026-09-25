@@ -377,6 +377,139 @@ async def test_empty_tool_followup_emits_recoverable_error():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["none", "other"])
+@pytest.mark.parametrize("tool_followup", [False, True])
+async def test_empty_completion_uses_generation_llm_after_model_swap(
+    replacement: str, tool_followup: bool
+) -> None:
+    """An in-flight generation reports the model that actually opened its stream."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse, FakeLLMStream
+
+    class PausedLLM(FakeLLM):
+        def __init__(self, *, pause_on: str, fake_responses: list[FakeLLMResponse]) -> None:
+            super().__init__(fake_responses=fake_responses)
+            self.pause_on = pause_on
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self._label = "model-a"
+
+        def chat(self, **kwargs):
+            return PausedLLMStream(
+                self,
+                chat_ctx=kwargs["chat_ctx"],
+                tools=kwargs.get("tools") or [],
+                conn_options=kwargs.get("conn_options", APIConnectOptions()),
+            )
+
+    class PausedLLMStream(FakeLLMStream):
+        async def _run(self) -> None:
+            assert isinstance(self._llm, PausedLLM)
+            if self._get_index_text() == self._llm.pause_on:
+                self._llm.started.set()
+                await self._llm.release.wait()
+            await super()._run()
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def look_up(self) -> str:
+            """Look up a value for the user."""
+            return "lookup complete"
+
+    responses = (
+        [
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0.01,
+                tool_calls=[FunctionToolCall(name="look_up", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="lookup complete", content="", ttft=0, duration=0.01),
+        ]
+        if tool_followup
+        else [FakeLLMResponse(input="hello", content="", ttft=0, duration=0.01)]
+    )
+    original = PausedLLM(
+        pause_on="lookup complete" if tool_followup else "hello",
+        fake_responses=responses,
+    )
+    next_model = FakeLLM()
+    next_model._label = "model-b"
+    agent = ToolAgent(instructions="test agent", llm=original)
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        run = session.run(user_input="hello")
+        await asyncio.wait_for(original.started.wait(), timeout=10.0)
+        agent.update_options(llm=None if replacement == "none" else next_model)
+        original.release.set()
+        result = await asyncio.wait_for(run, timeout=10.0)
+
+        if tool_followup:
+            assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        else:
+            result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].source is original
+        assert errors[0].error.label == "model-a"
+        assert errors[0].error.recoverable is True
+    finally:
+        original.release.set()
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_completion_uses_model_selected_after_generation_was_scheduled() -> None:
+    """The default node can choose a newer model after the reply task was created."""
+    from .fake_llm import FakeLLMResponse
+
+    class DelayedNodeAgent(Agent):
+        def __init__(self, *, llm: FakeLLM) -> None:
+            super().__init__(instructions="test agent", llm=llm)
+            self.node_started = asyncio.Event()
+            self.resume_node = asyncio.Event()
+
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            self.node_started.set()
+            await self.resume_node.wait()
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+
+    original = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hello", content="old reply", ttft=0, duration=0)]
+    )
+    original._label = "model-a"
+    selected = FakeLLM()
+    selected._label = "model-b"
+    agent = DelayedNodeAgent(llm=original)
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        run = session.run(user_input="hello")
+        await asyncio.wait_for(agent.node_started.wait(), timeout=10.0)
+        agent.update_options(llm=selected)
+        agent.resume_node.set()
+        result = await asyncio.wait_for(run, timeout=10.0)
+
+        result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].source is selected
+        assert errors[0].error.label == "model-b"
+    finally:
+        agent.resume_node.set()
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_scheduled_generate_reply_empty_completion_emits_recoverable_error():
     """A public generate_reply request should surface its empty completion."""
     from .fake_llm import FakeLLMResponse

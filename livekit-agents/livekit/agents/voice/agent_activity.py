@@ -2177,9 +2177,11 @@ class AgentActivity(RecognitionHooks):
         | tts.TTSError
         | llm.RealtimeModelError
         | inference.InterruptionDetectionError,
+        *,
+        llm_source: llm.LLM | None = None,
     ) -> None:
         if isinstance(error, llm.LLMError):
-            error_event = ErrorEvent(error=error, source=self.llm)
+            error_event = ErrorEvent(error=error, source=llm_source or self.llm)
             self._session.emit("error", error_event)
         elif isinstance(error, llm.RealtimeModelError):
             error_event = ErrorEvent(error=error, source=self.llm)
@@ -3512,6 +3514,7 @@ class AgentActivity(RecognitionHooks):
         )
 
         tasks: list[asyncio.Task[Any]] = []
+        generation_llm = self.llm
         llm_task, llm_gen_data = perform_llm_inference(
             node=self._agent.llm_node,
             chat_ctx=chat_ctx,
@@ -3520,6 +3523,9 @@ class AgentActivity(RecognitionHooks):
             model=self.llm.model if self.llm else None,
             provider=self.llm.provider if self.llm else None,
         )
+        # Custom llm_node implementations may not report a model; retain the
+        # configured model as a fallback for their empty-completion events.
+        llm_gen_data.llm = generation_llm if isinstance(generation_llm, llm.LLM) else None
         tasks.append(llm_task)
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
@@ -4051,14 +4057,15 @@ class AgentActivity(RecognitionHooks):
                 message,
                 extra={"speech_id": speech_handle.id, "llm_generation_id": llm_gen_data.id},
             )
-            if self.llm is not None:
+            if llm_gen_data.llm is not None:
                 self._on_error(
                     llm.LLMError(
                         timestamp=time.time(),
-                        label=self.llm.label,
+                        label=llm_gen_data.llm.label,
                         error=RuntimeError(message),
                         recoverable=True,
-                    )
+                    ),
+                    llm_source=llm_gen_data.llm,
                 )
 
         if not chain_continues:
