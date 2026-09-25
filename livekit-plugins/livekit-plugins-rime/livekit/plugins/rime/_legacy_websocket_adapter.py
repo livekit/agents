@@ -130,6 +130,9 @@ class LegacyWebSocketAdapter:
     def prewarm(self) -> None:
         self._pools.current.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await self._pools.current.release_idle()
+
     def update_endpoint(self, websocket_url: str) -> None:
         if websocket_url == self._websocket_url:
             return
