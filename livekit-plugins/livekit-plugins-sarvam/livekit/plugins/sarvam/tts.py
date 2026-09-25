@@ -847,20 +847,38 @@ class TTS(tts.TTS):
                 )
             self._opts.output_audio_codec = output_audio_codec
 
+    @staticmethod
+    def _resolve_conn_options(conn_options: APIConnectOptions | None) -> APIConnectOptions:
+        # AgentSession always passes DEFAULT_API_CONNECT_OPTIONS (max_retry=3).
+        # Treat that singleton -- and an omitted argument -- as the plugin
+        # default of no retries. An explicitly constructed APIConnectOptions
+        # is honored as-is, including a caller-chosen max_retry.
+        if conn_options is None or conn_options is DEFAULT_API_CONNECT_OPTIONS:
+            return replace(DEFAULT_API_CONNECT_OPTIONS, max_retry=0)
+        return conn_options
+
     # Implement the abstract synthesize method
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions | None = None
     ) -> ChunkedStream:
-        """Synthesize text to audio using Sarvam.ai TTS API."""
-        if conn_options is None:
-            conn_options = DEFAULT_API_CONNECT_OPTIONS
-        return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+        """Synthesize text to audio using Sarvam.ai TTS API.
+
+        Defaults to ``max_retry=0``. Pass a constructed ``APIConnectOptions``
+        to opt into retries or change timeout/interval.
+        """
+        return ChunkedStream(
+            tts=self, input_text=text, conn_options=self._resolve_conn_options(conn_options)
+        )
 
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
-        """Create a streaming TTS session."""
-        stream = SynthesizeStream(tts=self, conn_options=conn_options)
+        """Create a streaming TTS session.
+
+        Defaults to ``max_retry=0``. Pass a constructed ``APIConnectOptions``
+        to opt into retries or change timeout/interval.
+        """
+        stream = SynthesizeStream(tts=self, conn_options=self._resolve_conn_options(conn_options))
         self._streams.add(stream)
         return stream
 
@@ -1105,9 +1123,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     # The transport is dead -- almost always a stale pooled
                     # connection that the server already closed (60s idle
                     # timeout). Raise so the pool evicts it via the
-                    # ``async with`` __aexit__; the framework will retry
-                    # against a fresh connection. Real user interruptions
-                    # propagate as ``CancelledError``, not this branch.
+                    # ``async with`` __aexit__. The plugin defaults to
+                    # ``max_retry=0``, so this error surfaces unless the caller
+                    # opted into retries via ``APIConnectOptions``. Real user
+                    # interruptions propagate as ``CancelledError``, not
+                    # this branch.
                     logger.debug(
                         "Sarvam TTS WebSocket transport closed before send "
                         "completed; pool will replace this connection",
