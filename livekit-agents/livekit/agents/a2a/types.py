@@ -37,6 +37,8 @@ class TaskInput:
     """The sender's conversation, whose database the receiver persists into."""
     caller_session_id: str | None = None
     """The sender's session in that conversation, which the receiver's session hangs under."""
+    context_id: str | None = None
+    """The A2A context the request continues, or None to open a new one."""
 
     def __post_init__(self) -> None:
         if self.closing and self.text is None and self.instruction is None:

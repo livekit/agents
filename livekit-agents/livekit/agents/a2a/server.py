@@ -40,7 +40,7 @@ except ImportError as e:
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from ..store import Session as PersistedSession, Store
+    from ..store import SessionStore, StoredSession
     from ..voice.agent_session import AgentSession
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
@@ -67,7 +67,7 @@ class A2ASessionContext:
         endpoint: str,
         conversation_id: str | None = None,
         caller_session_id: str | None = None,
-        store: Store | None = None,
+        store: SessionStore | None = None,
     ) -> None:
         self._context_id = context_id
         self._endpoint = endpoint
@@ -107,7 +107,7 @@ class A2ASessionContext:
         return self._caller_session_id
 
     @property
-    def persisted(self) -> PersistedSession | None:
+    def persisted(self) -> StoredSession | None:
         """This context's session in the caller's conversation, for ``start(persist=)``; None
         when the caller named no conversation or the agent server has no store."""
         return self._persisted
@@ -137,7 +137,7 @@ class _Context:
         *,
         conversation_id: str | None,
         caller_session_id: str | None,
-        store: Store | None,
+        store: SessionStore | None,
     ) -> None:
         self._ctx = A2ASessionContext(
             context_id,
@@ -189,7 +189,7 @@ class _SessionExecutor(AgentExecutor):
         *,
         endpoint: str,
         idle_timeout: float | None,
-        store: Store | None = None,
+        store: SessionStore | None = None,
     ) -> None:
         self._handler = handler
         self._endpoint = endpoint
@@ -328,7 +328,7 @@ def mount(
     description: str,
     name: str | None = None,
     idle_timeout: float | None = None,
-    store: Store | None = None,
+    store: SessionStore | None = None,
 ) -> _SessionExecutor:
     """Register one A2A endpoint on ``app``, under ``/<endpoint>``.
 

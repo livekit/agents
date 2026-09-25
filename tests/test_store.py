@@ -21,10 +21,10 @@ from livekit.agents.llm import (
     FunctionCallOutput,
     ImageContent,
 )
-from livekit.agents.store.base import ExecResult, Executor, Statement, Store, Value
+from livekit.agents.store.base import ExecResult, Executor, SessionStore, Statement, Value
 from livekit.agents.store.local import SQLiteExecutor
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
-from livekit.agents.store.session import SESSION_OWNER, AgentRecord, Session, _Database
+from livekit.agents.store.session import SESSION_OWNER, AgentRecord, StoredSession, _Database
 
 pytestmark = pytest.mark.unit
 
@@ -33,10 +33,10 @@ pytestmark = pytest.mark.unit
 class Database:
     """One database of a store, as the suite drives it."""
 
-    store: Store
+    store: SessionStore
     database_id: str
 
-    def session(self, session_id: str, **kwargs: Any) -> Session:
+    def session(self, session_id: str, **kwargs: Any) -> StoredSession:
         return self.store.session(self.database_id, session_id, **kwargs)
 
     async def executor(self) -> Executor:
@@ -315,7 +315,9 @@ class StoreSuite:
 
         again = database.session("voice")
         assert await again.load() is not None
-        assert again.child_contexts == {"fare-desk": "ctx-1", "baggage": "ctx-2"}
+        assert again.child_session("fare-desk") == "ctx-1"
+        assert again.child_session("baggage") == "ctx-2"
+        assert again.child_session("lounge") is None
         tree = await database.rows(
             "SELECT session_id, parent_session_id, endpoint FROM sessions ORDER BY 1"
         )
@@ -362,7 +364,7 @@ class StoreSuite:
 
 
 async def _save(
-    persisted: Session, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()
+    persisted: StoredSession, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()
 ) -> None:
     await persisted.save(
         current_agent_id="agent_1",

@@ -24,7 +24,7 @@ from livekit.protocol import agentdb as pb
 
 from ..log import logger
 from ..utils import aio
-from .base import ExecResult, Executor, Row, Statement, Store, StoreError, Value
+from .base import ExecResult, Executor, Row, SessionStore, Statement, StoreError, Value
 
 if TYPE_CHECKING:
     from google.protobuf.message import Message
@@ -357,7 +357,7 @@ class AgentDBExecutor:
             await self._http_session.close()
 
 
-class AgentDB(Store):
+class AgentDB(SessionStore):
     """Sessions in agent-db: its management API mints databases, its data plane serves them.
 
     ``url`` defaults to ``LIVEKIT_AGENTDB_URL`` and the key to ``LIVEKIT_API_KEY``/``_SECRET``;

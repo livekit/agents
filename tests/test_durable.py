@@ -429,9 +429,9 @@ async def test_a_save_during_a_start_that_fails_keeps_the_restored_frame(
     first.generate_reply(user_input="go")
     await _close_in_hold(first)
 
-    load = store.Session.load
+    load = store.StoredSession.load
 
-    async def load_then_save(self: store.Session) -> Any:
+    async def load_then_save(self: store.StoredSession) -> Any:
         stored = await load(self)
         # before the session has an agent it holds only what it loaded
         await resumed.save()
@@ -444,7 +444,7 @@ async def test_a_save_during_a_start_that_fails_keeps_the_restored_frame(
         await self.save()
         raise RuntimeError("the room did not connect")
 
-    monkeypatch.setattr(store.Session, "load", load_then_save)
+    monkeypatch.setattr(store.StoredSession, "load", load_then_save)
     monkeypatch.setattr(AgentSession, "_update_activity_task", save_then_fail)
     resumed = AgentSession(llm=_llm("book"))
     with pytest.raises(RuntimeError, match="did not connect"):

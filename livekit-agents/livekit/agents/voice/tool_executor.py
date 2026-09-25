@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import weakref
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -324,9 +325,10 @@ class _ToolExecutor:
         # durable tools, apart from the running tasks: they have no update, filler or
         # cancellation, and a drain leaves them to the close
         self._durable_tasks: dict[asyncio.Task[Any], DurableTask] = {}
-        # cleared to hold every durable tool at its next boundary
+        # cleared to hold every durable tool at its next boundary, while any hold is entered
         self._durable_running = asyncio.Event()
         self._durable_running.set()
+        self._durable_holds = 0
         # the frames of the durable tools a close stopped at a boundary
         self._stopped_frames: list[bytes] = []
 
@@ -612,26 +614,27 @@ class _ToolExecutor:
         _pass_through_activity_task_info(exe_task)
         return await exe_task
 
-    async def pause(self) -> None:
-        """Hold every durable tool at its next boundary, and return once each is at one."""
+    @contextlib.asynccontextmanager
+    async def pause_durable(self) -> AsyncIterator[None]:
+        """Hold every durable tool at its next boundary, entering once each is at one, and
+        release them on exit."""
+        self._durable_holds += 1
         self._durable_running.clear()
-        waiting = [task for task in self._durable_tasks.values() if not task.at_boundary.is_set()]
-        if waiting:
-            logger.info(
-                "waiting for durable tools to finish their effect in flight",
-                extra={"functions": [task.fnc_name for task in waiting]},
-            )
-            await asyncio.gather(*(task.at_boundary.wait() for task in waiting))
+        try:
+            waiting = [t for t in self._durable_tasks.values() if not t.at_boundary.is_set()]
+            if waiting:
+                logger.info(
+                    "waiting for durable tools to finish their effect in flight",
+                    extra={"functions": [task.fnc_name for task in waiting]},
+                )
+                await asyncio.gather(*(task.at_boundary.wait() for task in waiting))
+            yield
+        finally:
+            self._durable_holds -= 1
+            if self._durable_holds == 0:
+                self._durable_running.set()
 
-    def resume(self) -> None:
-        self._durable_running.set()
-
-    def durable_state(self) -> list[bytes]:
-        """Every durable tool as of its latest boundary, each pickled."""
-        snapshots = [task.snapshot for task in self._durable_tasks.values() if task.snapshot]
-        return snapshots + self._stopped_frames
-
-    def close(self) -> None:
+    def stop_durable(self) -> None:
         """Stop every durable tool; one at a boundary keeps its frame, one mid-effect is lost."""
         for exe_task, task in self._durable_tasks.items():
             if task.at_boundary.is_set() and task.snapshot:
@@ -643,6 +646,11 @@ class _ToolExecutor:
                 )
             exe_task.cancel()
         self._durable_tasks.clear()
+
+    def durable_state(self) -> list[bytes]:
+        """Every durable tool as of its latest boundary, each pickled."""
+        snapshots = [task.snapshot for task in self._durable_tasks.values() if task.snapshot]
+        return snapshots + self._stopped_frames
 
     async def _enqueue_reply(
         self,

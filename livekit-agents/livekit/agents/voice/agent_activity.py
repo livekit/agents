@@ -412,14 +412,6 @@ class AgentActivity(RecognitionHooks):
             **self._session._opts.delegation,
             **self._agent._delegation,
         }
-        delegate = self._delegation["delegate"]
-        persisted = self._session._persisted
-        if delegate is not None and delegate.endpoint is not None and persisted is not None:
-            # the expert keeps one session per context, so a delegate resumes the context this
-            # session last delegated to its endpoint under
-            context_id = persisted.child_contexts.get(delegate.endpoint)
-            if context_id is not None and delegate.context_id != context_id:
-                delegate.context_id = context_id
         self.__delegate_tool: FunctionTool | None = None
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
@@ -1819,7 +1811,7 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            self._tool_executor.close()
+            self._tool_executor.stop_durable()
 
             # session-scoped toolsets are closed by the session; this only closes
             # the agent's own toolsets + MCP — all of which outlive pause

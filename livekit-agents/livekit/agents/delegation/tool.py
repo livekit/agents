@@ -72,9 +72,10 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
         )
 
         if (persisted := session.persisted) is not None:
-            # the expert joins this session's conversation, whose id is the database id
+            # these three ids tie the delegation to the stored session
             task_input.conversation_id = persisted.database_id
             task_input.caller_session_id = persisted.session_id
+            task_input.context_id = persisted.child_session(handler.endpoint)
 
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed

@@ -77,15 +77,18 @@ class TaskStream:
         self._holds_turn = True
         try:
             task_input = self._input
+            if task_input.context_id:
+                # a later request on this client continues the context without naming it
+                self._client._context_id = task_input.context_id
+            else:
+                task_input = dataclasses.replace(task_input, context_id=self._client.context_id)
             if not self._client.extension_active:
                 # the conversation id is ours to share only with an endpoint that joins it
                 task_input = dataclasses.replace(
                     task_input, conversation_id=None, caller_session_id=None
                 )
             request = to_a2a_request(
-                task_input,
-                context_id=self._client.context_id,
-                reference_task_ids=self._client._take_open_questions(),
+                task_input, reference_task_ids=self._client._take_open_questions()
             )
             # the SDK under-declares its stream as an AsyncIterator; it is a generator, and
             # until it is closed it holds its HTTP connection
@@ -112,6 +115,8 @@ class TaskStream:
                     task_id = getattr(payload, "id", "") or getattr(payload, "task_id", "")
                     if task_id:
                         self._task_id = task_id
+                        if context_id := getattr(payload, "context_id", ""):
+                            self._client._context_id = context_id
                         self._release_turn()
                 yield event
         finally:
@@ -189,7 +194,8 @@ class A2AClient:
         return self._extension_active
 
     def send(self, task_input: TaskInput) -> TaskStream:
-        """Send one message on this context and read the task it opens."""
+        """Send one message and read the task it opens, on the request's context when it names
+        one, which this client then keeps, and on this client's otherwise."""
         return TaskStream(self, task_input)
 
     async def cancel(self, task_id: str, *, reason: str = "") -> None:

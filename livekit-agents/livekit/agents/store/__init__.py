@@ -8,16 +8,16 @@ context id, under the session that delegated to it.
 """
 
 from .agentdb import AgentDB
-from .base import Store, StoreError
+from .base import SessionStore, StoreError
 from .local import LocalStore
 from .schema import SchemaVersionError
-from .session import Session
+from .session import StoredSession
 
 __all__ = [
     "AgentDB",
     "LocalStore",
     "SchemaVersionError",
-    "Session",
-    "Store",
+    "SessionStore",
     "StoreError",
+    "StoredSession",
 ]

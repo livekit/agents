@@ -129,16 +129,6 @@ async def test_the_delegate_tool_is_offered_when_a_delegate_is_in_force() -> Non
         assert _delegate_tool() is _delegate_tool()
 
 
-def test_a_delegates_context_is_fixed_once_it_has_sent() -> None:
-    delegate = A2ADelegate("http://localhost:1/fare-desk")
-    delegate.context_id = "ctx-9"
-    assert delegate.context_id == "ctx-9"
-    assert delegate.client.context_id == "ctx-9"
-    # the far side keeps this caller's session under the context already sent
-    with pytest.raises(RuntimeError):
-        delegate.context_id = "ctx-1"
-
-
 async def test_a_session_without_a_delegate_offers_no_such_tool() -> None:
     session = AgentSession(llm=_voice_llm())
     await session.start(agent=Agent(instructions="voice"))
@@ -380,7 +370,6 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     local = store.LocalStore(tmp_path)
     conversation_id = await local.create_database()
     seen: list[tuple[str, str | None, str | None]] = []
-    named_at_start: list[str | None] = []
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
         seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
@@ -398,8 +387,6 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
         await session.start(
             agent=Agent(instructions="voice"), persist=local.session(conversation_id)
         )
-        # a resumed session names the stored context before its first delegation
-        named_at_start.append(delegate.context_id)
         session.generate_reply(user_input="how much is it")
         answers: list[str] = []
         for _ in range(100):
@@ -422,10 +409,10 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
         second, caller = await call(url, "d2")
     await _drain_sse_watcher()
 
-    # the restarted caller reached the same expert context, and the expert heard where to write
-    assert first.context_id == second.context_id
-    assert named_at_start == [None, first.context_id]
-    assert seen == [(first.context_id, conversation_id, conversation_id)] * 2
+    # the restarted caller's request named the stored context, and the expert heard where to write
+    context_id = first.client.context_id
+    assert second.client.context_id == context_id
+    assert seen == [(context_id, conversation_id, conversation_id)] * 2
     # the answer to each delegate call names the expert task that gave it, and the call, recorded
     # before the task existed, is left as it was
     history = caller.history.items
@@ -444,7 +431,7 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     assert tree == [
         {"session_id": conversation_id, "parent_session_id": None, "endpoint": None},
         {
-            "session_id": first.context_id,
+            "session_id": context_id,
             "parent_session_id": conversation_id,
             "endpoint": "fare-desk",
         },

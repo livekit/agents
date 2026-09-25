@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import shortuuid
-from .base import ExecResult, Executor, Row, Statement, Store, StoreError, Value
+from .base import ExecResult, Executor, Row, SessionStore, Statement, StoreError, Value
 from .schema import migrate
 
 
@@ -78,7 +78,7 @@ class SQLiteExecutor:
         self._thread.shutdown(wait=False)
 
 
-class LocalStore(Store):
+class LocalStore(SessionStore):
     """Databases as SQLite files under ``directory``. No server needed."""
 
     def __init__(self, directory: str | os.PathLike[str]):

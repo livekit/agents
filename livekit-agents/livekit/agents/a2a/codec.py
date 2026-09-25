@@ -77,10 +77,7 @@ def decode_item(data: dict[str, Any]) -> ChatItem | None:
 
 
 def to_a2a_request(
-    task_input: TaskInput,
-    *,
-    context_id: str,
-    reference_task_ids: Sequence[str] = (),
+    task_input: TaskInput, *, reference_task_ids: Sequence[str] = ()
 ) -> pb.SendMessageRequest:
     """One message on a context: the text, the history, and what it may be answering."""
     parts = [pb.Part(text=task_input.body)]
@@ -94,7 +91,7 @@ def to_a2a_request(
 
     message = pb.Message(
         message_id=shortuuid("msg-"),
-        context_id=context_id,
+        context_id=task_input.context_id or "",
         role=pb.Role.ROLE_USER,
         parts=parts,
         reference_task_ids=list(reference_task_ids),
@@ -145,6 +142,7 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
         closing=kind == KIND_CLOSE,
         conversation_id=message_metadata.get(CONVERSATION),
         caller_session_id=message_metadata.get(CALLER),
+        context_id=message.context_id or None,
     )
 
 

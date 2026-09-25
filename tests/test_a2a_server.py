@@ -18,7 +18,7 @@ from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a.extension import EXTENSION_URI, KIND, as_dict
 from livekit.agents.a2a.server import AGENT_CARD_PATH, A2ASessionContext, mount
 from livekit.agents.llm import ToolFlag
-from livekit.agents.store import Store
+from livekit.agents.store import SessionStore
 
 from .fake_llm import FakeLLM
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -78,7 +78,7 @@ async def _serving(
     *,
     idle_timeout: float | None = None,
     handler: Callable[[A2ASessionContext, _Served], Awaitable[None]] | None = None,
-    store: Store | None = None,
+    store: SessionStore | None = None,
 ) -> AsyncIterator[_Served]:
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known

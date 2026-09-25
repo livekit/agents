@@ -704,7 +704,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
-        self._persisted: store.Session | None = None
+        self._persisted: store.StoredSession | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -821,7 +821,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._chat_ctx
 
     @property
-    def persisted(self) -> store.Session | None:
+    def persisted(self) -> store.StoredSession | None:
         """The persisted session, as passed to ``start(persist=...)``; None if none."""
         return self._persisted
 
@@ -896,7 +896,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        persist: store.Session | None = None,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -912,7 +912,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        persist: store.Session | None = None,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -927,7 +927,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
-        persist: store.Session | None = None,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -1397,15 +1397,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             try:
                 # durable tools stop at their next boundary, where the save captures them
                 chain = durable_chain(self._agent)
-                executors = [executor for executor in chain.values() if executor is not None]
                 try:
-                    try:
-                        for executor in executors:
-                            await executor.pause()
-                    finally:
-                        # a close cut short while an effect is in flight loses only that tool
-                        for executor in executors:
-                            executor.close()
+                    async with contextlib.AsyncExitStack() as held:
+                        executors = [e for e in chain.values() if e is not None]
+                        try:
+                            for executor in executors:
+                                await held.enter_async_context(executor.pause_durable())
+                        finally:
+                            # a close cut short while an effect is in flight loses only that tool
+                            for executor in executors:
+                                executor.stop_durable()
 
                     if self._persisted is not None and isinstance(self._agent, AgentTask):
                         from . import persistence

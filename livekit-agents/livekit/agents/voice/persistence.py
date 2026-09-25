@@ -1,4 +1,4 @@
-"""Restoring an ``AgentSession`` from its ``store.Session`` when it starts, and saving it.
+"""Restoring an ``AgentSession`` from its ``store.StoredSession`` when it starts, and saving it.
 
 Imported only when ``start()`` is given ``persist``; it restores data into the agent and
 session the handler built, and rebuilds an agent from its row only when its class says how.
@@ -17,7 +17,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from .. import llm
 from ..log import logger
-from ..store.session import AgentRecord, Session
+from ..store.session import AgentRecord, StoredSession
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity
 from .durable_tool import _REHYDRATING, DurableTask, durable_chain
@@ -84,7 +84,9 @@ async def _close_restored(activities: list[AgentActivity]) -> None:
             activity.agent._rehydrated = False
 
 
-async def rehydrate(session: AgentSession, persisted: Session, agent: Agent) -> tuple[Agent, bool]:
+async def rehydrate(
+    session: AgentSession, persisted: StoredSession, agent: Agent
+) -> tuple[Agent, bool]:
     """Load the session and restore what it had; returns the agent to start, and whether it
     is the one the session left off on."""
     _userdata_json(session._userdata)
@@ -211,7 +213,7 @@ async def rehydrate(session: AgentSession, persisted: Session, agent: Agent) -> 
         current._chat_ctx = session._chat_ctx.copy(exclude_handoff=True, exclude_config_update=True)
 
     delegate = (session._opts.delegation | current._delegation).get("delegate")
-    for endpoint in persisted.child_contexts:
+    for endpoint in persisted._child_contexts:
         if delegate is None or delegate.endpoint != endpoint:
             logger.warning(
                 "the session had a child session on an endpoint it has no delegate for",
@@ -279,10 +281,10 @@ async def save(
             if not chain:
                 # a session with no agent yet holds only what it loaded
                 return
-            executors = [executor for executor in chain.values() if executor is not None]
-            try:
-                for executor in executors:
-                    await executor.pause()
+            async with contextlib.AsyncExitStack() as held:
+                for executor in chain.values():
+                    if executor is not None:
+                        await held.enter_async_context(executor.pause_durable())
                 history = list(session._chat_ctx.items)
                 in_history = {item.id for item in history}
                 records: list[AgentRecord] = []
@@ -340,9 +342,6 @@ async def save(
                     history=history,
                     agents=records,
                 )
-            finally:
-                for executor in executors:
-                    executor.resume()
         except Exception:
             if not release:
                 raise

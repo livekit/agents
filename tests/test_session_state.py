@@ -602,30 +602,21 @@ async def test_an_unchanged_configuration_is_recorded_once() -> None:
     await third.aclose()
 
 
-class _Remembering(Delegate):
+class _Addressed(Delegate):
     """A delegate with an address and no a2a: all a resumed session needs from it."""
 
     def __init__(self, endpoint: str) -> None:
         self._endpoint = endpoint
-        self.resumed: list[str] = []
 
     @property
     def endpoint(self) -> str:
         return self._endpoint
 
-    @property
-    def context_id(self) -> str | None:
-        return self.resumed[-1] if self.resumed else None
-
-    @context_id.setter
-    def context_id(self, context_id: str) -> None:
-        self.resumed.append(context_id)
-
     def submit(self, task_input: Any) -> Any:
         raise AssertionError("nothing is delegated here")
 
 
-async def test_a_resumed_session_points_its_delegate_back_at_its_child(
+async def test_a_resumed_session_knows_its_child_behind_its_delegate(
     database: Database, caplog: pytest.LogCaptureFixture
 ) -> None:
     earlier = database.session("voice")
@@ -636,19 +627,22 @@ async def test_a_resumed_session_points_its_delegate_back_at_its_child(
         await expert.release()
     await earlier.release()
 
-    delegate = _Remembering("desk")
+    delegate = _Addressed("desk")
     session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), delegate=delegate)
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
         await session.start(agent=Agent(instructions="voice"), persist=database.session("voice"))
-    assert delegate.resumed == ["ctx-9"]
+    assert session.persisted is not None
+    assert session.persisted.child_session(delegate.endpoint) == "ctx-9"
     # a child on an endpoint the session has no delegate for is reported, and left alone
     (warning,) = [r for r in caplog.records if "no delegate for" in r.getMessage()]
     assert warning.endpoint == "baggage"  # type: ignore[attr-defined]
     await session.aclose()
 
     # a new session has nothing to go back to
-    fresh = _Remembering("desk")
-    session = AgentSession(llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), delegate=fresh)
+    session = AgentSession(
+        llm=_AnsweringLLM(fake_responses=[], fallbacks=[]), delegate=_Addressed("desk")
+    )
     await session.start(agent=Agent(instructions="voice"), persist=database.session("new"))
-    assert fresh.resumed == []
+    assert session.persisted is not None
+    assert session.persisted.child_session("desk") is None
     await session.aclose()

@@ -1,4 +1,4 @@
-"""A persisted session: its rows in its conversation's database, what it loads, and what each
+"""A stored session: its rows in its conversation's database, what it loads, and what each
 save writes.
 
 A save writes the items gained, changed or lost since the last one and rewrites the small
@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,7 +45,7 @@ class AgentRecord:
 
 
 @dataclass
-class StoredSession:
+class SessionRecord:
     """What a session had written when it was last saved, read back."""
 
     current_agent_id: str | None
@@ -90,8 +90,8 @@ class _Database:
                 await executor.aclose()
 
 
-class Session:
-    """The persisted counterpart of an ``AgentSession``, from a store's ``session()``, for
+class StoredSession:
+    """A stored session is one session as the store holds it, for
     ``AgentSession.start(persist=)``."""
 
     def __init__(
@@ -119,12 +119,12 @@ class Session:
     def session_id(self) -> str:
         return self._session_id
 
-    @property
-    def child_contexts(self) -> Mapping[str, str]:
-        """Per endpoint, the context id this session last delegated there under, as loaded."""
-        return self._child_contexts
+    def child_session(self, endpoint: str | None) -> str | None:
+        """The context id this session last delegated to ``endpoint`` under, as loaded, which
+        the expert keeps this caller's session by; None when there is none."""
+        return self._child_contexts.get(endpoint) if endpoint is not None else None
 
-    async def load(self) -> StoredSession | None:
+    async def load(self) -> SessionRecord | None:
         """Read the session back, or create it and return None when it is new."""
         if not self._loaded:
             self._loaded = True
@@ -189,7 +189,7 @@ class Session:
         ):
             self._child_contexts[str(row["endpoint"])] = str(row["session_id"])
 
-        return StoredSession(
+        return SessionRecord(
             current_agent_id=_text(session.get("current_agent_id")),
             userdata=_json(session.get("userdata")),
             history=history,
@@ -321,6 +321,6 @@ def _json(value: Value | None) -> Any:
 __all__ = [
     "SESSION_OWNER",
     "AgentRecord",
-    "Session",
+    "SessionRecord",
     "StoredSession",
 ]

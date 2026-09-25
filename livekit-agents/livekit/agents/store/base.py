@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from .session import Session, _Database
+    from .session import StoredSession, _Database
 
 Value = int | float | str | bytes | None
 """One of SQLite's five storage classes."""
@@ -55,9 +55,9 @@ class Executor(Protocol):
     async def aclose(self) -> None: ...
 
 
-class Store(ABC):
-    """Where sessions persist: one connection per database, one ``Session`` per session. A
-    backend pickles as its configuration only, so each job process opens its own connections."""
+class SessionStore(ABC):
+    """A store holds the sessions of conversations. A backend pickles as its configuration only,
+    so each job process opens its own connections."""
 
     def __init__(self) -> None:
         self._databases: dict[str, _Database] = {}
@@ -77,16 +77,16 @@ class Store(ABC):
         *,
         parent: str | None = None,
         endpoint: str | None = None,
-    ) -> Session:
+    ) -> StoredSession:
         """A conversation's session, for ``start(persist=)``: with no ``session_id`` the front
         session, whose id is the conversation id. ``parent`` is the caller's session."""
-        from .session import Session, _Database
+        from .session import StoredSession, _Database
 
         if (database := self._databases.get(conversation_id)) is None:
             database = self._databases[conversation_id] = _Database(
                 conversation_id, connect=lambda: self._connect(conversation_id)
             )
-        return Session(
+        return StoredSession(
             database,
             session_id if session_id is not None else conversation_id,
             parent=parent,
@@ -103,8 +103,8 @@ __all__ = [
     "ExecResult",
     "Executor",
     "Row",
+    "SessionStore",
     "Statement",
-    "Store",
     "StoreError",
     "Value",
 ]

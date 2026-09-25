@@ -66,7 +66,7 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from .a2a.server import A2ASessionHandler, _SessionExecutor
-    from .store import Store
+    from .store import SessionStore
 
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -362,7 +362,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
-        store: Store | None = None,
+        store: SessionStore | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -452,7 +452,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._http
 
     @property
-    def store(self) -> Store | None:
+    def store(self) -> SessionStore | None:
         """Where sessions persist: handed to each job as ``JobContext.store``, and to each A2A
         context as ``A2ASessionContext.persisted``."""
         return self._store

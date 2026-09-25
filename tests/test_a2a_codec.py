@@ -84,7 +84,7 @@ INPUTS: list[a2a.TaskInput] = [
 
 @pytest.mark.parametrize("task_input", INPUTS, ids=lambda i: f"{i.is_delegation}-{i.body[:12]!r}")
 def test_request_round_trip(task_input: a2a.TaskInput) -> None:
-    back = a2a.from_a2a_request(a2a.to_a2a_request(task_input, context_id="sess-1"))
+    back = a2a.from_a2a_request(a2a.to_a2a_request(task_input))
 
     assert back.text == task_input.text
     assert back.instruction == task_input.instruction
@@ -97,12 +97,12 @@ def test_request_round_trip(task_input: a2a.TaskInput) -> None:
 
 def test_request_carries_the_extension_keys() -> None:
     request = a2a.to_a2a_request(
-        a2a.TaskInput(instruction="find it", chat_ctx=_history()),
-        context_id="sess-1",
+        a2a.TaskInput(instruction="find it", chat_ctx=_history(), context_id="sess-1"),
         reference_task_ids=["task-open"],
     )
 
     assert request.message.context_id == "sess-1"
+    assert a2a.from_a2a_request(request).context_id == "sess-1"
     assert request.message.message_id
     assert as_dict(request.message.metadata)[KIND] == KIND_DELEGATION
     assert list(request.message.reference_task_ids) == ["task-open"]
@@ -117,7 +117,7 @@ def test_the_persistence_keys_round_trip_beside_the_kind() -> None:
     task_input = a2a.TaskInput(
         instruction="find it", conversation_id="DB_abc", caller_session_id="voice"
     )
-    request = a2a.to_a2a_request(task_input, context_id="sess-1")
+    request = a2a.to_a2a_request(task_input)
 
     assert as_dict(request.message.metadata) == {
         KIND: KIND_DELEGATION,
@@ -128,14 +128,14 @@ def test_the_persistence_keys_round_trip_beside_the_kind() -> None:
     assert (back.conversation_id, back.caller_session_id) == ("DB_abc", "voice")
 
     # a person's turn carries them too, and a request without them reads as None
-    turn = a2a.to_a2a_request(a2a.TaskInput(text="hi", conversation_id="DB_abc"), context_id="s")
+    turn = a2a.to_a2a_request(a2a.TaskInput(text="hi", conversation_id="DB_abc"))
     assert as_dict(turn.message.metadata) == {a2a.CONVERSATION: "DB_abc"}
-    plain = a2a.from_a2a_request(a2a.to_a2a_request(a2a.TaskInput(text="hi"), context_id="s"))
-    assert (plain.conversation_id, plain.caller_session_id) == (None, None)
+    plain = a2a.from_a2a_request(a2a.to_a2a_request(a2a.TaskInput(text="hi")))
+    assert (plain.conversation_id, plain.caller_session_id, plain.context_id) == (None,) * 3
 
 
 def test_a_persons_turn_is_not_tagged_a_delegation() -> None:
-    request = a2a.to_a2a_request(a2a.TaskInput(text="hello"), context_id="sess-1")
+    request = a2a.to_a2a_request(a2a.TaskInput(text="hello"))
     assert KIND not in as_dict(request.message.metadata)
     # nothing to share, so no history part rides along
     assert all(p.WhichOneof("content") == "text" for p in request.message.parts)

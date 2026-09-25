@@ -26,39 +26,15 @@ class A2ADelegate(Delegate):
         self,
         url: str,
         *,
-        context_id: str | None = None,
         headers: dict[str, str] | None = None,
         httpx_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._url = url
-        self._context_id = context_id
-        self._headers = headers
-        self._httpx_client = httpx_client
-        # made on the first send, so a resumed session can still say which context it is
-        self._client: A2AClient | None = None
+        self._client = A2AClient(url, headers=headers, httpx_client=httpx_client)
 
     @property
     def client(self) -> A2AClient:
-        if self._client is None:
-            self._client = A2AClient(
-                self._url,
-                context_id=self._context_id,
-                headers=self._headers,
-                httpx_client=self._httpx_client,
-            )
         return self._client
-
-    @property
-    def context_id(self) -> str | None:
-        """The context with the endpoint: the one given, else minted on the first send."""
-        return self._client.context_id if self._client is not None else self._context_id
-
-    @context_id.setter
-    def context_id(self, context_id: str) -> None:
-        if self._client is not None:
-            # the far side already keeps this caller's session under the context sent
-            raise RuntimeError("the delegate's context is fixed once it has sent")
-        self._context_id = context_id
 
     @property
     def endpoint(self) -> str:
@@ -69,5 +45,4 @@ class A2ADelegate(Delegate):
         return self.client.send(task_input)
 
     async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
+        await self._client.aclose()
