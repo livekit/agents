@@ -12,68 +12,16 @@ did for a tool that asks for no reply.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
 
 import pytest
 
-from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, utils
-from livekit.agents.llm import FunctionCall, GenerationCreatedEvent, MessageGeneration
+from livekit.agents import Agent, AgentSession, function_tool
+from livekit.agents.llm import FunctionCall
 
 from .fake_io import FakeAudioOutput
-from .fake_realtime import FakeRealtimeModel, fake_capabilities
+from .fake_realtime import FakeRealtimeModel, fake_capabilities, generation as _generation
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
-
-_SAMPLE_RATE = 24000
-
-
-def _generation(
-    *,
-    response_id: str,
-    text: str,
-    audio_duration: float,
-    function_calls: Sequence[FunctionCall] = (),
-) -> GenerationCreatedEvent:
-    """A single-message generation carrying `audio_duration` seconds of silence."""
-    message_ch = utils.aio.Chan[MessageGeneration]()
-    function_ch = utils.aio.Chan[FunctionCall]()
-    text_ch = utils.aio.Chan[str]()
-    audio_ch = utils.aio.Chan[rtc.AudioFrame]()
-    modalities = asyncio.Future[list[str]]()
-    modalities.set_result(["audio", "text"])
-
-    message_ch.send_nowait(
-        MessageGeneration(
-            message_id=f"{response_id}-message",
-            text_stream=text_ch,
-            audio_stream=audio_ch,
-            modalities=modalities,
-        )
-    )
-    message_ch.close()
-    text_ch.send_nowait(text)
-    text_ch.close()
-    samples = int(_SAMPLE_RATE * audio_duration)
-    audio_ch.send_nowait(
-        rtc.AudioFrame(
-            data=b"\x00\x01" * samples,
-            sample_rate=_SAMPLE_RATE,
-            num_channels=1,
-            samples_per_channel=samples,
-        )
-    )
-    audio_ch.close()
-    for fnc_call in function_calls:
-        function_ch.send_nowait(fnc_call)
-    function_ch.close()
-
-    return GenerationCreatedEvent(
-        message_stream=message_ch,
-        function_stream=function_ch,
-        user_initiated=True,
-        response_id=response_id,
-    )
 
 
 async def _wait_for_agent_state(session: AgentSession, state: str) -> None:
