@@ -1,4 +1,5 @@
-"""One session's rows in its conversation's database: what it loads, and what each save writes.
+"""A persisted session: its rows in its conversation's database, what it loads, and what each
+save writes.
 
 A save writes the items gained, changed or lost since the last one and rewrites the small
 mutable part, in one batch; the last save wins.
@@ -9,20 +10,16 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import TypeAdapter
 
 from ..llm.chat_context import ChatContext, ChatItem
 from ..llm.utils import compute_chat_ctx_diff
-from ..log import logger
-from .executor import Executor, Row, Statement, StoreError, Value
+from .base import Executor, Row, Statement, StoreError, Value
 from .schema import migrate
-
-if TYPE_CHECKING:
-    from ..delegation.delegate import Delegate
 
 SESSION_OWNER = "session"
 """The ``chat_items.owner`` of the session's own history, as opposed to an agent's context."""
@@ -56,8 +53,6 @@ class StoredSession:
     """Plain JSON; the persistence loads it into the handler's userdata type."""
     history: list[ChatItem]
     agents: dict[str, AgentRecord]
-    children: dict[str | None, str]
-    """Per endpoint, the latest child session this one reached there, to resume on."""
 
 
 class _Database:
@@ -95,38 +90,9 @@ class _Database:
                 await executor.aclose()
 
 
-class _Store:
-    """What both backends share: one connection per database, one handle per session."""
-
-    def __init__(self) -> None:
-        self._databases: dict[str, _Database] = {}
-
-    async def _connect(self, database_id: str) -> Executor:
-        raise NotImplementedError
-
-    def session(
-        self,
-        database_id: str,
-        session_id: str,
-        *,
-        parent: str | None = None,
-        endpoint: str | None = None,
-    ) -> PersistedSession:
-        """A handle on one session's rows, for ``start(persist=)``; ``parent`` is its caller's."""
-        if (database := self._databases.get(database_id)) is None:
-            database = self._databases[database_id] = _Database(
-                database_id, connect=lambda: self._connect(database_id)
-            )
-        return PersistedSession(database, session_id, parent=parent, endpoint=endpoint)
-
-    async def aclose(self) -> None:
-        for database in self._databases.values():
-            await database.aclose()
-        self._databases.clear()
-
-
-class PersistedSession:
-    """A handle on one session's rows, from ``session()``, for ``AgentSession.start(persist=)``."""
+class Session:
+    """The persisted counterpart of an ``AgentSession``, from a store's ``session()``, for
+    ``AgentSession.start(persist=)``."""
 
     def __init__(
         self, database: _Database, session_id: str, *, parent: str | None, endpoint: str | None
@@ -135,11 +101,15 @@ class PersistedSession:
         self._session_id = session_id
         self._parent = parent
         self._endpoint = endpoint
-        # while loaded, the handle holds its database's connection open
+        # while loaded, the session holds its database's connection open
         self._loaded = False
-        self._children: dict[str | None, str] = {}
+        # endpoint -> the A2A context id this session last delegated there under, which a
+        # delegate to that endpoint resumes so the expert keeps its session for this caller
+        self._child_contexts: dict[str, str] = {}
         # per owner, a copy of the items as last saved, which the next save diffs against
         self._saved: dict[str, ChatContext] = {}
+        # held across a save's capture and write, so saves land in turn and none after release
+        self._lock = asyncio.Lock()
 
     @property
     def database_id(self) -> str:
@@ -148,6 +118,11 @@ class PersistedSession:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    @property
+    def child_contexts(self) -> Mapping[str, str]:
+        """Per endpoint, the context id this session last delegated there under, as loaded."""
+        return self._child_contexts
 
     async def load(self) -> StoredSession | None:
         """Read the session back, or create it and return None when it is new."""
@@ -209,17 +184,16 @@ class PersistedSession:
 
         async for row in executor.query(
             "SELECT session_id, endpoint FROM sessions WHERE parent_session_id = ? "
-            "ORDER BY created_at",
+            "AND endpoint IS NOT NULL ORDER BY created_at",
             self._session_id,
         ):
-            self._children[_text(row["endpoint"])] = str(row["session_id"])
+            self._child_contexts[str(row["endpoint"])] = str(row["session_id"])
 
         return StoredSession(
             current_agent_id=_text(session.get("current_agent_id")),
             userdata=_json(session.get("userdata")),
             history=history,
             agents=agents,
-            children=dict(self._children),
         )
 
     async def save(
@@ -231,7 +205,10 @@ class PersistedSession:
         agents: list[AgentRecord],
     ) -> None:
         """Write the items the history and each agent's context gained, changed or lost since
-        the last save, and the mutable part, in one batch. ``None`` userdata leaves it as is."""
+        the last save, and the mutable part, in one batch. ``None`` userdata leaves it as is,
+        and a released session writes nothing."""
+        if not self._loaded:
+            return
         if any(agent.agent_id == SESSION_OWNER for agent in agents):
             # the history's rows are stored under that owner, and an agent's would mix with them
             raise ValueError(f"the agent id {SESSION_OWNER!r} is reserved in a persisted session")
@@ -240,6 +217,7 @@ class PersistedSession:
         owners = [(SESSION_OWNER, history)] + [(a.agent_id, a.chat_items) for a in agents]
         for owner, items in owners:
             base = self._saved.get(owner, ChatContext.empty())
+            kept = {item.id: item for item in base.items}
             diff = compute_chat_ctx_diff(base, ChatContext(list(items)))
             for item_id in diff.to_remove:
                 statements.append(
@@ -248,9 +226,15 @@ class PersistedSession:
                         (self._session_id, owner, item_id),
                     )
                 )
-            # a changed item is rewritten whole, as to_dict() gives it: no audio or images
-            changed_ids = {item_id for _, item_id in diff.to_create + diff.to_update}
-            changed = [item for item in items if item.id in changed_ids]
+            # a created item, or a kept one that differs by value from its saved copy, is
+            # written whole, as to_dict() gives it: no audio or images
+            created = {item_id for _, item_id in diff.to_create}
+            changed = [
+                item
+                for item in items
+                if item.id in created or (item.id in kept and item != kept[item.id])
+            ]
+            changed_ids = {item.id for item in changed}
             dumped = ChatContext(changed).to_dict(exclude_timestamp=False)["items"]
             for item, data in zip(changed, dumped, strict=True):
                 statements.append(
@@ -260,7 +244,6 @@ class PersistedSession:
                         (self._session_id, owner, item.id, json.dumps(data), item.created_at),
                     )
                 )
-            kept = {item.id: item for item in base.items}
             saved[owner] = ChatContext(
                 [_frozen(item) if item.id in changed_ids else kept[item.id] for item in items]
             )
@@ -295,15 +278,6 @@ class PersistedSession:
         await self._database.executor.batch(*statements)
         # a failed batch keeps the old base, so the next save writes the same difference again
         self._saved.update(saved)
-
-    def resume_delegate(self, delegate: Delegate) -> None:
-        """Point a delegate back at the child session this one last had on its endpoint."""
-        endpoint = delegate.endpoint
-        if (child := self._children.get(endpoint)) is not None and delegate.resume(child):
-            logger.debug(
-                "resuming the delegate's earlier context",
-                extra={"endpoint": endpoint, "context_id": child},
-            )
 
     async def release(self) -> None:
         """Mark the session closed and let it go, closing the database after its last."""
@@ -347,6 +321,6 @@ def _json(value: Value | None) -> Any:
 __all__ = [
     "SESSION_OWNER",
     "AgentRecord",
-    "PersistedSession",
+    "Session",
     "StoredSession",
 ]

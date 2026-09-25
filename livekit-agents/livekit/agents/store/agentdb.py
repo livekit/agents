@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import itertools
 import os
 import random
@@ -23,8 +24,7 @@ from livekit.protocol import agentdb as pb
 
 from ..log import logger
 from ..utils import aio
-from .executor import ExecResult, Executor, Row, Statement, StoreError, Value
-from .session import _Store
+from .base import ExecResult, Executor, Row, Statement, Store, StoreError, Value
 
 if TYPE_CHECKING:
     from google.protobuf.message import Message
@@ -357,7 +357,7 @@ class AgentDBExecutor:
             await self._http_session.close()
 
 
-class AgentDB(_Store):
+class AgentDB(Store):
     """Sessions in agent-db: its management API mints databases, its data plane serves them.
 
     ``url`` defaults to ``LIVEKIT_AGENTDB_URL`` and the key to ``LIVEKIT_API_KEY``/``_SECRET``;
@@ -389,6 +389,18 @@ class AgentDB(_Store):
         self._token_expires_at = 0.0
         self._http_session: aiohttp.ClientSession | None = None
         self._twirp: TwirpClient | None = None
+
+    def __reduce__(self) -> tuple[Callable[[], AgentDB], tuple[()]]:
+        return (
+            functools.partial(
+                AgentDB,
+                url=self._url,
+                ws_url=self._ws_url,
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+            ),
+            (),
+        )
 
     def _token(self) -> str:
         # one token serves every socket and call until it is near expiry

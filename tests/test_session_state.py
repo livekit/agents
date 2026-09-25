@@ -310,9 +310,8 @@ async def test_a_save_called_twice_writes_only_the_difference(
 async def test_saves_from_conversation_item_added_and_the_close_write_each_item_once(
     database: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from livekit.agents.a2a import TaskUpdate
+    from livekit.agents.a2a import TASK_ID_KEY, TaskUpdate
     from livekit.agents.delegation import DELEGATE_TOOL_NAME
-    from livekit.agents.delegation.tool import TASK_ID_EXTRA
 
     from .test_delegation import _Scripted, _ScriptedStream
 
@@ -368,7 +367,7 @@ async def test_saves_from_conversation_item_added_and_the_close_write_each_item_
     assert written and len(written) == len(set(written))
     rows = await database.rows(
         "SELECT json_extract(item, '$.call_id') AS call_id, "
-        f"json_extract(item, '$.extra.\"{TASK_ID_EXTRA}\"') AS task_id FROM chat_items "
+        f"json_extract(item, '$.extra.\"{TASK_ID_KEY}\"') AS task_id FROM chat_items "
         "WHERE owner = 'session' AND json_extract(item, '$.type') = 'function_call_output'"
     )
     assert {row["call_id"]: row["task_id"] for row in rows}["d1_final"] == "task-1"
@@ -406,10 +405,12 @@ async def test_a_save_that_queued_behind_the_close_is_a_no_op(database: Database
     await session.run(user_input="hello")
     # an application's save, such as one from conversation_item_added during the teardown,
     # takes the lock only once the close saved and let the rows go
-    persistence = session._persistence
-    assert persistence is not None
+    persisted = session.persisted
+    assert persisted is not None
     await session.aclose()
-    await persistence.save()
+    # a save that held the persisted session from before the close
+    session._persisted = persisted
+    await session.save()
     (row,) = await database.rows("SELECT closed_at FROM sessions")
     assert row["closed_at"] is not None
 
@@ -584,6 +585,10 @@ async def test_an_unchanged_configuration_is_recorded_once() -> None:
     await second.start(agent=agent)
     configs = [i for i in agent.chat_ctx.items if i.type == "agent_config_update"]
     assert len(configs) == 1
+    # the update names every tool in force, which is what the next start compares against
+    assert configs[0].tools is not None and set(configs[0].tools) == set(
+        configs[0].tools_added or ()
+    )
     await second.aclose()
 
     # a changed instruction is recorded
@@ -608,9 +613,13 @@ class _Remembering(Delegate):
     def endpoint(self) -> str:
         return self._endpoint
 
-    def resume(self, context_id: str) -> bool:
+    @property
+    def context_id(self) -> str | None:
+        return self.resumed[-1] if self.resumed else None
+
+    @context_id.setter
+    def context_id(self, context_id: str) -> None:
         self.resumed.append(context_id)
-        return True
 
     def submit(self, task_input: Any) -> Any:
         raise AssertionError("nothing is delegated here")

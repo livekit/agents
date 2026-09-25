@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import pickle
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -20,15 +21,10 @@ from livekit.agents.llm import (
     FunctionCallOutput,
     ImageContent,
 )
-from livekit.agents.store.executor import ExecResult, Executor, SQLiteExecutor, Statement, Value
+from livekit.agents.store.base import ExecResult, Executor, Statement, Store, Value
+from livekit.agents.store.local import SQLiteExecutor
 from livekit.agents.store.schema import SCHEMA_VERSION, migrate
-from livekit.agents.store.session import (
-    SESSION_OWNER,
-    AgentRecord,
-    PersistedSession,
-    _Database,
-    _Store,
-)
+from livekit.agents.store.session import SESSION_OWNER, AgentRecord, Session, _Database
 
 pytestmark = pytest.mark.unit
 
@@ -37,10 +33,10 @@ pytestmark = pytest.mark.unit
 class Database:
     """One database of a store, as the suite drives it."""
 
-    store: _Store
+    store: Store
     database_id: str
 
-    def session(self, session_id: str, **kwargs: Any) -> PersistedSession:
+    def session(self, session_id: str, **kwargs: Any) -> Session:
         return self.store.session(self.database_id, session_id, **kwargs)
 
     async def executor(self) -> Executor:
@@ -130,6 +126,30 @@ class StoreSuite:
             "SELECT json_extract(item, '$.extra.app.note') AS note FROM chat_items"
         )
         assert rows == [{"note": "checked"}]
+
+    async def test_a_kept_item_that_differs_by_value_is_rewritten(self, database: Database) -> None:
+        persisted = database.session("s1")
+        await persisted.load()
+        call = FunctionCall(call_id="call_1", name="rebook", arguments="{}")
+        output = FunctionCallOutput(call_id="call_1", output="done", is_error=False)
+        await _save(persisted, [call, output])
+        # the diff reports only a message's text as changed, so the store compares the rest
+        await _save(
+            persisted,
+            [
+                call.model_copy(update={"arguments": '{"flight": "NW812"}'}),
+                output.model_copy(update={"extra": {"lk.task_id": "task-1"}}),
+            ],
+        )
+        rows = await database.rows(
+            "SELECT json_extract(item, '$.arguments') AS arguments, "
+            "json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
+            "WHERE owner = 'session' ORDER BY created_at"
+        )
+        assert rows == [
+            {"arguments": '{"flight": "NW812"}', "task_id": None},
+            {"arguments": None, "task_id": "task-1"},
+        ]
 
     async def test_an_item_holding_audio_or_an_image_is_written_once(
         self, database: Database, monkeypatch: pytest.MonkeyPatch
@@ -293,9 +313,9 @@ class StoreSuite:
             await expert.release()
         await caller.release()
 
-        stored = await database.session("voice").load()
-        assert stored is not None
-        assert stored.children == {"fare-desk": "ctx-1", "baggage": "ctx-2"}
+        again = database.session("voice")
+        assert await again.load() is not None
+        assert again.child_contexts == {"fare-desk": "ctx-1", "baggage": "ctx-2"}
         tree = await database.rows(
             "SELECT session_id, parent_session_id, endpoint FROM sessions ORDER BY 1"
         )
@@ -342,7 +362,7 @@ class StoreSuite:
 
 
 async def _save(
-    persisted: PersistedSession, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()
+    persisted: Session, history: list[ChatItem], agent_items: Sequence[ChatItem] = ()
 ) -> None:
     await persisted.save(
         current_agent_id="agent_1",
@@ -375,6 +395,40 @@ async def test_a_local_database_reopens_by_id(tmp_path: pathlib.Path) -> None:
     await reopened.aclose()
     with pytest.raises(store.StoreError):
         await store.LocalStore(tmp_path).session("DB_missing", "s1").load()
+
+
+async def test_the_front_session_takes_the_conversation_id(tmp_path: pathlib.Path) -> None:
+    local = store.LocalStore(tmp_path)
+    database_id = await local.create_database()
+    front = local.session(database_id)
+    assert front.session_id == database_id
+    assert await front.load() is None
+    await front.release()
+    # every channel of the conversation resumes that one row
+    again = local.session(database_id)
+    assert await again.load() is not None
+    await again.release()
+    await local.aclose()
+
+
+async def test_a_store_pickles_as_its_configuration(tmp_path: pathlib.Path) -> None:
+    local = store.LocalStore(tmp_path)
+    persisted = local.session(await local.create_database())
+    await persisted.load()
+    copy = pickle.loads(pickle.dumps(local))
+    assert copy._directory == tmp_path and copy._databases == {}
+    await persisted.release()
+    await local.aclose()
+
+    db = store.AgentDB(url="http://agentdb.test", api_key="key", api_secret="secret")
+    copy = pickle.loads(pickle.dumps(db))
+    assert (copy._url, copy._ws_url, copy._api_key, copy._api_secret) == (
+        "http://agentdb.test",
+        "ws://agentdb.test/db",
+        "key",
+        "secret",
+    )
+    assert copy._databases == {} and copy._http_session is None
 
 
 async def test_memory_executor_batch_is_atomic() -> None:

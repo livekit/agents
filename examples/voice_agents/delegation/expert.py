@@ -51,7 +51,7 @@ from livekit.agents import (
     inference,
     store,
 )
-from livekit.agents.a2a import REQUEST_ID_KEY, A2ASessionContext
+from livekit.agents.a2a import TASK_ID_KEY, A2ASessionContext
 from livekit.agents.llm import ToolFlag, function_tool
 
 logger = logging.getLogger("fare-desk")
@@ -59,10 +59,6 @@ logging.getLogger("a2a").setLevel(logging.INFO)
 logging.getLogger("sse_starlette").setLevel(logging.INFO)
 
 load_dotenv()
-
-# pinned, because voice.py needs a fixed address to reach: the port otherwise defaults to a
-# random one in dev
-server = AgentServer(port=8321)
 
 # without agent-db the desk keeps contexts in memory, and a closed one is gone
 AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
@@ -73,10 +69,16 @@ LOCAL_KEY = (
     if AGENTDB_URL and "localhost" in AGENTDB_URL
     else {}
 )
-db = (
-    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
-    if AGENTDB_URL
-    else None
+
+server = AgentServer(
+    # pinned, because voice.py needs a fixed address to reach: the port otherwise defaults to
+    # a random one in dev
+    port=8321,
+    store=(
+        store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
+        if AGENTDB_URL
+        else None
+    ),
 )
 
 
@@ -875,7 +877,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
         update = ev.update
         if update.type == "tool_call_started":
             call = update.function_call
-            task_id = call.extra.get(REQUEST_ID_KEY, "")
+            task_id = call.extra.get(TASK_ID_KEY, "")
             calls[call.call_id] = (task_id, call.name)
             _trace(task_id, "→", f"{call.name}({call.arguments})")
             return
@@ -889,14 +891,9 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
             task_id, name = calls.pop(update.call_id, ("", "?"))
             _trace(task_id, "←", f"{update.status}: {update.message}")
 
-    persisted = None
-    if db is not None and ctx.conversation_id:
-        # the caller names the conversation; this context is one session in it, under the caller's
-        persisted = db.session(
-            ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id, endpoint=ctx.endpoint
-        )
-    await session.start(agent=FareDesk(), persist=persisted)
-    if persisted is not None and (messages := session.history.messages()):
+    # the caller names the conversation; this context is one session in it, under the caller's
+    await session.start(agent=FareDesk(), persist=ctx.persisted)
+    if ctx.persisted is not None and (messages := session.history.messages()):
         # a fresh session has said nothing yet, so any message here came back from the store
         _trace("", "↺", f"rehydrated {ctx.context_id}: {len(messages)} messages back", limit=200)
     # todo: the expert runs in the server process; a job process per context is planned

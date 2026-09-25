@@ -129,6 +129,16 @@ async def test_the_delegate_tool_is_offered_when_a_delegate_is_in_force() -> Non
         assert _delegate_tool() is _delegate_tool()
 
 
+def test_a_delegates_context_is_fixed_once_it_has_sent() -> None:
+    delegate = A2ADelegate("http://localhost:1/fare-desk")
+    delegate.context_id = "ctx-9"
+    assert delegate.context_id == "ctx-9"
+    assert delegate.client.context_id == "ctx-9"
+    # the far side keeps this caller's session under the context already sent
+    with pytest.raises(RuntimeError):
+        delegate.context_id = "ctx-1"
+
+
 async def test_a_session_without_a_delegate_offers_no_such_tool() -> None:
     session = AgentSession(llm=_voice_llm())
     await session.start(agent=Agent(instructions="voice"))
@@ -362,9 +372,8 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     tmp_path: pathlib.Path,
 ) -> None:
     from livekit.agents import store
-    from livekit.agents.a2a import A2ASessionContext
-    from livekit.agents.delegation.tool import TASK_ID_EXTRA
-    from livekit.agents.store.executor import SQLiteExecutor
+    from livekit.agents.a2a import TASK_ID_KEY, A2ASessionContext
+    from livekit.agents.store.local import SQLiteExecutor
 
     from .test_a2a_server import _fare_desk_llm, _Served, check_fares
 
@@ -375,16 +384,9 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
         seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
-        assert ctx.conversation_id is not None
         session: AgentSession = AgentSession(llm=_fare_desk_llm())
         await session.start(
-            agent=Agent(instructions="fare desk", tools=[check_fares]),
-            persist=local.session(
-                ctx.conversation_id,
-                ctx.context_id,
-                parent=ctx.caller_session_id,
-                endpoint=ctx.endpoint,
-            ),
+            agent=Agent(instructions="fare desk", tools=[check_fares]), persist=ctx.persisted
         )
         served.sessions.append(session)
         ctx.attach(session)
@@ -392,8 +394,9 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     async def call(url: str, call_id: str) -> tuple[A2ADelegate, AgentSession]:
         delegate = A2ADelegate(url)
         session: AgentSession = AgentSession(llm=_voice_llm(call_id=call_id), delegate=delegate)
+        # the front session, which every channel of the conversation resumes
         await session.start(
-            agent=Agent(instructions="voice"), persist=local.session(conversation_id, "voice")
+            agent=Agent(instructions="voice"), persist=local.session(conversation_id)
         )
         # a resumed session names the stored context before its first delegation
         named_at_start.append(delegate.context_id)
@@ -413,7 +416,7 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
         await asyncio.wait_for(session.aclose(), timeout=10.0)
         return delegate, session
 
-    async with _serving(handler=persisted) as served:
+    async with _serving(handler=persisted, store=local) as served:
         url = f"{served.base_url}/fare-desk"
         first, _ = await call(url, "d1")
         second, caller = await call(url, "d2")
@@ -422,14 +425,14 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
     # the restarted caller reached the same expert context, and the expert heard where to write
     assert first.context_id == second.context_id
     assert named_at_start == [None, first.context_id]
-    assert seen == [(first.context_id, conversation_id, "voice")] * 2
+    assert seen == [(first.context_id, conversation_id, conversation_id)] * 2
     # the answer to each delegate call names the expert task that gave it, and the call, recorded
     # before the task existed, is left as it was
     history = caller.history.items
     answers = [i for i in history if i.type == "function_call_output" and i.call_id == "d2_final"]
-    assert [bool(a.extra.get(TASK_ID_EXTRA)) for a in answers] == [True]
+    assert [bool(a.extra.get(TASK_ID_KEY)) for a in answers] == [True]
     calls = [i for i in history if i.type == "function_call" and i.call_id == "d2"]
-    assert [c.extra.get(TASK_ID_EXTRA) for c in calls] == [None]
+    assert [c.extra.get(TASK_ID_KEY) for c in calls] == [None]
 
     executor = SQLiteExecutor(str(tmp_path / f"{conversation_id}.sqlite"))
     tree = [
@@ -439,17 +442,22 @@ async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context
         )
     ]
     assert tree == [
-        {"session_id": first.context_id, "parent_session_id": "voice", "endpoint": "fare-desk"},
-        {"session_id": "voice", "parent_session_id": None, "endpoint": None},
+        {"session_id": conversation_id, "parent_session_id": None, "endpoint": None},
+        {
+            "session_id": first.context_id,
+            "parent_session_id": conversation_id,
+            "endpoint": "fare-desk",
+        },
     ]
     tasks = [
         row
         async for row in executor.query(
             "SELECT json_extract(item, '$.call_id') AS call_id, "
             "json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
-            "WHERE session_id = 'voice' AND owner = 'session' "
+            "WHERE session_id = ? AND owner = 'session' "
             "AND json_extract(item, '$.call_id') IN ('d1_final', 'd2_final') "
-            "AND json_extract(item, '$.type') = 'function_call_output'"
+            "AND json_extract(item, '$.type') = 'function_call_output'",
+            conversation_id,
         )
     ]
     assert sorted(row["call_id"] for row in tasks) == ["d1_final", "d2_final"]

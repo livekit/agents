@@ -1543,15 +1543,14 @@ class RealtimeSession(
         # - an existing remote item with non-text content (audio/images) that is not
         #   synced into the agent-side ChatContext.
         # Keep empty messages that already exist remotely so we do not delete them.
-        remote_by_id = {item.id: item for item in remote_ctx.items}
+        remote_ids = {item.id for item in remote_ctx.items}
         chat_ctx = llm.ChatContext(
             [
                 item
                 for item in chat_ctx.items
-                if item.type != "message" or item.content or item.id in remote_by_id
+                if item.type != "message" or item.content or item.id in remote_ids
             ]
         )
-        local_by_id = {item.id: item for item in chat_ctx.items}
         diff_ops = llm.utils.compute_chat_ctx_diff(remote_ctx, chat_ctx)
 
         def _delete_item(msg_id: str) -> None:
@@ -1564,14 +1563,22 @@ class RealtimeSession(
             )
 
         def _create_item(previous_msg_id: str | None, msg_id: str) -> None:
+            chat_item = chat_ctx.get_by_id(msg_id)
+            assert chat_item is not None
             events.append(
                 ConversationItemCreateEvent(
                     type="conversation.item.create",
-                    item=livekit_item_to_openai_item(local_by_id[msg_id]),
+                    item=livekit_item_to_openai_item(chat_item),
                     previous_item_id=("root" if previous_msg_id is None else previous_msg_id),
                     event_id=utils.shortuuid("chat_ctx_create_"),
                 )
             )
+
+        def _is_content_empty(msg_id: str) -> bool:
+            remote_item = remote_ctx.get_by_id(msg_id)
+            if remote_item and remote_item.type == "message" and not remote_item.content:
+                return True
+            return False
 
         for msg_id in diff_ops.to_remove:
             _delete_item(msg_id)
@@ -1579,19 +1586,14 @@ class RealtimeSession(
         for previous_msg_id, msg_id in diff_ops.to_create:
             _create_item(previous_msg_id, msg_id)
 
+        # update the items with the same id but different content
         for previous_msg_id, msg_id in diff_ops.to_update:
-            # the remote copy keeps only what the server echoed, so only a message's text is
-            # compared; empty content almost always means the content is not synced down, and
-            # recreating it there would be wrong
-            remote_item, item = remote_by_id[msg_id], local_by_id[msg_id]
-            if (
-                remote_item.type == "message"
-                and remote_item.content
-                and item.type == "message"
-                and item.raw_text_content != remote_item.raw_text_content
-            ):
-                _delete_item(msg_id)
-                _create_item(previous_msg_id, msg_id)
+            # empty content almost always means the content is not synced down
+            # we don't want to recreate these items there
+            if _is_content_empty(msg_id):
+                continue
+            _delete_item(msg_id)
+            _create_item(previous_msg_id, msg_id)
 
         return events
 

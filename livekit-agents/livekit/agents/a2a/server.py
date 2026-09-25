@@ -40,6 +40,7 @@ except ImportError as e:
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from ..store import Session as PersistedSession, Store
     from ..voice.agent_session import AgentSession
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
@@ -55,7 +56,7 @@ class A2ASessionContext:
         @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
         async def fare_desk(ctx: A2ASessionContext) -> None:
             session = AgentSession(llm="openai/gpt-4.1")
-            await session.start(agent=FareDesk())
+            await session.start(agent=FareDesk(), persist=ctx.persisted)
             ctx.attach(session)
     """
 
@@ -66,11 +67,23 @@ class A2ASessionContext:
         endpoint: str,
         conversation_id: str | None = None,
         caller_session_id: str | None = None,
+        store: Store | None = None,
     ) -> None:
         self._context_id = context_id
         self._endpoint = endpoint
         self._conversation_id = conversation_id
         self._caller_session_id = caller_session_id
+        self._persisted = (
+            # this context is one session in the caller's conversation, under the caller's
+            store.session(
+                conversation_id,
+                context_id,
+                parent=caller_session_id,
+                endpoint=endpoint,
+            )
+            if store is not None and conversation_id is not None
+            else None
+        )
         self._runner: SessionRunner | None = None
 
     @property
@@ -93,6 +106,12 @@ class A2ASessionContext:
         """The caller's own session in that conversation, which this one is the child of."""
         return self._caller_session_id
 
+    @property
+    def persisted(self) -> PersistedSession | None:
+        """This context's session in the caller's conversation, for ``start(persist=)``; None
+        when the caller named no conversation or the agent server has no store."""
+        return self._persisted
+
     def attach(self, session: AgentSession) -> None:
         """Hand the started session to this context's runner."""
         if self._runner is not None:
@@ -111,14 +130,21 @@ class _Context:
     """
 
     def __init__(
-        self, context_id: str, endpoint: str, handler: A2ASessionHandler, first_input: TaskInput
+        self,
+        context_id: str,
+        endpoint: str,
+        handler: A2ASessionHandler,
+        *,
+        conversation_id: str | None,
+        caller_session_id: str | None,
+        store: Store | None,
     ) -> None:
-        # the first request of a context says where it persists, and the handler runs on it
         self._ctx = A2ASessionContext(
             context_id,
             endpoint=endpoint,
-            conversation_id=first_input.conversation_id,
-            caller_session_id=first_input.caller_session_id,
+            conversation_id=conversation_id,
+            caller_session_id=caller_session_id,
+            store=store,
         )
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
@@ -158,10 +184,16 @@ class _SessionExecutor(AgentExecutor):
     """
 
     def __init__(
-        self, handler: A2ASessionHandler, *, endpoint: str, idle_timeout: float | None
+        self,
+        handler: A2ASessionHandler,
+        *,
+        endpoint: str,
+        idle_timeout: float | None,
+        store: Store | None = None,
     ) -> None:
         self._handler = handler
         self._endpoint = endpoint
+        self._store = store
         self._contexts: dict[str, _Context] = {}
         self._by_task: dict[str, RequestRun] = {}
         self._idle_timeout = idle_timeout
@@ -170,8 +202,14 @@ class _SessionExecutor(AgentExecutor):
 
     def _context(self, context_id: str, task_input: TaskInput) -> _Context:
         if context_id not in self._contexts:
+            # the first request of a context says where it persists, and the handler runs on it
             self._contexts[context_id] = _Context(
-                context_id, self._endpoint, self._handler, task_input
+                context_id,
+                self._endpoint,
+                self._handler,
+                conversation_id=task_input.conversation_id,
+                caller_session_id=task_input.caller_session_id,
+                store=self._store,
             )
         if self._sweeper is None and self._idle_timeout is not None:
             self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
@@ -235,7 +273,7 @@ class _SessionExecutor(AgentExecutor):
             await self._emit(event_queue, failed, task_id, context_id)
             return
 
-        run = runner.submit(task_input, request_id=task_id)
+        run = runner.submit(task_input, task_id=task_id)
         held.runs[task_id] = run
         self._by_task[task_id] = run
         try:
@@ -290,13 +328,14 @@ def mount(
     description: str,
     name: str | None = None,
     idle_timeout: float | None = None,
+    store: Store | None = None,
 ) -> _SessionExecutor:
     """Register one A2A endpoint on ``app``, under ``/<endpoint>``.
 
     The card route goes on before the binding's own routes: the SDK mounts a catch-all that
     would otherwise shadow the well-known path.
     """
-    executor = _SessionExecutor(handler, endpoint=endpoint, idle_timeout=idle_timeout)
+    executor = _SessionExecutor(handler, endpoint=endpoint, idle_timeout=idle_timeout, store=store)
     card_name = name or endpoint
     prefix = f"/{endpoint}"
 

@@ -593,7 +593,7 @@ class Agent:
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         # an agent in a durable tool's frame is a reference to the rehydrated session's instance
-        from ..durable_scheduler import _lookup_rehydrated_agent
+        from .durable_tool import _lookup_rehydrated_agent
 
         return (_lookup_rehydrated_agent, (type(self), self._id))
 

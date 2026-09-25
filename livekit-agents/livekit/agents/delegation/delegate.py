@@ -59,9 +59,15 @@ class Delegate(ABC):
         """Where the far side lives, stable across restarts, or None when it has no address."""
         return None
 
-    def resume(self, context_id: str) -> bool:
-        """Continue an earlier context on the far side; False once a send has fixed one."""
-        return False
+    @property
+    def context_id(self) -> str | None:
+        """The far side's context, under which it keeps one session for this caller, or None
+        when it keeps none."""
+        return None
+
+    @context_id.setter
+    def context_id(self, context_id: str) -> None:
+        raise NotImplementedError(f"{type(self).__name__} keeps no context on the far side")
 
     async def aclose(self) -> None:  # noqa: B027
         """Release what the delegate holds. Called by whatever it is attached to."""

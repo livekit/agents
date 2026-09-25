@@ -6,7 +6,7 @@ never an edit to an old one.
 
 from __future__ import annotations
 
-from .executor import Executor, Statement, StoreError
+from .base import Executor, Statement, StoreError
 
 SCHEMA_VERSION = 1
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import pickle
 from dataclasses import dataclass, field
 from typing import ClassVar
 
@@ -106,6 +107,9 @@ class StartJobRequest:
         channel.write_double(b, self.running_job.accepted_at)
         channel.write_double(b, self.running_job.assigned_at)
         channel.write_double(b, self.running_job.launched_at)
+        # the store crosses as its configuration, and connects on first use in the job
+        store = self.running_job.store
+        channel.write_bytes(b, pickle.dumps(store) if store is not None else b"")
 
     def read(self, b: io.BytesIO) -> None:
         job = agent.Job()
@@ -126,6 +130,8 @@ class StartJobRequest:
             assigned_at=channel.read_double(b),
             launched_at=channel.read_double(b),
         )
+        if store := channel.read_bytes(b):
+            self.running_job.store = pickle.loads(store)
 
 
 @dataclass

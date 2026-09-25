@@ -33,7 +33,6 @@ from livekit.protocol.agent_pb import agent_session as agent_pb
 from .. import cli, inference, llm, stt, tts, utils, vad
 from .._exceptions import APIError
 from ..delegation.delegate import DelegationOptions, resolve_delegation_options
-from ..durable_scheduler import durable_chain
 from ..job import get_job_context
 from ..llm import (
     LLM,
@@ -68,6 +67,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .durable_tool import durable_chain
 from .events import (
     AgentEvent,
     AgentState,
@@ -109,12 +109,11 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from .. import store
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..delegation import Delegate
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
-    from ..store import PersistedSession
-    from .persistence import SessionPersistence
     from .transcription.text_transforms import TextTransforms
 
 
@@ -705,7 +704,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
-        self._persistence: SessionPersistence | None = None
+        self._persisted: store.Session | None = None
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -822,14 +821,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._chat_ctx
 
     @property
-    def persisted(self) -> PersistedSession | None:
-        """The rows this session persists to, as passed to ``start(persist=...)``; None if none."""
-        return self._persistence.persisted if self._persistence is not None else None
+    def persisted(self) -> store.Session | None:
+        """The persisted session, as passed to ``start(persist=...)``; None if none."""
+        return self._persisted
 
     async def save(self) -> None:
-        """Save the session to its rows now, as closing it does; a no-op without ``persist``."""
-        if self._persistence is not None:
-            await self._persistence.save()
+        """Save the session now, as closing it does; a no-op without ``persist``."""
+        if self._persisted is not None:
+            from . import persistence
+
+            await persistence.save(self)
 
     @property
     def keyterms(self) -> list[str]:
@@ -895,7 +896,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        persist: PersistedSession | None = None,
+        persist: store.Session | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -911,7 +912,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
-        persist: PersistedSession | None = None,
+        persist: store.Session | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -926,7 +927,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
-        persist: PersistedSession | None = None,
+        persist: store.Session | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -948,262 +949,282 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
-            persist: This session's rows, from a store's ``session()``: a stored session is
-                restored before it starts, and the session is saved to them when it closes.
+            persist: The persisted session, from a store's ``session()``: what it stored is
+                restored before the session starts, and the session is saved to it when it
+                closes.
         """
+        if persist is None or self._started:
+            return await self._start(
+                agent,
+                capture_run=capture_run,
+                room=room,
+                room_options=room_options,
+                session_host=session_host,
+                record=record,
+                room_input_options=room_input_options,
+                room_output_options=room_output_options,
+            )
+
+        # imported here: a session that persists nothing never loads the store
+        from . import persistence
+
+        self._persisted = persist
+        try:
+            agent, resumes = await persistence.rehydrate(self, persist, agent)
+            return await self._start(
+                agent,
+                capture_run=capture_run,
+                room=room,
+                room_options=room_options,
+                session_host=session_host,
+                record=record,
+                room_input_options=room_input_options,
+                room_output_options=room_output_options,
+                resumes=resumes,
+            )
+        except BaseException:
+            # a session that never started is never closed, so it lets its rows go here
+            await asyncio.shield(persistence.discard(self, agent))
+            raise
+
+    async def _start(
+        self,
+        agent: Agent,
+        *,
+        capture_run: bool,
+        room: NotGivenOr[rtc.Room],
+        room_options: NotGivenOr[room_io.RoomOptions],
+        session_host: NotGivenOr[bool],
+        record: NotGivenOr[bool | RecordingOptions],
+        room_input_options: NotGivenOr[room_io.RoomInputOptions],
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions],
+        resumes: bool = False,
+    ) -> RunResult | None:
         async with self._lock:
             if self._started:
                 return None
 
             self._started_at = time.time()
 
-            resumes = False
-            persistence: SessionPersistence | None = None
-            if persist is not None:
-                # imported here: a session that persists nothing never loads the store
-                from .persistence import SessionPersistence
+            # configure observability first
+            record_is_given = is_given(record)
+            job_ctx = get_job_context(required=False)
+            if not is_given(record):
+                # defer to server-side setting for recording
+                record = job_ctx.job.enable_recording if job_ctx else False
 
-                self._persistence = persistence = SessionPersistence(self, persist)
-            try:
-                if persistence is not None:
-                    agent, resumes = await persistence.rehydrate(agent)
+            self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
+            if self._text_only:
+                self._opts.recording_options["audio"] = False
 
-                # configure observability first
-                record_is_given = is_given(record)
-                job_ctx = get_job_context(required=False)
-                if not is_given(record):
-                    # defer to server-side setting for recording
-                    record = job_ctx.job.enable_recording if job_ctx else False
+            is_primary = True
+            if job_ctx:
+                # set the primary session
+                if job_ctx._primary_agent_session is None or job_ctx._primary_agent_session is self:
+                    job_ctx._primary_agent_session = self
+                else:
+                    is_primary = False
+                    if recording_enabled(self._opts.recording_options):
+                        if record_is_given:
+                            raise RuntimeError(
+                                "Only one `AgentSession` can be the primary at a time. "
+                                "If you want to ignore primary designation, "
+                                "use session.start(record=False)."
+                            )
+                        else:
+                            # auto-disable recording for non-primary sessions when record is not given
+                            self._opts.recording_options = _resolve_recording_options(False)
 
-                self._opts.recording_options = _resolve_recording_options(record)  # type: ignore[arg-type]
-                if self._text_only:
-                    self._opts.recording_options["audio"] = False
+                job_ctx.init_recording(self._opts.recording_options)
 
-                is_primary = True
-                if job_ctx:
-                    # set the primary session
-                    if (
-                        job_ctx._primary_agent_session is None
-                        or job_ctx._primary_agent_session is self
-                    ):
-                        job_ctx._primary_agent_session = self
-                    else:
-                        is_primary = False
-                        if recording_enabled(self._opts.recording_options):
-                            if record_is_given:
-                                raise RuntimeError(
-                                    "Only one `AgentSession` can be the primary at a time. "
-                                    "If you want to ignore primary designation, "
-                                    "use session.start(record=False)."
-                                )
-                            else:
-                                # auto-disable recording for non-primary sessions when record is not given
-                                self._opts.recording_options = _resolve_recording_options(False)
+            self._redaction_enabled = bool(
+                self._opts.recording_options["redaction"]
+                or (job_ctx and job_ctx.job.enable_redaction)
+            )
 
-                    job_ctx.init_recording(self._opts.recording_options)
+            # hosting needs the primary designation as before, and the caller's consent
+            hosting = is_primary and (session_host if is_given(session_host) else True)
 
-                self._redaction_enabled = bool(
-                    self._opts.recording_options["redaction"]
-                    or (job_ctx and job_ctx.job.enable_redaction)
+            # Under a text simulation the simulated user interacts over text
+            # streams only: disable audio I/O here, and STT/TTS/VAD via
+            # AgentActivity (both consult _text_only).
+            if self._text_only:
+                logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
+
+            self._session_span = current_span = tracer.start_span("agent_session")
+            # we detach here to avoid context issues since tokens need to be detached
+            # in the same context as it was created
+            if self._session_ctx_token is not None:
+                otel_context.detach(self._session_ctx_token)
+                self._session_ctx_token = None
+            ctx = trace.set_span_in_context(current_span)
+            self._session_ctx_token = otel_context.attach(ctx)
+
+            self._recorded_events = []
+            self._usage_collector = ModelUsageCollector()
+            self._room_io = None
+            self._recorder_io = None
+            self._session_host = None
+
+            self._closing = False
+            self._root_span_context = otel_context.get_current()
+            current_span = trace.get_current_span()
+            current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
+            self._loop_stall_count = 0
+            self._loop_stall_total = 0.0
+            self._loop_stall_max = 0.0
+            # the session is the convention's workflow: agent turns (`invoke_agent`),
+            # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
+            gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
+
+            # startup as one bar: room connect, participant wait, model prewarm, on_enter
+            session_start_span = tracer.start_span("session_start")
+            self._session_start_context = trace.set_span_in_context(session_start_span)
+
+            self._agent = agent
+            self._update_agent_state("initializing")
+
+            tasks: list[asyncio.Task[None]] = []
+
+            c = cli.AgentsConsole.get_instance()
+            if c.enabled and not c.io_acquired:
+                if self.input.audio is not None or self.output.audio is not None:
+                    logger.warning(
+                        "agent started with the console subcommand, but input.audio/output.audio "
+                        "is already set, overriding..."
+                    )
+
+                c.acquire_io(loop=self._loop, session=self)
+
+                if c._tcp_transport is not None:
+                    self._session_host = SessionHost(
+                        c._tcp_transport,
+                        audio_input=c._tcp_audio_input,
+                        audio_output=c._tcp_audio_output,
+                    )
+                    self._session_host.register_session(self)
+            elif is_given(room) and not self._room_io:
+                room_options = room_io.RoomOptions._ensure_options(
+                    room_options,
+                    room_input_options=room_input_options,
+                    room_output_options=room_output_options,
                 )
+                room_options = copy.copy(room_options)  # shadow copy is enough
 
-                # hosting needs the primary designation as before, and the caller's consent
-                hosting = is_primary and (session_host if is_given(session_host) else True)
-
-                # Under a text simulation the simulated user interacts over text
-                # streams only: disable audio I/O here, and STT/TTS/VAD via
-                # AgentActivity (both consult _text_only).
                 if self._text_only:
-                    logger.info("text simulation: disabling STT/TTS/VAD and audio I/O")
+                    room_options.audio_input = False
+                    room_options.audio_output = False
 
-                self._session_span = current_span = tracer.start_span("agent_session")
-                # we detach here to avoid context issues since tokens need to be detached
-                # in the same context as it was created
-                if self._session_ctx_token is not None:
-                    otel_context.detach(self._session_ctx_token)
-                    self._session_ctx_token = None
-                ctx = trace.set_span_in_context(current_span)
-                self._session_ctx_token = otel_context.attach(ctx)
-
-                self._recorded_events = []
-                self._usage_collector = ModelUsageCollector()
-                self._room_io = None
-                self._recorder_io = None
-                self._session_host = None
-
-                self._closing = False
-                self._root_span_context = otel_context.get_current()
-                current_span = trace.get_current_span()
-                current_span.set_attribute(trace_types.ATTR_AGENT_LABEL, agent.label)
-                self._loop_stall_count = 0
-                self._loop_stall_total = 0.0
-                self._loop_stall_max = 0.0
-                # the session is the convention's workflow: agent turns (`invoke_agent`),
-                # inference (`chat`) and tool spans (`execute_tool`) nest underneath it
-                gen_ai_telemetry.set_workflow_attributes(self._session_span, name="agent_session")
-
-                # startup as one bar: room connect, participant wait, model prewarm, on_enter
-                session_start_span = tracer.start_span("session_start")
-                self._session_start_context = trace.set_span_in_context(session_start_span)
-
-                self._agent = agent
-                self._update_agent_state("initializing")
-
-                tasks: list[asyncio.Task[None]] = []
-
-                c = cli.AgentsConsole.get_instance()
-                if c.enabled and not c.io_acquired:
-                    if self.input.audio is not None or self.output.audio is not None:
+                if self.input.audio is not None:
+                    if room_options.audio_input:
                         logger.warning(
-                            "agent started with the console subcommand, but input.audio/output.audio "
-                            "is already set, overriding..."
+                            "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
                         )
+                    room_options.audio_input = False
 
-                    c.acquire_io(loop=self._loop, session=self)
-
-                    if c._tcp_transport is not None:
-                        self._session_host = SessionHost(
-                            c._tcp_transport,
-                            audio_input=c._tcp_audio_input,
-                            audio_output=c._tcp_audio_output,
+                if self.output.audio is not None:
+                    if room_options.audio_output:
+                        logger.warning(
+                            "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
                         )
-                        self._session_host.register_session(self)
-                elif is_given(room) and not self._room_io:
-                    room_options = room_io.RoomOptions._ensure_options(
-                        room_options,
-                        room_input_options=room_input_options,
-                        room_output_options=room_output_options,
-                    )
-                    room_options = copy.copy(room_options)  # shadow copy is enough
+                    room_options.audio_output = False
 
-                    if self._text_only:
-                        room_options.audio_input = False
-                        room_options.audio_output = False
+                if self.output.transcription is not None:
+                    if room_options.text_output:
+                        logger.warning(
+                            "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
+                        )
+                    room_options.text_output = False
 
-                    if self.input.audio is not None:
-                        if room_options.audio_input:
-                            logger.warning(
-                                "RoomIO audio input is enabled but input.audio is already set, ignoring.."  # noqa: E501
-                            )
-                        room_options.audio_input = False
+                self._room_io = room_io.RoomIO(room=room, agent_session=self, options=room_options)
+                # passed, not made current: RoomIO's tasks live for the whole session
+                await self._room_io.start(trace_context=self._session_start_context)
 
-                    if self.output.audio is not None:
-                        if room_options.audio_output:
-                            logger.warning(
-                                "RoomIO audio output is enabled but output.audio is already set, ignoring.."  # noqa: E501
-                            )
-                        room_options.audio_output = False
+                if hosting:
+                    # only the primary session can have a session host
+                    transport = RoomSessionTransport(room)
+                    self._session_host = SessionHost(transport)
+                    self._session_host.register_session(self)
 
-                    if self.output.transcription is not None:
-                        if room_options.text_output:
-                            logger.warning(
-                                "RoomIO transcription output is enabled but output.transcription is already set, ignoring.."  # noqa: E501
-                            )
-                        room_options.text_output = False
+                text_input_opts = room_options.get_text_input_options()
+                if text_input_opts:
+                    self._room_io.register_text_input(text_input_opts.text_input_cb)
 
-                    self._room_io = room_io.RoomIO(
-                        room=room, agent_session=self, options=room_options
-                    )
-                    # passed, not made current: RoomIO's tasks live for the whole session
-                    await self._room_io.start(trace_context=self._session_start_context)
+            if job_ctx:
+                # these aren't relevant during eval mode, as they require job context and/or room_io
+                if self.input.audio and self.output.audio:
+                    if self._opts.recording_options["audio"] or (c.enabled and c.record):
+                        self._recorder_io = RecorderIO(agent_session=self)
+                        self.input.audio = self._recorder_io.record_input(self.input.audio)
+                        self.output.audio = self._recorder_io.record_output(self.output.audio)
 
-                    if hosting:
-                        # only the primary session can have a session host
-                        transport = RoomSessionTransport(room)
-                        self._session_host = SessionHost(transport)
-                        self._session_host.register_session(self)
-
-                    text_input_opts = room_options.get_text_input_options()
-                    if text_input_opts:
-                        self._room_io.register_text_input(text_input_opts.text_input_cb)
-
-                if job_ctx:
-                    # these aren't relevant during eval mode, as they require job context and/or room_io
-                    if self.input.audio and self.output.audio:
-                        if self._opts.recording_options["audio"] or (c.enabled and c.record):
-                            self._recorder_io = RecorderIO(agent_session=self)
-                            self.input.audio = self._recorder_io.record_input(self.input.audio)
-                            self.output.audio = self._recorder_io.record_output(self.output.audio)
-
-                            if (c.enabled and c.record) or not c.enabled:
-                                task = asyncio.create_task(
-                                    self._recorder_io.start(
-                                        output_path=job_ctx.session_directory / "audio.ogg"
-                                    )
+                        if (c.enabled and c.record) or not c.enabled:
+                            task = asyncio.create_task(
+                                self._recorder_io.start(
+                                    output_path=job_ctx.session_directory / "audio.ogg"
                                 )
-                                tasks.append(task)
-
-                    if self.options.ivr_detection:
-                        tasks.append(
-                            asyncio.create_task(
-                                self._start_ivr_detection(), name="_ivr_activity_start"
                             )
-                        )
+                            tasks.append(task)
 
-                    current_span.set_attributes(
-                        {
-                            trace_types.ATTR_ROOM_NAME: job_ctx.room.name,
-                            trace_types.ATTR_JOB_ID: job_ctx.job.id,
-                            trace_types.ATTR_AGENT_NAME: job_ctx.job.agent_name,
-                            # join keys shared with server, SIP and client traces
-                            trace_types.ATTR_ROOM_SID: job_ctx.job.room.sid,
-                            trace_types.ATTR_DISPATCH_ID: job_ctx.job.dispatch_id,
-                            trace_types.ATTR_WORKER_ID: job_ctx._info.worker_id,
-                            trace_types.ATTR_JOB_AGENT_ID: job_ctx.job.state.agent_id,
-                        }
+                if self.options.ivr_detection:
+                    tasks.append(
+                        asyncio.create_task(self._start_ivr_detection(), name="_ivr_activity_start")
                     )
-                    if self._room_io:
-                        # automatically connect to the room when room io is used; room_connect
-                        # finds session_start through the primary session (telemetry.session_context)
-                        tasks.append(
-                            asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect")
-                        )
 
-                    # session can be restarted, register the callbacks only once
-                    if not self._job_context_cb_registered:
-                        job_ctx.add_shutdown_callback(
-                            lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
-                        )
-                        self._job_context_cb_registered = True
-
-                run_state: RunResult | None = None
-                if capture_run:
-                    if self._global_run_state is not None and not self._global_run_state.done():
-                        raise RuntimeError("nested runs are not supported")
-
-                    run_state = RunResult(output_type=None)
-                    self._global_run_state = run_state
-
-                # it is ok to await it directly, there is no previous task to drain.
-                # _update_activity_task also watches on_enter on the run state: without it
-                # the run completes as soon as the first speech does, dropping whatever
-                # on_enter produces next — and never completes when on_enter says nothing.
-                tasks.append(
-                    asyncio.create_task(
-                        self._update_activity_task(None, self._agent, resumes=resumes)
-                    )
+                current_span.set_attributes(
+                    {
+                        trace_types.ATTR_ROOM_NAME: job_ctx.room.name,
+                        trace_types.ATTR_JOB_ID: job_ctx.job.id,
+                        trace_types.ATTR_AGENT_NAME: job_ctx.job.agent_name,
+                        # join keys shared with server, SIP and client traces
+                        trace_types.ATTR_ROOM_SID: job_ctx.job.room.sid,
+                        trace_types.ATTR_DISPATCH_ID: job_ctx.job.dispatch_id,
+                        trace_types.ATTR_WORKER_ID: job_ctx._info.worker_id,
+                        trace_types.ATTR_JOB_AGENT_ID: job_ctx.job.state.agent_id,
+                    }
                 )
+                if self._room_io:
+                    # automatically connect to the room when room io is used; room_connect
+                    # finds session_start through the primary session (telemetry.session_context)
+                    tasks.append(asyncio.create_task(job_ctx.connect(), name="_job_ctx_connect"))
 
+                # session can be restarted, register the callbacks only once
+                if not self._job_context_cb_registered:
+                    job_ctx.add_shutdown_callback(
+                        lambda: self._aclose_impl(reason=CloseReason.JOB_SHUTDOWN)
+                    )
+                    self._job_context_cb_registered = True
+
+            run_state: RunResult | None = None
+            if capture_run:
+                if self._global_run_state is not None and not self._global_run_state.done():
+                    raise RuntimeError("nested runs are not supported")
+
+                run_state = RunResult(output_type=None)
+                self._global_run_state = run_state
+
+            # it is ok to await it directly, there is no previous task to drain.
+            # _update_activity_task also watches on_enter on the run state: without it
+            # the run completes as soon as the first speech does, dropping whatever
+            # on_enter produces next — and never completes when on_enter says nothing.
+            tasks.append(
+                asyncio.create_task(self._update_activity_task(None, self._agent, resumes=resumes))
+            )
+
+            try:
                 try:
-                    try:
-                        await asyncio.gather(*tasks)
-                    finally:
-                        await utils.aio.cancel_and_wait(*tasks)
-
-                    if self._session_host is not None:
-                        await self._session_host.start()
-                except Exception as e:
-                    trace_utils.record_exception(session_start_span, e)
-                    raise
+                    await asyncio.gather(*tasks)
                 finally:
-                    session_start_span.end()
-                    self._session_start_context = None
-            except BaseException:
-                if persistence is not None:
-                    # a session that never started is never closed, so it lets its rows go here
-                    self._persistence = None
-                    await asyncio.shield(persistence.discard())
+                    await utils.aio.cancel_and_wait(*tasks)
+
+                if self._session_host is not None:
+                    await self._session_host.start()
+            except Exception as e:
+                trace_utils.record_exception(session_start_span, e)
                 raise
+            finally:
+                session_start_span.end()
+                self._session_start_context = None
 
             # important: no await should be done after this!
 
@@ -1218,8 +1239,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             self._started = True
-            if self._persistence is not None:
-                self._persistence.resume_durable_tools()
+            # restored durable tools run only against a session that started
+            for member in durable_chain(self._agent):
+                if member._activity is not None:
+                    member._activity._resume_durable_tools()
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -1374,27 +1397,29 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             try:
                 # durable tools stop at their next boundary, where the save captures them
                 chain = durable_chain(self._agent)
-                schedulers = [scheduler for scheduler in chain.values() if scheduler is not None]
+                executors = [executor for executor in chain.values() if executor is not None]
                 try:
                     try:
-                        for scheduler in schedulers:
-                            await scheduler.pause()
+                        for executor in executors:
+                            await executor.pause()
                     finally:
                         # a close cut short while an effect is in flight loses only that tool
-                        for scheduler in schedulers:
-                            scheduler.close()
+                        for executor in executors:
+                            executor.close()
 
-                    if self._persistence is not None and isinstance(self._agent, AgentTask):
+                    if self._persisted is not None and isinstance(self._agent, AgentTask):
+                        from . import persistence
+
                         # tearing down hands each task back to its parent, so the save comes first
-                        await self._persistence.aclose(chain)
-                        self._persistence = None
+                        await persistence.save(self, chain, release=True)
 
                     await self._teardown_activity(reason=reason, drain=drain)
                 finally:
-                    if self._persistence is not None:
+                    if self._persisted is not None:
+                        from . import persistence
+
                         # after the drain, so the last turn is in it, and also on a close cut short
-                        await asyncio.shield(self._persistence.aclose(chain))
-                        self._persistence = None
+                        await asyncio.shield(persistence.save(self, chain, release=True))
 
                 # the agent's own delegate goes with its activity; this one is the session's
                 if self._delegate is not None:

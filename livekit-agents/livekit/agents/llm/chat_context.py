@@ -408,6 +408,8 @@ class AgentConfigUpdate(BaseModel):
     instructions: str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
+    tools: list[str] | None = None
+    """Every tool name in force after the update, so the latest update alone says the set."""
 
     created_at: float = Field(default_factory=time.time)
 

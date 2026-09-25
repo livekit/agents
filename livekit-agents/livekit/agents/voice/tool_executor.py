@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import weakref
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypedDict
 
@@ -39,10 +38,10 @@ from .events import (
 )
 
 if TYPE_CHECKING:
-    from ..durable_scheduler import DurableScheduler
     from .agent import Agent
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession
+    from .durable_tool import DurableTask
     from .speech_handle import SpeechHandle
 
 
@@ -302,6 +301,9 @@ class _ToolExecutor:
 
     Session-scoped (``owning_activity=None``): tasks survive agent handoff; replies
     are delivered to whichever agent is current at delivery time.
+
+    Durable tools run here too, activity-scoped only: the executor steps each one's frame,
+    snapshots it at its boundaries, and can hold, capture and stop them for a save.
     """
 
     def __init__(
@@ -318,6 +320,15 @@ class _ToolExecutor:
 
         self._owning_activity: AgentActivity | None = owning_activity
         self._tool_options: AsyncToolOptions = _resolve_async_tool_options(async_tool_options)
+
+        # durable tools, apart from the running tasks: they have no update, filler or
+        # cancellation, and a drain leaves them to the close
+        self._durable_tasks: dict[asyncio.Task[Any], DurableTask] = {}
+        # cleared to hold every durable tool at its next boundary
+        self._durable_running = asyncio.Event()
+        self._durable_running.set()
+        # the frames of the durable tools a close stopped at a boundary
+        self._stopped_frames: list[bytes] = []
 
     def set_owning_activity(self, activity: AgentActivity | None) -> None:
         self._owning_activity = activity
@@ -341,38 +352,39 @@ class _ToolExecutor:
         run_ctx: RunContext,
         raw_arguments: dict[str, Any],
         mock: Callable[..., Any] | None = None,
-        durable_scheduler: DurableScheduler | None = None,
     ) -> Any:
         """Run ``tool``. Returns when the first ``ctx.update()`` lands or the tool returns."""
         info = tool.info
 
         if ToolFlag.DURABLE in info.flags:
-            # the scheduler drives the frame, so there is no update, filler or cancellation:
+            # the frame is stepped here, so there is no update, filler or cancellation:
             # releasing the floor mid-tool is not something a restored frame can repeat
-            from .generation import _DurableExecutionMetadata
+            from .durable_tool import DurableTask, _DurableExecutionMetadata
 
-            if durable_scheduler is None:
-                raise RuntimeError("a durable tool requires a durable scheduler")
+            if self._owning_activity is None:
+                raise RuntimeError("a durable tool runs only on its activity's executor")
             run_ctx._durable = True
             fnc_args, fnc_kwargs = prepare_function_arguments(
                 fnc=tool, json_arguments=raw_arguments, call_ctx=run_ctx
             )
-            fnc_callable: Callable[[], Any]
             if mock is not None:
                 from .run_result import _run_mock
 
-                fnc_callable = functools.partial(_run_mock, mock, *fnc_args, **fnc_kwargs)
+                coro = _run_mock(mock, *fnc_args, **fnc_kwargs)
             else:
-                fnc_callable = functools.partial(tool, *fnc_args, **fnc_kwargs)
+                coro = tool(*fnc_args, **fnc_kwargs)
             speech_handle = run_ctx.speech_handle
-            return await durable_scheduler.execute(
-                cast("Callable[[], Any]", fnc_callable),
-                metadata=_DurableExecutionMetadata(
-                    num_steps=speech_handle.num_steps,
-                    function_call=run_ctx.function_call.model_dump_json(),
-                    allow_interruptions=speech_handle.allow_interruptions,
-                    input_details=speech_handle.input_details,
-                ),
+            return await self.run_durable(
+                DurableTask(
+                    coro.__await__(),
+                    fnc_name=getattr(tool, "__qualname__", run_ctx.function_call.name),
+                    metadata=_DurableExecutionMetadata(
+                        num_steps=speech_handle.num_steps,
+                        function_call=run_ctx.function_call.model_dump_json(),
+                        allow_interruptions=speech_handle.allow_interruptions,
+                        input_details=speech_handle.input_details,
+                    ),
+                )
             )
 
         call_id = run_ctx.function_call.call_id
@@ -589,6 +601,48 @@ class _ToolExecutor:
         """Cancel cancellable tools, await the rest. Reply delivery is left running;
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
+
+    async def run_durable(self, task: DurableTask) -> Any:
+        """Run a durable tool's frame, new or restored, to its end."""
+        from .agent import _pass_through_activity_task_info
+
+        exe_task = asyncio.create_task(task.run(self._durable_running), name=task.fnc_name)
+        self._durable_tasks[exe_task] = task
+        exe_task.add_done_callback(lambda _: self._durable_tasks.pop(exe_task, None))
+        _pass_through_activity_task_info(exe_task)
+        return await exe_task
+
+    async def pause(self) -> None:
+        """Hold every durable tool at its next boundary, and return once each is at one."""
+        self._durable_running.clear()
+        waiting = [task for task in self._durable_tasks.values() if not task.at_boundary.is_set()]
+        if waiting:
+            logger.info(
+                "waiting for durable tools to finish their effect in flight",
+                extra={"functions": [task.fnc_name for task in waiting]},
+            )
+            await asyncio.gather(*(task.at_boundary.wait() for task in waiting))
+
+    def resume(self) -> None:
+        self._durable_running.set()
+
+    def durable_state(self) -> list[bytes]:
+        """Every durable tool as of its latest boundary, each pickled."""
+        snapshots = [task.snapshot for task in self._durable_tasks.values() if task.snapshot]
+        return snapshots + self._stopped_frames
+
+    def close(self) -> None:
+        """Stop every durable tool; one at a boundary keeps its frame, one mid-effect is lost."""
+        for exe_task, task in self._durable_tasks.items():
+            if task.at_boundary.is_set() and task.snapshot:
+                self._stopped_frames.append(task.snapshot)
+            else:
+                logger.warning(
+                    "a durable tool stopped before its effect returned, so it is lost",
+                    extra={"function": task.fnc_name},
+                )
+            exe_task.cancel()
+        self._durable_tasks.clear()
 
     async def _enqueue_reply(
         self,

@@ -53,9 +53,6 @@ load_dotenv()
 
 FARE_DESK_URL = "http://localhost:8321/fare-desk"
 
-server = AgentServer()
-
-# a real app looks the conversation up from a caller key, such as a phone number
 AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
 # devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
 # todo: devLocal should accept the project key; until then a local agent-db takes its own
@@ -64,10 +61,14 @@ LOCAL_KEY = (
     if AGENTDB_URL and "localhost" in AGENTDB_URL
     else {}
 )
-db = (
-    store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
-    if AGENTDB_URL
-    else None
+
+# the server hands its store to each job, as ctx.store
+server = AgentServer(
+    store=(
+        store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
+        if AGENTDB_URL
+        else None
+    )
 )
 
 
@@ -200,9 +201,10 @@ async def entrypoint(ctx: JobContext) -> None:
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
     persisted = None
-    if db is not None and (conversation_id := os.environ.get("CONVERSATION")):
-        # the app picks the phone agent's session id, stable across calls
-        persisted = db.session(conversation_id, "voice")
+    # a real app looks the conversation up from a caller key, such as a phone number
+    if ctx.store is not None and (conversation_id := os.environ.get("CONVERSATION")):
+        # the front session: its id is the conversation's, so every call resumes it
+        persisted = ctx.store.session(conversation_id)
     await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
     if persisted is not None and (messages := session.history.messages()):
         logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")

@@ -20,9 +20,9 @@ from livekit.agents import (
     function_tool,
     store,
 )
-from livekit.agents.durable_scheduler import EffectException
 from livekit.agents.llm import ToolError, ToolFlag
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.durable_tool import EffectException
 from livekit.durable import registry
 
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -341,7 +341,7 @@ async def test_a_rehydrate_that_fails_midway_leaves_no_running_frame(
     (activity,) = restored
     assert desk._activity is None and activity._restored_tools == []
     assert not any(t.get_name() == "AgentActivity.resume_durable_tool" for t in asyncio.all_tasks())
-    assert activity._durable_scheduler is None
+    assert activity._tool_executor._durable_tasks == {}
 
 
 async def note() -> str:
@@ -419,6 +419,45 @@ async def test_a_start_that_fails_after_the_rehydrate_lets_everything_go(
     # the handle is let go, so the session reads as closed and its connection is shut
     (row,) = await database.rows("SELECT closed_at FROM sessions")
     assert row["closed_at"] is not None
+
+
+async def test_a_save_during_a_start_that_fails_keeps_the_restored_frame(
+    database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = AgentSession(llm=_llm("book", '{"flight": "NW812"}'))
+    await first.start(agent=Desk(), persist=database.session("s1"))
+    first.generate_reply(user_input="go")
+    await _close_in_hold(first)
+
+    load = store.Session.load
+
+    async def load_then_save(self: store.Session) -> Any:
+        stored = await load(self)
+        # before the session has an agent it holds only what it loaded
+        await resumed.save()
+        return stored
+
+    async def save_then_fail(self: AgentSession, *args: Any, **kwargs: Any) -> None:
+        (row,) = await database.rows("SELECT current_agent_id FROM sessions")
+        assert row["current_agent_id"] == "desk"
+        # the restored frame has not started yet, and is still the session's
+        await self.save()
+        raise RuntimeError("the room did not connect")
+
+    monkeypatch.setattr(store.Session, "load", load_then_save)
+    monkeypatch.setattr(AgentSession, "_update_activity_task", save_then_fail)
+    resumed = AgentSession(llm=_llm("book"))
+    with pytest.raises(RuntimeError, match="did not connect"):
+        await resumed.start(agent=Desk(), persist=database.session("s1"))
+
+    monkeypatch.undo()
+    again = AgentSession(llm=_llm("book"))
+    await again.start(agent=Desk(), persist=database.session("s1"))
+    await _until(lambda: _outputs(again))
+    (output,) = _outputs(again)
+    assert output.output == "NW812: charged, held"
+    assert CALLS == ["charge", "hold"]
+    await again.aclose()
 
 
 async def test_a_close_cut_short_in_an_effect_still_saves(

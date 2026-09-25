@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from ..a2a import TaskInput, TaskUpdate
+from ..a2a import TASK_ID_KEY, TaskInput, TaskUpdate
 from ..llm.tool_context import FunctionTool, ToolError, function_tool
 
 # imported at runtime: the tool's signature is resolved with get_type_hints() when a call
 # arrives, so RunContext has to be a real name by then
 from ..voice.events import RunContext
 from .delegate import DELEGATE_TOOL_NAME
-
-TASK_ID_EXTRA = "lk.task_id"
-"""The ``FunctionCallOutput.extra`` key naming the far side's task that answered a delegate call."""
 
 TOOL_DESCRIPTION = """Hand a request to the expert that handles reasoning, lookups and actions.
 
@@ -78,8 +75,6 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
             # the expert joins this session's conversation, whose id is the database id
             task_input.conversation_id = persisted.database_id
             task_input.caller_session_id = persisted.session_id
-            # a delegate an agent brings after a handoff is pointed back here, before it sends
-            persisted.resume_delegate(handler)
 
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
@@ -94,7 +89,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                 if stream.task_id:
                     # the outputs from here on name the expert task that answers the call, for a
                     # dashboard to join; the call itself was recorded before the task existed
-                    ctx._output_extra[TASK_ID_EXTRA] = stream.task_id
+                    ctx._output_extra[TASK_ID_KEY] = stream.task_id
                 if update.state == "working":
                     if not update.text:
                         continue

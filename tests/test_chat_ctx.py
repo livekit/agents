@@ -1017,24 +1017,6 @@ def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
     assert ctx.copy(tools=["get_weather"]).items == []
 
 
-def test_the_diff_reports_any_item_changed_by_value() -> None:
-    message = ChatMessage(role="user", content=["move my flight"])
-    call = FunctionCall(call_id="call_1", name="rebook", arguments="{}")
-    output = FunctionCallOutput(call_id="call_1", output="done", is_error=False)
-    old = ChatContext([message, call, output])
-
-    new = ChatContext(
-        [
-            message.model_copy(),
-            call.model_copy(update={"arguments": '{"flight": "NW812"}'}),
-            output.model_copy(update={"extra": {"lk.task_id": "task-1"}}),
-        ]
-    )
-    diff = utils.compute_chat_ctx_diff(old, new)
-    assert (diff.to_remove, diff.to_create) == ([], [])
-    assert diff.to_update == [(message.id, call.id), (call.id, output.id)]
-
-
 def test_the_append_only_diff_matches_the_general_one(monkeypatch: pytest.MonkeyPatch) -> None:
     import random
 
@@ -1048,7 +1030,9 @@ def test_the_append_only_diff_matches_the_general_one(monkeypatch: pytest.Monkey
         for item in new.items:
             if item.id not in lcs:
                 to_create.append((prev, item.id))
-            elif item != by_id[item.id]:
+            elif (
+                item.type == "message" and item.raw_text_content != by_id[item.id].raw_text_content
+            ):  # type: ignore[union-attr]
                 to_update.append((prev, item.id))
             prev = item.id
         return utils.DiffOps([i.id for i in old.items if i.id not in lcs], to_create, to_update)

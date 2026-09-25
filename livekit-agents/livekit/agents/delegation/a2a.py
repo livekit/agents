@@ -53,16 +53,17 @@ class A2ADelegate(Delegate):
         """The context with the endpoint: the one given, else minted on the first send."""
         return self._client.context_id if self._client is not None else self._context_id
 
+    @context_id.setter
+    def context_id(self, context_id: str) -> None:
+        if self._client is not None:
+            # the far side already keeps this caller's session under the context sent
+            raise RuntimeError("the delegate's context is fixed once it has sent")
+        self._context_id = context_id
+
     @property
     def endpoint(self) -> str:
         """The endpoint's name, the last segment of its URL, as its server registered it."""
         return urlsplit(self._url).path.rstrip("/").rsplit("/", 1)[-1]
-
-    def resume(self, context_id: str) -> bool:
-        if self._client is not None:
-            return False
-        self._context_id = context_id
-        return True
 
     def submit(self, task_input: TaskInput) -> DelegateStream:
         return self.client.send(task_input)

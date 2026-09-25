@@ -30,7 +30,6 @@ from ._exceptions import (
     UnexpectedModelBehavior,
     create_api_error_from_http,
 )
-from .durable_scheduler import EffectCall
 from .job import (
     AutoSubscribe,
     JobContext,
@@ -126,6 +125,7 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.durable_tool import EffectCall
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
     KeytermsOptions,

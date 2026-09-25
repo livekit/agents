@@ -18,6 +18,7 @@ from livekit.agents.a2a import TaskInput, TaskUpdate
 from livekit.agents.a2a.extension import EXTENSION_URI, KIND, as_dict
 from livekit.agents.a2a.server import AGENT_CARD_PATH, A2ASessionContext, mount
 from livekit.agents.llm import ToolFlag
+from livekit.agents.store import Store
 
 from .fake_llm import FakeLLM
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
@@ -77,6 +78,7 @@ async def _serving(
     *,
     idle_timeout: float | None = None,
     handler: Callable[[A2ASessionContext, _Served], Awaitable[None]] | None = None,
+    store: Store | None = None,
 ) -> AsyncIterator[_Served]:
     app = FastAPI()
     served: _Served = _Served("", None)  # filled once the port is known
@@ -98,6 +100,7 @@ async def _serving(
         handler=fare_desk,
         description="Answers fare questions.",
         idle_timeout=idle_timeout,
+        store=store,
     )
     served.executor = executor
 
@@ -168,6 +171,23 @@ def test_the_shipped_example_still_wires_up() -> None:
     # the card route is registered before the binding's catch-all mount, which would shadow it
     ordered = [getattr(route, "path", "") for route in module.server.http.routes]
     assert ordered.index(f"/fare-desk{AGENT_CARD_PATH}") < ordered.index("/{tenant}")
+
+
+def test_a_context_persists_only_under_a_named_conversation_and_a_store(
+    tmp_path: pathlib.Path,
+) -> None:
+    from livekit.agents import store
+
+    local = store.LocalStore(tmp_path)
+    ctx = A2ASessionContext(
+        "ctx-1", endpoint="fare-desk", conversation_id="DB_1", caller_session_id="DB_1", store=local
+    )
+    assert ctx.persisted is not None and ctx.persisted.session_id == "ctx-1"
+    assert (ctx.persisted._parent, ctx.persisted._endpoint) == ("DB_1", "fare-desk")
+    assert A2ASessionContext("ctx-1", endpoint="fare-desk", store=local).persisted is None
+    assert (
+        A2ASessionContext("ctx-1", endpoint="fare-desk", conversation_id="DB_1").persisted is None
+    )
 
 
 async def test_the_card_names_the_endpoint_and_offers_the_extension() -> None:
@@ -477,25 +497,22 @@ async def test_a_dropped_context_rehydrates_on_the_next_request(
 ) -> None:
     from livekit.agents import store
     from livekit.agents.a2a import A2AClient
-    from livekit.agents.store.executor import SQLiteExecutor
+    from livekit.agents.store.local import SQLiteExecutor
 
     local = store.LocalStore(tmp_path)
     conversation_id = await local.create_database()
 
     async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
-        assert ctx.conversation_id is not None
+        assert ctx.persisted is not None
         session = AgentSession(llm=_fare_desk_llm())
         await session.start(
-            agent=Agent(instructions="fare desk", tools=[check_fares]),
-            persist=local.session(
-                ctx.conversation_id, ctx.context_id, parent=ctx.caller_session_id
-            ),
+            agent=Agent(instructions="fare desk", tools=[check_fares]), persist=ctx.persisted
         )
         served.sessions.append(session)
         ctx.attach(session)
 
     delegation = {"conversation_id": conversation_id, "caller_session_id": "voice"}
-    async with _serving(handler=persisted) as served:
+    async with _serving(handler=persisted, store=local) as served:
         first = A2AClient(f"{served.base_url}/fare-desk", context_id="ctx-1")
         await _collect(first, TaskInput(instruction="what is the change fee", **delegation))
         # the goodbye closes the session, which releases it and so the connection

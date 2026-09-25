@@ -5,6 +5,7 @@ import contextlib
 import contextvars
 import heapq
 import json
+import pickle
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Iterator
 from dataclasses import dataclass
@@ -17,7 +18,6 @@ from livekit.agents.llm.realtime import MessageGeneration
 from livekit.agents.metrics.base import Metadata
 
 from .. import inference, llm, stt, tts, utils, vad
-from ..durable_scheduler import DurableScheduler, DurableTask
 from ..llm.chat_context import Instructions
 from ..llm.realtime_fallback_adapter import _FallbackRealtimeSession
 from ..llm.tool_context import (
@@ -61,6 +61,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .durable_tool import DurableTask, _DurableExecutionMetadata
 from .endpointing import create_endpointing
 from .events import (
     TURN_ENDED_KEY,
@@ -81,7 +82,6 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
-    _DurableExecutionMetadata,
     _ForwardOutput,
     _inject_running_tool_calls,
     _interrupted_tool_output,
@@ -223,6 +223,18 @@ class _PausedSpeechInfo:
     handle: SpeechHandle
     agent_state: AgentState
     timeout: float
+
+
+@dataclass
+class _RestoredTool:
+    """A durable tool a rehydrate readied, which runs once the session started."""
+
+    task: DurableTask
+    function_call: llm.FunctionCall
+    speech_handle: SpeechHandle
+    """The speech the tool ran in, rebuilt with the steps it had taken."""
+    error: ToolError | None
+    """Why the frame did not load, answered as the tool's output instead of running it."""
 
 
 def _end_user_turn_span(info: _EndOfTurnInfo) -> None:
@@ -382,10 +394,7 @@ class AgentActivity(RecognitionHooks):
         self._authorization_allowed.set()
 
         self._drain_blocked_tasks: set[asyncio.Task[Any]] = set()
-        self._durable_scheduler: DurableScheduler | None = None
-        self._restored_tools: list[
-            tuple[DurableTask, llm.FunctionCall, SpeechHandle, ToolError | None]
-        ] = []
+        self._restored_tools: list[_RestoredTool] = []
         # set while scheduling runs, so a restored tool fails only once its agent is active
         self._activated_ev = asyncio.Event()
         self._mcp_tools: list[mcp.MCPToolset] = []
@@ -403,6 +412,14 @@ class AgentActivity(RecognitionHooks):
             **self._session._opts.delegation,
             **self._agent._delegation,
         }
+        delegate = self._delegation["delegate"]
+        persisted = self._session._persisted
+        if delegate is not None and delegate.endpoint is not None and persisted is not None:
+            # the expert keeps one session per context, so a delegate resumes the context this
+            # session last delegated to its endpoint under
+            context_id = persisted.child_contexts.get(delegate.endpoint)
+            if context_id is not None and delegate.context_id != context_id:
+                delegate.context_id = context_id
         self.__delegate_tool: FunctionTool | None = None
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
@@ -759,6 +776,7 @@ class AgentActivity(RecognitionHooks):
         # Record the configuration change
         config_update = llm.AgentConfigUpdate(
             instructions=instructions,
+            tools=get_fnc_tool_names(self.tools),
         )
         self._agent._chat_ctx.insert(config_update)
         self._session._chat_ctx.insert(config_update)
@@ -785,6 +803,7 @@ class AgentActivity(RecognitionHooks):
             config_update = llm.AgentConfigUpdate(
                 tools_added=tools_added,
                 tools_removed=tools_removed,
+                tools=get_fnc_tool_names(self.tools),
             )
             config_update._tools = llm.ToolContext(tools).flatten()
             self._agent._chat_ctx.insert(config_update)
@@ -1067,7 +1086,6 @@ class AgentActivity(RecognitionHooks):
                 # don't use start_span for _start_session, avoid nested user/assistant turns
                 await self._start_session(reuse_resources=reuse_resources)
                 self._started = True
-                self._durable_scheduler = DurableScheduler()
                 if resumes:
                     return
 
@@ -1104,7 +1122,6 @@ class AgentActivity(RecognitionHooks):
         resumes rather than starts, and ready them; returns the calls that did not restore."""
         self._started = True
         self._agent._activity = self
-        self._durable_scheduler = DurableScheduler()
         async with self._lock:
             await self._setup_toolsets()
 
@@ -1131,7 +1148,8 @@ class AgentActivity(RecognitionHooks):
                 _AgentActivityContextVar.set(self),
             )
             try:
-                task.unpickle_generator()
+                if isinstance(task.generator, bytes):
+                    task.generator = pickle.loads(task.generator)
             except Exception:
                 logger.warning(
                     "a durable tool changed since its frame was written, so it cannot resume",
@@ -1147,28 +1165,33 @@ class AgentActivity(RecognitionHooks):
                 _AgentActivityContextVar.reset(tokens[1])
                 _SpeechHandleContextVar.reset(tokens[0])
 
-            self._restored_tools.append((task, fnc_call, speech_handle, unpickle_error))
+            self._restored_tools.append(
+                _RestoredTool(
+                    task=task,
+                    function_call=fnc_call,
+                    speech_handle=speech_handle,
+                    error=unpickle_error,
+                )
+            )
         return failed
 
     def _resume_durable_tools(self) -> None:
         """Run the tools ``_rehydrate`` readied, once every agent of the session has its activity."""
-        for task, fnc_call, speech_handle, unpickle_error in self._restored_tools:
+        for restored in self._restored_tools:
             speech_task = self._create_speech_task(
-                self._resume_durable_function(task, fnc_call, speech_handle, unpickle_error),
-                speech_handle=speech_handle,
+                self._resume_durable_function(restored),
+                speech_handle=restored.speech_handle,
                 name="AgentActivity.resume_durable_tool",
             )
-            _set_activity_task_info(speech_task, function_call=fnc_call, inline_task=True)
+            _set_activity_task_info(
+                speech_task, function_call=restored.function_call, inline_task=True
+            )
         self._restored_tools.clear()
 
     @utils.log_exceptions(logger=logger)
-    async def _resume_durable_function(
-        self,
-        task: DurableTask,
-        fnc_call: llm.FunctionCall,
-        speech_handle: SpeechHandle,
-        unpickle_error: ToolError | None,
-    ) -> None:
+    async def _resume_durable_function(self, restored: _RestoredTool) -> None:
+        task, unpickle_error = restored.task, restored.error
+        fnc_call, speech_handle = restored.function_call, restored.speech_handle
         reset_tool_timestamp = False
         try:
             if unpickle_error is not None:
@@ -1179,11 +1202,10 @@ class AgentActivity(RecognitionHooks):
 
             if task.next_value is not None:
                 task.next_value._c_ctx = contextvars.copy_context()
-            assert self._durable_scheduler is not None
-            val = await self._durable_scheduler.execute(task)
+            val = await self._tool_executor.run_durable(task)
             tool_output = make_tool_output(fnc_call=fnc_call, output=val, exception=None)
         except asyncio.CancelledError:
-            # the scheduler stopped it at a boundary, where the save on close captured its frame
+            # the executor stopped it at a boundary, where the save on close captured its frame
             return
         except BaseException as e:
             tool_output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
@@ -1437,23 +1459,27 @@ class AgentActivity(RecognitionHooks):
         initial_instructions = (
             instr.render(modality="audio") if isinstance(instr, Instructions) else instr
         )
-        # the configuration the context already records, folded from its updates in order
-        recorded_instructions: str | None = None
-        recorded_tools: set[str] = set()
-        for item in self._agent._chat_ctx.items:
-            if item.type == "agent_config_update":
-                if item.instructions is not None:
-                    recorded_instructions = item.instructions
-                recorded_tools |= set(item.tools_added or ())
-                recorded_tools -= set(item.tools_removed or ())
-        unchanged = recorded_instructions == initial_instructions and recorded_tools == set(
-            initial_tools or ()
+        # the configuration the context already records: the tools as of its latest update,
+        # and the instructions as of the latest one that set them
+        updates = [
+            item for item in self._agent._chat_ctx.items if item.type == "agent_config_update"
+        ]
+        recorded_instructions = next(
+            (item.instructions for item in reversed(updates) if item.instructions is not None),
+            None,
+        )
+        recorded_tools = updates[-1].tools if updates else None
+        unchanged = (
+            recorded_instructions == initial_instructions
+            and recorded_tools is not None
+            and set(recorded_tools) == set(initial_tools or ())
         )
         # a restart with the same configuration, such as a resumed session, records nothing
         if (initial_instructions or initial_tools) and not unchanged:
             initial_config = llm.AgentConfigUpdate(
                 instructions=initial_instructions,
                 tools_added=initial_tools,
+                tools=initial_tools or [],
             )
             initial_config._tools = llm.ToolContext(self.tools).flatten()
             self._agent._chat_ctx.insert(initial_config)
@@ -1793,9 +1819,7 @@ class AgentActivity(RecognitionHooks):
             if self._scheduling_atask is not None:
                 await utils.aio.cancel_and_wait(self._scheduling_atask)
 
-            if self._durable_scheduler is not None:
-                self._durable_scheduler.close()
-                self._durable_scheduler = None
+            self._tool_executor.close()
 
             # session-scoped toolsets are closed by the session; this only closes
             # the agent's own toolsets + MCP — all of which outlive pause

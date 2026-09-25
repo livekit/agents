@@ -20,6 +20,7 @@ from ..llm import (
     StopResponse,
     ToolContext,
     ToolError,
+    ToolFlag,
     utils as llm_utils,
 )
 from ..llm.chat_context import Instructions
@@ -34,7 +35,7 @@ from ..types import (
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
-from .speech_handle import InputDetails, SpeechHandle
+from .speech_handle import SpeechHandle
 from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
 
@@ -779,17 +780,6 @@ class _ToolOutput:
     first_tool_started_fut: asyncio.Future[None]
 
 
-@dataclass
-class _DurableExecutionMetadata:
-    """What a durable tool's speech needs to be rebuilt on resume; pickled with the frame."""
-
-    num_steps: int
-    function_call: str
-    """The ``FunctionCall`` as JSON."""
-    allow_interruptions: bool
-    input_details: InputDetails
-
-
 def perform_tool_executions(
     *,
     session: AgentSession,
@@ -973,14 +963,18 @@ async def _execute_tools_task(
                     },
                 )
 
-                executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+                executor = (
+                    # a durable tool's frame belongs to its agent, which a save walks to find it
+                    activity._tool_executor
+                    if ToolFlag.DURABLE in function_tool.info.flags
+                    else executor_by_name.get(fnc_call.name, activity._tool_executor)
+                )
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,
                     run_ctx=run_ctx,
                     raw_arguments=raw_args,
                     mock=mock,
-                    durable_scheduler=activity._durable_scheduler,
                 )
 
                 @tracer.start_as_current_span("function_tool")

@@ -28,7 +28,7 @@ from .extension import (
     VERBATIM,
     agent_card,
 )
-from .runner import REQUEST_ID_KEY
+from .runner import TASK_ID_KEY
 from .server import A2ASessionContext, A2ASessionHandler
 from .types import TaskInput, TaskState, TaskUpdate
 
@@ -40,7 +40,7 @@ __all__ = [
     "EXTENSION_URI",
     "KIND",
     "REASON",
-    "REQUEST_ID_KEY",
+    "TASK_ID_KEY",
     "VERBATIM",
     "A2AClient",
     "A2ASessionContext",

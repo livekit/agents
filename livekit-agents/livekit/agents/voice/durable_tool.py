@@ -2,30 +2,30 @@
 
 A tool is captured at a boundary: after an ``EffectCall`` resolved and before the next is sent,
 or while it awaits an ``AgentTask``. A save holds every tool at one, so no effect runs twice.
+The tool executor runs them; this is the frame and its stepping.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
-import functools
 import pickle
 import reprlib
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Generator
 from dataclasses import dataclass, field
 from types import coroutine
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
-from typing_extensions import Self
+from livekit.durable.function import durable
 
-from livekit.durable.function import DurableCoroutine, durable
-
-from .llm.tool_context import StopResponse, ToolError
-from .log import logger
-from .voice.agent import Agent, AgentTask
+from ..llm.tool_context import StopResponse, ToolError
+from ..log import logger
+from .agent import Agent, AgentTask, _pass_through_activity_task_info
+from .speech_handle import InputDetails
 
 if TYPE_CHECKING:
-    from .voice.agent_session import AgentSession
+    from .agent_session import AgentSession
+    from .tool_executor import _ToolExecutor
 
 _REHYDRATING = contextvars.ContextVar[tuple["AgentSession", dict[str, Agent]]]("agents_rehydrating")
 """While frames are unpickled: the session, and its agents by id."""
@@ -131,6 +131,17 @@ class DurableInvalidStateError(RuntimeError):
 
 
 @dataclass
+class _DurableExecutionMetadata:
+    """What a durable tool's speech needs to be rebuilt on resume; pickled with the frame."""
+
+    num_steps: int
+    function_call: str
+    """The ``FunctionCall`` as JSON."""
+    allow_interruptions: bool
+    input_details: InputDetails
+
+
+@dataclass
 class DurableTask:
     generator: Generator | bytes
     fnc_name: str
@@ -149,104 +160,30 @@ class DurableTask:
         )
         return (self.__class__, (g, self.fnc_name, self.next_value, self.metadata))
 
-    def unpickle_generator(self) -> Self:
-        if isinstance(self.generator, bytes):
-            self.generator = pickle.loads(self.generator)
-        return self
-
-
-class DurableScheduler:
-    """Runs one activity's durable tools, and snapshots each at its boundaries."""
-
-    def __init__(self, *, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        self._loop = loop or asyncio.get_event_loop()
-        self._tasks: dict[asyncio.Task[Any], DurableTask] = {}
-        # cleared to hold every tool at its next boundary
-        self._running = asyncio.Event()
-        self._running.set()
-        # the frames of the tools a close stopped at a boundary
-        self._stopped: list[bytes] = []
-
-    def execute(
-        self, fnc: Callable[[], DurableCoroutine] | DurableTask, *, metadata: Any | None = None
-    ) -> asyncio.Task[Any]:
-        from .voice.agent import _pass_through_activity_task_info
-
-        if isinstance(fnc, DurableTask):
-            task = fnc.unpickle_generator()
-        else:
-            try:
-                if isinstance(fnc, functools.partial):
-                    fnc_name = fnc.func.__qualname__
-                else:
-                    fnc_name = fnc.__qualname__
-            except AttributeError:
-                fnc_name = "<unknown function>"
-
-            task = DurableTask(fnc().__await__(), fnc_name=fnc_name, metadata=metadata)
-
-        exe_task = self._loop.create_task(self._execute(task), name=task.fnc_name)
-        self._tasks[exe_task] = task
-        exe_task.add_done_callback(lambda _: self._tasks.pop(exe_task, None))
-        _pass_through_activity_task_info(exe_task)
-        return exe_task
-
-    async def pause(self) -> None:
-        """Hold every tool at its next boundary, and return once each is at one."""
-        self._running.clear()
-        waiting = [task for task in self._tasks.values() if not task.at_boundary.is_set()]
-        if waiting:
-            logger.info(
-                "waiting for durable tools to finish their effect in flight",
-                extra={"functions": [task.fnc_name for task in waiting]},
-            )
-            await asyncio.gather(*(task.at_boundary.wait() for task in waiting))
-
-    def resume(self) -> None:
-        self._running.set()
-
-    def durable_state(self) -> bytes:
-        """Every tool as of its latest boundary, pickled, or empty when there is none."""
-        snapshots = [task.snapshot for task in self._tasks.values() if task.snapshot]
-        snapshots += self._stopped
-        return pickle.dumps(snapshots) if snapshots else b""
-
-    def close(self) -> None:
-        """Stop every tool; one at a boundary keeps its frame, one mid-effect is lost."""
-        for exe_task, task in self._tasks.items():
-            if task.at_boundary.is_set() and task.snapshot:
-                self._stopped.append(task.snapshot)
-            else:
-                logger.warning(
-                    "a durable tool stopped before its effect returned, so it is lost",
-                    extra={"function": task.fnc_name},
-                )
-            exe_task.cancel()
-        self._tasks.clear()
-
-    def _capture(self, task: DurableTask) -> None:
-        task.at_boundary.set()
+    def capture(self) -> None:
+        """Mark the task at a boundary and snapshot it there."""
+        self.at_boundary.set()
         try:
-            task.snapshot = pickle.dumps(task)
+            self.snapshot = pickle.dumps(self)
         except Exception:
             # a tool that does not pickle here keeps running, and has no frame to save
-            task.snapshot = b""
-            logger.exception("could not snapshot a durable tool", extra={"function": task.fnc_name})
+            self.snapshot = b""
+            logger.exception("could not snapshot a durable tool", extra={"function": self.fnc_name})
 
-    async def _execute(self, task: DurableTask) -> Any:
-        from .voice.agent import _pass_through_activity_task_info
-
+    async def run(self, running: asyncio.Event) -> Any:
+        """Step the frame to its end, capturing it at each boundary and holding it there
+        while ``running`` is clear; returns what the tool returned."""
         __tracebackhide__ = True
 
-        g = task.generator
+        g = self.generator
         assert not isinstance(g, bytes)
-        nv: EffectCall | Any = task.next_value
+        nv: EffectCall | Any = self.next_value
         while True:
             try:
                 if nv is None or (isinstance(nv, EffectCall) and nv._done):
-                    self._capture(task)
-                    await self._running.wait()
-                    task.at_boundary.clear()
+                    self.capture()
+                    await running.wait()
+                    self.at_boundary.clear()
                     if nv is None:
                         nv = g.send(None)
                     else:
@@ -254,14 +191,14 @@ class DurableScheduler:
                 # else: restored while awaiting an AgentTask, which is awaited again
 
                 if isinstance(nv, EffectCall):
-                    task.next_value = nv
+                    self.next_value = nv
                     if isinstance(nv._c, AgentTask):
                         # a pending AgentTask pickles, so awaiting one is a boundary too
-                        self._capture(task)
+                        self.capture()
                     try:
                         if not nv._c or nv._c_ctx is None:
                             raise RuntimeError("invalid EffectCall state")
-                        exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c, loop=self._loop)
+                        exe_task = nv._c_ctx.run(asyncio.ensure_future, nv._c)
                         _pass_through_activity_task_info(exe_task)
                         if isinstance(nv._c, AgentTask):
                             # a frame stopped here leaves the task to the session's close
@@ -273,7 +210,7 @@ class DurableScheduler:
                         if not isinstance(e, (ToolError, StopResponse)):
                             logger.exception("error executing step of durable function")
                         nv._set_exception(e)
-                    task.at_boundary.clear()
+                    self.at_boundary.clear()
                     assert nv._done
                 else:
                     exc = DurableInvalidStateError(
@@ -284,16 +221,17 @@ class DurableScheduler:
                     )
                     nv = EffectCall(None)  # type: ignore[arg-type]
                     nv._set_exception(exc)
-                    task.next_value = nv
+                    self.next_value = nv
 
             except StopIteration as e:
                 return e.value
 
 
-def durable_chain(agent: Agent | None) -> dict[Agent, DurableScheduler | None]:
-    """The agent and the agents its tasks return to, each with its activity's durable tools."""
-    chain: dict[Agent, DurableScheduler | None] = {}
+def durable_chain(agent: Agent | None) -> dict[Agent, _ToolExecutor | None]:
+    """The agent and the agents its tasks return to, each with its activity's tool executor,
+    which runs its durable tools."""
+    chain: dict[Agent, _ToolExecutor | None] = {}
     while agent is not None and agent not in chain:
-        chain[agent] = agent._activity._durable_scheduler if agent._activity else None
+        chain[agent] = agent._activity._tool_executor if agent._activity else None
         agent = agent._old_agent if isinstance(agent, AgentTask) else None
     return chain

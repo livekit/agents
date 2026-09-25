@@ -66,11 +66,20 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 
 Persistence lets a session be loaded again after it closed. A text session cannot stay alive for days between messages, and a voice session ends with the call. A session that ends with a defined error (an LLM, STT or TTS failure) still closes gracefully, so it still saves. Persistence is not designed to survive a server crash: nothing written since the last save is recovered, and no mechanism in the framework exists for that case.
 
-A session given `persist=` is saved once, when it closes: the items its history and its agents' contexts gained, changed or lost since the last save, then its current agent, the agents that current agent returns to, its userdata (the mock airline included) and any durable tool's frame, in one batch. One conversation is one agent-db database, so its id is the database id; the phone agent's session and each desk context it talked to are rows in it, the desk's under the caller's.
+A session given `persist=` is saved once, when it closes: the items its history and its agents' contexts gained, changed or lost since the last save, then its current agent, the agents that current agent returns to, its userdata (the mock airline included) and any durable tool's frame, in one batch. One conversation is one agent-db database, so its id is the database id. The front session, the phone agent's, takes the conversation id as its own, so every call on the conversation resumes it; each desk context it talked to is a row in the same database, under the caller's, with the context id as its id.
+
+The store belongs to the agent server, which hands it to each job as `ctx.store` and to each desk context as `ctx.persisted`:
 
 ```python
-db = store.AgentDB()   # LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
-await session.start(agent=FareDesk(), persist=db.session(conversation_id, session_id, parent=caller))
+server = AgentServer(store=store.AgentDB())   # LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext) -> None:
+    await session.start(agent=Receptionist(), room=ctx.room, persist=ctx.store.session(conversation_id))
+
+@server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
+async def fare_desk(ctx: A2ASessionContext) -> None:
+    await session.start(agent=FareDesk(), persist=ctx.persisted)   # None when the caller named no conversation
 ```
 
 Start agent-db locally, from `agents-private/agent-db`, and leave it running:
@@ -130,11 +139,11 @@ adb -q "SELECT json_extract(item,'$.call_id') AS call_id, json_extract(item,'$.e
         AND json_extract(item,'$.type') = 'function_call_output'"
 ```
 
-A desk session names its caller in `parent_session_id`, and the output of each delegate call names the desk task that answered it in `lk.task_id`, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
+A desk session names its caller in `parent_session_id`. `lk.task_id` is the A2A task on both sides: the output of each delegate call names the desk task that answered it, and each call and reply of the desk names the task that produced it, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
 
 ### The voice half
 
-`voice.py` persists too once it is given a conversation. The session id `voice` is the app's choice, stable across calls:
+`voice.py` persists too once it is given a conversation, into the conversation's front session:
 
 ```bash
 CONVERSATION=DB_... python voice.py console

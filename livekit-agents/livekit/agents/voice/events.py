@@ -98,8 +98,8 @@ class RunContext(Generic[Userdata_T]):
         return {"function_call": self._function_call, "initial_step_idx": self._initial_step_idx}
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        from ..durable_scheduler import _REHYDRATING
         from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .durable_tool import _REHYDRATING
 
         session, _ = _REHYDRATING.get()
         self.__init__(  # type: ignore[misc]
