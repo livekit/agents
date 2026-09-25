@@ -5,8 +5,8 @@ import httpx
 import openai
 import pytest
 
-from livekit.agents import inference
-from livekit.agents.inference.llm import supports_prompt_cache_breakpoints
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, inference
+from livekit.agents.inference.llm import LLMStream, supports_prompt_cache_breakpoints
 from livekit.agents.llm import CacheBreakpoint, ChatContext
 
 pytestmark = pytest.mark.unit
@@ -38,6 +38,11 @@ def test_rule_accepts_newer_minor():
 
 def test_rule_accepts_newer_major():
     assert supports_prompt_cache_breakpoints("gpt-6") is True
+
+
+def test_rule_accepts_gpt_6_snapshot_on_gateway():
+    # gpt-6-luna and gpt-6-sol accept the field and cache behind it (measured 2026-09-25)
+    assert supports_prompt_cache_breakpoints("openai/gpt-6-luna") is True
 
 
 def test_rule_accepts_newer_major_variant():
@@ -102,6 +107,10 @@ def test_rule_rejects_gpt_oss():
     assert supports_prompt_cache_breakpoints("openai/gpt-oss-120b") is False
 
 
+def test_rule_rejects_azure_prefix():
+    assert supports_prompt_cache_breakpoints("azure/gpt-5.6-luna") is False
+
+
 def test_rule_rejects_google_model():
     assert supports_prompt_cache_breakpoints("google/gemini-3.5-flash") is False
 
@@ -115,8 +124,10 @@ def _llm(model: str, **kwargs: Any) -> inference.LLM:
 
 
 def _ctx() -> ChatContext:
+    # the marker ends the static system message; per-call text is its own message
     ctx = ChatContext()
-    ctx.add_message(role="system", content=[STATIC, CacheBreakpoint(), DYNAMIC])
+    ctx.add_message(role="system", content=[STATIC, CacheBreakpoint()])
+    ctx.add_message(role="system", content=DYNAMIC)
     ctx.add_message(role="user", content="Hi, I need to reschedule.")
     return ctx
 
@@ -164,7 +175,7 @@ async def test_update_options_setting_applies_to_next_chat():
     assert await _resolved(llm) is False
 
 
-async def _wire_body(llm: inference.LLM) -> dict[str, Any]:
+def _capture_requests(llm: inference.LLM) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -176,6 +187,11 @@ async def _wire_body(llm: inference.LLM) -> dict[str, Any]:
         base_url=GATEWAY,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    return captured
+
+
+async def _wire_body(llm: inference.LLM) -> dict[str, Any]:
+    captured = _capture_requests(llm)
     stream = llm.chat(chat_ctx=_ctx())
     try:
         async for _ in stream:
@@ -190,20 +206,47 @@ async def test_wire_carries_breakpoint_when_enabled():
     body = await _wire_body(_llm("openai/gpt-5.6-luna"))
 
     assert body["messages"][0]["content"] == [
-        {"type": "text", "text": STATIC, "prompt_cache_breakpoint": {"mode": "explicit"}},
-        {"type": "text", "text": f"\n{DYNAMIC}"},
+        {"type": "text", "text": STATIC, "prompt_cache_breakpoint": {"mode": "explicit"}}
     ]
+    assert body["messages"][1]["content"] == DYNAMIC
 
 
 async def test_wire_omits_breakpoint_for_gpt_4_1():
     body = await _wire_body(_llm("openai/gpt-4.1"))
 
-    assert body["messages"][0]["content"] == f"{STATIC}\n{DYNAMIC}"
+    assert body["messages"][0]["content"] == STATIC
+    assert body["messages"][1]["content"] == DYNAMIC
     assert "prompt_cache_breakpoint" not in json.dumps(body)
 
 
 async def test_wire_omits_breakpoint_for_google_model():
     body = await _wire_body(_llm("google/gemini-3.5-flash"))
 
-    assert body["messages"][0]["content"] == f"{STATIC}\n{DYNAMIC}"
+    assert body["messages"][0]["content"] == STATIC
+    assert body["messages"][1]["content"] == DYNAMIC
     assert "prompt_cache_breakpoint" not in json.dumps(body)
+
+
+async def test_stream_ignores_flag_for_non_openai_format():
+    llm = _llm("openai/gpt-5.6-luna")
+    captured = _capture_requests(llm)
+    stream = LLMStream(
+        llm,
+        model="google/gemini-3.5-flash",
+        strict_tool_schema=False,
+        client=llm._client,
+        chat_ctx=_ctx(),
+        tools=[],
+        conn_options=DEFAULT_API_CONNECT_OPTIONS,
+        extra_kwargs={},
+        provider_fmt="google",
+        prompt_cache_breakpoints=True,
+    )
+    try:
+        assert stream._prompt_cache_breakpoints is False
+        async for _ in stream:
+            pass
+    finally:
+        await stream.aclose()
+        await llm.aclose()
+    assert "prompt_cache_breakpoint" not in json.dumps(captured)
