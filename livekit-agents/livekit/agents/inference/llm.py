@@ -120,26 +120,23 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
 
 
 _GPT_VERSION = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
-# families that answer HTTP 400 to prompt_cache_breakpoint; "chat-latest" is the bare alias
-_BREAKPOINT_REJECTING_PREFIXES = ("chat-latest", "chatgpt-", "gpt-4o", "gpt-oss")
 _BREAKPOINT_FORMATS = ("openai", "openai.responses")
 
 
 def supports_prompt_cache_breakpoints(model: str) -> bool:
     """Whether an OpenAI model accepts ``prompt_cache_breakpoint`` content parts.
 
-    A denylist: OpenAI supports breakpoints on GPT-5.6 and later, so only names known
-    to reject them return False, and a newer or unrecognized OpenAI model is assumed to
-    support them. Models from other providers (``google/...``) always return False.
+    OpenAI supports breakpoints on GPT-5.6 and later, so any ``gpt-<major>.<minor>``
+    at or above 5.6 qualifies, future families such as gpt-6 included. Every other
+    name is out: gpt-oss, the o-series, the chat-latest aliases, and models from
+    other providers (``google/...``). Older models answer HTTP 400 to the field.
     """
     provider, _, name = model.lower().rpartition("/")
     if provider not in ("", "openai"):
         return False
-    if re.match(r"^o\d", name) or name.startswith(_BREAKPOINT_REJECTING_PREFIXES):
-        return False
     version = _GPT_VERSION.match(name)
     if version is None:
-        return True
+        return False
     return (int(version.group(1)), int(version.group(2) or 0)) >= (5, 6)
 
 

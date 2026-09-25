@@ -44,8 +44,12 @@ def test_rule_accepts_newer_major_variant():
     assert supports_prompt_cache_breakpoints("gpt-7-mini") is True
 
 
-def test_rule_accepts_unrecognized_openai_name():
-    assert supports_prompt_cache_breakpoints("openai/some-new-model") is True
+def test_rule_accepts_two_digit_minor():
+    assert supports_prompt_cache_breakpoints("gpt-5.10") is True
+
+
+def test_rule_rejects_unversioned_openai_name():
+    assert supports_prompt_cache_breakpoints("openai/some-new-model") is False
 
 
 def test_rule_is_case_insensitive():
