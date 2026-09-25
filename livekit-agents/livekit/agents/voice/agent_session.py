@@ -705,6 +705,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
         self._persisted: store.StoredSession | None = None
+        self._resumed = False
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -824,6 +825,15 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def persisted(self) -> store.StoredSession | None:
         """The persisted session, as passed to ``start(persist=...)``; None if none."""
         return self._persisted
+
+    @property
+    def resumed(self) -> bool:
+        """Whether the start picked the stored session up where it left off.
+
+        A resumed agent is not entered again, so what a returning user hears is the
+        application's to decide, on this flag.
+        """
+        return self._resumed
 
     async def save(self) -> None:
         """Save the session now, as closing it does; a no-op without ``persist``."""
@@ -971,6 +981,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._persisted = persist
         try:
             agent, resumes = await persistence.rehydrate(self, persist, agent)
+            self._resumed = resumes
             return await self._start(
                 agent,
                 capture_run=capture_run,

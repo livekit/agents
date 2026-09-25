@@ -159,6 +159,7 @@ async def test_a_second_start_resumes_the_session(database: Database) -> None:
     )
     first = _session(llm, Userdata(airline="Northwind", rebooked=["NW100"]))
     await first.start(agent=FareDesk(), persist=database.session("s1"))
+    assert not first.resumed
     await first.run(user_input="my flight is NW812")
     history = [item.id for item in first.history.items]
     await first.aclose()
@@ -166,6 +167,7 @@ async def test_a_second_start_resumes_the_session(database: Database) -> None:
     second = _session(llm, Userdata(airline="a fresh seed"))
     agent = FareDesk()
     await second.start(agent=agent, persist=database.session("s1"))
+    assert second.resumed
     assert [item.id for item in second.history.items][: len(history)] == history
     # the stored JSON is loaded into the type of the userdata the handler passed
     assert second.userdata == Userdata(airline="Northwind", rebooked=["NW100"])

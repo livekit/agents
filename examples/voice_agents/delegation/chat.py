@@ -1,7 +1,9 @@
 """A text client for the fare desk: each line you type is a turn, over A2A, with no microphone.
 
-Run it against ``python expert.py dev``. Ending the input says goodbye, which closes the context
-and saves it; the README's "Persistence" section has the drill.
+Run it against ``python expert.py dev``. The desk is the only agent here, so its session is the
+conversation's front session and the conversation id doubles as the A2A context id: one id to
+keep. Ending the input says goodbye, which closes the context and saves it; the README's
+"Persistence" section has the drill.
 """
 
 import argparse
@@ -21,7 +23,6 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--url", default="http://localhost:8321/fare-desk")
     parser.add_argument("--conversation", help="reuse this DB_... conversation")
-    parser.add_argument("--context", help="reuse this A2A context")
     parser.add_argument("--delegate", action="store_true", help="send lines as instructions")
     args = parser.parse_args()
 
@@ -33,9 +34,9 @@ async def main() -> None:
         db = store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **local_key)
         conversation_id = await db.create_database()
         await db.aclose()
-    context_id = args.context or shortuuid("chat-")
+    # with no store the id names only the context, and nothing outlives the desk's memory of it
+    context_id = conversation_id or shortuuid("chat-")
     print(f"conversation {conversation_id or '(not persisted)'}")
-    print(f"context      {context_id}")
 
     client = A2AClient(args.url, context_id=context_id)
     loop = asyncio.get_running_loop()

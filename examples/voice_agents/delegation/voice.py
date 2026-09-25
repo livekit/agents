@@ -19,9 +19,10 @@ Dana Whitfield <dana@example.com> is a Gold member whose Tokyo flight tomorrow i
 the seat moves for nothing. Miguel Ortiz <ortiz@example.com> is on a BASIC fare, which
 cannot be changed or refunded at all. Priya Raman <raman@example.com> holds travel credit.
 
-With agent-db configured and CONVERSATION=DB_... set, the call is saved when it ends: a second
-console run on the same conversation resumes it, and its delegations reach the same desk
-context.
+With agent-db configured, the call is saved when it ends. The conversation comes from the
+caller, as the `conversation_id` attribute of the participant that joins; a caller without one
+starts a new conversation, and a caller that joins with that id resumes it, delegations to the
+same desk context included.
 """
 
 import json
@@ -40,12 +41,13 @@ from livekit.agents import (
     RunContext,
     ToolExecutionUpdatedEvent,
     cli,
+    inference,
     store,
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
 from livekit.agents.llm import ToolFlag, function_tool
-from livekit.plugins import openai
+from livekit.plugins import openai  # noqa
 
 logger = logging.getLogger("voice")
 
@@ -149,11 +151,10 @@ async def entrypoint(ctx: JobContext) -> None:
         # one delegate per session: the session closes it when the call ends, which is
         # what tells the desk it can drop this context rather than wait for it to idle
         delegate={"delegate": A2ADelegate(FARE_DESK_URL), "announce": False},
-        llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
-        # llm=inference.LLM("openai/gpt-4.1-mini"),
-        # stt=inference.STT("deepgram/nova-3", language="multi"),
-        # llm=inference.LLM("google/gemma-4-31b-it"),
-        # tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+        # llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
     @session.on("directive_received")
@@ -200,14 +201,21 @@ async def entrypoint(ctx: JobContext) -> None:
             delegations.discard(update.call_id)
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
+    remote_participant = await ctx.wait_for_participant()
+    conversation_id = remote_participant.attributes.get("conversation_id")
     persisted = None
-    # a real app looks the conversation up from a caller key, such as a phone number
-    if ctx.store is not None and (conversation_id := os.environ.get("CONVERSATION")):
-        # the front session: its id is the conversation's, so every call resumes it
+    if ctx.store is not None:
+        if not conversation_id:
+            conversation_id = await ctx.store.create_database()
+            logger.info(f"start a new conversation: {conversation_id}")
         persisted = ctx.store.session(conversation_id)
+
     await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
-    if persisted is not None and (messages := session.history.messages()):
-        logger.info(f"resumed call on {conversation_id}: {len(messages)} messages back")
+
+    if session.resumed:
+        logger.info(
+            f"resumed call on {conversation_id}: {len(session.history.messages())} messages back"
+        )
         # a resumed agent is not entered again, so what a returning caller hears is up to us
         session.generate_reply(
             instructions="welcome the caller back to Northwind Air and pick up where the "

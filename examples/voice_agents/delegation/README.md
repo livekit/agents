@@ -97,32 +97,34 @@ export LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db
 
 ### The desk drill, with no microphone
 
-`chat.py` is a text client over A2A. It mints a conversation and a context, prints both, and sends each line as a person's turn. Ending its input sends the goodbye (`lk/kind = close`), which closes the desk's context, and so saves it.
+`chat.py` is a text client over A2A. The desk is the only agent in this conversation, so its session is the conversation's front session and the conversation id is the A2A context id: `chat.py` mints one id, prints it, and sends each line as a person's turn. Ending its input sends the goodbye (`lk/kind = close`), which closes the desk's context, and so saves it.
 
 ```bash
 python expert.py dev   # terminal 1
-python chat.py         # terminal 2: prints conversation DB_... and context chat-...
+python chat.py         # terminal 2: prints conversation DB_...
 ```
 
 1. Ask two things that build on each other: _"Hi, I'm dana@example.com. What's the status of my flight to Tokyo tomorrow?"_, then _"What other flights could you put me on that day, and what would the change cost me?"_ The desk quotes the change and keeps the quote on the booking.
 2. End the input with Ctrl-D. The desk closes the context and saves it.
-3. Open it again from a fresh client: `python chat.py --conversation DB_... --context chat-...`, and ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated chat-...: N messages back` and rebooks from the quote it made in the first session.
+3. Open it again from a fresh client: `python chat.py --conversation DB_...`, and ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated DB_...: N messages back` and rebooks from the quote it made in the first session.
 
-`--delegate` sends lines as instructions, the way the phone agent asks.
+`--delegate` sends lines as instructions, the way the phone agent asks. One conversation has one front program: a conversation the desk served directly is not one a phone agent should later open, since the front row would hand the phone agent the desk as its agent.
 
 ### The phone agent drill: a durable tool
 
-`collect_email` on the phone agent is a durable tool: it awaits `EffectCall(GetEmailTask(...))`, so a session closed while the email task runs saves the tool's frame, and the next session resumes the task where the caller left off. `voice_drill.py` runs the phone agent over text with the same delegate and persistence; ending its input closes the session.
+`collect_email` on the phone agent is a durable tool: it awaits `EffectCall(GetEmailTask(...))`, so a session closed while the email task runs saves the tool's frame, and the next session resumes the task where the caller left off. `voice.py` runs on a pipeline model, which is what a durable tool needs to resume.
+
+The phone agent reads the conversation from the caller: the `conversation_id` attribute of the participant that joins. A caller without one gets a new conversation, which the agent creates and logs as `start a new conversation: DB_...`; a caller that joins with that id resumes it. So the drill runs in `dev` mode with a client whose participant carries the attribute, the playground or any client whose token sets `attributes={"conversation_id": "DB_..."}`.
 
 ```bash
-python expert.py dev        # terminal 1
-python voice_drill.py       # terminal 2: prints conversation DB_...
+python expert.py dev   # terminal 1
+python voice.py dev    # terminal 2, then join from a client
 ```
 
-1. Ask for something that needs an address: _"Hi, my flight to Tokyo tomorrow is delayed. Can you move me onto the evening flight?"_ The desk asks for the caller's email, and the phone agent hands over to the email task, which asks for it.
-2. End the input with Ctrl-D while the task is waiting. The session saves with the email task current.
-3. Start it again on the same conversation: `python voice_drill.py --conversation DB_...`. It logs `the AgentTask was awaited from a durable tool, so it resumes`, and the email task is the current agent again, without asking twice.
-4. Give the address: _"It's dana@example.com"_. The task hands back to the restored `collect_email`, which records the caller and returns, and the phone agent delegates the change.
+1. Join with no `conversation_id` attribute, and ask for something that needs an address: _"Hi, my flight to Tokyo tomorrow is delayed. Can you move me onto the evening flight?"_ The desk asks for the caller's email, and the phone agent hands over to the email task, which asks for it. The log names the new conversation.
+2. Hang up while the task is waiting. The session saves with the email task current.
+3. Join again with that id as the `conversation_id` attribute. `session.resumed` is set, so the agent logs `resumed call on DB_...`, welcomes you back instead of running `on_enter`, and the email task is the current agent again, without asking twice.
+4. Give the address. The task hands back to the restored `collect_email`, which records the caller and returns, and the phone agent delegates the change to the same desk context it used before, which the desk loads again.
 
 ### Reading the rows
 
@@ -140,16 +142,6 @@ adb -q "SELECT json_extract(item,'$.call_id') AS call_id, json_extract(item,'$.e
 ```
 
 A desk session names its caller in `parent_session_id`. `lk.task_id` is the A2A task on both sides: the output of each delegate call names the desk task that answered it, and each call and reply of the desk names the task that produced it, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
-
-### The voice half
-
-`voice.py` persists too once it is given a conversation, into the conversation's front session:
-
-```bash
-CONVERSATION=DB_... python voice.py console
-```
-
-Hang up and run it again on the same `CONVERSATION`: the call resumes with what was said before, and its delegations reach the same desk context, which the desk loads again on the first one. A durable tool resumes only on a pipeline model; `voice.py` runs a realtime one.
 
 ## Talking to the desk without a voice agent
 
