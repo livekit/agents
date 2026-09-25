@@ -122,10 +122,15 @@ class _FakeVoiceLive:
                 )
                 return
             item = event["item"]
-            previous = event.get("previous_item_id") or (
-                conn.item_ids[-1] if conn.item_ids else None
-            )
-            conn.item_ids.append(item["id"])
+            anchor = event.get("previous_item_id")
+            if anchor == "root":
+                # the item opens the conversation, which names no predecessor for it
+                conn.item_ids.insert(0, item["id"])
+                previous = None
+            else:
+                previous = anchor or (conn.item_ids[-1] if conn.item_ids else None)
+                index = conn.item_ids.index(previous) + 1 if previous in conn.item_ids else 0
+                conn.item_ids.insert(index, item["id"])
             await conn.send("conversation.item.created", previous_item_id=previous, item=item)
         elif event["type"] == "response.create":
             self._responses += 1
@@ -156,9 +161,12 @@ class _FakeVoiceLive:
             conn.input_audio = 0
             await conn.send("input_audio_buffer.cleared")
 
-    async def commit(self, conn: _Connection) -> None:
-        """Commit the input audio buffer, as requested or as the turn detection of Azure does."""
-        conn.input_audio = 0
+    async def commit(self, conn: _Connection, *, keep: int = 0) -> None:
+        """Commit the input audio buffer, as requested or as the turn detection of Azure does.
+
+        `keep` is the audio that arrived past the commit boundary, which stays buffered.
+        """
+        conn.input_audio = keep
         await conn.send(
             "input_audio_buffer.committed",
             previous_item_id=conn.item_ids[-1] if conn.item_ids else None,
@@ -789,6 +797,77 @@ async def test_committed_audio_is_not_sent_again(voice_live: _FakeVoiceLive) -> 
         assert base64.b64decode(events[0]["audio"]) == _PCM_20MS * 5
 
 
+async def test_automatic_commit_leaves_the_next_turn_in_the_buffer(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        errors: list[llm.RealtimeModelError] = []
+        received: list[Any] = []
+        session.on("error", errors.append)
+        session.on("azure_server_event_received", received.append)
+
+        conn = await _connected(voice_live)
+        # the turn detection of Azure commits a 200ms turn without being asked to
+        for _ in range(10):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 2)
+        await conn.send("input_audio_buffer.speech_started", audio_start_ms=0, item_id="item_turn")
+        await conn.send("input_audio_buffer.speech_stopped", audio_end_ms=200, item_id="item_turn")
+        await voice_live.commit(conn)
+        await _wait_until(lambda: any(e.type == "input_audio_buffer.committed" for e in received))
+
+        # the 80ms that follow are a turn of their own, too short to commit
+        for _ in range(4):
+            session.push_audio(_pcm_frame())
+        session.commit_audio()
+
+        await _wait_until(lambda: voice_live.sent("input_audio_buffer.clear"))
+        await asyncio.sleep(0.05)
+        events = _input_audio(voice_live.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.append",
+            "input_audio_buffer.clear",
+        ]
+        assert base64.b64decode(events[2]["audio"]) == _PCM_20MS * 4
+        assert errors == []
+
+
+async def test_speech_stop_consumes_the_audio_azure_reports(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        received: list[Any] = []
+        session.on("azure_server_event_received", received.append)
+
+        conn = await _connected(voice_live)
+        # 200ms of a turn, then 100ms of the next one goes out before the speech stop,
+        # which travels back while the microphone keeps streaming, reaches the client
+        for _ in range(15):
+            session.push_audio(_pcm_frame())
+        await _wait_until(lambda: len(voice_live.sent("input_audio_buffer.append")) == 3)
+        await conn.send("input_audio_buffer.speech_started", audio_start_ms=0, item_id="item_turn")
+        await conn.send("input_audio_buffer.speech_stopped", audio_end_ms=200, item_id="item_turn")
+        await voice_live.commit(conn, keep=len(_PCM_20MS) * 5)
+        await _wait_until(lambda: any(e.type == "input_audio_buffer.committed" for e in received))
+
+        # the 100ms Azure left in the buffer is the next turn: a new connection starts
+        # from it, whole, and it is long enough to commit rather than be dropped
+        await conn.ws.close()
+        second = await _connected(voice_live, 1)
+        await _wait_until(lambda: _input_audio(second.events))
+        session.commit_audio()
+
+        await _wait_until(lambda: _input_audio(second.events)[1:])
+        events = _input_audio(second.events)
+        assert [e["type"] for e in events] == [
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+        ]
+        assert base64.b64decode(events[0]["audio"]) == _PCM_20MS * 5
+
+
 async def test_audio_sent_again_is_bounded(
     voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1070,6 +1149,39 @@ async def test_reconnect_replays_the_generated_conversation(voice_live: _FakeVoi
         assert [i.id for i in session.chat_ctx.items] == ["item_user", "item_assistant"]
 
 
+async def test_reconnect_replays_an_interrupted_reply(voice_live: _FakeVoiceLive) -> None:
+    async def on_response(conn: _Connection, event: dict[str, Any], response_id: str) -> None:
+        # the reply streams, but never reaches its response.done
+        await _created(conn, response_id, _metadata(event))
+        await _add_message(conn, response_id, "item_reply")
+        await _audio(conn, response_id, "item_reply")
+        await _transcript(conn, response_id, "item_reply", "The answer is forty")
+
+    voice_live.on_response = on_response
+    async with _session(voice_live) as session:
+        received: list[Any] = []
+        session.on("azure_server_event_received", received.append)
+
+        first = await _connected(voice_live)
+        await asyncio.wait_for(session.generate_reply(), 5)
+        await _wait_until(
+            lambda: any(e.type == "response.audio_transcript.delta" for e in received)
+        )
+
+        # the socket drops while the reply is still streaming
+        await first.ws.close()
+
+        second = await _connected(voice_live, 1)
+        await _wait_until(lambda: [e for e in second.events if e["type"] != "session.update"])
+        replayed = [e for e in second.events if e["type"] == "conversation.item.create"]
+        assert [(e["item"]["id"], e["item"]["content"]) for e in replayed] == [
+            ("item_reply", [{"type": "text", "text": "The answer is forty"}])
+        ]
+        assert [(i.id, i.content) for i in session.chat_ctx.items] == [
+            ("item_reply", ["The answer is forty"])
+        ]
+
+
 async def test_reconnect_restores_the_session_configuration(voice_live: _FakeVoiceLive) -> None:
     async with _session(voice_live) as session:
         conn = await _connected(voice_live)
@@ -1220,6 +1332,89 @@ async def test_update_chat_ctx_reports_rejected_items(voice_live: _FakeVoiceLive
         assert [i.id for i in session.chat_ctx.items] == [first.id, second.id, output.id]
         # the rejection surfaced through update_chat_ctx, not as a session error
         assert errors == []
+
+
+async def test_update_chat_ctx_inserts_a_prepended_item_at_the_root(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        conn = await _connected(voice_live)
+        chat_ctx = llm.ChatContext.empty()
+        second = chat_ctx.add_message(role="user", content="second")
+        await session.update_chat_ctx(chat_ctx)
+
+        # the caller puts a message before the history Azure already holds
+        chat_ctx = session.chat_ctx.copy()
+        first = llm.ChatMessage(role="user", content=["first"])
+        chat_ctx.items.insert(0, first)
+        await session.update_chat_ctx(chat_ctx)
+
+        creates = [e for e in conn.events if e["type"] == "conversation.item.create"]
+        assert [(e["item"]["id"], e.get("previous_item_id")) for e in creates] == [
+            (second.id, "root"),
+            (first.id, "root"),
+        ]
+        # the mirror agrees with the order Azure holds
+        assert conn.item_ids == [first.id, second.id]
+        assert [i.id for i in session.chat_ctx.items] == [first.id, second.id]
+
+
+async def test_update_chat_ctx_appends_a_context_that_drops_history(
+    voice_live: _FakeVoiceLive,
+) -> None:
+    async with _session(voice_live) as session:
+        conn = await _connected(voice_live)
+        chat_ctx = llm.ChatContext.empty()
+        first = chat_ctx.add_message(role="user", content="first")
+        await session.update_chat_ctx(chat_ctx)
+
+        # the caller replaces the history Azure holds, which Azure never deletes: opening
+        # the conversation with the summary would leave the stale turn the newest one
+        summarized = llm.ChatContext.empty()
+        summary = summarized.add_message(role="user", content="a summary")
+        await session.update_chat_ctx(summarized)
+
+        creates = [e for e in conn.events if e["type"] == "conversation.item.create"]
+        assert [(e["item"]["id"], e.get("previous_item_id")) for e in creates] == [
+            (first.id, "root"),
+            (summary.id, None),
+        ]
+        assert conn.item_ids == [first.id, summary.id]
+        assert [i.id for i in session.chat_ctx.items] == [first.id, summary.id]
+
+
+async def test_prepended_item_is_mirrored_after_a_late_confirmation(
+    voice_live: _FakeVoiceLive, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(realtime_model, "_UPDATE_CHAT_CTX_TIMEOUT", 0.2)
+    async with _session(voice_live) as session:
+        conn = await _connected(voice_live)
+        chat_ctx = llm.ChatContext.empty()
+        second = chat_ctx.add_message(role="user", content="second")
+        await session.update_chat_ctx(chat_ctx)
+
+        # the caller gives up before Azure confirms the item it put first
+        voice_live.answer_items = False
+        chat_ctx = session.chat_ctx.copy()
+        first = llm.ChatMessage(role="user", content=["first"])
+        chat_ctx.items.insert(0, first)
+        with pytest.raises(llm.RealtimeError, match="timed out"):
+            await session.update_chat_ctx(chat_ctx)
+
+        # the confirmation still arrives: the mirror keeps the order Azure holds
+        await conn.send(
+            "conversation.item.created",
+            previous_item_id=None,
+            item={
+                "id": first.id,
+                "type": "message",
+                "role": "user",
+                "status": "completed",
+                "content": [{"type": "input_text", "text": "first"}],
+            },
+        )
+        await _wait_until(lambda: len(session.chat_ctx.items) == 2)
+        assert [i.id for i in session.chat_ctx.items] == [first.id, second.id]
 
 
 async def test_update_chat_ctx_times_out_without_confirmation(
@@ -1391,6 +1586,46 @@ async def test_error_events_are_reported(voice_live: _FakeVoiceLive) -> None:
         assert len(errors) == 1
         assert errors[0].recoverable
         assert "boom" in str(errors[0].error)
+
+
+async def test_error_messages_stay_out_of_logs(
+    voice_live: _FakeVoiceLive, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="livekit.plugins.azure")
+    async with _session(voice_live) as session:
+        errors: list[llm.RealtimeModelError] = []
+        session.on("error", errors.append)
+
+        conn = await _connected(voice_live)
+        # Azure quotes the request it rejected, which carries what the user said
+        await conn.send(
+            "error",
+            error={
+                "type": "invalid_request_error",
+                "code": "response_cancel_not_active",
+                "message": "no active response for 'my password is hunter-two'",
+            },
+        )
+        await conn.send(
+            "error",
+            error={
+                "type": "invalid_request_error",
+                "code": "invalid_value",
+                "message": "invalid item: 'my password is hunter-two'",
+            },
+        )
+        await _wait_until(lambda: errors)
+
+    plugin_logs = [r for r in caplog.records if r.name.startswith("livekit.plugins")]
+    assert plugin_logs
+    for record in plugin_logs:
+        # only a `lk.pii.`-marked field may carry it, redaction drops those whole
+        unmarked = {k: v for k, v in vars(record).items() if "pii" not in k.split(".")}
+        assert "hunter-two" not in record.getMessage()
+        assert "hunter-two" not in repr(unmarked)
+    assert any("hunter-two" in str(vars(r).get("lk.pii.error_message", "")) for r in plugin_logs)
+    # the app still sees the message, it is the logs that cannot carry it
+    assert "hunter-two" in str(errors[0].error)
 
 
 async def test_speech_start_leaves_interruption_to_the_agent(voice_live: _FakeVoiceLive) -> None:
