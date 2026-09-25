@@ -31,6 +31,8 @@ def test_the_extension_names_itself_and_its_keys() -> None:
     assert VERBATIM == "https://livekit.io/a2a/ext/agent-session/v1/verbatim"
     assert DIRECTIVE == "https://livekit.io/a2a/ext/agent-session/v1/directive"
     assert a2a.REASON == "https://livekit.io/a2a/ext/agent-session/v1/reason"
+    assert a2a.CONVERSATION == "https://livekit.io/a2a/ext/agent-session/v1/conversation"
+    assert a2a.CALLER == "https://livekit.io/a2a/ext/agent-session/v1/caller"
 
 
 def test_a_card_offers_the_extension_without_requiring_it() -> None:
@@ -42,7 +44,7 @@ def test_a_card_offers_the_extension_without_requiring_it() -> None:
     assert [skill.id for skill in card.skills] == ["delegate"]
 
 
-def _conversation() -> ChatContext:
+def _history() -> ChatContext:
     ctx = ChatContext.empty()
     ctx.add_message(role="user", content="change my Monday flight", id="m1")
     ctx.add_message(
@@ -71,10 +73,10 @@ def _conversation() -> ChatContext:
 
 INPUTS: list[a2a.TaskInput] = [
     a2a.TaskInput(text="hello"),
-    a2a.TaskInput(text="what is the fee?", chat_ctx=_conversation()),
-    a2a.TaskInput(instruction="find the change fee", chat_ctx=_conversation()),
+    a2a.TaskInput(text="what is the fee?", chat_ctx=_history()),
+    a2a.TaskInput(instruction="find the change fee", chat_ctx=_history()),
     # a duplex model delegates without saying anything
-    a2a.TaskInput(instruction="", chat_ctx=_conversation()),
+    a2a.TaskInput(instruction="", chat_ctx=_history()),
     a2a.TaskInput(instruction="look it up", metadata={"customer_id": "c-42", "tier": 2}),
     a2a.TaskInput(text="multi\nline\nturn"),
 ]
@@ -82,7 +84,7 @@ INPUTS: list[a2a.TaskInput] = [
 
 @pytest.mark.parametrize("task_input", INPUTS, ids=lambda i: f"{i.is_delegation}-{i.body[:12]!r}")
 def test_request_round_trip(task_input: a2a.TaskInput) -> None:
-    back = a2a.from_a2a_request(a2a.to_a2a_request(task_input, context_id="sess-1"))
+    back = a2a.from_a2a_request(a2a.to_a2a_request(task_input))
 
     assert back.text == task_input.text
     assert back.instruction == task_input.instruction
@@ -95,12 +97,12 @@ def test_request_round_trip(task_input: a2a.TaskInput) -> None:
 
 def test_request_carries_the_extension_keys() -> None:
     request = a2a.to_a2a_request(
-        a2a.TaskInput(instruction="find it", chat_ctx=_conversation()),
-        context_id="sess-1",
+        a2a.TaskInput(instruction="find it", chat_ctx=_history(), context_id="sess-1"),
         reference_task_ids=["task-open"],
     )
 
     assert request.message.context_id == "sess-1"
+    assert a2a.from_a2a_request(request).context_id == "sess-1"
     assert request.message.message_id
     assert as_dict(request.message.metadata)[KIND] == KIND_DELEGATION
     assert list(request.message.reference_task_ids) == ["task-open"]
@@ -111,10 +113,31 @@ def test_request_carries_the_extension_keys() -> None:
     assert [as_dict(p.metadata)[KIND] for p in data_parts] == [KIND_CHAT_CTX]
 
 
+def test_the_persistence_keys_round_trip_beside_the_kind() -> None:
+    task_input = a2a.TaskInput(
+        instruction="find it", conversation_id="DB_abc", caller_session_id="voice"
+    )
+    request = a2a.to_a2a_request(task_input)
+
+    assert as_dict(request.message.metadata) == {
+        KIND: KIND_DELEGATION,
+        a2a.CONVERSATION: "DB_abc",
+        a2a.CALLER: "voice",
+    }
+    back = a2a.from_a2a_request(request)
+    assert (back.conversation_id, back.caller_session_id) == ("DB_abc", "voice")
+
+    # a person's turn carries them too, and a request without them reads as None
+    turn = a2a.to_a2a_request(a2a.TaskInput(text="hi", conversation_id="DB_abc"))
+    assert as_dict(turn.message.metadata) == {a2a.CONVERSATION: "DB_abc"}
+    plain = a2a.from_a2a_request(a2a.to_a2a_request(a2a.TaskInput(text="hi")))
+    assert (plain.conversation_id, plain.caller_session_id, plain.context_id) == (None,) * 3
+
+
 def test_a_persons_turn_is_not_tagged_a_delegation() -> None:
-    request = a2a.to_a2a_request(a2a.TaskInput(text="hello"), context_id="sess-1")
+    request = a2a.to_a2a_request(a2a.TaskInput(text="hello"))
     assert KIND not in as_dict(request.message.metadata)
-    # nothing to share, so no conversation part rides along
+    # nothing to share, so no history part rides along
     assert all(p.WhichOneof("content") == "text" for p in request.message.parts)
 
 
@@ -141,8 +164,8 @@ def test_exactly_one_of_text_and_instruction() -> None:
 
 UPDATES: list[a2a.TaskUpdate] = [
     a2a.TaskUpdate(text="Checking Tuesday."),
-    a2a.TaskUpdate(item=_conversation().items[2]),
-    a2a.TaskUpdate(text="Checking Tuesday.", item=_conversation().items[2]),
+    a2a.TaskUpdate(item=_history().items[2]),
+    a2a.TaskUpdate(text="Checking Tuesday.", item=_history().items[2]),
     a2a.TaskUpdate(text="Your confirmation code is AB12.", verbatim=True),
     a2a.TaskUpdate(state="completed", text="The change fee is $75."),
     a2a.TaskUpdate(state="completed", text="Read this back exactly.", verbatim=True),
@@ -156,9 +179,9 @@ UPDATES: list[a2a.TaskUpdate] = [
     a2a.TaskUpdate(state="canceled", text="the hold was released"),
     a2a.TaskUpdate(state="input-required", text="Which Tuesday flight?"),
     # the answer is an item as well as text, and the caller stores what it renders
-    a2a.TaskUpdate(state="completed", text="The change fee is $75.", item=_conversation().items[1]),
-    a2a.TaskUpdate(state="input-required", text="Which one?", item=_conversation().items[1]),
-    a2a.TaskUpdate(state="canceled", text="the hold was released", item=_conversation().items[2]),
+    a2a.TaskUpdate(state="completed", text="The change fee is $75.", item=_history().items[1]),
+    a2a.TaskUpdate(state="input-required", text="Which one?", item=_history().items[1]),
+    a2a.TaskUpdate(state="canceled", text="the hold was released", item=_history().items[2]),
 ]
 
 
@@ -210,7 +233,7 @@ def test_the_answer_rides_an_artifact_and_the_reason_rides_the_status() -> None:
 
 
 def test_a_working_event_carries_the_item_and_the_relayed_text() -> None:
-    call = _conversation().items[2]
+    call = _history().items[2]
     (status,) = a2a.to_a2a_events(
         a2a.TaskUpdate(text="Checking Tuesday.", item=call),
         task_id="task-1",

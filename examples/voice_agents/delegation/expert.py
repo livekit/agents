@@ -17,16 +17,21 @@ header the binding requires:
               "what flights are there from SFO to Tokyo next Monday?"}]}}'
 
 The desk never speaks to the caller. It works out what is true, hands back the facts and the
-numbers, and says what the phone agent should tell them. It holds the whole conversation:
+numbers, and says what the phone agent should tell them. It holds each context whole:
 one session per contextId, so the second request sees what the first one did.
 
 `ctx.update()` inside a tool reports while the work is still running and releases the turn,
 so the phone agent can say "holding a seat" while the seat is being held. That report is
 relayed as the tool wrote it rather than handed to a model to restate.
+
+With LIVEKIT_AGENTDB_URL set, each context persists as a session in the conversation the caller
+names, saved when the context closes and loaded when it is reopened; see the README's
+"Persistence" section.
 """
 
 import asyncio
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -44,8 +49,9 @@ from livekit.agents import (
     ToolExecutionUpdatedEvent,
     cli,
     inference,
+    store,
 )
-from livekit.agents.a2a import REQUEST_ID_KEY, A2ASessionContext
+from livekit.agents.a2a import TASK_ID_KEY, A2ASessionContext
 from livekit.agents.llm import ToolFlag, function_tool
 
 logger = logging.getLogger("fare-desk")
@@ -54,9 +60,26 @@ logging.getLogger("sse_starlette").setLevel(logging.INFO)
 
 load_dotenv()
 
-# pinned, because voice.py needs a fixed address to reach: the port otherwise defaults to a
-# random one in dev
-server = AgentServer(port=8321)
+# without agent-db the desk keeps contexts in memory, and a closed one is gone
+AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
+# devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
+# todo: devLocal should accept the project key; until then a local agent-db takes its own
+LOCAL_KEY = (
+    {"api_key": "devkey", "api_secret": "secret"}
+    if AGENTDB_URL and "localhost" in AGENTDB_URL
+    else {}
+)
+
+server = AgentServer(
+    # pinned, because voice.py needs a fixed address to reach: the port otherwise defaults to
+    # a random one in dev
+    port=8321,
+    store=(
+        store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
+        if AGENTDB_URL
+        else None
+    ),
+)
 
 
 # cheapest to dearest — the order the rules compare buckets in
@@ -158,10 +181,11 @@ class Airline:
     bookings: dict[str, Booking]
     # every day of the timetable is identical until someone touches it, so a day's
     # inventory is opened lazily and only the days in play are ever held
-    departures: dict[tuple[str, str], Departure] = field(default_factory=dict)
+    departures: dict[str, Departure] = field(default_factory=dict)
 
     def departure(self, route: Route, day: str) -> Departure:
-        key = (route.flight_no, day)
+        # a string key, so the airline persists as readable JSON
+        key = f"{route.flight_no}@{day}"
         if key not in self.departures:
             self.departures[key] = Departure(route, day, dict(route.seats))
         return self.departures[key]
@@ -844,7 +868,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
     def _on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
         if ev.item.type != "message":
             return
-        # the conversation frames the work, so it takes no task id: what came in at the top,
+        # messages frame the work, so they take no task id: what came in at the top,
         # what went back at the bottom, and the task's own lines in between
         _trace("", "▶" if ev.item.role == "user" else "◀", ev.item.text_content, limit=200)
 
@@ -853,7 +877,7 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
         update = ev.update
         if update.type == "tool_call_started":
             call = update.function_call
-            task_id = call.extra.get(REQUEST_ID_KEY, "")
+            task_id = call.extra.get(TASK_ID_KEY, "")
             calls[call.call_id] = (task_id, call.name)
             _trace(task_id, "→", f"{call.name}({call.arguments})")
             return
@@ -867,8 +891,12 @@ async def fare_desk(ctx: A2ASessionContext) -> None:
             task_id, name = calls.pop(update.call_id, ("", "?"))
             _trace(task_id, "←", f"{update.status}: {update.message}")
 
-    await session.start(agent=FareDesk())
-    # TODO(v1): runs in the server process; the same handler moves to a job process with #4337
+    # the caller names the conversation; this context is one session in it, under the caller's
+    await session.start(agent=FareDesk(), persist=ctx.persisted)
+    if ctx.persisted is not None and (messages := session.history.messages()):
+        # a fresh session has said nothing yet, so any message here came back from the store
+        _trace("", "↺", f"rehydrated {ctx.context_id}: {len(messages)} messages back", limit=200)
+    # todo: the expert runs in the server process; a job process per context is planned
     ctx.attach(session)
 
 

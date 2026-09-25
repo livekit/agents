@@ -1,0 +1,84 @@
+"""A conversation database's schema, versioned in ``_meta`` and migrated forward on open.
+
+A database outlives the release that wrote it, so a change is a new migration appended below,
+never an edit to an old one.
+"""
+
+from __future__ import annotations
+
+from .base import Executor, Statement, StoreError
+
+SCHEMA_VERSION = 1
+
+MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        """CREATE TABLE sessions (
+            session_id TEXT PRIMARY KEY,
+            parent_session_id TEXT,
+            endpoint TEXT,
+            current_agent_id TEXT,
+            userdata TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            closed_at REAL,
+            extra TEXT
+        )""",
+        "CREATE INDEX sessions_parent ON sessions (parent_session_id, endpoint)",
+        """CREATE TABLE chat_items (
+            session_id TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            item TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (session_id, owner, item_id)
+        )""",
+        """CREATE TABLE agents (
+            session_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            cls TEXT NOT NULL,
+            parent_agent_id TEXT,
+            state TEXT,
+            durable_state BLOB,
+            PRIMARY KEY (session_id, agent_id)
+        )""",
+    ],
+}
+
+
+class SchemaVersionError(Exception):
+    """The database was written by a newer framework than this one."""
+
+
+async def migrate(executor: Executor) -> int:
+    """Bring a database up to ``SCHEMA_VERSION`` and return the version it was found at."""
+    await executor.exec("CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT)")
+    found = 0
+    async for row in executor.query("SELECT value FROM _meta WHERE key = 'schema_version'"):
+        found = int(str(row["value"]))
+    if found > SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"the database is at schema version {found}, and this framework "
+            f"only knows up to {SCHEMA_VERSION}; upgrade livekit-agents to open it"
+        )
+
+    for version in range(found + 1, SCHEMA_VERSION + 1):
+        statements: list[Statement] = [(sql, ()) for sql in MIGRATIONS[version]]
+        statements.append(
+            (
+                "INSERT OR REPLACE INTO _meta (key, value) VALUES ('schema_version', ?)",
+                (str(version),),
+            )
+        )
+        try:
+            await executor.batch(*statements)
+        except StoreError:
+            # two openers raced and the other one migrated first: its batch is whole or absent
+            async for row in executor.query("SELECT value FROM _meta WHERE key = 'schema_version'"):
+                if int(str(row["value"])) >= version:
+                    break
+            else:
+                raise
+    return found
+
+
+__all__ = ["MIGRATIONS", "SCHEMA_VERSION", "SchemaVersionError", "migrate"]

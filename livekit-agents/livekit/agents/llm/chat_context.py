@@ -383,6 +383,8 @@ class FunctionCallOutput(BaseModel):
     output: str
     is_error: bool
     created_at: float = Field(default_factory=time.time)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    """Extra data for this output, such as what the tool learned only while it ran."""
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
@@ -406,6 +408,8 @@ class AgentConfigUpdate(BaseModel):
     instructions: str | None = None
     tools_added: list[str] | None = None
     tools_removed: list[str] | None = None
+    tools: list[str] | None = None
+    """Every tool name in force after the update, so the latest update alone says the set."""
 
     created_at: float = Field(default_factory=time.time)
 

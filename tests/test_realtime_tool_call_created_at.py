@@ -4,7 +4,15 @@ import time
 import pytest
 
 from livekit import rtc
-from livekit.agents import Agent, AgentSession, function_tool, llm, utils
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    FunctionToolsExecutedEvent,
+    RunContext,
+    function_tool,
+    llm,
+    utils,
+)
 
 from .fake_realtime import FakeRealtimeModel, fake_capabilities
 
@@ -152,3 +160,114 @@ async def test_realtime_records_the_call_of_a_tool_that_never_ran() -> None:
         "function_call",
         "function_call_output",
     ]
+
+
+async def test_a_realtime_tool_update_leaves_its_recorded_call_as_it_was() -> None:
+    """The call is recorded when the tool starts, so ``ctx.update()`` must not edit it."""
+    released = asyncio.Event()
+    waited = asyncio.Event()
+    recorded: list[llm.FunctionCall] = []
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self, ctx: RunContext) -> str:
+            recorded.extend(i for i in ctx.session.history.items if i.type == "function_call")
+            extra = [dict(call.extra) for call in recorded]
+            with pytest.raises(RuntimeError, match="circular wait"):
+                await ctx.speech_handle.wait_for_playout()
+            await ctx.update("looking it up")
+            assert [dict(call.extra) for call in recorded] == extra
+            released.set()
+            # once released, the tool no longer holds its speech, so it may wait for it
+            await ctx.speech_handle.wait_for_playout()
+            waited.set()
+            return "ok"
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+
+    async with AgentSession(llm=model) as session:
+        await session.start(ToolAgent())
+
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["text"])
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("Let me look that up.")
+        text_ch.close()
+        audio_ch.close()
+        function_ch.send_nowait(llm.FunctionCall(call_id="call_1", name="lookup", arguments="{}"))
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch, function_stream=function_ch, user_initiated=True
+            )
+        )
+
+        await asyncio.wait_for(released.wait(), timeout=5)
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+        await asyncio.wait_for(waited.wait(), timeout=5)
+
+    assert [call.call_id for call in recorded] == ["call_1"]
+
+
+async def test_a_realtime_tools_executed_handler_edits_outputs_before_they_are_recorded() -> None:
+    """As in the pipeline, ``function_tools_executed`` comes before the outputs are recorded."""
+
+    class ToolAgent(Agent):
+        def __init__(self) -> None:
+            super().__init__(instructions="test")
+
+        @function_tool
+        async def lookup(self) -> str:
+            return "ok"
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    recorded_at_event: list[str] = []
+
+    async with AgentSession(llm=model) as session:
+        await session.start(ToolAgent())
+
+        def on_executed(ev: FunctionToolsExecutedEvent) -> None:
+            recorded_at_event.extend(
+                i.call_id for i in session.history.items if i.type == "function_call_output"
+            )
+            ev.cancel_tool_reply()
+
+        session.on("function_tools_executed", on_executed)
+        speech_handle = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        message_ch.close()
+        function_ch.send_nowait(llm.FunctionCall(call_id="call_1", name="lookup", arguments="{}"))
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch, function_stream=function_ch, user_initiated=True
+            )
+        )
+        await asyncio.wait_for(speech_handle.wait_for_playout(), timeout=5)
+        outputs = [i for i in session.history.items if i.type == "function_call_output"]
+
+    assert recorded_at_event == []
+    assert [(o.call_id, o.reply_required) for o in outputs] == [("call_1", False)]

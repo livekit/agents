@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..a2a import TaskInput, TaskUpdate
+from ..a2a import TASK_ID_KEY, TaskInput, TaskUpdate
 from ..llm.tool_context import FunctionTool, ToolError, function_tool
 
 # imported at runtime: the tool's signature is resolved with get_type_hints() when a call
@@ -71,6 +71,12 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
             metadata=dict(activity._delegation["metadata"]),
         )
 
+        if (persisted := session.persisted) is not None:
+            # these three ids tie the delegation to the stored session
+            task_input.conversation_id = persisted.database_id
+            task_input.caller_session_id = persisted.session_id
+            task_input.context_id = persisted.child_session(handler.endpoint)
+
         # the terminal update leaves the delegation running, holding a session there or an
         # open HTTP stream here, until the stream is closed
         async with handler.submit(task_input) as stream:
@@ -81,6 +87,10 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                     # the stream ended without declaring a state, which is how a delegation
                     # that died mid-flight reaches the caller
                     raise ToolError("the delegation ended without an answer") from None
+                if stream.task_id:
+                    # the outputs from here on name the expert task that answers the call, for a
+                    # dashboard to join; the call itself was recorded before the task existed
+                    ctx._output_extra[TASK_ID_KEY] = stream.task_id
                 if update.state == "working":
                     if not update.text:
                         continue
@@ -110,7 +120,7 @@ def build_delegate_tool(description: str | None = None, *, announce: bool = True
                     return None
                 # completed, canceled and input-required all answer: a cancelled delegation
                 # still says what happened, side effects included, and a question is what the
-                # conversation relays to the user
+                # conversation model relays to the user
                 return update.text
 
     # not CANCELLABLE, since the expert owns its work. duplicates are allowed because the

@@ -18,7 +18,7 @@ from ..utils import aio, shortuuid
 from .codec import from_a2a_request, to_a2a_events
 from .extension import EXTENSION_URI, REASON, agent_card, pb, struct
 from .runner import RequestRun, SessionRunner
-from .types import TaskUpdate
+from .types import TaskInput, TaskUpdate
 
 try:
     from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -40,6 +40,7 @@ except ImportError as e:
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from ..store import SessionStore, StoredSession
     from ..voice.agent_session import AgentSession
 
 AGENT_CARD_PATH = "/.well-known/agent-card.json"
@@ -48,47 +49,103 @@ VERSION_PREFIX = "/v1"
 
 
 class A2ASessionContext:
-    """What an A2A session handler is given: one conversation, and where to put its session.
+    """What an A2A session handler is given: one context, and where to put its session.
 
-    The handler runs once per conversation — build the session, start it, hand it over::
+    The handler runs once per context — build the session, start it, hand it over::
 
         @server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
         async def fare_desk(ctx: A2ASessionContext) -> None:
             session = AgentSession(llm="openai/gpt-4.1")
-            await session.start(agent=FareDesk())
+            await session.start(agent=FareDesk(), persist=ctx.persisted)
             ctx.attach(session)
     """
 
-    def __init__(self, context_id: str) -> None:
+    def __init__(
+        self,
+        context_id: str,
+        *,
+        endpoint: str,
+        conversation_id: str | None = None,
+        caller_session_id: str | None = None,
+        store: SessionStore | None = None,
+    ) -> None:
         self._context_id = context_id
+        self._endpoint = endpoint
+        self._conversation_id = conversation_id
+        self._caller_session_id = caller_session_id
+        self._persisted = (
+            # this context is one session in the caller's conversation, under the caller's
+            store.session(
+                conversation_id,
+                context_id,
+                parent=caller_session_id,
+                endpoint=endpoint,
+            )
+            if store is not None and conversation_id is not None
+            else None
+        )
         self._runner: SessionRunner | None = None
 
     @property
     def context_id(self) -> str:
-        """The conversation. The same handler run answers every request carrying it."""
+        """The context. The same handler run answers every request carrying it."""
         return self._context_id
 
+    @property
+    def endpoint(self) -> str:
+        """The endpoint serving this context, as registered, which a persisted session names."""
+        return self._endpoint
+
+    @property
+    def conversation_id(self) -> str | None:
+        """The caller's conversation, whose database this session persists into."""
+        return self._conversation_id
+
+    @property
+    def caller_session_id(self) -> str | None:
+        """The caller's own session in that conversation, which this one is the child of."""
+        return self._caller_session_id
+
+    @property
+    def persisted(self) -> StoredSession | None:
+        """This context's session in the caller's conversation, for ``start(persist=)``; None
+        when the caller named no conversation or the agent server has no store."""
+        return self._persisted
+
     def attach(self, session: AgentSession) -> None:
-        """Hand the started session to this conversation's runner."""
+        """Hand the started session to this context's runner."""
         if self._runner is not None:
-            raise RuntimeError("a session is already attached to this conversation")
+            raise RuntimeError("a session is already attached to this context")
         self._runner = SessionRunner(session)
 
 
 A2ASessionHandler = Callable[[A2ASessionContext], Coroutine[Any, Any, None]]
 
 
-class _Conversation:
+class _Context:
     """One context id: the handler run that owns its session, and the requests in flight.
 
-    Held until the caller says goodbye or it goes idle.
+    Held until the caller says goodbye or it goes idle; closing it closes the session, so the
+    next request on the context rehydrates a persisted one.
     """
 
-    # TODO(v1): with a session store, an idle conversation persists what it holds and the
-    # next request on that context rehydrates it, which is what moves it into a job process
-
-    def __init__(self, context_id: str, handler: A2ASessionHandler) -> None:
-        self._ctx = A2ASessionContext(context_id)
+    def __init__(
+        self,
+        context_id: str,
+        endpoint: str,
+        handler: A2ASessionHandler,
+        *,
+        conversation_id: str | None,
+        caller_session_id: str | None,
+        store: SessionStore | None,
+    ) -> None:
+        self._ctx = A2ASessionContext(
+            context_id,
+            endpoint=endpoint,
+            conversation_id=conversation_id,
+            caller_session_id=caller_session_id,
+            store=store,
+        )
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
         self.runs: dict[str, RequestRun] = {}
@@ -121,30 +178,47 @@ class _Conversation:
 
 
 class _SessionExecutor(AgentExecutor):
-    """Turns A2A requests into turns of the conversation's session, and back.
+    """Turns A2A requests into turns of the context's session, and back.
 
-    One conversation is one handler run, found or created by ``context_id``.
+    One context is one handler run, found or created by ``context_id``.
     """
 
-    def __init__(self, handler: A2ASessionHandler, *, idle_timeout: float | None) -> None:
+    def __init__(
+        self,
+        handler: A2ASessionHandler,
+        *,
+        endpoint: str,
+        idle_timeout: float | None,
+        store: SessionStore | None = None,
+    ) -> None:
         self._handler = handler
-        self._conversations: dict[str, _Conversation] = {}
+        self._endpoint = endpoint
+        self._store = store
+        self._contexts: dict[str, _Context] = {}
         self._by_task: dict[str, RequestRun] = {}
         self._idle_timeout = idle_timeout
         self._sweeper: asyncio.Task[None] | None = None
         self._binding: DefaultRequestHandler | None = None
 
-    def _conversation(self, context_id: str) -> _Conversation:
-        if context_id not in self._conversations:
-            self._conversations[context_id] = _Conversation(context_id, self._handler)
+    def _context(self, context_id: str, task_input: TaskInput) -> _Context:
+        if context_id not in self._contexts:
+            # the first request of a context says where it persists, and the handler runs on it
+            self._contexts[context_id] = _Context(
+                context_id,
+                self._endpoint,
+                self._handler,
+                conversation_id=task_input.conversation_id,
+                caller_session_id=task_input.caller_session_id,
+                store=self._store,
+            )
         if self._sweeper is None and self._idle_timeout is not None:
             self._sweeper = asyncio.create_task(self._sweep(), name="a2a_idle_sweep")
-        conversation = self._conversations[context_id]
-        conversation.touched_at = time.monotonic()
-        return conversation
+        held = self._contexts[context_id]
+        held.touched_at = time.monotonic()
+        return held
 
     async def _sweep(self) -> None:
-        """Drop conversations nobody came back to.
+        """Drop contexts nobody came back to.
 
         The backstop behind ``lk/kind = close``: a caller that crashes says goodbye to
         nobody, and the session it leaves behind holds a model connection open.
@@ -156,13 +230,13 @@ class _SessionExecutor(AgentExecutor):
 
     async def _drop_idle(self) -> None:
         assert self._idle_timeout is not None
-        for context_id, conversation in list(self._conversations.items()):
-            if conversation.idle_for < self._idle_timeout:
+        for context_id, held in list(self._contexts.items()):
+            if held.idle_for < self._idle_timeout:
                 continue
-            logger.debug("dropping an idle conversation", extra={"context_id": context_id})
-            self._conversations.pop(context_id, None)
+            logger.debug("dropping an idle context", extra={"context_id": context_id})
+            self._contexts.pop(context_id, None)
             with contextlib.suppress(Exception):
-                await conversation.aclose()
+                await held.aclose()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         context_id = context.context_id or shortuuid("ctx-")
@@ -183,33 +257,33 @@ class _SessionExecutor(AgentExecutor):
             request.metadata.CopyFrom(struct(dict(context.metadata)))
         task_input = from_a2a_request(request)
 
-        conversation = self._conversation(context_id)
+        held = self._context(context_id, task_input)
         if task_input.closing:
-            # the caller is done, so the conversation goes now rather than when it times out
-            self._conversations.pop(context_id, None)
-            await conversation.aclose()
+            # the caller is done, so the context goes now rather than when it times out
+            self._contexts.pop(context_id, None)
+            await held.aclose()
             await self._emit(event_queue, TaskUpdate(state="completed"), task_id, context_id)
             return
 
         try:
-            runner = await conversation.runner()
+            runner = await held.runner()
         except Exception as exc:
             logger.exception("the A2A session handler failed", extra={"context_id": context_id})
             failed = TaskUpdate(state="failed", text=str(exc) or type(exc).__name__)
             await self._emit(event_queue, failed, task_id, context_id)
             return
 
-        run = runner.submit(task_input, request_id=task_id)
-        conversation.runs[task_id] = run
+        run = runner.submit(task_input, task_id=task_id)
+        held.runs[task_id] = run
         self._by_task[task_id] = run
         try:
             async with run:
                 async for update in run:
                     await self._emit(event_queue, update, task_id, context_id)
         finally:
-            conversation.runs.pop(task_id, None)
+            held.runs.pop(task_id, None)
             self._by_task.pop(task_id, None)
-            conversation.touched_at = time.monotonic()
+            held.touched_at = time.monotonic()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""
@@ -237,9 +311,9 @@ class _SessionExecutor(AgentExecutor):
         if self._sweeper is not None:
             await aio.cancel_and_wait(self._sweeper)
             self._sweeper = None
-        for conversation in list(self._conversations.values()):
-            await conversation.aclose()
-        self._conversations.clear()
+        for held in list(self._contexts.values()):
+            await held.aclose()
+        self._contexts.clear()
         if self._binding is not None:
             # the binding runs a producer and a consumer per task, and expects to be drained
             await self._binding.aclose()
@@ -254,13 +328,14 @@ def mount(
     description: str,
     name: str | None = None,
     idle_timeout: float | None = None,
+    store: SessionStore | None = None,
 ) -> _SessionExecutor:
     """Register one A2A endpoint on ``app``, under ``/<endpoint>``.
 
     The card route goes on before the binding's own routes: the SDK mounts a catch-all that
     would otherwise shadow the well-known path.
     """
-    executor = _SessionExecutor(handler, idle_timeout=idle_timeout)
+    executor = _SessionExecutor(handler, endpoint=endpoint, idle_timeout=idle_timeout, store=store)
     card_name = name or endpoint
     prefix = f"/{endpoint}"
 

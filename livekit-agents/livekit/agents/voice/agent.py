@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import time
 from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+
+from typing_extensions import Self
 
 from livekit import rtc
 
@@ -35,8 +39,35 @@ if TYPE_CHECKING:
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
+    from .events import RunContext
     from .io import TimedString
     from .turn import TurnDetectionMode
+
+
+# configuration the handler's code supplies on every start, not state to snapshot
+_CONFIGURATION_PARAMETERS = frozenset(
+    {
+        "chat_ctx",
+        "tools",
+        "delegate",
+        "stt",
+        "vad",
+        "llm",
+        "tts",
+        "turn_handling",
+        "tool_handling",
+        "expressive",
+        "min_consecutive_speech_delay",
+        "use_tts_aligned_transcript",
+        "turn_detection",
+        "min_endpointing_delay",
+        "max_endpointing_delay",
+        "allow_interruptions",
+        "mcp_servers",
+        "preserve_function_call_history",
+    }
+)
+_INSTRUCTIONS_KEY = "__instructions__"
 
 
 @dataclass
@@ -509,6 +540,63 @@ class Agent:
         """A node processing the audio from the realtime LLM session before it is played out."""
         return Agent.default.realtime_audio_output_node(self, audio, model_settings)
 
+    def _snapshot_state(self) -> dict[str, Any]:
+        """JSON-serializable constructor arguments that rebuild this agent on resume.
+
+        The default reads each parameter back from the attribute of that name or its underscored
+        twin; a class that does not keep what it takes defines this and ``_from_state``.
+        """
+        state: dict[str, Any] = {}
+        for name, param in inspect.signature(type(self).__init__).parameters.items():
+            if (
+                name == "self"
+                or name in _CONFIGURATION_PARAMETERS
+                or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
+            ):
+                continue
+            for attr in (name, f"_{name}"):
+                if hasattr(self, attr):
+                    value = getattr(self, attr)
+                    break
+            else:
+                if param.default is param.empty:
+                    raise TypeError(f"constructor parameter '{name}' has no matching attribute")
+                continue  # its default rebuilds it
+            if not is_given(value):
+                continue
+            if isinstance(value, Instructions):
+                value = {_INSTRUCTIONS_KEY: [value.common, value.audio, value.text]}
+            try:
+                json.dumps(value)
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"constructor parameter '{name}' holds a {type(value).__name__}, "
+                    "which is not JSON-serializable"
+                ) from None
+            state[name] = value
+        return state
+
+    @classmethod
+    def _from_state(cls, state: dict[str, Any]) -> Self:
+        """Rebuild an agent from what ``_snapshot_state`` returned. Default: ``cls(**state)``."""
+        kwargs: dict[str, Any] = {
+            name: Instructions(
+                value[_INSTRUCTIONS_KEY][0],
+                audio=value[_INSTRUCTIONS_KEY][1],
+                text=value[_INSTRUCTIONS_KEY][2],
+            )
+            if isinstance(value, dict) and _INSTRUCTIONS_KEY in value
+            else value
+            for name, value in state.items()
+        }
+        return cls(**kwargs)
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        # an agent in a durable tool's frame is a reference to the rehydrated session's instance
+        from .durable_tool import _lookup_rehydrated_agent
+
+        return (_lookup_rehydrated_agent, (type(self), self._id))
+
     def _get_activity_or_raise(self) -> AgentActivity:
         """Get the current activity context for this task (internal)"""
         if self._activity is None:
@@ -928,6 +1016,8 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         self._preserve_function_call_history = preserve_function_call_history
 
         self._old_agent: Agent | None = None
+        # set on resume when a durable tool's restored frame awaits this task again
+        self._rehydrated = False
 
     def done(self) -> bool:
         return self.__fut.done()
@@ -961,16 +1051,35 @@ class AgentTask(Agent, Generic[TaskResult_T]):
         #    session._close_soon(reason=CloseReason.TASK_COMPLETED, drain=True)
 
     async def __await_impl(self) -> TaskResult_T:
-        if self.__started:
-            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
-
-        self.__started = True
-
         current_task = asyncio.current_task()
         if current_task is None:
             raise RuntimeError(
                 f"{self.__class__.__name__} must be executed inside an async context"
             )
+
+        if self._rehydrated and self._old_agent is not None:
+            # a restored frame awaits the task again: it is already the current agent, so
+            # this waits for its result and hands back to the agent that awaited it
+            from .agent_activity import _SpeechHandleContextVar
+
+            self._rehydrated = False
+            self.__started = True
+            resumed_handle = _SpeechHandleContextVar.get(None)
+            self.__inactive_ev.clear()
+            try:
+                return await asyncio.shield(self.__fut)
+            finally:
+                await self.__switch_to_old_agent(
+                    old_agent=self._old_agent,
+                    session=self.session,
+                    suspended_handles=[resumed_handle] if resumed_handle else [],
+                )
+                self.__inactive_ev.set()
+
+        if self.__started:
+            raise RuntimeError(f"{self.__class__.__name__} is not re-entrant, await only once")
+
+        self.__started = True
 
         task_info = _get_activity_task_info(current_task)
         if not task_info or not task_info.inline_task:
@@ -1081,44 +1190,58 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 return await asyncio.shield(self.__fut)
 
             finally:
-                # run_state could have changed after self.__fut
-                run_state = session._global_run_state
-
-                # re-watch the suspended handles so the resumed parent activity
-                # is tracked by the current RunResult again
-                if run_state and not run_state.done():
-                    for handle in suspended_handles:
-                        run_state._watch_handle(handle)
-
-                if pending_on_enter_task:
-                    try:
-                        await asyncio.shield(pending_on_enter_task)
-                    except BaseException:
-                        logger.exception("error in on_enter task of agent %s", self.id)
-
-                if session._closing and self._activity is None:
-                    # the activity never started (session closing), skip the handoff;
-                    # the close path owns the previous activity
-                    pass
-                elif session.current_agent != self:
-                    logger.warning(
-                        f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
-                        "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
-                    )
-                    await old_activity.aclose()
-                else:
-                    merged_chat_ctx = old_agent.chat_ctx.merge(
-                        self.chat_ctx,
-                        exclude_function_call=not self._preserve_function_call_history,
-                        exclude_instructions=True,
-                    )
-                    # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
-                    old_agent._chat_ctx.items[:] = merged_chat_ctx.items
-
-                    await session._update_activity(
-                        old_agent, new_activity="resume", wait_on_enter=False
-                    )
+                await self.__switch_to_old_agent(
+                    old_agent=old_agent,
+                    session=session,
+                    suspended_handles=suspended_handles,
+                    pending_on_enter_task=pending_on_enter_task,
+                )
                 self.__inactive_ev.set()
+
+    async def __switch_to_old_agent(
+        self,
+        *,
+        old_agent: Agent,
+        session: AgentSession,
+        suspended_handles: list[SpeechHandle | asyncio.Future[Any]],
+        pending_on_enter_task: asyncio.Task[None] | None = None,
+    ) -> None:
+        # run_state could have changed after self.__fut
+        run_state = session._global_run_state
+
+        # re-watch the suspended handles so the resumed parent activity
+        # is tracked by the current RunResult again
+        if run_state and not run_state.done():
+            for handle in suspended_handles:
+                run_state._watch_handle(handle)
+
+        if pending_on_enter_task:
+            try:
+                await asyncio.shield(pending_on_enter_task)
+            except BaseException:
+                logger.exception("error in on_enter task of agent %s", self.id)
+
+        if session._closing and self._activity is None:
+            # the activity never started (session closing), skip the handoff;
+            # the close path owns the previous activity
+            pass
+        elif session.current_agent != self:
+            logger.warning(
+                f"{self.__class__.__name__} completed, but the agent has changed in the meantime. "
+                "Ignoring handoff to the previous agent, likely due to `AgentSession.update_agent` being invoked."
+            )
+            if old_agent._activity is not None:
+                await old_agent._activity.aclose()
+        else:
+            merged_chat_ctx = old_agent.chat_ctx.merge(
+                self.chat_ctx,
+                exclude_function_call=not self._preserve_function_call_history,
+                exclude_instructions=True,
+            )
+            # set the chat_ctx directly, `session._update_activity` will sync it to the rt_session if needed
+            old_agent._chat_ctx.items[:] = merged_chat_ctx.items
+
+            await session._update_activity(old_agent, new_activity="resume", wait_on_enter=False)
 
     def __await__(self) -> Generator[None, None, TaskResult_T]:
         return self.__await_impl().__await__()
@@ -1130,6 +1253,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
 @dataclass
 class _ActivityTaskInfo:
     function_call: llm.FunctionCall | None = None
+    run_ctx: RunContext | None = None
     speech_handle: SpeechHandle | None = None
     inline_task: bool = False
 
@@ -1138,6 +1262,7 @@ def _set_activity_task_info(
     task: asyncio.Task[Any],
     *,
     function_call: NotGivenOr[llm.FunctionCall | None] = NOT_GIVEN,
+    run_ctx: NotGivenOr[RunContext | None] = NOT_GIVEN,
     speech_handle: NotGivenOr[SpeechHandle | None] = NOT_GIVEN,
     inline_task: NotGivenOr[bool] = NOT_GIVEN,
 ) -> None:
@@ -1145,6 +1270,9 @@ def _set_activity_task_info(
 
     if is_given(function_call):
         info.function_call = function_call
+
+    if is_given(run_ctx):
+        info.run_ctx = run_ctx
 
     if is_given(speech_handle):
         info.speech_handle = speech_handle

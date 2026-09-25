@@ -91,7 +91,11 @@ def compute_chat_ctx_diff(old_ctx: ChatContext, new_ctx: ChatContext) -> DiffOps
     old_ids = [m.id for m in old_ctx.items]
     new_ids = [m.id for m in new_ctx.items]
 
-    lcs_ids = set(_compute_lcs(old_ids, new_ids))
+    # an append-only change, the common case, needs no LCS
+    if new_ids[: len(old_ids)] == old_ids:
+        lcs_ids = set(old_ids)
+    else:
+        lcs_ids = set(_compute_lcs(old_ids, new_ids))
     old_ctx_by_id = {item.id: item for item in old_ctx.items}
 
     to_remove = [msg.id for msg in old_ctx.items if msg.id not in lcs_ids]
