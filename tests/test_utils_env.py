@@ -1,7 +1,11 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.utils.env import resolve_env_var
+from livekit.agents.utils.env import resolve_env_int, resolve_env_var
 
 pytestmark = pytest.mark.unit
 
@@ -95,3 +99,48 @@ class TestResolveEnvVar:
             )
             == " "
         )
+
+
+class TestResolveEnvInt:
+    """Contract for the ``LK_*`` debug flags, which are parsed at import time."""
+
+    def test_unset_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("LK_DUMP_TTS", raising=False)
+
+        assert resolve_env_int("LK_DUMP_TTS") == 0
+
+    @pytest.mark.parametrize("raw", ["", " ", "true", "on", "1.5"])
+    def test_unparsable_value_falls_back_instead_of_raising(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        # an empty value is how an unset variable reaches a container, and `int("")` at
+        # import time used to leave the whole package unimportable
+        monkeypatch.setenv("LK_DUMP_TTS", raw)
+
+        assert resolve_env_int("LK_DUMP_TTS", default=3) == 3
+
+    @pytest.mark.parametrize(("raw", "expected"), [("1", 1), ("0", 0), (" 2 ", 2)])
+    def test_integer_values_are_parsed(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ) -> None:
+        monkeypatch.setenv("LK_DUMP_TTS", raw)
+
+        assert resolve_env_int("LK_DUMP_TTS") == expected
+
+
+def test_blank_debug_flag_keeps_the_package_importable() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", "import livekit.agents"],
+        env={
+            **os.environ,
+            "LK_DUMP_TTS": "",
+            "LK_OPENAI_DEBUG": "",
+            "LK_KEYTERMS_DEBUG": "",
+            "LIVEKIT_EVALS_VERBOSE": "",
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
