@@ -3467,7 +3467,7 @@ class AgentActivity(RecognitionHooks):
         # resolve modality-specific instructions for this turn
         turn_modality = speech_handle.input_details.modality
         if instructions is not None:
-            instr_content = (
+            instr_content: list[llm.ChatContent] = (
                 instructions.render_content(modality=turn_modality)
                 if isinstance(instructions, Instructions)
                 else [instructions]
