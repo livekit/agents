@@ -1,6 +1,8 @@
 import pytest
+from pydantic import ValidationError
 
-from livekit.agents.llm import CacheBreakpoint, ChatContext, ImageContent
+from livekit import rtc
+from livekit.agents.llm import AudioContent, CacheBreakpoint, ChatContext, ChatMessage, ImageContent
 
 pytestmark = [pytest.mark.unit, pytest.mark.concurrent]
 
@@ -8,6 +10,8 @@ STATIC = "You are the Riverside Clinic voice agent. Follow the clinic rules."
 DYNAMIC = "Current time: 09:01. Caller number: +15551234567."
 IMAGE_URL = "https://example.com/insurance-card.jpg"
 BREAKPOINT = {"mode": "explicit"}
+IMAGE_PART = {"type": "image_url", "image_url": {"url": IMAGE_URL, "detail": "auto"}}
+INPUT_IMAGE_PART = {"type": "input_image", "image_url": IMAGE_URL, "detail": "auto"}
 
 
 def _ctx(*content: object, role: str = "system") -> ChatContext:
@@ -242,3 +246,126 @@ def test_text_content_ignores_marker():
     message = _ctx(STATIC, CacheBreakpoint(), DYNAMIC).items[0]
 
     assert message.text_content == f"{STATIC}\n{DYNAMIC}"  # type: ignore[union-attr]
+
+
+def test_typeless_dict_content_is_rejected_by_chat_message():
+    with pytest.raises(ValidationError):
+        ChatMessage(role="user", content=[{"text": "hi"}])  # type: ignore[list-item]
+
+
+def test_typeless_dict_content_is_rejected_by_from_dict():
+    data = {"items": [{"type": "message", "role": "user", "content": ["hello", {"text": "world"}]}]}
+
+    with pytest.raises(ValidationError):
+        ChatContext.from_dict(data)
+
+
+def test_marker_dict_with_extra_field_is_rejected():
+    with pytest.raises(ValidationError):
+        ChatMessage(role="user", content=[{"type": "cache_breakpoint", "text": "hi"}])  # type: ignore[list-item]
+
+
+# The literal outputs below are what main produced before CacheBreakpoint existed. Every
+# request goes through the rewritten formatter, so the marker-free path must not drift.
+
+
+def _audio() -> AudioContent:
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00", sample_rate=16000, num_channels=1, samples_per_channel=1
+    )
+    return AudioContent(frame=[frame])
+
+
+def _default_openai(ctx: ChatContext) -> list[dict]:
+    disabled = _openai(ctx, enabled=False)
+    assert _openai(ctx, enabled=True) == disabled
+    return disabled
+
+
+def _default_responses(ctx: ChatContext) -> list[dict]:
+    disabled = _responses(ctx, enabled=False)
+    assert _responses(ctx, enabled=True) == disabled
+    return disabled
+
+
+def test_default_openai_image_only():
+    ctx = _ctx(ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_openai(ctx) == [{"role": "user", "content": [IMAGE_PART]}]
+
+
+def test_default_responses_image_only():
+    ctx = _ctx(ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_responses(ctx) == [{"role": "user", "content": [INPUT_IMAGE_PART]}]
+
+
+def test_default_openai_text_then_image_puts_image_first():
+    ctx = _ctx("a", ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_openai(ctx) == [
+        {"role": "user", "content": [IMAGE_PART, {"type": "text", "text": "a"}]}
+    ]
+
+
+def test_default_responses_text_then_image_puts_image_first():
+    ctx = _ctx("a", ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_responses(ctx) == [
+        {"role": "user", "content": [INPUT_IMAGE_PART, {"type": "input_text", "text": "a"}]}
+    ]
+
+
+def test_default_openai_images_around_text_group_images_first():
+    ctx = _ctx(ImageContent(image=IMAGE_URL), "a", ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_openai(ctx) == [
+        {"role": "user", "content": [IMAGE_PART, IMAGE_PART, {"type": "text", "text": "a"}]}
+    ]
+
+
+def test_default_responses_images_around_text_group_images_first():
+    ctx = _ctx(ImageContent(image=IMAGE_URL), "a", ImageContent(image=IMAGE_URL), role="user")
+
+    assert _default_responses(ctx) == [
+        {
+            "role": "user",
+            "content": [INPUT_IMAGE_PART, INPUT_IMAGE_PART, {"type": "input_text", "text": "a"}],
+        }
+    ]
+
+
+def test_default_openai_audio_is_skipped_and_text_joined_with_newline():
+    ctx = _ctx("a", _audio(), "b", role="user")
+
+    assert _default_openai(ctx) == [{"role": "user", "content": "a\nb"}]
+
+
+def test_default_responses_audio_is_skipped_and_text_joined_with_newline():
+    ctx = _ctx("a", _audio(), "b", role="user")
+
+    assert _default_responses(ctx) == [{"role": "user", "content": "a\nb"}]
+
+
+def test_default_openai_leading_empty_string_adds_no_newline():
+    ctx = _ctx("", "a", role="user")
+
+    assert _default_openai(ctx) == [{"role": "user", "content": "a"}]
+
+
+def test_default_responses_leading_empty_string_adds_no_newline():
+    ctx = _ctx("", "a", role="user")
+
+    assert _default_responses(ctx) == [{"role": "user", "content": "a"}]
+
+
+def test_default_openai_empty_content_is_empty_string():
+    ctx = _ctx(role="user")
+
+    assert _default_openai(ctx) == [{"role": "user", "content": ""}]
+
+
+def test_default_responses_empty_content_is_empty_string():
+    ctx = _ctx(role="user")
+
+    assert _default_responses(ctx) == [{"role": "user", "content": ""}]
