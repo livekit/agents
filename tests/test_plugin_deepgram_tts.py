@@ -5,6 +5,7 @@ import json
 import logging
 from collections import deque
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
 import pytest
@@ -248,3 +249,92 @@ async def test_stream_run_rejects_non_linear16_encoding():
 
     with pytest.raises(ValueError, match="linear16"):
         await stream._run(_FakeEmitter())  # type: ignore[arg-type]
+
+
+# --- speed (v1 / Aura-2) -------------------------------------------------------------
+
+
+class _RecordingSession:
+    """Records the URLs the v1 TTS connects and posts to, without touching the network."""
+
+    def __init__(self) -> None:
+        self.urls: list[str] = []
+
+    async def ws_connect(self, url: str, **kwargs):  # noqa: ANN201
+        self.urls.append(url)
+        return SimpleNamespace(_response=SimpleNamespace(headers={}))
+
+    def post(self, url: str, **kwargs):  # noqa: ANN201
+        self.urls.append(url)
+        raise RuntimeError("stop before sending")
+
+
+async def _request_urls(tts) -> list[str]:  # noqa: ANN001
+    """The WebSocket URL (streaming) and the HTTP URL (synthesize) this TTS would use."""
+    from livekit.agents import APIConnectionError
+    from livekit.plugins.deepgram.tts import ChunkedStream
+
+    await tts._connect_ws(timeout=5.0)
+
+    stream = SimpleNamespace(
+        _tts=tts,
+        _opts=tts._opts,
+        _input_text="hello",
+        _conn_options=SimpleNamespace(timeout=5.0),
+    )
+    with pytest.raises(APIConnectionError):
+        await ChunkedStream._run.__get__(stream)(_FakeEmitter())
+
+    return tts._session.urls
+
+
+async def test_speed_is_sent_on_websocket_and_http():
+    from livekit.plugins.deepgram import TTS
+
+    tts = TTS(api_key="test-key", speed=1.2, http_session=_RecordingSession())  # type: ignore[arg-type]
+
+    ws_url, http_url = await _request_urls(tts)
+
+    assert parse_qs(urlparse(ws_url).query)["speed"] == ["1.2"]
+    assert parse_qs(urlparse(http_url).query)["speed"] == ["1.2"]
+
+
+async def test_speed_is_left_out_unless_set():
+    # Aura-1 models and Aura-2 voices outside English/Spanish reject any `speed`, even 1.0,
+    # so the default must not send it.
+    from livekit.plugins.deepgram import TTS
+
+    tts = TTS(api_key="test-key", model="aura-asteria-en", http_session=_RecordingSession())  # type: ignore[arg-type]
+
+    for url in await _request_urls(tts):
+        assert "speed" not in parse_qs(urlparse(url).query)
+
+
+@pytest.mark.parametrize("speed", [0.69, 1.51])
+async def test_speed_out_of_range_is_rejected(speed: float):
+    from livekit.plugins.deepgram import TTS
+
+    with pytest.raises(ValueError, match="speed"):
+        TTS(api_key="test-key", speed=speed)
+
+    tts = TTS(api_key="test-key")
+    with pytest.raises(ValueError, match="speed"):
+        tts.update_options(speed=speed)
+    assert tts._opts.speed is None
+
+
+async def test_update_options_speed_invalidates_pool():
+    from livekit.plugins.deepgram import TTS
+
+    tts = TTS(api_key="test-key")
+    calls: list[bool] = []
+    tts._pool.invalidate = lambda: calls.append(True)  # type: ignore[method-assign]
+
+    tts.update_options(speed=0.9)
+    assert tts._opts.speed == 0.9
+
+    # None goes back to the model's normal rate by leaving `speed` out again
+    tts.update_options(speed=None)
+    assert tts._opts.speed is None
+
+    assert calls == [True, True]
