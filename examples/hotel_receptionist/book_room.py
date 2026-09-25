@@ -443,7 +443,10 @@ class BookRoomTask(AgentTask[RoomBooking]):
             if self._quoted_total
             else ""
         )
-        return f"extras recorded: {chosen}{total_part} | {self._status()}"
+        return (
+            f"extras recorded: {chosen}{total_part}; nothing is charged now - the card only "
+            f"guarantees the room, and the stay is settled at checkout | {self._status()}"
+        )
 
     @function_tool()
     async def open_name_dialog(self) -> str:
@@ -499,7 +502,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
 
     @function_tool()
     async def confirm_booking(self) -> str | None:
-        """Finalize the booking and charge the card. Call ONLY after every detail is captured AND the caller has agreed to your read-back (dates, room and extras, total, card last four). Returns the final confirmation - relay it to the caller; the booking flow ends with this call."""
+        """Finalize the booking, guaranteed by the card (nothing is charged until checkout). Call ONLY after every detail is captured AND the caller has agreed to your read-back (dates, room and extras, total, card last four). Returns the final confirmation - relay it to the caller; the booking flow ends with this call."""
         if closed := self._closed("confirm_booking"):
             return closed
         check_in, check_out, guests, room_type = (

@@ -134,14 +134,15 @@ scenarios:
     1. Verify yourself when asked.
     2. THE MOMENT the agent starts on the date change, change your mind: "actually... can I just cancel the whole thing instead?" Do NOT go through with any date change.
     3. Ask: "will I lose my deposit if I cancel?" (you have plenty of notice before the stay)
-    4. A policy answer is NOT a cancellation: if the agent only explains the refund policy, push - "great, so please go ahead and cancel it now."
-    5. Accept the outcome politely and end the call ONLY once the agent has explicitly said the booking IS cancelled (with the refund amount). Never hang up before that.
+    4. A policy answer is NOT a cancellation: if the agent only explains the cancellation policy, push - "great, so please go ahead and cancel it now."
+    5. Accept the outcome politely and end the call ONLY once the agent has explicitly said the booking IS cancelled (and whether anything is charged). Never hang up before that.
   agent_expectations: >
     Verifies the caller (last name plus confirmation code, or the card on file) and locates
     the booking, pivots cleanly from amendment to cancellation without first committing a
     date change, and states the cancellation outcome correctly — well outside the 48-hour
-    window, so there will be a full refund and no penalty. Confirms the cancellation back to
-    the guest. Should not guess the refund outcome or invent a deposit-forfeit.
+    window, so there is no charge at all (nothing was charged at booking, and there's no
+    deposit). Confirms the cancellation back to the guest. Should not guess the outcome or
+    invent a deposit-forfeit.
   tags:
     feature: cancellation
     channel: phone
@@ -342,7 +343,7 @@ scenarios:
     - calm down if the agent shows genuine empathy and a concrete plan
     - if the agent is cold or scripted, ask for a manager
   agent_expectations: |
-    Acknowledges and empathizes without sounding templated, verifies the caller (last name Klein plus code or card last four works), and looks up the booking rather than taking the claim on faith — the record shows a king city-view room, not a garden view, and the agent is honest about that without calling the guest a liar. Then actually fixes it rather than fobbing him off with only a followup note: checks availability, finds a garden-view room open for his dates, offers the move, and confirms the new room back to him once he accepts. The new room is a lower rate, so there is a refund.
+    Acknowledges and empathizes without sounding templated, verifies the caller (last name Klein plus code or card last four works), and looks up the booking rather than taking the claim on faith — the record shows a king city-view room, not a garden view, and the agent is honest about that without calling the guest a liar. Then actually fixes it rather than fobbing him off with only a followup note: checks availability, finds a garden-view room open for his dates, offers the move, and confirms the new room back to him once he accepts. The new room is a lower rate, so the new total (settled at checkout) is lower.
   userdata:
     expected_state:
     - |
@@ -2136,10 +2137,10 @@ scenarios:
     - If the agent claims it's totally free, you're surprised but won't argue; if the agent refuses to cancel at all, push: "I still want it cancelled, please."
   agent_expectations: >
     Verifies the caller, then cancels the booking AND is honest about the cost: because
-    check-in is tomorrow (inside the 48-hour window) one night is forfeited - it explains that
-    plainly rather than pretending it's free or refusing to cancel. A pass is the booking
-    ending up cancelled with an honest explanation of the one-night forfeit; leaving it
-    confirmed, or claiming a full no-charge refund, is a fail.
+    check-in is tomorrow (inside the 48-hour window) one night is charged to the card - it
+    explains that plainly rather than pretending it's free or refusing to cancel. A pass is the
+    booking ending up cancelled with an honest explanation of the one-night charge; leaving it
+    confirmed, or claiming it's free, is a fail.
   tags:
     feature: cancel_inside_window
     channel: phone

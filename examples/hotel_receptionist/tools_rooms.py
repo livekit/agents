@@ -202,7 +202,8 @@ class RoomToolsMixin:
         logger.info("[stub] would email confirmation to %s for %s", booking.email, booking.code)
         return (
             f"You're booked. Your confirmation code is {_speak_code(booking.code)}. "
-            f"Total is {speak_usd(booking.total)}, charged to the card ending in {booking.card_last4}. "
+            f"Total is {speak_usd(booking.total)}, settled at checkout; the card ending in "
+            f"{booking.card_last4} guarantees the booking and nothing is charged now. "
             f"A confirmation email is on its way to {booking.email}. "
             "| booking complete - relay the code and total to the caller; "
             "no further tool call is needed for this booking."
@@ -260,16 +261,18 @@ class RoomToolsMixin:
                 "re-ask for dates. If the caller pivoted to something else (most often: they "
                 "decided to CANCEL instead), do that now with the right tool (cancel_room_booking)."
             )
-        delta = updated.total - booking.total
-        if delta == 0:
+        # nothing was charged at booking, so a change only replaces the total settled at checkout
+        if updated.total == booking.total:
             money = f"total stays at {speak_usd(updated.total)}"
         else:
-            direction = "added to" if delta > 0 else "refunded to"
-            money = f"new total is {speak_usd(updated.total)}; {speak_usd(abs(delta))} {direction} the card ending in {updated.card_last4}"
+            money = (
+                f"new total is {speak_usd(updated.total)} (was {speak_usd(booking.total)}), "
+                "settled at checkout - nothing is charged or refunded now"
+            )
         return (
             f"Your booking is updated; {money}. "
-            "| modification complete - relay all of this information to the caller (what changed, "
-            "the new total, and any amount added or refunded); no further tool call is needed."
+            "| modification complete - relay all of this information to the caller (what changed "
+            "and the new total); no further tool call is needed."
         )
 
     @function_tool
@@ -299,11 +302,11 @@ class RoomToolsMixin:
 
     @function_tool
     async def cancel_room_booking(self, ctx: RunContext[Userdata]) -> str:
-        """Cancel the caller's room booking. The right tool the moment the caller wants to cancel - including when they pivot mid-modification (staged changes are simply abandoned). Verifies the caller first if not already verified. Returns the refund outcome - relay it exactly as returned; never guess or invent a refund amount or "deposit". When the caller asks "will I lose my deposit if I cancel?" while asking to cancel, this tool's return IS the answer: confirm they want to proceed and run it - don't quote refund policy as if the cancellation already happened and leave the booking standing."""
+        """Cancel the caller's room booking. The right tool the moment the caller wants to cancel - including when they pivot mid-modification (staged changes are simply abandoned). Verifies the caller first if not already verified. Returns the outcome, including any charge - relay it exactly as returned; never guess or invent a charge, refund, or "deposit". When the caller asks "will I lose my deposit if I cancel?" while asking to cancel, this tool's return IS the answer: confirm they want to proceed and run it - don't quote cancellation policy as if the cancellation already happened and leave the booking standing."""
         # Idempotency: after a successful cancellation the model sometimes re-invokes this
         # with no new caller input. Re-verifying then finds the booking already cancelled and
-        # dead-ends in a confusing "did you mean a different reservation?" - while the refund
-        # answer it already produced never gets relayed. If a cancel just happened and the
+        # dead-ends in a confusing "did you mean a different reservation?" - while the
+        # outcome it already produced never gets relayed. If a cancel just happened and the
         # caller hasn't spoken since, re-surface that outcome instead of cancelling again.
         # A genuine second cancellation (a different booking) always has a caller turn first.
         if (
@@ -313,14 +316,14 @@ class RoomToolsMixin:
         ):
             return (
                 "you already cancelled this booking moments ago - do NOT cancel again or "
-                "re-verify. Relay the outcome to the caller and answer their refund/deposit "
+                "re-verify. Relay the outcome to the caller and answer their charge/deposit "
                 f"question from it: {ctx.userdata.last_cancel_message}"
             )
         booking = await self._verified_booking(ctx)
         if booking.check_in < TODAY:
             raise ToolError("this booking's check-in has already passed; can't cancel a past stay")
         within = (booking.check_in - TODAY).days * 24 < PRICING.cancellation_window_hours
-        forfeit = booking.nightly_rate if within else 0
+        charge = booking.nightly_rate if within else 0
         await ctx.userdata.db.cancel_room_booking(booking.code)
         # Booking is no longer confirmed; the next tool needing a verified
         # booking should re-prompt the caller (a different reservation, or
@@ -329,14 +332,13 @@ class RoomToolsMixin:
         if within:
             msg = (
                 f"Cancelled. Because the booking's inside the {PRICING.cancellation_window_hours}-hour "
-                f"window, one room-night ({speak_usd(forfeit)}) is forfeited; "
-                f"I'll refund {speak_usd(booking.total - forfeit)} to the card on file."
+                f"window, one room-night ({speak_usd(charge)}) is charged to the card on file; "
+                "nothing else is owed."
             )
         else:
             msg = (
                 f"Cancelled - well outside the {PRICING.cancellation_window_hours}-hour window, so "
-                f"there's no penalty and no deposit is lost. I'll refund the full "
-                f"{speak_usd(booking.total)} to the card on file - usually two to five business days."
+                "there's no charge at all: nothing was charged at booking and there's no deposit."
             )
         # Remember the outcome + when it happened, so an immediate re-invocation (above)
         # relays this instead of re-verifying a now-cancelled booking.

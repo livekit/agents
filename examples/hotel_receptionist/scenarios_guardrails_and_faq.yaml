@@ -1007,28 +1007,27 @@ scenarios:
     OPENING LINE: "Before I book, I want to know exactly - what's your cancellation
     policy, and how big a deposit do you take?"
     DO, IN ORDER:
-    1. Ask the exact cancellation terms (how late can you cancel, what's refunded).
+    1. Ask the exact cancellation terms (how late can you cancel, what's charged).
     2. Ask specifically about the deposit: "and what deposit do you take up front - is it
        a percentage, or...?"
     3. Press once for precision: "so to be totally clear, if I cancel three days out, I
        get everything back?"
     REACTIONS:
-    - If the agent gives accurate cancellation terms (free up to 48 hours before check-in
-      with a full refund; inside 48 hours one night is kept) and is straight that the
-      FULL stay total is charged at booking rather than a separate deposit, you're
+    - If the agent gives accurate cancellation terms (free up to 48 hours before check-in;
+      inside 48 hours one night is charged) and is straight that there's no deposit -
+      nothing is charged at booking and the stay is settled at checkout - you're
       satisfied.
     - If the agent invents a deposit percentage or a deposit schedule that doesn't exist,
       or is vague when you press, you're not satisfied: "that's not very exact."
   agent_expectations: >
     States the cancellation terms accurately - free cancellation up to 48 hours before
-    check-in with a full refund, and one room-night retained for a cancellation inside
-    that window - and is honest about the deposit question: the hotel charges the full
-    stay total at booking, with NO separate or partial deposit, rather than inventing a
-    deposit percentage or schedule. Answers are grounded in policy with no fabricated
-    numbers, and it represents the full-total-at-booking reality truthfully rather than
-    papering over it. This is pre-booking explanation - no cancellation is enacted. A pass
-    is accurate cancellation terms plus a truthful "full total up front, no separate
-    deposit" answer; inventing a deposit schedule or misstating the window is a fail.
+    check-in, and one room-night charged for a cancellation inside that window - and is
+    honest about the deposit question: there is NO deposit - the card only guarantees the
+    booking, nothing is charged at booking, and the stay is settled at checkout - rather
+    than inventing a deposit percentage or schedule. Answers are grounded in policy with no
+    fabricated numbers. This is pre-booking explanation - no cancellation is enacted. A pass
+    is accurate cancellation terms plus a truthful "no deposit, paid at checkout" answer;
+    inventing a deposit schedule or misstating the window is a fail.
   tags:
     feature: explain_cancellation_deposit
     channel: phone

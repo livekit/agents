@@ -17,7 +17,7 @@ class Userdata:
     # Departments already transferred to this call - guards against a duplicate transfer
     # row when the agent re-calls transfer_call after the caller's reaction.
     transferred_to: set[str] = field(default_factory=set)
-    # The refund outcome from the last room cancellation, and the caller-turn count when it
+    # The outcome of the last room cancellation, and the caller-turn count when it
     # happened - so a re-invoked cancel (no caller input since) re-surfaces that answer
     # instead of re-verifying into a confusing "already cancelled" dead end.
     last_cancel_message: str = ""
