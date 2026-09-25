@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Coroutine
 from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
+from opentelemetry import context as otel_context
+
 from livekit import rtc
 from livekit.api import TwirpError
 
@@ -13,6 +15,7 @@ from ... import utils
 from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
+from ...telemetry import trace_types, tracer
 from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
 
 if TYPE_CHECKING:
@@ -72,6 +75,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._wait_avatar_join_task: asyncio.Task[None] | None = None
         self._room: rtc.Room | None = None
         self._agent_session: AgentSession | None = None
+        self._start_context: otel_context.Context | None = None
 
     @property
     @abstractmethod
@@ -85,6 +89,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         return "unknown"
 
     async def start(self, agent_session: AgentSession, room: rtc.Room) -> None:
+        self._start_context = otel_context.get_current()
         job_ctx = get_job_context(required=False)
         if job_ctx is not None:
             job_ctx.add_shutdown_callback(self.aclose)
@@ -155,21 +160,36 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         if self._wait_avatar_join_task:
             await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
             self._wait_avatar_join_task = None
+        self._start_context = None
 
     async def _wait_avatar_join(self) -> None:
         assert self._room is not None
 
         started_time = time.time()
-        await utils.wait_for_participant(
-            room=self._room, identity=self.avatar_identity, include_local=True
-        )
-        await utils.wait_for_track_publication(
-            room=self._room,
-            identity=self.avatar_identity,
-            kind=rtc.TrackKind.KIND_VIDEO,
-            include_local=True,
-        )
-        joined_time = time.time()
+        with tracer.detached_span(
+            "avatar_join",
+            context=self._start_context,
+            attributes={trace_types.ATTR_AVATAR_PROVIDER: self.provider},
+        ) as span:
+            try:
+                await utils.wait_for_participant(
+                    room=self._room, identity=self.avatar_identity, include_local=True
+                )
+                await utils.wait_for_track_publication(
+                    room=self._room,
+                    identity=self.avatar_identity,
+                    kind=rtc.TrackKind.KIND_VIDEO,
+                    include_local=True,
+                )
+            except asyncio.CancelledError:
+                span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "cancelled")
+                raise
+            except Exception:
+                span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "failed")
+                raise
+            joined_time = time.time()
+            span.set_attribute(trace_types.ATTR_AVATAR_JOIN_OUTCOME, "completed")
+            span.set_attribute(trace_types.ATTR_AVATAR_JOIN_LATENCY, joined_time - started_time)
         self._emit_metrics(
             AvatarMetrics(
                 timestamp=joined_time,
