@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiobotocore.session import AioSession  # type: ignore
 from botocore.config import Config  # type: ignore
+from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
@@ -322,7 +323,18 @@ class LLMStream(llm.LLMStream):
         try:
             config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
             async with self._session.create_client("bedrock-runtime", config=config) as client:
-                response = await client.converse_stream(**self._opts)
+                try:
+                    response = await client.converse_stream(**self._opts)
+                except ClientError as e:
+                    # Bedrock rejected the request itself, e.g. a ValidationException
+                    # ("This model doesn't support the temperature field."). Keep the HTTP
+                    # status so a 4xx is not retried; throttling and 5xx still are.
+                    meta = e.response.get("ResponseMetadata", {})
+                    raise APIStatusError(
+                        f"aws bedrock llm: error generating content: {e}",
+                        status_code=meta.get("HTTPStatusCode", -1),
+                        request_id=meta.get("RequestId"),
+                    ) from e
                 request_id = response["ResponseMetadata"]["RequestId"]
                 if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                     raise APIStatusError(
@@ -340,6 +352,8 @@ class LLMStream(llm.LLMStream):
                         retryable = False
                         self._event_ch.send_nowait(chat_chunk)
 
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError(
                 f"aws bedrock llm: error generating content: {e}",
