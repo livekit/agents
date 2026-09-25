@@ -1,0 +1,30 @@
+examples/warm-transfer/README.md
+  s_c84637313b0ea6::t_267b9e5d9b80d1 55,76
+examples/warm-transfer/twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_267b9e5d9b80d1 18,30
+livekit-agents/livekit/agents/beta/workflows/warm_transfer.py
+  s_c84637313b0ea6::t_cb6981e24ab535 34-35,542-544,547,567,592,609,614
+  s_c84637313b0ea6::t_267b9e5d9b80d1 8-9,439-445,484,545,548,550-562,572,591,593-594,596-599,606,610,622,636-637
+  s_c84637313b0ea6::t_bb9015b3dc4e4c 6,446-448,515-520,546,549
+  s_c84637313b0ea6::t_3ff9ed06ac7d0d 563
+tests/test_twilio_connector_warm_transfer.py
+  s_c84637313b0ea6::t_bb9015b3dc4e4c 2,120-122,162-166
+  s_c84637313b0ea6::t_cb6981e24ab535 245
+  s_c84637313b0ea6::t_413a1bb9c77fcf 3,6,9,11-12,25,35-38,40-45,48-53,76-79,82-87,107,116-119,123-126,128-129,131,138,140-142,148-153,168-169,175,178-181,183-190,194-196,198-207,213,215,221,229,234-235,240,247-249,251-252,258,260-263,271-274,278,282,290,297,300,302-305,308-310,312-313,315,329,332,340,348,350-355,357,376-377,381,383-385,387,390,392,402,409,414-417,425-426
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "adcf93781726c092e62f095fb11f7e0b82ad977a",
+  "prompts": {},
+  "sessions": {
+    "s_c84637313b0ea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d874-86e3-7642-8295-1ffa240fbd1a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
