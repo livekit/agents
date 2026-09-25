@@ -51,11 +51,21 @@ class Instructions:
             text="Use markdown formatting.",
         )
 
+        # With per-call context kept out of the cached prefix
+        Instructions(
+            "You are a helpful assistant.",
+            dynamic=f"Current time: {now}. Caller: {caller_id}.",
+        )
+
     Rendering::
 
         instr.render()                              # → common text
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
+
+    ``dynamic`` holds text that changes from call to call. It is rendered last, and
+    :meth:`render_content` separates it from the rest with a :class:`CacheBreakpoint`,
+    so a provider that supports prompt cache breakpoints reuses everything before it.
     """
 
     def __init__(
@@ -64,10 +74,12 @@ class Instructions:
         *,
         audio: str | None = None,
         text: str | None = None,
+        dynamic: str | None = None,
     ) -> None:
         self.common = common
         self.audio = audio
         self.text = text
+        self.dynamic = dynamic
 
     def render(
         self,
@@ -82,18 +94,45 @@ class Instructions:
             data: Template variables to fill. Missing placeholders log a warning
                 and are replaced with empty strings.
         """
-        parts = [self.common]
-        if modality is not None:
-            addition = self.audio if modality == "audio" else self.text
-            if addition:
-                parts.append(addition)
-
+        parts = [self._render_static(modality=modality), self._render_dynamic()]
         result = "\n\n".join(p for p in parts if p)
 
         if data:
             result = utils.misc.safe_render(result, data)
 
         return result
+
+    def render_content(
+        self,
+        *,
+        modality: Literal["audio", "text"] | None = None,
+        data: dict[str, object] | None = None,
+    ) -> list[ChatContent]:
+        """Render instructions as message content, with a cache breakpoint before ``dynamic``.
+
+        Without ``dynamic`` this is the single string :meth:`render` returns. With it, the
+        static text and the dynamic text become separate items around a
+        :class:`CacheBreakpoint`; a provider formatter joins them with a newline.
+        """
+        static = self._render_static(modality=modality)
+        dynamic = self._render_dynamic()
+        if data:
+            static = utils.misc.safe_render(static, data)
+            dynamic = utils.misc.safe_render(dynamic, data) if dynamic else dynamic
+        if not dynamic:
+            return [static]
+        return [static, CacheBreakpoint(), dynamic]
+
+    def _render_static(self, *, modality: Literal["audio", "text"] | None) -> str:
+        parts = [self.common]
+        if modality is not None:
+            addition = self.audio if modality == "audio" else self.text
+            if addition:
+                parts.append(addition)
+        return "\n\n".join(p for p in parts if p)
+
+    def _render_dynamic(self) -> str:
+        return self.dynamic or ""
 
     @staticmethod
     def resolve_template(template: str, **kwargs: object) -> Instructions:
@@ -102,6 +141,7 @@ class Instructions:
         If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
         parts are substituted into the matching variant of the result. This is used by
         workflow tasks to build modality-aware instructions from a single template.
+        ``dynamic`` is not templated: the result never carries one.
         """
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
@@ -133,10 +173,12 @@ class Instructions:
         return self.common
 
     def __repr__(self) -> str:
-        return f"Instructions({self.common!r})"
+        if self.dynamic is None:
+            return f"Instructions({self.common!r})"
+        return f"Instructions({self.common!r}, dynamic={self.dynamic!r})"
 
     def __hash__(self) -> int:
-        return hash((self.common, self.audio, self.text))
+        return hash((self.common, self.audio, self.text, self.dynamic))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Instructions):
@@ -144,6 +186,7 @@ class Instructions:
                 self.common == other.common
                 and self.audio == other.audio
                 and self.text == other.text
+                and self.dynamic == other.dynamic
             )
         if isinstance(other, str):
             return self.common == other
@@ -475,7 +518,7 @@ class ChatContext:
             kwargs["extra"] = extra
 
         if isinstance(content, Instructions):
-            message = ChatMessage(role=role, content=[str(content)], **kwargs)
+            message = ChatMessage(role=role, content=content.render_content(), **kwargs)
         elif isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
         else:

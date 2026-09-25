@@ -1230,12 +1230,13 @@ def update_instructions(
     """
     Update the instruction message in the chat context or insert a new one if missing.
 
-    Instructions are resolved to a plain string using the given modality before storage.
+    Instructions are rendered for the given modality before storage; a ``dynamic``
+    section is stored behind a cache breakpoint (see :meth:`Instructions.render_content`).
     """
-    text = (
-        instructions.render(modality=modality)
+    content = (
+        instructions.render_content(modality=modality)
         if isinstance(instructions, Instructions)
-        else instructions
+        else [instructions]
     )
 
     idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
@@ -1244,7 +1245,7 @@ def update_instructions(
             chat_ctx.items[idx] = llm.ChatMessage(
                 id=INSTRUCTIONS_MESSAGE_ID,
                 role="system",
-                content=[text],
+                content=content,
                 created_at=chat_ctx.items[idx].created_at,
             )
         else:
@@ -1254,7 +1255,7 @@ def update_instructions(
     elif add_if_missing:
         chat_ctx.items.insert(
             0,
-            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[text]),
+            llm.ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=content),
         )
 
 
