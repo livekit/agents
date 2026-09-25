@@ -581,21 +581,124 @@ async def test_resampling_drains_the_sdk_resampler_tail(
     assert all(f.sample_rate == 16000 and f.num_channels == 1 for f in resampled)
 
 
-async def test_incomplete_backend_tail_is_not_fabricated_as_final() -> None:
+@pytest.mark.parametrize(
+    ("delta", "hypotheses", "transcript"),
+    [
+        pytest.param("I agree", [" completely"], "I agree", id="retracted-interim"),
+        pytest.param(
+            "I agree", [" completly", " completely"], "I agree completely.", id="corrected-interim"
+        ),
+        pytest.param(
+            "I agree", [" completely", " in part"], "I agree in part.", id="replaced-interim"
+        ),
+        pytest.param("", ["spurious speech"], "", id="empty-final"),
+        pytest.param("I agree", [" completely"], "", id="empty-final-after-delta"),
+    ],
+)
+async def test_acknowledged_final_is_authoritative_and_next_turn_continues(
+    delta: str, hypotheses: list[str], transcript: str
+) -> None:
+    socket = FakeSocket(auto_commit=False)
+    instance, http = provider(socket)
+    first, second = audio_frame(901), audio_frame(83, value=b"\x01\0")
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(first)
+        stream.flush()
+        await socket.wait_sent("input_audio_buffer.commit")
+        socket.transcript("delta", delta=delta)
+        for hypothesis in hypotheses:
+            socket.transcript("intermediate", intermediate=hypothesis)
+        socket.emit({"type": "input_audio_buffer.committed", "item_id": "item-1"})
+        socket.transcript("completed", transcript=transcript)
+        socket.transcript("completed", transcript=transcript)
+        events = []
+        while True:
+            event = await next_event(stream)
+            events.append(event)
+            if event.type == stt.SpeechEventType.END_OF_SPEECH:
+                break
+        assert finals(events) == ([transcript] if transcript else [])
+        interims = [
+            event.alternatives[0].text
+            for event in events
+            if event.type == stt.SpeechEventType.INTERIM_TRANSCRIPT
+        ]
+        assert interims[-1] == delta + hypotheses[-1]
+        assert sum(event.type == stt.SpeechEventType.RECOGNITION_USAGE for event in events) == 1
+        assert not socket.closed and not stream._input_ch.closed
+
+        stream.push_frame(second)
+        stream.end_input()
+        await socket.wait_sent("input_audio_buffer.commit", count=2)
+        socket.complete(item="item-2", text="Next turn.")
+        following = await collect(stream)
+        assert finals(following) == ["Next turn."]
+        assert sum(event.type == stt.SpeechEventType.RECOGNITION_USAGE for event in following) == 1
+    assert socket.commits == [first.data.tobytes(), second.data.tobytes()]
+    http.ws_connect.assert_awaited_once()
+    assert socket.closed
+
+
+async def test_empty_completion_without_interim_does_not_invent_user_text() -> None:
     socket = FakeSocket(auto_commit=False)
     instance, _ = provider(socket)
     async with instance, instance.stream(conn_options=OPTIONS) as stream:
-        stream.push_frame(audio_frame(901))
+        stream.push_frame(audio_frame())
         stream.end_input()
         await socket.wait_sent("input_audio_buffer.commit")
-        socket.transcript("delta", delta="hello ")
-        socket.transcript("intermediate", intermediate="tail")
         socket.emit({"type": "input_audio_buffer.committed", "item_id": "item-1"})
-        socket.transcript("completed", transcript="hello ")
-        with pytest.raises(APIError, match="audio-tail contract") as caught:
+        socket.transcript("completed", transcript="")
+        events = await collect(stream)
+    assert [event.type for event in events] == [stt.SpeechEventType.RECOGNITION_USAGE]
+    assert all(not event.alternatives for event in events)
+    assert socket.closed
+
+
+@pytest.mark.parametrize(
+    ("ack_item", "completed_item"),
+    [(None, "item-1"), ("item-2", "item-1"), ("item-1", "item-2")],
+    ids=["missing-ack", "wrong-ack-item", "wrong-completed-item"],
+)
+async def test_authoritative_final_still_requires_the_matching_commit_ack(
+    ack_item: str | None, completed_item: str
+) -> None:
+    socket = FakeSocket(auto_commit=False)
+    instance, _ = provider(socket)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame())
+        stream.end_input()
+        await socket.wait_sent("input_audio_buffer.commit")
+        socket.transcript("delta", delta="I agree")
+        socket.transcript("intermediate", intermediate=" completely")
+        if ack_item is not None:
+            socket.emit({"type": "input_audio_buffer.committed", "item_id": ack_item})
+        socket.transcript("completed", item=completed_item, transcript="I agree")
+        with pytest.raises(APIError) as caught:
             await collect(stream)
         assert not caught.value.retryable
-    assert len(socket.commits[0]) == 1802
+    assert socket.closed
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"transcript": None}, {"transcript": 123}, {"transcript": []}],
+    ids=["missing", "null", "number", "list"],
+)
+async def test_acknowledged_completed_event_still_requires_string_transcript(
+    payload: dict[str, object],
+) -> None:
+    socket = FakeSocket(auto_commit=False)
+    instance, _ = provider(socket)
+    async with instance, instance.stream(conn_options=OPTIONS) as stream:
+        stream.push_frame(audio_frame())
+        stream.end_input()
+        await socket.wait_sent("input_audio_buffer.commit")
+        socket.emit({"type": "input_audio_buffer.committed", "item_id": "item-1"})
+        socket.transcript("completed", **payload)
+        with pytest.raises(APIError, match="string transcript") as caught:
+            await collect(stream)
+        assert not caught.value.retryable
+    assert socket.closed
 
 
 @pytest.mark.parametrize("ack", [False, True])

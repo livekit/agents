@@ -161,7 +161,9 @@ The client protocol is:
 5. Drain audio, send `input_audio_buffer.commit`, await
    `input_audio_buffer.committed` with `item_id`, then `.completed` with the
    authoritative `transcript`. Only this emits a LiveKit final transcript,
-   followed by end-of-speech. The socket stays open for subsequent utterances.
+   followed by end-of-speech. The completion may correct or retract earlier
+   hypotheses; an empty completion finishes the item without inventing user
+   text. The socket stays open for subsequent utterances.
 
 New deployments must be verified to implement these event fields and
 handshake/commit ordering. A short manual-commit smoke does not exercise every
@@ -188,9 +190,11 @@ audio nor empty commits. No provider clear/keepalive events are invented.
 
 **Tail limitation:** sending every byte and receiving `.completed` proves
 transport completion, not that the backend decoded an incomplete model chunk.
-There is no invented padding rule. An obviously discarded outstanding
-hypothesis fails explicitly rather than being promoted to a fabricated final.
-A live test must verify the full expected transcript, particularly the last
+There is no invented padding rule. The acknowledged completion is authoritative,
+even when it removes an interim hypothesis. Comparing final and revisable text
+cannot distinguish legitimate revision from recognition or audio-tail loss;
+discarded hypotheses are never appended to the final. The opt-in fixture smoke
+must verify the full expected transcript, particularly the last
 word, for both a short clip and a non-chunk-aligned tail. Obtain a documented
 backend drain/flush mechanism if commit does not decode the tail.
 

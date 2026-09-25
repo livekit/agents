@@ -652,12 +652,7 @@ class SpeechStream(stt.RecognizeStream):
             raise APIError(
                 "Microsoft AI STT completed without an acknowledged commit", retryable=False
             )
-        if item.hypothesis.strip() and transcript == item.finalized:
-            raise APIError(
-                "Microsoft AI STT completed with an unfinalized hypothesis; "
-                "verify the endpoint's audio-tail contract",
-                retryable=False,
-            )
+        # A completion can legitimately retract the revisable interim hypothesis.
         if transcript:
             self._speech_event(stt.SpeechEventType.FINAL_TRANSCRIPT, item, transcript)
         self._event_ch.send_nowait(
