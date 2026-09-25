@@ -1,8 +1,9 @@
 import os
 
 from dotenv import load_dotenv
-from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, run
+from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, create_server
 
+from livekit.agents import cli
 from livekit.agents.beta.workflows import WarmTransferResult, WarmTransferTask
 
 load_dotenv()
@@ -32,5 +33,8 @@ class SIPSupportAgent(SupportAgent):
         )
 
 
+server = create_server(SIPSupportAgent)
+
+
 if __name__ == "__main__":
-    run(SIPSupportAgent)
+    cli.run_app(server)

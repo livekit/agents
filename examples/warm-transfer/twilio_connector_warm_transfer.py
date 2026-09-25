@@ -1,8 +1,9 @@
 import os
 
 from dotenv import load_dotenv
-from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, run
+from support_agent import SUMMARY_INSTRUCTIONS, SupportAgent, create_server
 
+from livekit.agents import cli
 from livekit.agents.beta.workflows import TwilioConnectorWarmTransferTask, WarmTransferResult
 
 load_dotenv()
@@ -52,5 +53,8 @@ class TwilioSupportAgent(SupportAgent):
         )
 
 
+server = create_server(TwilioSupportAgent)
+
+
 if __name__ == "__main__":
-    run(TwilioSupportAgent)
+    cli.run_app(server)

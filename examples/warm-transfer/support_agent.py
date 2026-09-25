@@ -6,7 +6,6 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
-    cli,
     room_io,
 )
 from livekit.agents.beta.workflows import WarmTransferResult
@@ -68,7 +67,7 @@ class SupportAgent(Agent):
         raise NotImplementedError
 
 
-def run(create_agent: Callable[[], Agent]) -> None:
+def create_server(create_agent: Callable[[], Agent]) -> AgentServer:
     server = AgentServer()
 
     @server.rtc_session(agent_name="sip-inbound")
@@ -92,7 +91,7 @@ def run(create_agent: Callable[[], Agent]) -> None:
 
     # this example requires explicit dispatch using named agents
     # supervisor will be placed in a separate room, and we do not want it to dispatch the default agent
-    cli.run_app(server)
+    return server
 
 
 INSTRUCTIONS = """
