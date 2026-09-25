@@ -26,7 +26,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import audio as audio_utils, images, is_given
+from livekit.agents.utils import audio as audio_utils, images, is_given, resolve_env_int
 from livekit.plugins.google.realtime.api_proto import ClientEvents, LiveAPIModels, Voice
 
 from ..log import logger
@@ -44,7 +44,7 @@ DEFAULT_IMAGE_ENCODE_OPTIONS = images.EncodeOptions(
     resize_options=images.ResizeOptions(width=1024, height=1024, strategy="scale_aspect_fit"),
 )
 
-lk_google_debug = int(os.getenv("LK_GOOGLE_DEBUG", 0))
+lk_google_debug = resolve_env_int("LK_GOOGLE_DEBUG")
 
 
 class _ChatCtxContent(types.LiveClientContent):

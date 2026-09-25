@@ -89,7 +89,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from livekit.agents.voice.generation import remove_instructions
 
 from .openai_types import RealtimeModels
@@ -126,7 +126,7 @@ NUM_CHANNELS = 1
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_VOICE = "marin"
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Azure OpenAI Realtime API uses old-style (beta) event names.
 # This mapping normalizes them to the current OpenAI GA event names
