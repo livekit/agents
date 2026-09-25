@@ -456,6 +456,7 @@ class BookRoomTask(AgentTask[RoomBooking]):
         r = await beta.workflows.GetNameTask(
             first_name=True,
             last_name=True,
+            verify_spelling=True,
             chat_ctx=speech_only(self.chat_ctx),
             extra_instructions=COMMON_INSTRUCTIONS,
         )
@@ -468,7 +469,9 @@ class BookRoomTask(AgentTask[RoomBooking]):
         if closed := self._closed("open_email_dialog"):
             return closed
         r = await beta.workflows.GetEmailTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
+            verify_spelling=True,
+            chat_ctx=speech_only(self.chat_ctx),
+            extra_instructions=COMMON_INSTRUCTIONS,
         )
         self._email = r.email_address
         return f"email recorded: {self._email} | {self._status()}"
