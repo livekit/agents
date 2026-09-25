@@ -487,3 +487,43 @@ async def test_error_after_input_end_is_not_retried(error_code: int) -> None:
     assert exc_info.value.message == "LiveKit Inference STT returned an error"
     assert exc_info.value.body == {"code": error_code}
     assert exc_info.value.retryable is False
+
+
+async def test_error_the_gateway_marks_not_retryable_is_not_retried() -> None:
+    connection_count = 0
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        nonlocal connection_count
+        connection_count += 1
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if json.loads(msg.data)["type"] == "session.create":
+                await ws.send_json(
+                    {
+                        "type": "error",
+                        "code": 2004,
+                        "message": "customer content must not reach the API error",
+                        "retryable": False,
+                    }
+                )
+        return ws
+
+    async with _gateway(handler) as (base_url, session):
+        stt = _make_stt(base_url, session)
+        errors: list[Exception] = []
+        stt.on("error", lambda event: errors.append(event.error))
+        stream = stt.stream(
+            conn_options=APIConnectOptions(max_retry=3, retry_interval=0.001, timeout=1.0)
+        )
+        try:
+            with pytest.raises(APIError) as exc_info:
+                await asyncio.wait_for(_final_transcripts(stream), timeout=1.0)
+        finally:
+            await stream.aclose()
+
+    assert connection_count == 1
+    assert errors == [exc_info.value]
+    assert exc_info.value.message == "LiveKit Inference STT returned an error"
+    assert exc_info.value.body == {"code": 2004}
+    assert exc_info.value.retryable is False
