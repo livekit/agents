@@ -158,13 +158,26 @@ class TTSv2(tts.TTS):
             "sample_rate": self._opts.sample_rate,
             "mip_opt_out": self._opts.mip_opt_out,
         }
-        ws = await asyncio.wait_for(
-            session.ws_connect(
-                _to_deepgram_url(config, self._opts.base_url, websocket=True),
-                headers={"Authorization": f"Token {self._opts.api_key}"},
-            ),
-            timeout,
-        )
+        try:
+            ws = await asyncio.wait_for(
+                session.ws_connect(
+                    _to_deepgram_url(config, self._opts.base_url, websocket=True),
+                    headers={"Authorization": f"Token {self._opts.api_key}"},
+                ),
+                timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APIConnectionError("failed to connect to deepgram") from None
+        except aiohttp.ClientResponseError as e:
+            # RequestInfo carries the request headers, so chaining this error or
+            # formatting it puts the API key in the exception repr (#6739).
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
+        except Exception as e:
+            raise APIConnectionError(
+                f"failed to connect to deepgram ({type(e).__name__})"
+            ) from None
         ws_headers = {
             k: v for k, v in ws._response.headers.items() if k.startswith("dg-") or k == "Date"
         }

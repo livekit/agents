@@ -78,3 +78,39 @@ async def test_xai_tts_redacts_api_key_from_handshake_error():
         await tts._connect_ws(timeout=5.0, opts=tts._opts)
 
     _assert_redacted(exc_info.value)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_deepgram_tts_redacts_api_key_from_handshake_error():
+    from livekit.plugins.deepgram import TTS
+
+    tts = TTS(
+        api_key=SECRET_API_KEY,
+        http_session=_session_raising(
+            _handshake_error("api.deepgram.com", "Authorization", f"Token {SECRET_API_KEY}")
+        ),
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await tts._connect_ws(timeout=5.0)
+
+    _assert_redacted(exc_info.value)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_deepgram_flux_tts_redacts_api_key_from_handshake_error():
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(
+        api_key=SECRET_API_KEY,
+        http_session=_session_raising(
+            _handshake_error("api.deepgram.com", "Authorization", f"Token {SECRET_API_KEY}")
+        ),
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await tts._connect_ws(timeout=5.0)
+
+    _assert_redacted(exc_info.value)
