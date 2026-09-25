@@ -26,6 +26,7 @@ import enum
 import json
 import os
 import platform
+import struct
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -155,6 +156,28 @@ def _decode_telephony(codec: str, data: bytes) -> bytes:
         raise ValueError(f"_decode_telephony does not support codec: {codec}")
     pcm = table[np.frombuffer(data, dtype=np.uint8)]
     return pcm.astype("<i2").tobytes()
+
+
+def _extract_wav_pcm(audio_bytes: bytes) -> bytes:
+    """If audio_bytes starts with a RIFF/WAVE container, extract the raw PCM data.
+
+    Parses the RIFF chunk structure to locate the 'data' chunk instead of
+    assuming a fixed 44-byte header, handling metadata or extended format chunks.
+    """
+    if len(audio_bytes) < 12 or not audio_bytes.startswith(b"RIFF") or audio_bytes[8:12] != b"WAVE":
+        return audio_bytes
+
+    pos = 12
+    while pos + 8 <= len(audio_bytes):
+        chunk_id = audio_bytes[pos : pos + 4]
+        chunk_size = struct.unpack("<I", audio_bytes[pos + 4 : pos + 8])[0]
+        pos += 8
+        if chunk_id == b"data":
+            end = pos + chunk_size
+            return audio_bytes[pos:end] if end <= len(audio_bytes) else audio_bytes[pos:]
+        pos += chunk_size + (chunk_size % 2)
+
+    return audio_bytes[44:] if len(audio_bytes) >= 44 else audio_bytes
 
 
 # Supported languages in BCP-47 format
@@ -979,12 +1002,25 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._recv_task: asyncio.Task | None = None
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
+        # Streaming WAV parsing state
+        self._wav_header_buf = bytearray()
+        self._wav_is_riff: bool | None = None
+        self._wav_data_remaining: int | None = None
+        self._wav_container_remaining: int | None = None
+
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        self._wav_header_buf.clear()
+        self._wav_is_riff = None
+        self._wav_data_remaining = None
+        self._wav_container_remaining = None
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
         self._server_request_id = None
         mime_type = _codec_to_mime_type(self._opts.output_audio_codec)
+        if self._opts.output_audio_codec == "wav":
+            # Sarvam WebSocket streaming sends headerless raw PCM chunks for "wav"
+            mime_type = "audio/pcm"
         output_emitter.initialize(
             request_id=request_id,
             sample_rate=self._opts.speech_sample_rate,
@@ -1336,6 +1372,151 @@ class SynthesizeStream(tts.SynthesizeStream):
                 body={"raw_message": msg_data},
             ) from e
 
+    @staticmethod
+    def _locate_data_chunk(buf: bytearray) -> tuple[bool, int, int]:
+        """Try to locate the data chunk in buf.
+
+        Returns (found, data_offset, data_size). If found is True,
+        buf[data_offset : data_offset + data_size] contains PCM samples.
+        """
+        if len(buf) < 12:
+            return False, 0, 0
+        if bytes(buf[:4]) != b"RIFF" or bytes(buf[8:12]) != b"WAVE":
+            return True, 0, len(buf)
+
+        pos = 12
+        while pos + 8 <= len(buf):
+            chunk_id = bytes(buf[pos : pos + 4])
+            chunk_size = struct.unpack("<I", buf[pos + 4 : pos + 8])[0]
+            pos += 8
+            if chunk_id == b"data":
+                return True, pos, chunk_size
+            pos += chunk_size + (chunk_size % 2)
+
+        return False, 0, 0
+
+    def _extract_streaming_wav_pcm(self, audio_bytes: bytes) -> bytes:
+        """Extract PCM payload across WebSocket chunks for WAV containers.
+
+        Maintains state across chunks to handle headers split across messages,
+        buffers partial RIFF signatures, tracks container boundaries, and honors
+        data chunk boundaries without searching within metadata.
+        """
+        if self._wav_is_riff is False:
+            return audio_bytes
+
+        if self._wav_data_remaining is not None:
+            if self._wav_data_remaining > 0:
+                sample_bytes = min(len(audio_bytes), self._wav_data_remaining)
+                pcm = audio_bytes[:sample_bytes]
+                self._wav_data_remaining -= sample_bytes
+                if self._wav_container_remaining is not None:
+                    self._wav_container_remaining -= sample_bytes
+                trailing = audio_bytes[sample_bytes:]
+
+                if self._wav_data_remaining == 0:
+                    if (
+                        self._wav_container_remaining is not None
+                        and self._wav_container_remaining > 0
+                    ):
+                        skip_bytes = min(len(trailing), self._wav_container_remaining)
+                        self._wav_container_remaining -= skip_bytes
+                        trailing = trailing[skip_bytes:]
+
+                    if self._wav_container_remaining is None or self._wav_container_remaining == 0:
+                        self._wav_data_remaining = None
+                        self._wav_container_remaining = None
+                        if trailing:
+                            return pcm + self._extract_streaming_wav_pcm(trailing)
+                return pcm
+            else:
+                if self._wav_container_remaining is not None and self._wav_container_remaining > 0:
+                    skip_bytes = min(len(audio_bytes), self._wav_container_remaining)
+                    self._wav_container_remaining -= skip_bytes
+                    trailing = audio_bytes[skip_bytes:]
+                    if self._wav_container_remaining == 0:
+                        self._wav_data_remaining = None
+                        self._wav_container_remaining = None
+                        if trailing:
+                            return self._extract_streaming_wav_pcm(trailing)
+                    return b""
+                else:
+                    self._wav_data_remaining = None
+                    self._wav_container_remaining = None
+                    if audio_bytes:
+                        return self._extract_streaming_wav_pcm(audio_bytes)
+                    return b""
+
+        self._wav_header_buf.extend(audio_bytes)
+        buf = self._wav_header_buf
+
+        if self._wav_is_riff is None:
+            if len(buf) < 4:
+                if b"RIFF"[: len(buf)] == buf:
+                    return b""
+                self._wav_is_riff = False
+                pcm = bytes(buf)
+                self._wav_header_buf.clear()
+                return pcm
+            if bytes(buf[:4]) != b"RIFF":
+                self._wav_is_riff = False
+                pcm = bytes(buf)
+                self._wav_header_buf.clear()
+                return pcm
+            self._wav_is_riff = True
+
+        if self._wav_is_riff is True and not bytes(buf).startswith(b"RIFF"):
+            riff_idx = buf.find(b"RIFF")
+            if riff_idx != -1:
+                del buf[:riff_idx]
+            else:
+                matched = False
+                for prefix_len in (3, 2, 1):
+                    if buf.endswith(b"RIFF"[:prefix_len]):
+                        del buf[:-prefix_len]
+                        matched = True
+                        break
+                if not matched:
+                    buf.clear()
+                return b""
+
+        if len(buf) < 12:
+            return b""
+        if bytes(buf[8:12]) != b"WAVE":
+            self._wav_is_riff = False
+            pcm = bytes(buf)
+            self._wav_header_buf.clear()
+            return pcm
+
+        found, offset, data_size = self._locate_data_chunk(buf)
+        if found:
+            file_size = struct.unpack("<I", buf[4:8])[0]
+            total_riff_size = max(8 + file_size, offset + data_size)
+            self._wav_container_remaining = total_riff_size - offset
+            self._wav_data_remaining = data_size
+
+            payload = bytes(buf[offset:])
+            self._wav_header_buf.clear()
+            sample_bytes = min(len(payload), self._wav_data_remaining)
+            pcm = payload[:sample_bytes]
+            self._wav_data_remaining -= sample_bytes
+            self._wav_container_remaining -= sample_bytes
+            trailing = payload[sample_bytes:]
+            if self._wav_data_remaining == 0:
+                if self._wav_container_remaining > 0:
+                    skip_bytes = min(len(trailing), self._wav_container_remaining)
+                    self._wav_container_remaining -= skip_bytes
+                    trailing = trailing[skip_bytes:]
+
+                if self._wav_container_remaining == 0:
+                    self._wav_data_remaining = None
+                    self._wav_container_remaining = None
+                    if trailing:
+                        return pcm + self._extract_streaming_wav_pcm(trailing)
+            return pcm
+        else:
+            return b""
+
     async def _handle_audio_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle audio message with proper error handling."""
         try:
@@ -1345,9 +1526,12 @@ class SynthesizeStream(tts.SynthesizeStream):
                 return True
 
             audio_bytes = base64.b64decode(audio_data)
+            if self._opts.output_audio_codec == "wav":
+                audio_bytes = self._extract_streaming_wav_pcm(audio_bytes)
             if self._opts.output_audio_codec in _TELEPHONY_CODECS:
                 audio_bytes = _decode_telephony(self._opts.output_audio_codec, audio_bytes)
-            output_emitter.push(audio_bytes)
+            if audio_bytes:
+                output_emitter.push(audio_bytes)
 
             return True
 
