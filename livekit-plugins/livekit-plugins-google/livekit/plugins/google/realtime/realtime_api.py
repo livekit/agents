@@ -552,7 +552,7 @@ class RealtimeSession(llm.RealtimeSession):
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
-            if is_given(self._opts.session_resumption)
+            if is_given(self._opts.session_resumption) and self._opts.session_resumption is not None
             else None
         )
         # chat ctx the handle stands for; None until the first handle arrives
@@ -1267,6 +1267,24 @@ class RealtimeSession(llm.RealtimeSession):
             tool_behavior=self._opts.tool_behavior,
             use_parameters_json_schema=False,
         )
+        resumption_config: types.SessionResumptionConfig | None = None
+        transparent = (
+            self._opts.session_resumption.transparent
+            if self._opts.vertexai
+            and is_given(self._opts.session_resumption)
+            and self._opts.session_resumption is not None
+            else None
+        )
+        if self._session_resumption_handle is not None or (
+            self._opts.vertexai
+            and is_given(self._opts.session_resumption)
+            and self._opts.session_resumption is not None
+        ):
+            resumption_config = types.SessionResumptionConfig(
+                handle=self._session_resumption_handle,
+                transparent=transparent,
+            )
+
         conf = types.LiveConnectConfig(
             response_modalities=self._opts.response_modalities,
             history_config=types.HistoryConfig(initial_history_in_client_content=True)
@@ -1305,9 +1323,7 @@ class RealtimeSession(llm.RealtimeSession):
             tools=tools_config,
             input_audio_transcription=self._opts.input_audio_transcription,
             output_audio_transcription=self._opts.output_audio_transcription,
-            session_resumption=types.SessionResumptionConfig(
-                handle=self._session_resumption_handle
-            ),
+            session_resumption=resumption_config,
         )
 
         if is_given(self._opts.proactivity):

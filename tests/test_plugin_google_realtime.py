@@ -838,6 +838,236 @@ async def test_failed_send_with_a_queued_update_replays_each_item_once(
         await session.aclose()
 
 
+async def test_session_resumption_config_omitted_when_handle_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SessionResumptionConfig must not be passed with handle=None on initial connect (issue #5102)."""
+    from google.genai._live_converters import _LiveConnectParameters_to_mldev
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel().session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is None
+
+        # Verify wire setup payload has no sessionResumption
+        params = types.LiveConnectParameters(
+            model="gemini-2.5-flash-native-audio-preview-12-2025",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_mldev(session._client, params).get("setup", {})
+        assert "sessionResumption" not in setup
+    finally:
+        await session.aclose()
+
+
+async def test_session_resumption_config_included_when_handle_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SessionResumptionConfig must be passed when a resumption handle is present."""
+    from google.genai._live_converters import _LiveConnectParameters_to_mldev
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        session_resumption=types.SessionResumptionConfig(handle="handle-123")
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle == "handle-123"
+
+        # Verify wire setup payload has handle
+        params = types.LiveConnectParameters(
+            model="gemini-2.5-flash-native-audio-preview-12-2025",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_mldev(session._client, params).get("setup", {})
+        assert setup.get("sessionResumption") == {"handle": "handle-123"}
+    finally:
+        await session.aclose()
+
+
+async def test_session_resumption_transparent_omitted_on_gemini_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transparent resumption is unsupported on Gemini Developer API and must not be forwarded."""
+    from google.genai._live_converters import _LiveConnectParameters_to_mldev
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        session_resumption=types.SessionResumptionConfig(transparent=True)
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is None
+
+        # Verify wire setup payload does not raise ValueError and omits sessionResumption
+        params = types.LiveConnectParameters(
+            model="gemini-2.5-flash-native-audio-preview-12-2025",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_mldev(session._client, params).get("setup", {})
+        assert "sessionResumption" not in setup
+    finally:
+        await session.aclose()
+
+
+async def test_session_resumption_transparent_forwarded_on_vertex_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transparent resumption is supported in Vertex AI mode and must be forwarded."""
+    from google.genai._live_converters import _LiveConnectParameters_to_vertex
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        model="gemini-live-2.5-flash-native-audio",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        session_resumption=types.SessionResumptionConfig(transparent=True),
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.transparent is True
+
+        # Verify wire setup payload contains transparent sessionResumption
+        params = types.LiveConnectParameters(
+            model="gemini-live-2.5-flash-native-audio",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_vertex(session._client, params).get("setup", {})
+        assert setup.get("sessionResumption") == {"transparent": True}
+    finally:
+        await session.aclose()
+
+
+async def test_empty_session_resumption_config_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty SessionResumptionConfig() must be omitted to prevent code 1008 rejection."""
+    from google.genai._live_converters import _LiveConnectParameters_to_mldev
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(session_resumption=types.SessionResumptionConfig()).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is None
+
+        # Verify wire setup payload has no sessionResumption
+        params = types.LiveConnectParameters(
+            model="gemini-2.5-flash-native-audio-preview-12-2025",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_mldev(session._client, params).get("setup", {})
+        assert "sessionResumption" not in setup
+    finally:
+        await session.aclose()
+
+
+async def test_empty_session_resumption_config_is_forwarded_on_vertex_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty SessionResumptionConfig() must be preserved on Vertex AI to opt into resumption."""
+    from google.genai._live_converters import _LiveConnectParameters_to_vertex
+    from google.genai.live import AsyncLive
+
+    passed_configs: list[types.LiveConnectConfig] = []
+
+    @asynccontextmanager
+    async def _connect(self: AsyncLive, **kwargs: object) -> AsyncIterator[_FakeLiveSession]:
+        if "config" in kwargs and isinstance(kwargs["config"], types.LiveConnectConfig):
+            passed_configs.append(kwargs["config"])
+        yield _FakeLiveSession()
+
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    monkeypatch.setattr(AsyncLive, "connect", _connect)
+    session = RealtimeModel(
+        model="gemini-live-2.5-flash-native-audio",
+        vertexai=True,
+        project="test-project",
+        location="us-central1",
+        session_resumption=types.SessionResumptionConfig(),
+    ).session()
+    try:
+        while session._active_session is None:
+            await asyncio.sleep(0.01)
+        assert len(passed_configs) == 1
+        assert passed_configs[0].session_resumption is not None
+        assert passed_configs[0].session_resumption.handle is None
+        assert passed_configs[0].session_resumption.transparent is None
+
+        # Verify wire setup payload contains sessionResumption object for Vertex opt-in
+        params = types.LiveConnectParameters(
+            model="gemini-live-2.5-flash-native-audio",
+            config=passed_configs[0],
+        ).model_dump(exclude_none=True)
+        setup = _LiveConnectParameters_to_vertex(session._client, params).get("setup", {})
+        assert "sessionResumption" in setup
+    finally:
+        await session.aclose()
+
+
 @pytest.mark.parametrize(
     ("model", "expected"),
     [
