@@ -23,7 +23,11 @@ import httpx
 
 import openai
 from livekit.agents import llm
-from livekit.agents.inference.llm import LLMStream as _LLMStream
+from livekit.agents.inference.llm import (
+    LLMStream as _LLMStream,
+    PromptCacheOptions,
+    supports_prompt_cache_breakpoints,
+)
 from livekit.agents.llm import (
     ChatContext,
     ToolChoice,
@@ -80,6 +84,8 @@ class _LLMOptions:
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
     prompt_cache_retention: NotGivenOr[PromptCacheRetention]
+    prompt_cache_options: NotGivenOr[PromptCacheOptions]
+    prompt_cache_breakpoints: bool | Literal["auto"]
     extra_body: NotGivenOr[dict[str, Any]]
     extra_headers: NotGivenOr[dict[str, str]]
     extra_query: NotGivenOr[dict[str, str]]
@@ -109,6 +115,8 @@ class LLM(llm.LLM):
         reasoning_effort: NotGivenOr[ReasoningEffort] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         prompt_cache_retention: NotGivenOr[PromptCacheRetention] = NOT_GIVEN,
+        prompt_cache_options: NotGivenOr[PromptCacheOptions] = NOT_GIVEN,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
         extra_body: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
         extra_headers: NotGivenOr[dict[str, str]] = NOT_GIVEN,
         extra_query: NotGivenOr[dict[str, str]] = NOT_GIVEN,
@@ -120,6 +128,11 @@ class LLM(llm.LLM):
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
+
+        ``prompt_cache_breakpoints`` sends each :class:`livekit.agents.llm.CacheBreakpoint` in the
+        chat context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` does so against
+        ``api.openai.com`` for models that accept the field (GPT-5.6 and later); Azure and
+        OpenAI-compatible endpoints opt in with ``True``.
         """
         super().__init__()
 
@@ -145,6 +158,8 @@ class LLM(llm.LLM):
             top_p=top_p,
             verbosity=verbosity,
             prompt_cache_retention=prompt_cache_retention,
+            prompt_cache_options=prompt_cache_options,
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
             extra_body=extra_body,
             extra_headers=extra_headers,
             extra_query=extra_query,
@@ -217,6 +232,7 @@ class LLM(llm.LLM):
         top_p: NotGivenOr[float] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_completion_tokens: NotGivenOr[int] = NOT_GIVEN,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
     ) -> LLM:
         """
         This automatically infers the following arguments from their corresponding environment variables if they are not provided:
@@ -257,6 +273,7 @@ class LLM(llm.LLM):
             top_p=top_p,
             verbosity=verbosity,
             max_completion_tokens=max_completion_tokens,
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
         llm._owns_client = True
         return llm
@@ -1003,6 +1020,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.prompt_cache_retention):
             extra["prompt_cache_retention"] = self._opts.prompt_cache_retention
 
+        if is_given(self._opts.prompt_cache_options):
+            extra["prompt_cache_options"] = self._opts.prompt_cache_options
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -1035,6 +1055,18 @@ class LLM(llm.LLM):
             tools=tools or [],
             conn_options=conn_options,
             extra_kwargs=extra,
+            prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
+        )
+
+    def _resolve_prompt_cache_breakpoints(self) -> bool:
+        setting = self._opts.prompt_cache_breakpoints
+        if isinstance(setting, bool):
+            return setting
+        # Azure deployment names hide the model version and OpenAI-compatible vendors have
+        # not been verified to accept the field, so only api.openai.com resolves on its own
+        return (
+            self._client._base_url.host == "api.openai.com"
+            and supports_prompt_cache_breakpoints(self._opts.model)
         )
 
 
@@ -1051,6 +1083,7 @@ class LLMStream(_LLMStream):
         tools: list[llm.Tool],
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
+        prompt_cache_breakpoints: bool = False,
     ) -> None:
         super().__init__(
             llm,
@@ -1062,4 +1095,5 @@ class LLMStream(_LLMStream):
             tools=tools,
             conn_options=conn_options,
             extra_kwargs=extra_kwargs,
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
