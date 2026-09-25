@@ -204,7 +204,10 @@ class ServerOptions:
     """  # noqa: E501
 
     drain_timeout: int = DRAIN_TIMEOUT
-    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal."""
+    """Number of seconds to wait for current jobs to finish upon receiving TERM or INT signal.
+
+    Defaults to 3600 (1 hour); 0 waits indefinitely.
+    """
     num_idle_processes: int | ServerEnvOption[int] = ServerEnvOption(
         dev_default=0, prod_default=min(math.ceil(get_cpu_monitor().cpu_count()), 4)
     )
@@ -926,7 +929,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         return self._draining
 
     async def drain(self, timeout: NotGivenOr[int | None] = NOT_GIVEN) -> None:
-        """When timeout isn't None, it will raise asyncio.TimeoutError if the processes didn't finish in time."""  # noqa: E501
+        """Raise asyncio.TimeoutError if the processes didn't finish in time.
+
+        A `timeout` of None or 0 waits indefinitely.
+        """
 
         timeout = timeout if is_given(timeout) else self._drain_timeout
 
@@ -950,10 +956,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     for proc in procs:
                         await proc.join()
 
-            if timeout:
-                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
-            else:
+            # `0` and `None` both mean "no deadline": `ServerOptions.drain_timeout` is an int,
+            # so 0 is the only way to ask for an unbounded drain through it.
+            if timeout is None or timeout == 0:
                 await _drain()
+            else:
+                await asyncio.wait_for(_drain(), timeout)  # raises asyncio.TimeoutError on timeout
 
     @utils.log_exceptions(logger=logger)
     async def simulate_job(
