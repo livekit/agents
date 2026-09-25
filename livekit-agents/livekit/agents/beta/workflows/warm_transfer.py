@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
-import logging
 import os
+from base64 import b64encode
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 from xml.sax.saxutils import quoteattr
 
 from livekit import api, rtc
@@ -31,6 +31,8 @@ from ...voice.background_audio import (
 from .utils import WorkflowInstructions
 
 if TYPE_CHECKING:
+    import aiohttp
+
     from ...voice.turn import TurnDetectionMode
 
 
@@ -434,6 +436,16 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
 # Twilio reports no-answer/failure only via async status webhooks (not consumed here),
 # so cap the wait to keep an unanswered transfer from hanging the caller
 _TWILIO_RINGING_TIMEOUT = 30.0
+_TWILIO_API_BASE = "https://api.twilio.com/2010-04-01"
+
+
+class _TwilioAPIError(RuntimeError):
+    def __init__(self, status: int, code: int | None) -> None:
+        self.status = status
+        self.code = code
+        super().__init__(
+            f"Twilio request failed (HTTP {status}, code {code if code is not None else 'unknown'})"
+        )
 
 
 class TwilioConnectorWarmTransferTask(WarmTransferTask):
@@ -469,7 +481,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             twilio_auth_token: Twilio auth token. Defaults to ``TWILIO_AUTH_TOKEN``.
             twilio_call_token: Nonempty ``CallToken`` from the inbound call's validated
                 webhook, letting Twilio place the outbound call from the original
-                caller's number. Requires ``original_caller_number`` and ``twilio>=6.55.0``.
+                caller's number. Requires ``original_caller_number``.
                 Keep it in server-side state for that call, outside prompts, logs and
                 participant attributes.
             original_caller_number: The inbound call's ``From``. Used as the outbound
@@ -500,22 +512,12 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 " `twilio_auth_token` or set the TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
                 " environment variables"
             )
-        if is_given(twilio_call_token) and twilio_call_token:
-            if not is_given(original_caller_number) or not original_caller_number:
-                raise ValueError("twilio_call_token requires original_caller_number")
-            # optional dep; keep SIP path import-free
-            try:
-                from twilio.rest.api.v2010.account.call import CallList  # type: ignore
-            except ImportError as e:
-                raise ImportError(
-                    "Using twilio_call_token requires twilio>=6.55.0. "
-                    "To install, run: pip install 'twilio>=6.55.0'"
-                ) from e
-            if "call_token" not in inspect.signature(CallList.create).parameters:
-                raise RuntimeError(
-                    "Using twilio_call_token requires twilio>=6.55.0. "
-                    "To upgrade, run: pip install 'twilio>=6.55.0'"
-                )
+        if (
+            is_given(twilio_call_token)
+            and twilio_call_token
+            and (not is_given(original_caller_number) or not original_caller_number)
+        ):
+            raise ValueError("twilio_call_token requires original_caller_number")
         super().__init__(
             ringing_timeout=(
                 ringing_timeout if is_given(ringing_timeout) else _TWILIO_RINGING_TIMEOUT
@@ -537,28 +539,37 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
     def _setup_origination(self, **_: object) -> None:
         pass  # dials via the Twilio connector; no SIP config needed
 
+    async def _twilio_request(
+        self, session: aiohttp.ClientSession, path: str, data: dict[str, str]
+    ) -> dict[str, Any]:
+        account_sid = quote(self._twilio_account_sid, safe="")
+        auth = b64encode(f"{self._twilio_account_sid}:{self._twilio_auth_token}".encode()).decode()
+        async with session.post(
+            f"{_TWILIO_API_BASE}/Accounts/{account_sid}{path}",
+            headers={"Authorization": f"Basic {auth}"},
+            data=data,
+            allow_redirects=False,
+        ) as response:
+            try:
+                body = await response.json(content_type=None)
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                body = {}
+            if not 200 <= response.status < 300:
+                code = body.get("code")
+                raise _TwilioAPIError(response.status, code if isinstance(code, int) else None)
+            return body
+
     async def _originate_human_agent(
         self, *, room_name: str, identity: str, room: rtc.Room
     ) -> None:
-        # optional dep; keep SIP path import-free
-        try:
-            from twilio.base.exceptions import TwilioRestException  # type: ignore
-            from twilio.http.http_client import TwilioHttpClient  # type: ignore
-            from twilio.rest import Client  # type: ignore
-        except ImportError as e:
-            raise ImportError(
-                "The 'twilio' package is required for Twilio connector warm transfer "
-                "but is not installed. To fix this, run: pip install twilio"
-            ) from e
-
-        # Older SDKs log request and response bodies, which can contain CallToken.
-        http_client = TwilioHttpClient(logger=logging.Logger(__name__, level=logging.WARNING))
-        client = Client(self._twilio_account_sid, self._twilio_auth_token, http_client=http_client)
+        session = utils.http_context.http_session()
         call_options: dict[str, str] = {}
         dial_from = self._twilio_from_number
         if is_given(self._twilio_call_token) and self._twilio_call_token:
             assert is_given(self._original_caller_number)
-            call_options["call_token"] = self._twilio_call_token
+            call_options["CallToken"] = self._twilio_call_token
             dial_from = self._original_caller_number
 
         job_ctx = get_job_context()
@@ -577,28 +588,30 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         tasks = self._twilio_tasks
 
         async def create_call(from_number: str, **options: str) -> str:
-            call = await asyncio.to_thread(
-                client.calls.create,
-                to=self._phone_number,
-                from_=from_number,
-                twiml=twiml,
-                **options,
+            call = await self._twilio_request(
+                session,
+                "/Calls.json",
+                {"To": self._phone_number, "From": from_number, "Twiml": twiml, **options},
             )
-            return str(call.sid)
+            sid = call.get("sid")
+            if not isinstance(sid, str) or not sid:
+                raise RuntimeError("Twilio call creation returned no call SID")
+            return sid
 
         async def cancel_when_created(pending: asyncio.Task[str]) -> None:
             try:
                 sid = await pending
             except Exception:
                 return
+            path = f"/Calls/{quote(sid, safe='')}.json"
             try:
                 try:
-                    await asyncio.to_thread(client.calls(sid).update, status="canceled")
-                except TwilioRestException as error:
+                    await self._twilio_request(session, path, {"Status": "canceled"})
+                except _TwilioAPIError as error:
                     if error.status != 400 or error.code != 21220:
                         raise
                     # The call was answered before cancellation reached Twilio.
-                    await asyncio.to_thread(client.calls(sid).update, status="completed")
+                    await self._twilio_request(session, path, {"Status": "completed"})
             except Exception:
                 logger.warning("Failed to cancel Twilio call")
 
@@ -606,7 +619,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         try:
             try:
                 await asyncio.shield(pending)
-            except TwilioRestException as error:
+            except _TwilioAPIError as error:
                 # 21210 = unverified From; 21212 = invalid From. Neither creates a call.
                 if (
                     not self._twilio_call_token
@@ -620,14 +633,9 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 pending = tasks.create_task(create_call(self._twilio_from_number))
                 await asyncio.shield(pending)
             await self._wait_for_human_agent(room=room, identity=identity)
-        except BaseException as error:
-            # A synchronous creation request can finish after cancellation.
+        except BaseException:
+            # Twilio can create the call after the transfer is canceled.
             tasks.create_task(cancel_when_created(pending))
-            if isinstance(error, TwilioRestException):
-                code = error.code if isinstance(error.code, int) else "unknown"
-                raise RuntimeError(
-                    f"Twilio call creation failed (HTTP {error.status}, code {code})"
-                ) from None
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:

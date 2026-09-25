@@ -52,7 +52,7 @@ python warm_transfer.py dev
 
 [`twilio_connector_warm_transfer.py`](twilio_connector_warm_transfer.py) dials the
 supervisor through the [Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/)
-and Twilio's Calls API, which needs LiveKit Cloud and the optional `twilio` package.
+and Twilio's Calls API. This requires LiveKit Cloud and Twilio credentials.
 
 As shipped, this example uses the business number. It does not receive or store
 inbound Twilio webhooks. To demonstrate caller-ID forwarding, implement
@@ -73,8 +73,7 @@ result = await TwilioConnectorWarmTransferTask(
 )
 ```
 
-`twilio_call_token` requires `twilio>=6.55.0`; the task raises an upgrade error at
-construction otherwise. If Twilio rejects the preserved caller ID with HTTP 400 and
+If Twilio rejects the preserved caller ID with HTTP 400 and
 error [21210](https://www.twilio.com/docs/api/errors/21210) (From not verified) or
 [21212](https://www.twilio.com/docs/api/errors/21212) (invalid From), the task retries
 once from `twilio_from_number` without the token; other errors are not retried. Keep the
