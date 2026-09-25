@@ -19,6 +19,7 @@ livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
 livekit-plugins-clova = { workspace = true }
+livekit-plugins-convozen = { workspace = true }
 livekit-plugins-deepgram = { workspace = true }
 livekit-plugins-elevenlabs = { workspace = true }
 livekit-plugins-fal = { workspace = true }

@@ -39,6 +39,7 @@ members = [
     "livekit-plugins-cartesia",
     "livekit-plugins-cerebras",
     "livekit-plugins-clova",
+    "livekit-plugins-convozen",
     "livekit-plugins-deepgram",
     "livekit-plugins-did",
     "livekit-plugins-elevenlabs",
@@ -2047,6 +2048,9 @@ clova = [
 codecs = [
     { name = "numpy" },
 ]
+convozen = [
+    { name = "livekit-plugins-convozen" },
+]
 deepgram = [
     { name = "livekit-plugins-deepgram" },
 ]
@@ -2251,6 +2255,7 @@ requires-dist = [
     { name = "livekit-plugins-cartesia", marker = "extra == 'cartesia'", editable = "livekit-plugins/livekit-plugins-cartesia" },
     { name = "livekit-plugins-cerebras", marker = "extra == 'cerebras'", editable = "livekit-plugins/livekit-plugins-cerebras" },
     { name = "livekit-plugins-clova", marker = "extra == 'clova'", editable = "livekit-plugins/livekit-plugins-clova" },
+    { name = "livekit-plugins-convozen", marker = "extra == 'convozen'", editable = "livekit-plugins/livekit-plugins-convozen" },
     { name = "livekit-plugins-deepgram", marker = "extra == 'deepgram'", editable = "livekit-plugins/livekit-plugins-deepgram" },
     { name = "livekit-plugins-did", marker = "extra == 'did'", editable = "livekit-plugins/livekit-plugins-did" },
     { name = "livekit-plugins-elevenlabs", marker = "extra == 'elevenlabs'", editable = "livekit-plugins/livekit-plugins-elevenlabs" },
@@ -2328,7 +2333,7 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.12" },
     { name = "watchfiles", specifier = ">=1.0" },
 ]
-provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
+provides-extras = ["anam", "anthropic", "assemblyai", "asyncai", "avatario", "avatartalk", "aws", "azure", "baseten", "bey", "bithuman", "bland", "browser", "cambai", "cartesia", "cerebras", "clova", "codecs", "convozen", "deepgram", "did", "elevenlabs", "fal", "fireworksai", "fishaudio", "gladia", "gnani", "google", "gradium", "groq", "hamming", "hume", "images", "inworld", "keyframe", "langchain", "lemonslice", "liveavatar", "lmnt", "mcp", "meta", "minimax", "mistralai", "murf", "neuphonic", "nltk", "nvidia", "openai", "palabra", "perplexity", "phonic", "protoface", "resemble", "respeecher", "rime", "rtzr", "runway", "sarvam", "silero", "simli", "simplismart", "slng", "smallestai", "soniox", "spatius", "speechify", "speechmatics", "spitch", "synthesia", "tavus", "trugen", "turn-detector", "ultravox", "upliftai", "vakyam", "xai"]
 
 [[package]]
 name = "livekit-api"
@@ -2883,6 +2888,16 @@ requires-dist = [
     { name = "livekit-agents", editable = "livekit-agents" },
     { name = "pydub", specifier = "~=0.25.1" },
 ]
+
+[[package]]
+name = "livekit-plugins-convozen"
+source = { editable = "livekit-plugins/livekit-plugins-convozen" }
+dependencies = [
+    { name = "livekit-agents", extra = ["codecs"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", extras = ["codecs"], editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-deepgram"
