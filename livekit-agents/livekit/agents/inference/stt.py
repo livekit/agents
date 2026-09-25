@@ -78,6 +78,7 @@ SpeechmaticsModels = Literal[
 ]
 InworldModels = Literal["inworld/inworld-stt-1",]
 GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
+OpenAIModels = Literal["openai/gpt-live-transcribe",]
 
 
 class CartesiaOptions(TypedDict, total=False):
@@ -192,6 +193,16 @@ class GoogleOptions(TypedDict, total=False):
     custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
+class OpenaiOptions(TypedDict, total=False):
+    # Mirrors the transcription config of an OpenAI Realtime transcription session.
+    # https://developers.openai.com/api/docs/guides/realtime-transcription
+    languages: list[str]  # expected input languages; overrides `language`
+    prompt: str  # describes the recording or its setting, up to 1024 characters
+    keywords: list[str]  # literal terms the audio may contain
+    delay: Literal["minimal", "low", "medium", "high", "xhigh"]  # latency vs. accuracy
+    noise_reduction: Literal["near_field", "far_field"]
+
+
 # Diarization is requested via different extra_kwargs keys across
 # providers. Keep this list in one place so adding a new provider is a
 # single-line change and there's no divergence between __init__ and
@@ -251,6 +262,8 @@ def _keyterms_extra_for_model(
         key = "keyterm"
     elif model.startswith("assemblyai/"):
         key = "keyterms_prompt"
+    elif _is_openai_model(model):
+        key = "keywords"
 
     if key is None:
         return None
@@ -345,23 +358,54 @@ def _parse_model_string(model: str) -> tuple[str, NotGivenOr[LanguageCode]]:
     return model, language
 
 
+def _is_openai_model(model: str) -> bool:
+    # a bare "openai" resolves to the provider's default model on the gateway
+    return model == "openai" or model.startswith("openai/")
+
+
+def _needs_client_endpointing(model: NotGivenOr[STTModels | str]) -> bool:
+    """True for models that finalize a turn only when the client sends session.finalize.
+
+    Speechmatics RT and OpenAI gpt-live-transcribe detect no turns themselves, so without a
+    VAD-driven finalize they return interim transcripts and no finals.
+    """
+    if not (is_given(model) and isinstance(model, str)):
+        return False
+    if model.startswith("speechmatics/"):
+        return model != "speechmatics/linden-1"
+    return _is_openai_model(model)
+
+
+def _required_sample_rate(model: NotGivenOr[STTModels | str]) -> int | None:
+    # OpenAI transcription sessions take PCM only at 24 kHz; the gateway refuses other rates.
+    if is_given(model) and isinstance(model, str) and _is_openai_model(model):
+        return 24000
+    return None
+
+
+def _warn_if_sample_rate_refused(model: NotGivenOr[STTModels | str], sample_rate: int) -> None:
+    required = _required_sample_rate(model)
+    if required is not None and sample_rate != required:
+        logger.warning(
+            "model %r takes audio only at %d Hz; the gateway will refuse %d Hz",
+            model,
+            required,
+            sample_rate,
+        )
+
+
 def _resolve_vad_for_model(
     model: NotGivenOr[STTModels | str],
     vad_instance: vad.VAD | None,
 ) -> vad.VAD | None:
-    is_speechmatics_rt = (
-        is_given(model)
-        and isinstance(model, str)
-        and model.startswith("speechmatics/")
-        and model != "speechmatics/linden-1"
-    )
-    if vad_instance is not None and not is_speechmatics_rt:
+    needs_vad = _needs_client_endpointing(model)
+    if vad_instance is not None and not needs_vad:
         logger.warning(
             "`vad` will be ignored: model %r handles endpointing server-side.",
             model,
         )
         return None
-    if is_speechmatics_rt and vad_instance is None:
+    if needs_vad and vad_instance is None:
         from .vad import VAD
 
         vad_instance = VAD()
@@ -392,6 +436,7 @@ STTModels = (
     | SpeechmaticsModels
     | InworldModels
     | GoogleModels
+    | OpenAIModels
     | Literal["auto"]  # automatically select a provider based on the language
 )
 STTEncoding = Literal["pcm_s16le"]
@@ -591,6 +636,7 @@ class STT(stt.STT):
             | SpeechmaticsOptions
             | InworldOptions
             | GoogleOptions
+            | OpenaiOptions
         ] = NOT_GIVEN,
         fallback: NotGivenOr[list[FallbackModelType] | FallbackModelType] = NOT_GIVEN,
         conn_options: NotGivenOr[APIConnectOptions] = NOT_GIVEN,
@@ -602,7 +648,8 @@ class STT(stt.STT):
             model (STTModels | str, optional): STT model to use, in "provider/model[:language]" format.
             language (str, optional): Language of the STT model.
             encoding (STTEncoding, optional): Encoding of the STT model.
-            sample_rate (int, optional): Sample rate of the STT model.
+            sample_rate (int, optional): Sample rate of the STT model. Defaults to 24000 for
+                OpenAI models, which accept no other rate, and to 16000 otherwise.
             base_url (str, optional): LIVEKIT_URL, if not provided, read from environment variable.
             api_key (str, optional): LIVEKIT_API_KEY, if not provided, read from environment variable.
             api_secret (str, optional): LIVEKIT_API_SECRET, if not provided, read from environment variable.
@@ -613,8 +660,9 @@ class STT(stt.STT):
             conn_options (APIConnectOptions, optional): Connection options for request attempts.
             vad (VAD, optional): External Voice Activity Detector. When provided, each audio
                 frame is forwarded to the VAD and `session.finalize` is sent to the inference
-                gateway on end of speech. Only applicable to the Speechmatics RT models
-                (enhanced/standard); linden-1 detects turns server-side.
+                gateway on end of speech. Only applicable to models that detect no turns
+                themselves: the Speechmatics RT models (enhanced/standard) and OpenAI
+                gpt-live-transcribe. They get a default VAD when none is passed.
         """
         # Infer diarization capability from provider-specific extra_kwargs
         # keys (see _DIARIZATION_EXTRA_KEYS). xAI uses "diarize" (same as
@@ -631,6 +679,12 @@ class STT(stt.STT):
                 language = parsed_language
 
         vad = _resolve_vad_for_model(model, vad if is_given(vad) else None)
+        resolved_sample_rate = (
+            sample_rate
+            if is_given(sample_rate)
+            else (_required_sample_rate(model) or DEFAULT_SAMPLE_RATE)
+        )
+        _warn_if_sample_rate_refused(model, resolved_sample_rate)
 
         fallback_models: NotGivenOr[list[FallbackModel]] = NOT_GIVEN
         if is_given(fallback):
@@ -681,7 +735,7 @@ class STT(stt.STT):
             model=model,
             language=LanguageCode(language) if isinstance(language, str) else language,
             encoding=encoding if is_given(encoding) else DEFAULT_ENCODING,
-            sample_rate=sample_rate if is_given(sample_rate) else DEFAULT_SAMPLE_RATE,
+            sample_rate=resolved_sample_rate,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -767,6 +821,8 @@ class STT(stt.STT):
 
             self._opts.model = model
             self._vad = _resolve_vad_for_model(model, self._vad)
+            # a stream's sample rate is fixed when it is created
+            _warn_if_sample_rate_refused(model, self._opts.sample_rate)
             models = [self._opts.model]
             if is_given(self._opts.fallback):
                 models.extend(item["model"] for item in self._opts.fallback)
