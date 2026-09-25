@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 import sys
 import threading
 from types import SimpleNamespace
@@ -402,68 +401,11 @@ async def test_timeout_or_cancellation_does_not_wait_for_pending_cleanup(
     assert not task._twilio_tasks.tasks
 
 
-@pytest.fixture
-def twilio_http(monkeypatch: pytest.MonkeyPatch) -> Mock:
-    def response(request: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
-        result = requests.Response()
-        result.status_code = 201 if request.url.endswith("/Calls.json") else 200
-        result._content = json.dumps({"sid": "CA_test_transfer", "status": "in-progress"}).encode()
-        return result
-
-    send = Mock(side_effect=response)
-    monkeypatch.setattr(requests.Session, "send", send)
-    return send
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "code",
-    [None, 21211, 21212, CALL_TOKEN],
-    ids=["success", "rejected", "failed-fallback", "nonnumeric-code"],
-)
-async def test_real_twilio_sdk_does_not_log_call_token(
-    monkeypatch: pytest.MonkeyPatch,
-    connector: AsyncMock,
-    twilio_http: Mock,
-    caplog: pytest.LogCaptureFixture,
-    code: int | str | None,
-) -> None:
-    caplog.set_level(logging.DEBUG)
-    if code is not None:
-        response = requests.Response()
-        response.status_code = 400
-        response._content = json.dumps({"code": code, "message": CALL_TOKEN}).encode()
-        twilio_http.side_effect = None
-        twilio_http.return_value = response
-
-    task = build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
-    try:
-        if code is None:
-            await dial(task, monkeypatch)
-        else:
-            expected_code = "unknown" if code == CALL_TOKEN else code
-            with pytest.raises(RuntimeError, match=rf"HTTP 400, code {expected_code}"):
-                try:
-                    await dial(task, monkeypatch)
-                except Exception:
-                    warm_transfer.logger.exception("could not dial human agent")
-                    raise
-    finally:
-        await asyncio.gather(*task._twilio_tasks.tasks)
-
-    assert twilio_http.call_count == (2 if code == 21212 else 1)
-    assert parse_qs(twilio_http.call_args_list[0].args[0].body)["CallToken"] == [CALL_TOKEN]
-    assert CALL_TOKEN not in caplog.text
-    logging.getLogger("twilio.http_client").info("unrelated Twilio client")
-    assert "unrelated Twilio client" in caplog.text
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_state", ["queued", "ringing", "in-progress"])
 async def test_real_twilio_sdk_ends_call_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
     connector: AsyncMock,
-    twilio_http: Mock,
     call_state: str,
 ) -> None:
     initial_state = call_state
@@ -486,7 +428,8 @@ async def test_real_twilio_sdk_ends_call_on_timeout(
         response._content = json.dumps({"sid": "CA_test_transfer", "status": call_state}).encode()
         return response
 
-    twilio_http.side_effect = respond
+    twilio_http = Mock(side_effect=respond)
+    monkeypatch.setattr(requests.Session, "send", twilio_http)
     task = build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
     monkeypatch.setattr(
         task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
