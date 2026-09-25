@@ -592,8 +592,13 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
             except Exception:
                 return
             try:
-                # The call may already be answered when cleanup reaches Twilio.
-                await asyncio.to_thread(client.calls(sid).update, status="completed")
+                try:
+                    await asyncio.to_thread(client.calls(sid).update, status="canceled")
+                except TwilioRestException as error:
+                    if error.status != 400 or error.code != 21220:
+                        raise
+                    # The call was answered before cancellation reached Twilio.
+                    await asyncio.to_thread(client.calls(sid).update, status="completed")
             except Exception:
                 logger.warning("Failed to cancel Twilio call")
 

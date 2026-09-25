@@ -21,8 +21,9 @@ SUPERVISOR_PHONE_NUMBER = os.getenv("LIVEKIT_SUPERVISOR_PHONE_NUMBER")  # "+1200
 
 
 def inbound_caller_id() -> tuple[str, str]:
-    """Return the customer call's `From` and `CallToken`.
+    """Integration placeholder: use the business caller ID until a webhook store is wired in.
 
+    Replace the empty pair with the customer call's `From` and `CallToken`.
     Both come from the validated Twilio voice webhook for the inbound call; a real app
     keeps them in server-side state keyed by that call's `CallSid`, out of prompts, chat
     history, logs, and participant attributes. An empty token means the supervisor sees

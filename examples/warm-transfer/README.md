@@ -54,6 +54,11 @@ python warm_transfer.py dev
 supervisor through the [Twilio Connector](https://docs.livekit.io/telephony/connectors/twilio/)
 and Twilio's Calls API, which needs LiveKit Cloud and the optional `twilio` package.
 
+As shipped, this example uses the business number. It does not receive or store
+inbound Twilio webhooks. To demonstrate caller-ID forwarding, implement
+`inbound_caller_id()` using your server-side store for the current inbound `CallSid`;
+the placeholder currently returns an empty number/token pair.
+
 To show the inbound customer's number to the supervisor instead of your Twilio number,
 pass `original_caller_number` (the inbound call's `From`) together with
 `twilio_call_token` (its `CallToken`), both captured from the validated voice webhook:

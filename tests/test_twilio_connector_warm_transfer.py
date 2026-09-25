@@ -295,7 +295,7 @@ async def test_unanswered_call_cancels_the_created_sid(
         await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
     await asyncio.gather(*task._twilio_tasks.tasks)
     client.calls.assert_called_once_with("CA_created")
-    client.calls.return_value.update.assert_called_once_with(status="completed")
+    client.calls.return_value.update.assert_called_once_with(status="canceled")
 
 
 @pytest.mark.asyncio
@@ -361,7 +361,7 @@ async def test_cancellation_returns_before_late_creation_and_retains_cleanup(
         client.calls.assert_not_called()
     else:
         client.calls.assert_called_once_with("CA_late")
-        client.calls.return_value.update.assert_called_once_with(status="completed")
+        client.calls.return_value.update.assert_called_once_with(status="canceled")
 
 
 @pytest.mark.asyncio
@@ -459,11 +459,34 @@ async def test_real_twilio_sdk_does_not_log_call_token(
 
 
 @pytest.mark.asyncio
-async def test_real_twilio_sdk_ends_an_answered_call_on_timeout(
+@pytest.mark.parametrize("call_state", ["queued", "ringing", "in-progress"])
+async def test_real_twilio_sdk_ends_call_on_timeout(
     monkeypatch: pytest.MonkeyPatch,
     connector: AsyncMock,
     twilio_http: Mock,
+    call_state: str,
 ) -> None:
+    initial_state = call_state
+
+    def respond(request: requests.PreparedRequest, **kwargs: Any) -> requests.Response:
+        nonlocal call_state
+        response = requests.Response()
+        response.status_code = 201 if request.url.endswith("/Calls.json") else 200
+        if not request.url.endswith("/Calls.json"):
+            assert request.url.endswith("/Calls/CA_test_transfer.json")
+            status = parse_qs(request.body)["Status"][0]
+            if status == "canceled" and call_state == "in-progress":
+                response.status_code = 400
+                response._content = json.dumps(
+                    {"code": 21220, "message": "Call is not in the expected state"}
+                ).encode()
+                return response
+            assert status == ("completed" if call_state == "in-progress" else "canceled")
+            call_state = status
+        response._content = json.dumps({"sid": "CA_test_transfer", "status": call_state}).encode()
+        return response
+
+    twilio_http.side_effect = respond
     task = build_task(twilio_call_token=CALL_TOKEN, original_caller_number=CALLER_NUMBER)
     monkeypatch.setattr(
         task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
@@ -473,10 +496,29 @@ async def test_real_twilio_sdk_ends_an_answered_call_on_timeout(
         await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
     await asyncio.gather(*task._twilio_tasks.tasks)
 
-    assert twilio_http.call_count == 2
-    request = twilio_http.call_args.args[0]
-    assert request.url.endswith("/Calls/CA_test_transfer.json")
-    assert parse_qs(request.body) == {"Status": ["completed"]}
+    assert call_state == ("completed" if initial_state == "in-progress" else "canceled")
+    assert twilio_http.call_count == (3 if initial_state == "in-progress" else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "code"), [(403, 21220), (400, 21211), (500, 21220)])
+async def test_cleanup_does_not_retry_unrelated_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    twilio_sdk: Any,
+    connector: AsyncMock,
+    status: int,
+    code: int,
+) -> None:
+    client = twilio_sdk()
+    client.calls.return_value.update.side_effect = FakeTwilioRestException(status, code)
+    task = build_task()
+    monkeypatch.setattr(
+        task, "_wait_for_human_agent", AsyncMock(side_effect=ToolError("no answer"))
+    )
+    with pytest.raises(ToolError, match="no answer"):
+        await task._originate_human_agent(room_name="consult", identity="human", room=Mock())
+    await asyncio.gather(*task._twilio_tasks.tasks)
+    client.calls.return_value.update.assert_called_once_with(status="canceled")
 
 
 @pytest.mark.asyncio
