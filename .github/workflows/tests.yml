@@ -66,6 +66,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: make unit-tests
 
+      - name: Test warm transfers with the minimum Twilio SDK
+        run: uv run --with 'twilio==6.55.0' pytest tests/test_twilio_connector_warm_transfer.py -q
+
   evaluation:
     # don't run tests for PRs on forks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false

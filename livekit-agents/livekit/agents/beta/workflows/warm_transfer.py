@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
+import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -317,11 +318,6 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             "connecting to human agent room",
             extra={"ws_url": ws_url, "human_agent_room_name": human_agent_room_name},
         )
-        await room.connect(ws_url, token)
-
-        # if human agent hung up for whatever reason, we'd resume the caller conversation
-        room.on("disconnected", self._on_human_agent_room_close)
-
         human_agent_sess: AgentSession = AgentSession(
             vad=self.session.vad or NOT_GIVEN,
             llm=self.session.llm or NOT_GIVEN,
@@ -341,26 +337,31 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
             chat_ctx=self.chat_ctx,
             allow_interruptions=self.allow_interruptions,
         )
-        await human_agent_sess.start(
-            agent=human_agent_agent,
-            room=room,
-            room_options=room_io.RoomOptions(
-                close_on_disconnect=True,
-                delete_room_on_close=True,
-                participant_identity=self._human_agent_identity,
-            ),
-            record=False,  # TODO: support recording on multiple sessions?
-        )
-
-        # dial the human agent
         try:
+            await room.connect(ws_url, token)
+            # Resume the caller conversation if the human agent hangs up.
+            room.on("disconnected", self._on_human_agent_room_close)
+
+            await human_agent_sess.start(
+                agent=human_agent_agent,
+                room=room,
+                room_options=room_io.RoomOptions(
+                    close_on_disconnect=True,
+                    delete_room_on_close=True,
+                    participant_identity=self._human_agent_identity,
+                ),
+                record=False,  # TODO: support recording on multiple sessions?
+            )
             await self._originate_human_agent(
                 room_name=human_agent_room_name,
                 identity=self._human_agent_identity,
                 room=room,
             )
-        except Exception:
-            human_agent_sess.shutdown()
+        except BaseException:
+            room.off("disconnected", self._on_human_agent_room_close)
+            human_agent_sess.shutdown(drain=False)
+            with contextlib.suppress(Exception):
+                await room.disconnect()
             raise
 
         return human_agent_sess
@@ -542,6 +543,7 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         # optional dep; keep SIP path import-free
         try:
             from twilio.base.exceptions import TwilioRestException  # type: ignore
+            from twilio.http.http_client import TwilioHttpClient  # type: ignore
             from twilio.rest import Client  # type: ignore
         except ImportError as e:
             raise ImportError(
@@ -549,7 +551,9 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
                 "but is not installed. To fix this, run: pip install twilio"
             ) from e
 
-        client = Client(self._twilio_account_sid, self._twilio_auth_token)
+        # Older SDKs log request and response bodies, which can contain CallToken.
+        http_client = TwilioHttpClient(logger=logging.Logger(__name__, level=logging.WARNING))
+        client = Client(self._twilio_account_sid, self._twilio_auth_token, http_client=http_client)
         call_options: dict[str, str] = {}
         dial_from = self._twilio_from_number
         if is_given(self._twilio_call_token) and self._twilio_call_token:
@@ -572,51 +576,53 @@ class TwilioConnectorWarmTransferTask(WarmTransferTask):
         # Retain late results without delaying cancellation or using process-global state.
         tasks = self._twilio_tasks
 
-        async def cancel_call(sid: str) -> None:
+        async def create_call(from_number: str, **options: str) -> str:
+            call = await asyncio.to_thread(
+                client.calls.create,
+                to=self._phone_number,
+                from_=from_number,
+                twiml=twiml,
+                **options,
+            )
+            return str(call.sid)
+
+        async def cancel_when_created(pending: asyncio.Task[str]) -> None:
             try:
-                await asyncio.to_thread(client.calls(sid).update, status="canceled")
+                sid = await pending
+            except Exception:
+                return
+            try:
+                # The call may already be answered when cleanup reaches Twilio.
+                await asyncio.to_thread(client.calls(sid).update, status="completed")
             except Exception:
                 logger.warning("Failed to cancel Twilio call")
 
-        async def create_call(from_number: str, **options: str) -> str:
-            pending = tasks.create_task(
-                asyncio.to_thread(
-                    client.calls.create,
-                    to=self._phone_number,
-                    from_=from_number,
-                    twiml=twiml,
-                    **options,
-                )
-            )
+        pending = tasks.create_task(create_call(dial_from, **call_options))
+        try:
             try:
-                call = await asyncio.shield(pending)
-                return str(call.sid)
-            except asyncio.CancelledError:
-                # Cancelling the await cannot stop Twilio's synchronous HTTP request.
-                async def cleanup() -> None:
-                    with contextlib.suppress(Exception):
-                        call = await pending
-                        await cancel_call(str(call.sid))
-
-                tasks.create_task(cleanup())
-                raise
-
-        try:
-            call_sid = await create_call(dial_from, **call_options)
-        except TwilioRestException as error:
-            # 21210 = From not verified (token rejected/expired), 21212 = invalid From
-            # (e.g. withheld/anonymous inbound caller); both mean no call was created
-            if not call_options or error.status != 400 or error.code not in (21210, 21212):
-                raise
-            logger.warning("Twilio rejected preserved caller ID; retrying with business caller ID")
-            call_sid = await create_call(self._twilio_from_number)
-
-        try:
+                await asyncio.shield(pending)
+            except TwilioRestException as error:
+                # 21210 = unverified From; 21212 = invalid From. Neither creates a call.
+                if (
+                    not self._twilio_call_token
+                    or error.status != 400
+                    or error.code not in (21210, 21212)
+                ):
+                    raise
+                logger.warning(
+                    "Twilio rejected preserved caller ID; retrying with business caller ID"
+                )
+                pending = tasks.create_task(create_call(self._twilio_from_number))
+                await asyncio.shield(pending)
             await self._wait_for_human_agent(room=room, identity=identity)
-        except BaseException:
-            # we gave up waiting; cancel the still-ringing call so it doesn't linger
-            # A stalled provider must not keep the caller on hold after a timeout.
-            tasks.create_task(cancel_call(call_sid))
+        except BaseException as error:
+            # A synchronous creation request can finish after cancellation.
+            tasks.create_task(cancel_when_created(pending))
+            if isinstance(error, TwilioRestException):
+                code = error.code if isinstance(error.code, int) else "unknown"
+                raise RuntimeError(
+                    f"Twilio call creation failed (HTTP {error.status}, code {code})"
+                ) from None
             raise
 
     async def _wait_for_human_agent(self, *, room: rtc.Room, identity: str) -> None:
