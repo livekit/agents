@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
 import json
 import time
@@ -56,11 +57,24 @@ class _LLMGenerationData:
     generated_text: str = ""
     generated_functions: list[llm.FunctionCall] = field(default_factory=list)
     generated_extra: dict[str, Any] = field(default_factory=dict)
+    llm: llm.LLM | None = None
     id: str = field(default_factory=lambda: utils.shortuuid("item_"))
     started_fut: asyncio.Future[None] = field(default_factory=asyncio.Future)
     started_at: float | None = None
     ttft: float | None = None
     tps: float | None = None
+
+
+_active_llm_generation = contextvars.ContextVar[_LLMGenerationData | None](
+    "active_llm_generation", default=None
+)
+
+
+def _record_generation_llm(model: llm.LLM) -> None:
+    # The default node chooses its LLM when the async generator is first iterated,
+    # which may be later than perform_llm_inference() was scheduled.
+    if data := _active_llm_generation.get():
+        data.llm = model
 
 
 # output for an injected in-progress tool call, phrased so the model waits instead of
@@ -216,6 +230,7 @@ async def _llm_inference_task(
     # never builds an LLMStream has no such span, and records them here instead.
     inference_recorded = gen_ai_telemetry.track_inference_span(model=model, provider=provider)
 
+    _active_llm_generation.set(data)
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
         llm_node = await llm_node

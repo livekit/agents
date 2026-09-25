@@ -1,8 +1,8 @@
 """Test that LLM errors propagate through session.run() → RunResult,
 including the full e2e path through SessionHost → RemoteSession.
 
-Also pins the other side of that contract: a turn the agent stays silent on
-is reported as a silent turn, not as an error."""
+A silent turn still leaves RunResult successful. The session can separately
+emit a recoverable error event so applications can handle an empty LLM completion."""
 
 from __future__ import annotations
 
@@ -170,3 +170,419 @@ async def test_run_silent_turn_is_not_an_error():
     await client.aclose()
     await host.aclose()
     await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_usage_only_user_reply_emits_recoverable_error_and_warning(caplog):
+    """An exhausted user reply with only usage must be visible to the application."""
+    from livekit.agents.llm import ChatChunk, CompletionUsage
+    from livekit.agents.voice.events import ErrorEvent
+
+    class UsageOnlyAgent(Agent):
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            yield ChatChunk(
+                id="usage-only",
+                usage=CompletionUsage(
+                    completion_tokens=3,
+                    prompt_tokens=5,
+                    total_tokens=8,
+                ),
+            )
+
+    session = AgentSession()
+    llm_model = FakeLLM()
+    agent = UsageOnlyAgent(instructions="test agent", llm=llm_model)
+    errors: list[ErrorEvent] = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        with caplog.at_level("WARNING", logger="livekit.agents"):
+            result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+
+        result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].error.type == "llm_error"
+        assert errors[0].error.recoverable is True
+        assert errors[0].source is llm_model
+        assert "empty" in str(errors[0].error.error).lower()
+        assert any("empty" in record.message.lower() for record in caplog.records)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tool_only_user_reply_does_not_emit_empty_completion_error():
+    """A tool call is a valid LLM response even if it has no text."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    class ToolOnlyAgent(Agent):
+        @function_tool
+        async def complete_task(self) -> None:
+            """Complete the user's task."""
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[
+                    FunctionToolCall(name="complete_task", arguments="{}", call_id="call_1")
+                ],
+            )
+        ]
+    )
+    session = AgentSession()
+    agent = ToolOnlyAgent(instructions="test agent", llm=llm)
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["", "   "])
+async def test_blank_custom_llm_reply_emits_recoverable_error(reply):
+    """Blank custom node output cannot silently complete a scheduled user turn."""
+
+    class BlankReplyAgent(Agent):
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            return reply
+
+    session = AgentSession()
+    agent = BlankReplyAgent(instructions="test agent", llm=FakeLLM())
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_failed_llm_does_not_emit_empty_completion_error():
+    """A provider failure is already surfaced and is not a completed blank response."""
+    session = AgentSession(
+        conn_options=SessionConnectOptions(llm_conn_options=APIConnectOptions(max_retry=0))
+    )
+    agent = Agent(instructions="test agent", llm=FailingLLM())
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        with pytest.raises(APIStatusError):
+            await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert all("empty" not in str(event.error.error).lower() for event in errors)
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_discarded_unscheduled_usage_only_generation_stays_quiet():
+    """Discarded preemptive work does not owe the user a reply."""
+    from livekit.agents.llm import ChatChunk, ChatMessage, CompletionUsage
+
+    class UsageOnlyAgent(Agent):
+        def __init__(self):
+            super().__init__(instructions="test agent", llm=FakeLLM())
+            self.exhausted = asyncio.Event()
+
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            yield ChatChunk(
+                id="usage-only",
+                usage=CompletionUsage(
+                    completion_tokens=3,
+                    prompt_tokens=5,
+                    total_tokens=8,
+                ),
+            )
+            self.exhausted.set()
+
+    session = AgentSession()
+    agent = UsageOnlyAgent()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        assert session._activity is not None
+        handle = session._activity._generate_reply(
+            user_message=ChatMessage(role="user", content=["hello"]),
+            schedule_speech=False,
+        )
+        await asyncio.wait_for(agent.exhausted.wait(), timeout=10.0)
+        handle._cancel()
+        await asyncio.wait_for(handle, timeout=10.0)
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_followup_emits_recoverable_error():
+    """A blank LLM generation after a tool reply still leaves the user waiting."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def look_up(self) -> str:
+            """Look up a value for the user."""
+            return "lookup complete"
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0.01,
+                tool_calls=[FunctionToolCall(name="look_up", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="lookup complete", content="", ttft=0, duration=0.01),
+        ]
+    )
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=ToolAgent(instructions="test agent", llm=llm))
+        result = await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", ["none", "other"])
+@pytest.mark.parametrize("tool_followup", [False, True])
+async def test_empty_completion_uses_generation_llm_after_model_swap(
+    replacement: str, tool_followup: bool
+) -> None:
+    """An in-flight generation reports the model that actually opened its stream."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse, FakeLLMStream
+
+    class PausedLLM(FakeLLM):
+        def __init__(self, *, pause_on: str, fake_responses: list[FakeLLMResponse]) -> None:
+            super().__init__(fake_responses=fake_responses)
+            self.pause_on = pause_on
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self._label = "model-a"
+
+        def chat(self, **kwargs):
+            return PausedLLMStream(
+                self,
+                chat_ctx=kwargs["chat_ctx"],
+                tools=kwargs.get("tools") or [],
+                conn_options=kwargs.get("conn_options", APIConnectOptions()),
+            )
+
+    class PausedLLMStream(FakeLLMStream):
+        async def _run(self) -> None:
+            assert isinstance(self._llm, PausedLLM)
+            if self._get_index_text() == self._llm.pause_on:
+                self._llm.started.set()
+                await self._llm.release.wait()
+            await super()._run()
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def look_up(self) -> str:
+            """Look up a value for the user."""
+            return "lookup complete"
+
+    responses = (
+        [
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0.01,
+                tool_calls=[FunctionToolCall(name="look_up", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="lookup complete", content="", ttft=0, duration=0.01),
+        ]
+        if tool_followup
+        else [FakeLLMResponse(input="hello", content="", ttft=0, duration=0.01)]
+    )
+    original = PausedLLM(
+        pause_on="lookup complete" if tool_followup else "hello",
+        fake_responses=responses,
+    )
+    next_model = FakeLLM()
+    next_model._label = "model-b"
+    agent = ToolAgent(instructions="test agent", llm=original)
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        run = session.run(user_input="hello")
+        await asyncio.wait_for(original.started.wait(), timeout=10.0)
+        agent.update_options(llm=None if replacement == "none" else next_model)
+        original.release.set()
+        result = await asyncio.wait_for(run, timeout=10.0)
+
+        if tool_followup:
+            assert any(type(event).__name__ == "FunctionCallEvent" for event in result.events)
+        else:
+            result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].source is original
+        assert errors[0].error.label == "model-a"
+        assert errors[0].error.recoverable is True
+    finally:
+        original.release.set()
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_empty_completion_uses_model_selected_after_generation_was_scheduled() -> None:
+    """The default node can choose a newer model after the reply task was created."""
+    from .fake_llm import FakeLLMResponse
+
+    class DelayedNodeAgent(Agent):
+        def __init__(self, *, llm: FakeLLM) -> None:
+            super().__init__(instructions="test agent", llm=llm)
+            self.node_started = asyncio.Event()
+            self.resume_node = asyncio.Event()
+
+        async def llm_node(self, chat_ctx, tools, model_settings):
+            self.node_started.set()
+            await self.resume_node.wait()
+            async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+                yield chunk
+
+    original = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="hello", content="old reply", ttft=0, duration=0)]
+    )
+    original._label = "model-a"
+    selected = FakeLLM()
+    selected._label = "model-b"
+    agent = DelayedNodeAgent(llm=original)
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=agent)
+        run = session.run(user_input="hello")
+        await asyncio.wait_for(agent.node_started.wait(), timeout=10.0)
+        agent.update_options(llm=selected)
+        agent.resume_node.set()
+        result = await asyncio.wait_for(run, timeout=10.0)
+
+        result.expect.no_more_events()
+        assert len(errors) == 1
+        assert errors[0].source is selected
+        assert errors[0].error.label == "model-b"
+    finally:
+        agent.resume_node.set()
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_generate_reply_empty_completion_emits_recoverable_error():
+    """A public generate_reply request should surface its empty completion."""
+    from .fake_llm import FakeLLMResponse
+
+    llm = FakeLLM(
+        fake_responses=[FakeLLMResponse(input="greet", content="", ttft=0, duration=0.01)]
+    )
+    session = AgentSession(llm=llm)
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=Agent(instructions="test agent"))
+        handle = session.generate_reply(instructions="greet")
+        await asyncio.wait_for(handle, timeout=10.0)
+        assert len(errors) == 1
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_silent_turn_without_llm_generation_emits_no_empty_completion_error():
+    """A turn with no LLM request is not an empty LLM completion."""
+    session = AgentSession()
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        result = await asyncio.wait_for(
+            session.start(agent=Agent(instructions="silent agent", llm=None), capture_run=True),
+            timeout=10.0,
+        )
+        result.expect.next_event().is_agent_handoff()
+        result.expect.no_more_events()
+        assert errors == []
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_error_handler_can_schedule_recovery_reply():
+    """An app can recover from the event before the empty turn finishes cleanup."""
+    from .fake_llm import FakeLLMResponse
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(input="hello", content="", ttft=0, duration=0.01),
+            FakeLLMResponse(input="recover", content="Recovered", ttft=0, duration=0.01),
+        ]
+    )
+    session = AgentSession(llm=llm)
+    agent = Agent(instructions="test agent")
+    errors = []
+    recovery_handles = []
+
+    def on_error(event):
+        errors.append(event)
+        if len(errors) == 1:
+            recovery_handles.append(session.generate_reply(instructions="recover"))
+
+    session.on("error", on_error)
+
+    try:
+        await session.start(agent=agent)
+        await asyncio.wait_for(session.run(user_input="hello"), timeout=10.0)
+        assert len(errors) == 1
+        assert len(recovery_handles) == 1
+        await asyncio.wait_for(recovery_handles[0], timeout=10.0)
+        assert any(
+            item.type == "message" and item.role == "assistant" and item.text_content == "Recovered"
+            for item in agent.chat_ctx.items
+        )
+    finally:
+        await session.aclose()
