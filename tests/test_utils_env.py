@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import subprocess
 import sys
@@ -138,6 +139,23 @@ def test_blank_debug_flag_keeps_the_package_importable() -> None:
             "LK_KEYTERMS_DEBUG": "",
             "LIVEKIT_EVALS_VERBOSE": "",
         },
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_blank_debug_flag_keeps_the_openai_plugin_importable() -> None:
+    # the plugin reads LK_OPENAI_DEBUG at import time too, and agent workers import
+    # it eagerly, so an unparsable value has to fall back there as well
+    if importlib.util.find_spec("livekit.plugins.openai") is None:
+        pytest.skip("livekit-plugins-openai is not installed")
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import livekit.plugins.openai"],
+        env={**os.environ, "LK_OPENAI_DEBUG": ""},
         capture_output=True,
         text=True,
         timeout=60,
