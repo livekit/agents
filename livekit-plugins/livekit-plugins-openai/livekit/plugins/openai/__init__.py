@@ -34,7 +34,7 @@ from .models import (
     TTSVoices,
 )
 from .stt import STT
-from .tts import TTS
+from .tts import TTS, TTSVoice
 from .version import __version__
 
 __all__ = [
@@ -47,6 +47,7 @@ __all__ = [
     "STTModels",
     "TTSModels",
     "TTSVoices",
+    "TTSVoice",
     "create_embeddings",
     "EmbeddingData",
     "realtime",
