@@ -1258,6 +1258,21 @@ def update_instructions(
         )
 
 
+def mark_instructions_cache_boundary(chat_ctx: ChatContext) -> None:
+    """End the instructions message with a :class:`llm.CacheBreakpoint`.
+
+    Run on a turn's working copy, never on the stored history. ``ChatContext.copy()``
+    shares message objects, so the message is replaced rather than edited in place.
+    """
+    idx = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    if idx is None:
+        return
+    msg = chat_ctx.items[idx]
+    if msg.type != "message" or (msg.content and isinstance(msg.content[-1], llm.CacheBreakpoint)):
+        return
+    chat_ctx.items[idx] = msg.model_copy(update={"content": [*msg.content, llm.CacheBreakpoint()]})
+
+
 def remove_instructions(chat_ctx: ChatContext) -> None:
     # loop in case there are items with the same id (shouldn't happen!)
     while True:
