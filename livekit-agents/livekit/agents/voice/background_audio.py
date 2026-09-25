@@ -359,7 +359,33 @@ class BackgroundAudioPlayer:
                 # publication by track name before unpublishing.
                 current = self._find_publication_by_name(_TRACK_NAME)
                 if current is not None:
-                    await self._room.local_participant.unpublish_track(current.sid)
+                    await self._unpublish_track(current.sid)
+
+    async def _unpublish_track(self, sid: str) -> None:
+        """Wait for unpublishing only while the room can deliver its acknowledgement."""
+        disconnected: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        def on_disconnected(*_: Any) -> None:
+            if not disconnected.done():
+                disconnected.set_result(None)
+
+        unpublish: asyncio.Task[None] | None = None
+        self._room.on("disconnected", on_disconnected)
+        try:
+            if not self._room.isconnected():
+                return
+            unpublish = asyncio.create_task(self._room.local_participant.unpublish_track(sid))
+            # The RTC room stops delivering unpublish acknowledgements after disconnect.
+            done, _ = await asyncio.wait(
+                (unpublish, disconnected), return_when=asyncio.FIRST_COMPLETED
+            )
+            if unpublish in done:
+                await unpublish
+        finally:
+            self._room.off("disconnected", on_disconnected)
+            disconnected.cancel()
+            if unpublish is not None:
+                await cancel_and_wait(unpublish)
 
     def _find_publication_by_name(self, name: str) -> rtc.LocalTrackPublication | None:
         for pub in self._room.local_participant.track_publications.values():
