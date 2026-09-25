@@ -19,7 +19,7 @@ import time
 from collections.abc import Generator, Sequence
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, overload
 
-from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypedDict
 
 from livekit import rtc
@@ -219,6 +219,31 @@ class AudioContent(BaseModel):
     transcript: str | None = None
 
 
+class CacheBreakpoint(BaseModel):
+    """Marks the end of a reusable prompt prefix inside a message's content.
+
+    The content before the marker becomes its own cacheable segment on LLMs that
+    enable OpenAI prompt cache breakpoints (GPT-5.6 and later). Every other
+    provider format drops it, and it is never part of ``text_content``.
+
+    In a system or developer message, put the marker last and send per-call text
+    as a separate message. When the request carries tools, a marker partway through
+    a system message is not matched; one at the end of the message is, and so is one
+    partway through a user message.
+
+    Example::
+
+        chat_ctx.add_message(role="system", content=[STATIC_PROMPT, CacheBreakpoint()])
+        chat_ctx.add_message(role="system", content=f"Caller: {caller_id}")
+    """
+
+    # the only ChatContent member with no required field: without this, any typeless dict
+    # would validate as a marker and vanish from the request instead of failing validation
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["cache_breakpoint"] = Field(default="cache_breakpoint")
+
+
 ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 
 
@@ -350,7 +375,7 @@ class ChatMessage(BaseModel):
         return "\n".join(text_parts)
 
 
-ChatContent: TypeAlias = ImageContent | AudioContent | str
+ChatContent: TypeAlias = ImageContent | AudioContent | CacheBreakpoint | str
 
 
 class FunctionCall(BaseModel):
@@ -700,6 +725,7 @@ class ChatContext:
         format: Literal["openai", "openai.responses"],
         *,
         inject_dummy_user_message: bool = True,
+        prompt_cache_breakpoints: bool = False,
     ) -> tuple[list[dict], Literal[None]]: ...
 
     @overload
