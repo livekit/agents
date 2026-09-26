@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from .base import (
     AgentMetrics,
+    DecisionMetrics,
     EOTInferenceMetrics,
     InterruptionMetrics,
     LLMMetrics,
@@ -127,7 +128,25 @@ class EOTModelUsage(_BaseModelUsage):
     """Total number of inference requests sent to the EOT model."""
 
 
-ModelUsage = LLMModelUsage | TTSModelUsage | STTModelUsage | InterruptionModelUsage | EOTModelUsage
+class DecisionModelUsage(_BaseModelUsage):
+    """Reported tokens and completed requests for decision models."""
+
+    type: Literal["decision_usage"] = "decision_usage"
+    provider: str
+    model: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_requests: int = 0
+
+
+ModelUsage = (
+    LLMModelUsage
+    | TTSModelUsage
+    | STTModelUsage
+    | InterruptionModelUsage
+    | EOTModelUsage
+    | DecisionModelUsage
+)
 """Union type for all model usage types."""
 
 
@@ -145,6 +164,7 @@ class ModelUsageCollector:
         self._stt_usage: dict[tuple[str, str], STTModelUsage] = {}
         self._interruption_usage: dict[tuple[str, str], InterruptionModelUsage] = {}
         self._eot_usage: dict[tuple[str, str], EOTModelUsage] = {}
+        self._decision_usage: dict[tuple[str, str], DecisionModelUsage] = {}
 
     def __call__(self, metrics: AgentMetrics) -> None:
         self.collect(metrics)
@@ -156,7 +176,8 @@ class ModelUsageCollector:
         | TTSMetrics
         | RealtimeModelMetrics
         | InterruptionMetrics
-        | EOTInferenceMetrics,
+        | EOTInferenceMetrics
+        | DecisionMetrics,
     ) -> tuple[str, str]:
         """Extract provider and model from metrics metadata."""
         provider = ""
@@ -202,7 +223,16 @@ class ModelUsageCollector:
         return self._eot_usage[key]
 
     def collect(self, metrics: AgentMetrics) -> None:
-        if isinstance(metrics, LLMMetrics):
+        if isinstance(metrics, DecisionMetrics):
+            provider, model = self._extract_provider_model(metrics)
+            key = (provider, model)
+            if key not in self._decision_usage:
+                self._decision_usage[key] = DecisionModelUsage(provider=provider, model=model)
+            decision_usage = self._decision_usage[key]
+            decision_usage.input_tokens += metrics.input_tokens or 0
+            decision_usage.output_tokens += metrics.output_tokens or 0
+            decision_usage.total_requests += 1
+        elif isinstance(metrics, LLMMetrics):
             provider, model = self._extract_provider_model(metrics)
             usage = self._get_llm_usage(provider, model)
             usage.input_tokens += metrics.prompt_tokens
@@ -273,4 +303,5 @@ class ModelUsageCollector:
         result.extend(u.model_copy(deep=True) for u in self._stt_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._interruption_usage.values())
         result.extend(u.model_copy(deep=True) for u in self._eot_usage.values())
+        result.extend(u.model_copy(deep=True) for u in self._decision_usage.values())
         return result

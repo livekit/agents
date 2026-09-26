@@ -93,6 +93,7 @@ members = [
     "livekit-plugins-telnyx",
     "livekit-plugins-trugen",
     "livekit-plugins-turn-detector",
+    "livekit-plugins-typesafe",
     "livekit-plugins-ultravox",
     "livekit-plugins-upliftai",
     "livekit-plugins-vakyam",
@@ -2584,6 +2585,7 @@ source = { virtual = "examples/voice_agents" }
 dependencies = [
     { name = "duckduckgo-search" },
     { name = "livekit-agents", extra = ["cartesia", "deepgram", "elevenlabs", "mcp", "openai", "silero", "turn-detector"] },
+    { name = "livekit-plugins-typesafe" },
     { name = "python-dotenv" },
 ]
 
@@ -2591,6 +2593,7 @@ dependencies = [
 requires-dist = [
     { name = "duckduckgo-search", specifier = ">=8.0" },
     { name = "livekit-agents", extras = ["openai", "cartesia", "elevenlabs", "deepgram", "silero", "turn-detector", "mcp"], editable = "livekit-agents" },
+    { name = "livekit-plugins-typesafe", editable = "livekit-plugins/livekit-plugins-typesafe" },
     { name = "python-dotenv", specifier = ">=1.0" },
 ]
 
@@ -3627,6 +3630,17 @@ requires-dist = [
     { name = "onnxruntime", marker = "python_full_version >= '3.11'", specifier = ">=1.18" },
     { name = "transformers", specifier = ">=4.47.1,!=4.57.2,!=4.57.3" },
 ]
+
+[[package]]
+name = "livekit-plugins-typesafe"
+version = "0.1.0"
+source = { editable = "livekit-plugins/livekit-plugins-typesafe" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
 name = "livekit-plugins-ultravox"

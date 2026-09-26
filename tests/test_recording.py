@@ -16,6 +16,7 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.metrics import DecisionModelUsage
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -606,6 +607,36 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+async def test_cloud_session_report_preserves_full_decision_usage() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    report.model_usage = [
+        DecisionModelUsage(
+            provider="openrouter",
+            model="typesafe/jev-1.13",
+            input_tokens=123,
+            output_tokens=17,
+            total_requests=3,
+        )
+    ]
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+    session_report = next(
+        call
+        for call in mock_logger.emit.call_args_list
+        if call.kwargs.get("body") == "session report"
+    )
+    assert session_report.kwargs["attributes"]["usage"] == [
+        {
+            "type": "decision_usage",
+            "provider": "openrouter",
+            "model": "typesafe/jev-1.13",
+            "input_tokens": 123,
+            "output_tokens": 17,
+            "total_requests": 3,
+        }
+    ]
 
 
 async def test_upload_session_report_marks_stt_keyterms_as_pii() -> None:

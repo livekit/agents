@@ -27,6 +27,7 @@ from ..llm.tool_context import (
 )
 from ..log import logger
 from ..metrics import (
+    DecisionMetrics,
     EOUMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
@@ -59,6 +60,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .decision_runner import _DecisionRunner
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -330,6 +332,7 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
+        self._decision_runner: _DecisionRunner | None = None
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -1186,6 +1189,10 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
+        if self._agent.decisions and self._session.decision_model is not None:
+            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
+            self._decision_runner.start()
+
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
@@ -1396,6 +1403,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         await self._session._keyterm_detector.aclose()
+
+        if self._decision_runner is not None:
+            await self._decision_runner.aclose()
 
         self._scheduling_paused = True
         # a parked preemptive generation is never scheduled, so the wait below would never
@@ -1618,6 +1628,8 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            if self._decision_runner is not None:
+                await self._decision_runner.aclose()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -2136,7 +2148,12 @@ class AgentActivity(RecognitionHooks):
 
     def _on_metrics_collected(
         self,
-        ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
+        ev: STTMetrics
+        | TTSMetrics
+        | VADMetrics
+        | LLMMetrics
+        | RealtimeModelMetrics
+        | DecisionMetrics,
     ) -> None:
         if (speech_handle := _SpeechHandleContextVar.get(None)) and (
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
