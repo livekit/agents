@@ -128,6 +128,28 @@ def test_aws_image_content_rejects_external_urls():
         chat_ctx.to_provider_format(format="aws")
 
 
+@pytest.mark.parametrize(
+    ("is_error", "expected_status"),
+    [(True, "error"), (False, "success")],
+)
+def test_aws_format_tool_result_status_reflects_is_error(is_error: bool, expected_status: str):
+    chat_ctx = ChatContext.empty()
+    chat_ctx.items.append(FunctionCall(name="search", call_id="call_1", arguments="{}"))
+    chat_ctx.items.append(
+        FunctionCallOutput(
+            name="search",
+            call_id="call_1",
+            output="the database is on fire",
+            is_error=is_error,
+        )
+    )
+
+    messages, _ = chat_ctx.to_provider_format(format="aws")
+
+    tool_result = messages[-1]["content"][-1]["toolResult"]
+    assert tool_result["status"] == expected_status
+
+
 def _ctx_with_per_turn_instructions() -> tuple[ChatContext, str]:
     # the shape generate_reply(instructions=...) produces: a trailing system message
     instructions = "Ask the caller for the year they were born."
