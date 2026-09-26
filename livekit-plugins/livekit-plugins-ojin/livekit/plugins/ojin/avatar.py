@@ -185,7 +185,11 @@ class _FrameSink:
     # --- segment protocol (decided by _SegmentTracker) ---
 
     def note_input_segment_open(self) -> None:
-        self._segments.input_opened()
+        if self._segments.input_opened():
+            # The previous segment never got its marker. Queue it before this
+            # segment's audio so the runner still reports one completion per
+            # captured segment.
+            self._append(AudioSegmentEnd())
 
     def note_input_audio(self) -> None:
         self._segments.input_audio()
@@ -370,6 +374,10 @@ class OjinVideoGenerator(VideoGenerator):
     async def push_audio(self, frame: rtc.AudioFrame | AudioSegmentEnd) -> None:
         """Send one chunk of the agent's speech, or close the current utterance."""
         if isinstance(frame, AudioSegmentEnd):
+            if self._turn_started:
+                # A resampler can hold part of its input; unflushed, those samples
+                # either vanish with this turn or open the next one.
+                await self._flush_resampler()
             self._turn_started = False
             self._sink.note_input_segment_end(had_real_audio=self._turn_had_real_audio)
             return
@@ -436,8 +444,44 @@ class OjinVideoGenerator(VideoGenerator):
             logger.exception("ojin audio conversion failed; dropping this chunk")
             return None
 
+    async def _flush_resampler(self) -> None:
+        """Send what the resampler still holds, then retire it at the turn boundary.
+
+        Dropped rather than sent if the turn was interrupted: `clear_buffer` clears
+        `_turn_started`, so this never runs for a cancelled turn.
+        """
+        resampler, self._resampler = self._resampler, None
+        self._resampler_input_rate = 0
+        if resampler is None:
+            return
+
+        try:
+            pcm = b"".join(bytes(out.data) for out in resampler.flush())
+        except Exception:
+            logger.exception("ojin resampler flush failed; dropping the tail")
+            return
+
+        if not pcm:
+            return
+
+        if pcm.strip(b"\x00"):
+            self._turn_had_real_audio = True
+            self._sink.note_input_audio()
+
+        try:
+            await self._client.send_tts_audio(pcm, self._sample_rate, NUM_CHANNELS)
+        except Exception:
+            logger.exception("ojin send_tts_audio failed; dropping the resampled tail")
+
     def _resample(self, pcm: bytes, input_rate: int) -> bytes:
-        if self._resampler is None or self._resampler_input_rate != input_rate:
+        tail = b""
+        if self._resampler is not None and self._resampler_input_rate != input_rate:
+            # Whatever the old rate's resampler still holds belongs ahead of the
+            # new rate's output, not discarded with the object.
+            tail = b"".join(bytes(out.data) for out in self._resampler.flush())
+            self._resampler = None
+
+        if self._resampler is None:
             logger.debug(
                 "resampling avatar input audio",
                 extra={"from": input_rate, "to": self._sample_rate},
@@ -453,7 +497,7 @@ class OjinVideoGenerator(VideoGenerator):
             num_channels=NUM_CHANNELS,
             samples_per_channel=len(pcm) // 2,
         )
-        return b"".join(bytes(out.data) for out in self._resampler.push(frame))
+        return tail + b"".join(bytes(out.data) for out in self._resampler.push(frame))
 
     async def clear_buffer(self) -> None:
         """Barge-in. Never raises.

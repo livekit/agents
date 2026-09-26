@@ -80,13 +80,24 @@ class _SegmentTracker:
 
     # --- input side, reported by the generator ---
 
-    def input_opened(self) -> None:
+    def input_opened(self) -> bool:
+        """Open an input segment. True means the previous one still owes a marker.
+
+        The session waits for a segment's completion report before capturing the
+        next one, so an overlap is not expected - but the receiver accepts
+        consecutive flushed segments regardless of playback, and collapsing the
+        pending state here would leave the earlier segment unreported and wedge
+        ``wait_for_playout()`` for good. Completing it as the next one opens keeps
+        the one-report-per-captured-segment contract either way.
+        """
+        owed = self._owes_end
         self._input_closed = False
         self._retired = False
         self._owes_end = False
         self._output_drained = False
         self._input_had_audio = False
         self._render_deadline = None
+        return owed
 
     def input_audio(self) -> None:
         """A real chunk was pushed; its echo has not played yet.

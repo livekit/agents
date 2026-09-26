@@ -281,6 +281,49 @@ async def test_input_resampled_to_the_configured_rate() -> None:
     assert (rate, channels) == (24000, 1), "sent at a rate the output track cannot play"
 
 
+async def test_resampled_tail_is_sent_before_the_turn_closes() -> None:
+    """A resampler holds part of its input until flushed.
+
+    A 40ms 16kHz chunk converts to 1920 bytes at 24kHz, but push() returns only
+    1576 of them. Unflushed, the remaining 344 bytes either vanish with this turn
+    or open the next one.
+    """
+    client, _, gen = build()
+    off_rate = chunk(ms=40, sample_rate=16000)
+
+    await gen.push_audio(off_rate)
+    sent_before_end = sum(len(pcm) for pcm, _, _ in client.sent)
+
+    await gen.push_audio(AudioSegmentEnd())
+    sent_total = sum(len(pcm) for pcm, _, _ in client.sent)
+
+    expected = 40 * 48  # 40ms at 24kHz, 16-bit mono: 24 samples/ms, 2 bytes each
+    assert sent_before_end < expected, "the resampler withheld nothing; test proves nothing"
+    assert sent_total == expected, "the resampled tail never reached the client"
+
+
+async def test_the_resampler_is_retired_at_the_turn_boundary() -> None:
+    """Held samples must not open the next utterance."""
+    client, _, gen = build()
+
+    await gen.push_audio(chunk(ms=40, sample_rate=16000))
+    await gen.push_audio(AudioSegmentEnd())
+
+    assert gen._resampler is None, "a resampler carrying state survived into the next turn"
+
+
+async def test_a_mid_turn_rate_change_keeps_the_old_tail() -> None:
+    """Swapping the resampler must not discard what it still holds."""
+    client, _, gen = build()
+
+    await gen.push_audio(chunk(ms=40, sample_rate=16000))
+    await gen.push_audio(chunk(ms=40, sample_rate=48000))
+    await gen.push_audio(AudioSegmentEnd())
+
+    # 40ms in at each rate, both converted to 24kHz, plus both tails.
+    assert sum(len(pcm) for pcm, _, _ in client.sent) == 2 * 40 * 48
+
+
 async def test_mismatched_echo_is_dropped_not_forwarded() -> None:
     """A single frame the audio source rejects kills the runner's loop forever."""
     sink = _FrameSink()

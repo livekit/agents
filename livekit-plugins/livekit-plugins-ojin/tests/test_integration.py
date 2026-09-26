@@ -169,6 +169,40 @@ async def test_three_consecutive_turns_complete(harness: RunnerHarness) -> None:
         assert ev.interrupted is False
 
 
+async def test_overlapping_utterances_each_get_a_marker(harness: RunnerHarness) -> None:
+    """Two segments captured before the first renders must not collapse into one.
+
+    The session waits for a completion report before capturing the next segment,
+    so this should not arise - but QueueAudioOutput accepts consecutive flushed
+    segments regardless of playback, and the tracker used to reset the first
+    segment's pending state when the second opened. That lost the first marker
+    entirely.
+
+    Asserted on the markers the plugin hands the runner, not on wait_for_playout:
+    AvatarRunner reports a marker only while its ``_audio_playing`` bool is set,
+    and it clears that on the first report, so two markers with no input audio
+    between them still produce one report. That accounting is identical for every
+    avatar plugin; what this plugin owns is emitting a marker per captured
+    segment.
+    """
+    h = harness
+
+    await h.audio_output.capture_frame(tts_chunk())
+    h.audio_output.flush()
+    await h.audio_output.capture_frame(tts_chunk())
+    h.audio_output.flush()
+    assert h.audio_output.captured_playout_segments == 2
+
+    await until(lambda: len(h.client.sent) >= 2, what="both utterances to reach the client")
+
+    await h.client.push_tick(frame_type=FrameType.START_OF_SPEECH)
+    await h.client.push_tick(frame_type=FrameType.SPEECH)
+    await until(lambda: h.sink._segments.output_open, what="the echo to open an output segment")
+    await h.client.emit_stopped_speaking()
+
+    await until(lambda: h.markers_seen >= 2, what="a marker for each captured segment")
+
+
 async def test_underrun_does_not_end_the_turn_early(harness: RunnerHarness) -> None:
     """Slow TTS drains the buffer mid-utterance; the session must not proceed."""
     await harness.audio_output.capture_frame(tts_chunk())
