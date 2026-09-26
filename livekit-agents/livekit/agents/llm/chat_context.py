@@ -56,6 +56,11 @@ class Instructions:
         instr.render()                              # → common text
         instr.render(modality="audio")               # → common + audio addition
         instr.render(modality="text", name="Alex")   # → common + text, with {name} filled
+
+    ``delegator`` is for a model that can't call tools and hands them to another model (GPT Live
+    under responses delegation): it is told ``delegator`` and the model it hands off to gets the
+    rendered instructions, since tool rules only mean something to the model that has the tools.
+    Other models ignore it.
     """
 
     def __init__(
@@ -64,10 +69,12 @@ class Instructions:
         *,
         audio: str | None = None,
         text: str | None = None,
+        delegator: str | None = None,
     ) -> None:
         self.common = common
         self.audio = audio
         self.text = text
+        self.delegator = delegator
 
     def render(
         self,
@@ -96,22 +103,28 @@ class Instructions:
         return result
 
     @staticmethod
-    def resolve_template(template: str, **kwargs: object) -> Instructions:
+    def resolve_template(
+        template: str, *, delegator_template: str | None = None, **kwargs: object
+    ) -> Instructions:
         """Fill a template string, producing an ``Instructions`` with modality variants.
 
         If any kwarg value is an ``Instructions`` object, its ``common``/``audio``/``text``
         parts are substituted into the matching variant of the result. This is used by
         workflow tasks to build modality-aware instructions from a single template.
+        ``delegator_template`` is filled like the audio variant and becomes ``delegator``.
         """
+        audio_kw: dict[str, object] = {
+            # an explicit "" removes the section; only None falls back to common
+            k: (v.audio if v.audio is not None else str(v)) if isinstance(v, Instructions) else v
+            for k, v in kwargs.items()
+        }
+        delegator = (
+            utils.misc.safe_render(delegator_template, audio_kw)
+            if delegator_template is not None
+            else None
+        )
         any_instructions = any(isinstance(v, Instructions) for v in kwargs.values())
         if any_instructions:
-            audio_kw: dict[str, object] = {
-                # an explicit "" removes the section; only None falls back to common
-                k: (v.audio if v.audio is not None else str(v))
-                if isinstance(v, Instructions)
-                else v
-                for k, v in kwargs.items()
-            }
             text_kw: dict[str, object] = {
                 k: (v.text if v.text is not None else str(v)) if isinstance(v, Instructions) else v
                 for k, v in kwargs.items()
@@ -123,11 +136,11 @@ class Instructions:
             if audio == text:
                 # no modality-specific differences; a single common variant renders correctly
                 # with or without a modality
-                return Instructions(common=audio)
-            return Instructions(common="", audio=audio, text=text)
+                return Instructions(common=audio, delegator=delegator)
+            return Instructions(common="", audio=audio, text=text, delegator=delegator)
         else:
             rendered = utils.misc.safe_render(template, kwargs)
-            return Instructions(common=rendered)
+            return Instructions(common=rendered, delegator=delegator)
 
     def __str__(self) -> str:
         return self.common
@@ -136,7 +149,7 @@ class Instructions:
         return f"Instructions({self.common!r})"
 
     def __hash__(self) -> int:
-        return hash((self.common, self.audio, self.text))
+        return hash((self.common, self.audio, self.text, self.delegator))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Instructions):
@@ -144,6 +157,7 @@ class Instructions:
                 self.common == other.common
                 and self.audio == other.audio
                 and self.text == other.text
+                and self.delegator == other.delegator
             )
         if isinstance(other, str):
             return self.common == other

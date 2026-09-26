@@ -391,8 +391,11 @@ class GPTLiveSession(
         self._live_model = duplex_model
         self._opts = replace(duplex_model._opts, responses=duplex_model._opts.responses.copy())
         self._tools = llm.ToolContext.empty()
-        # the agent's instructions, set by _update_session before session.start and immutable after
+        # the voice model's instructions, set by _update_session before session.start and immutable
+        # after; the agent's full instructions go to the backend when a delegator variant replaces
+        # them
         self._instructions: str | None = None
+        self._backend_instructions: str | None = None
         self._msg_ch = utils.aio.Chan[types.ClientEvent | dict[str, Any]]()
         self._audio_ch = utils.aio.Chan[llm.DuplexAudioFrame]()
         self._input_resampler: rtc.AudioResampler | None = None
@@ -441,7 +444,10 @@ class GPTLiveSession(
             type="responses",
             responses=types.ResponsesConfig(
                 model=opts.get("model", DEFAULT_BACKEND_MODEL),
-                instructions=opts.get("instructions"),
+                instructions="\n\n".join(
+                    i for i in (opts.get("instructions"), self._backend_instructions) if i
+                )
+                or None,
                 tools=_build_delegation_tools(self._tools.flatten()) or None,
                 tool_choice=_to_tool_choice(opts["tool_choice"]) if "tool_choice" in opts else None,
                 parallel_tool_calls=opts.get("parallel_tool_calls"),
@@ -1104,13 +1110,20 @@ class GPTLiveSession(
 
     # framework hooks
 
-    async def _update_instructions(self, instructions: str) -> None:
+    async def _update_instructions(
+        self, instructions: str, *, delegator: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
+        # tool rules only mean something to the backend, which makes every tool call
+        backend_instructions: str | None = None
+        if is_given(delegator) and self._opts.delegation == "responses":
+            instructions, backend_instructions = delegator, instructions
         if self._session_start_sent and instructions != self._instructions:
             raise llm.RealtimeError(
                 "gpt-live voice instructions are immutable after session start; use "
                 "append_instructions for a standing rule"
             )
         self._instructions = instructions
+        self._backend_instructions = backend_instructions
 
     async def _update_tools(self, tools: list[llm.Tool]) -> None:
         self._tools = llm.ToolContext(tools)
