@@ -21,7 +21,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import aiohttp
 
@@ -35,14 +35,16 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
+from livekit.agents.voice.io import TimedString
 
 from .log import logger
 
 WEBSOCKET_URL = "wss://tts-rt.soniox.com/tts-websocket"
 NUM_CHANNELS = 1
-DEFAULT_MODEL = "tts-rt-v1-preview"
+DEFAULT_MODEL = "tts-rt-v1"
 DEFAULT_LANGUAGE = "en"
 DEFAULT_VOICE = "Maya"
 DEFAULT_AUDIO_FORMAT = "pcm_s16le"
@@ -91,15 +93,16 @@ class TTS(tts.TTS):
         api_key: str | None = None,
         websocket_url: str = WEBSOCKET_URL,
         http_session: aiohttp.ClientSession | None = None,
+        return_timestamps: bool = True,
         tokenizer: NotGivenOr[tokenize.SentenceTokenizer] = NOT_GIVEN,
         stream_idle_timeout: float = DEFAULT_STREAM_IDLE_TIMEOUT,
     ) -> None:
         """Initialize instance of Soniox Text-to-Speech API service.
 
         Args:
-            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1-preview".
+            model (str): Soniox TTS model to use. Defaults to "tts-rt-v1".
             language (str): Language code (e.g., "en", "es", "fr"). Defaults to "en".
-            voice (str): Voice name (e.g., "Maya", "Adrian"). Defaults to "Maya".
+            voice (str): Voice name (e.g. "Maya") or a cloned-voice UUID. Defaults to "Maya".
             audio_format (str): Audio format (e.g., "pcm_s16le", "mp3"). Defaults to "pcm_s16le".
             sample_rate (int): Sample rate in Hz. Required for raw audio formats. Defaults to 24000.
             bitrate (int): Codec bitrate in bps for compressed formats. Optional.
@@ -108,6 +111,7 @@ class TTS(tts.TTS):
             api_key (str): Soniox API key. If not provided, will look for SONIOX_API_KEY env variable.
             websocket_url (str): Base WebSocket URL for Soniox TTS API.
             http_session (aiohttp.ClientSession): Optional aiohttp.ClientSession to use for requests.
+            return_timestamps (bool): Emit word-timestamped transcript deltas. Defaults to True.
             tokenizer (tokenize.SentenceTokenizer): Tokenizer used to buffer input into complete
                 sentences before sending. Defaults to
                 `livekit.agents.tokenize.blingfire.SentenceTokenizer`.
@@ -117,7 +121,7 @@ class TTS(tts.TTS):
                 Defaults to 5.0.
         """
         super().__init__(
-            capabilities=tts.TTSCapabilities(streaming=True),
+            capabilities=tts.TTSCapabilities(streaming=True, aligned_transcript=return_timestamps),
             sample_rate=sample_rate,
             num_channels=NUM_CHANNELS,
         )
@@ -142,6 +146,7 @@ class TTS(tts.TTS):
             speed=speed,
             websocket_url=websocket_url,
             api_key=api_key,
+            return_timestamps=return_timestamps,
             stream_idle_timeout=stream_idle_timeout,
         )
         self._session = http_session
@@ -205,7 +210,7 @@ class TTS(tts.TTS):
         Args:
             model: TTS model to use.
             language: Language code to use.
-            voice: Voice to use.
+            voice: Voice name or cloned-voice UUID to use.
             speed: Speaking rate in the range [0.7, 1.3]; 1.0 is the normal rate.
             stream_idle_timeout: Idle seconds before the current stream is finalized.
         """
@@ -539,6 +544,7 @@ class _TTSOptions:
     websocket_url: str
     api_key: str
     stream_idle_timeout: float
+    return_timestamps: bool = False
 
 
 @dataclass
@@ -562,6 +568,47 @@ class _CancelStream:
 _OutboundMsg = _StartConfig | _SendText | _CancelStream
 
 
+def _timed_words(chars: list[_Char], *, flush: bool) -> tuple[list[TimedString], list[_Char]]:
+    """Split buffered timed characters into word-aligned ``TimedString``s.
+
+    Soniox sends three equal-length parallel arrays per message (character,
+    start_seconds, end_seconds); the caller zips them into ``_Char``s and passes the
+    running buffer here. ``split_words`` handles all whitespace, keeps punctuation,
+    and splits CJK/Thai per character. Each delta spans one word plus the
+    whitespace/punctuation up to the next word, so the deltas re-concatenate to the
+    original text. The last word may still be growing, so it is returned as the
+    buffer to carry into the next call — unless ``flush`` closes the stream.
+    """
+    if not chars:
+        return [], []
+
+    text = "".join(c.text for c in chars)
+    words = split_words(text, ignore_punctuation=False, split_character=True)
+    if not words:
+        return [], chars
+
+    bounds = [start for _, start, _ in words] + [len(chars)]
+    count = len(words) if flush else len(words) - 1
+    timed = [
+        TimedString(
+            text=text[bounds[i] : bounds[i + 1]],
+            start_time=chars[bounds[i]].start,
+            end_time=chars[bounds[i + 1] - 1].end,
+        )
+        for i in range(count)
+    ]
+    if flush:
+        return timed, []
+    keep = bounds[count]  # start of the still-growing last word
+    return timed, chars[keep:]
+
+
+class _Char(NamedTuple):
+    text: str
+    start: float
+    end: float
+
+
 @dataclass
 class _StreamData:
     emitter: tts.AudioEmitter
@@ -572,6 +619,9 @@ class _StreamData:
     # This flag is how recv loop tells them apart.
     cancel_sent: bool = False
     config_sent: bool = False
+    # Buffered characters with timing, accumulated across timestamp messages until
+    # whole words can be emitted.
+    ts_chars: list[_Char] = field(default_factory=list)
 
 
 class _Connection:
@@ -727,6 +777,8 @@ class _Connection:
                     }
                     if msg.opts.bitrate is not None:
                         config["bitrate"] = msg.opts.bitrate
+                    if msg.opts.return_timestamps:
+                        config["return_timestamps"] = True
                     await self._ws.send_str(json.dumps(config))
                 elif isinstance(msg, _SendText):
                     payload: dict[str, Any] = {"stream_id": msg.stream_id}
@@ -811,12 +863,36 @@ class _Connection:
                 if audio_b64:
                     stream.emitter.push(base64.b64decode(audio_b64))
 
+                timestamps = resp.get("timestamps")
+                if timestamps:
+                    chars = timestamps.get("characters", [])
+                    starts = timestamps.get("character_start_times_seconds", [])
+                    ends = timestamps.get("character_end_times_seconds", [])
+                    if len(chars) == len(starts) == len(ends):
+                        stream.ts_chars += [
+                            _Char(c, s, e) for c, s, e in zip(chars, starts, ends, strict=True)
+                        ]
+                        words, stream.ts_chars = _timed_words(stream.ts_chars, flush=False)
+                        if words:
+                            stream.emitter.push_timed_transcript(words)
+                    else:
+                        logger.error(
+                            f"Soniox TTS timestamp array mismatch: "
+                            f"{len(chars)}/{len(starts)}/{len(ends)}"
+                        )
+
                 if resp.get("audio_end"):
                     stream.audio_ended = True
                     # end_segment() is called from SynthesizeStream._run's finally
                     # block (covers cancel/error paths too).
 
                 if resp.get("terminated"):
+                    # Flush the final buffered word (nothing closed it yet).
+                    words, _ = _timed_words(stream.ts_chars, flush=True)
+                    if words:
+                        stream.emitter.push_timed_transcript(words)
+                    stream.ts_chars = []
+
                     # Don't clobber an exception already raised on the error_code path.
                     if not stream.waiter.done():
                         # Server aborted on its own - no audio_end, no cancel from us.
