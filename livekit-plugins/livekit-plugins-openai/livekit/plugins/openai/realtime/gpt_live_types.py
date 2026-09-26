@@ -261,8 +261,16 @@ class ResponseSnapshot(BaseModel):
     incomplete_details: dict[str, Any] | None = None
 
 
+class OutputText(BaseModel):
+    """Public text or refusal in a completed backend message."""
+
+    type: str = ""
+    text: str | None = None
+    refusal: str | None = None
+
+
 class OutputItem(BaseModel):
-    """Fields needed to dispatch a completed backend function call."""
+    """Fields needed to dispatch backend calls and trace completed output messages."""
 
     id: str | None = None
     type: str | None = None
@@ -270,6 +278,7 @@ class OutputItem(BaseModel):
     call_id: str | None = None
     name: str | None = None
     arguments: str | None = None
+    content: list[OutputText] = []
 
 
 class ResponsesEvent(BaseModel):

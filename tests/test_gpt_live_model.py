@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
@@ -15,11 +15,14 @@ import aiohttp
 import numpy as np
 import pytest
 from aiohttp import web
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, APIError, llm
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
-from livekit.agents.telemetry import pii
+from livekit.agents.telemetry import gen_ai, pii, set_tracer_provider, tracer
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveDelegation,
@@ -1733,3 +1736,505 @@ def test_with_azure_does_not_accept_the_openai_key(monkeypatch: pytest.MonkeyPat
         "Missing Azure credentials. Pass api_key or entra_token, "
         "or set the AZURE_OPENAI_API_KEY environment variable"
     )
+
+
+@pytest.fixture
+def backend_span_exporter() -> Iterator[InMemorySpanExporter]:
+    original_provider = tracer._tracer_provider
+    original_capture = gen_ai.capture_content_enabled()
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    set_tracer_provider(provider)
+    gen_ai.set_capture_content(True)
+    try:
+        yield exporter
+    finally:
+        set_tracer_provider(original_provider)
+        gen_ai.set_capture_content(original_capture)
+        provider.shutdown()
+
+
+def _backend_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
+    return [span for span in exporter.get_finished_spans() if span.name == "llm_request"]
+
+
+def _backend_message(text: str) -> dict[str, Any]:
+    return {
+        "type": "response.output_item.done",
+        "item": {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": text}],
+        },
+    }
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("capture", [True, False])
+@pytest.mark.parametrize("capture_during_run", [True, False])
+async def test_backend_trace_records_text_without_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_span_exporter: InMemorySpanExporter,
+    capture: bool,
+    capture_during_run: bool,
+) -> None:
+    _connect_hook(monkeypatch)
+    gen_ai.set_capture_content(capture)
+    model = GPTLiveModel(api_key="sk-test", responses_options={"instructions": "Check weather."})
+    with tracer.start_as_current_span("session") as parent:
+        session = model.session()
+        try:
+            session._handle_event(
+                _response_event(
+                    "d1",
+                    {
+                        "type": "response.created",
+                        "response": {"id": "r1"},
+                    },
+                )
+            )
+            gen_ai.set_capture_content(capture_during_run)
+            session._handle_event(_response_event("d1", _backend_message("Please ask for a city.")))
+            # Reasoning items must not become conversation content.
+            session._handle_event(
+                _response_event(
+                    "d1",
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "reasoning",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "private"}],
+                        },
+                    },
+                )
+            )
+            session._handle_event(_response_event("d1", _completed("r1")))
+            assert session._history.items == []
+        finally:
+            await session.aclose()
+            await model.aclose()
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.parent is not None and span.parent.span_id == parent.get_span_context().span_id
+    attrs = dict(span.attributes or {})
+    assert attrs["lk.delegation_id"] == "d1"
+    assert attrs["gen_ai.response.id"] == "r1"
+    assert attrs["gen_ai.response.model"] == "gpt-5.6-sol"
+    assert attrs["gen_ai.usage.input_tokens"] == 376
+    assert attrs["gen_ai.usage.output_tokens"] == 18
+    assert attrs["gen_ai.usage.cache_read.input_tokens"] == 100
+    assert attrs["gen_ai.usage.cache_write.input_tokens"] == 20
+    assert attrs["gen_ai.usage.reasoning.output_tokens"] == 5
+    assert attrs["gen_ai.response.finish_reasons"] == ("stop",)
+    assert "gen_ai.input.messages" not in attrs
+    if capture and capture_during_run:
+        assert json.loads(str(attrs["gen_ai.output.messages"])) == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "Please ask for a city."}]}
+        ]
+    else:
+        assert "gen_ai.output.messages" not in attrs
+    assert ("gen_ai.system_instructions" in attrs) is capture
+    assert "private" not in str(attrs)
+    filtered = pii.filter_attributes(attrs)
+    assert "gen_ai.output.messages" not in filtered
+    assert "gen_ai.system_instructions" not in filtered
+    assert filtered["gen_ai.response.id"] == "r1"
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("capture", [True, False])
+async def test_backend_traces_separate_delegations_and_continuations(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, capture: bool
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    gen_ai.set_capture_content(capture)
+    try:
+        for d_id in ("d1", "d2"):
+            session._handle_event(_response_event(d_id, {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _function_call_done("c1")))
+        session._handle_event(_response_event("d2", _backend_message("Second delegation.")))
+        session._handle_event(_response_event("d2", _completed("r2")))
+        session._handle_event(_response_event("d1", _completed("r1")))
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _backend_message("Continuation.")))
+        session._handle_event(_response_event("d1", _completed("r3")))
+    finally:
+        await session.aclose()
+        await model.aclose()
+    spans = {
+        s.attributes["gen_ai.response.id"]: dict(s.attributes)
+        for s in _backend_spans(backend_span_exporter)
+        if s.attributes
+    }
+    assert set(spans) == {"r1", "r2", "r3"}
+    assert spans["r1"]["gen_ai.response.finish_reasons"] == ("tool_call",)
+    if not capture:
+        assert all("gen_ai.output.messages" not in attrs for attrs in spans.values())
+        return
+    parts = json.loads(str(spans["r1"]["gen_ai.output.messages"]))[0]["parts"]
+    assert parts == [
+        {
+            "type": "tool_call",
+            "id": "c1",
+            "name": "_get_weather",
+            "arguments": {"location": "Paris"},
+        }
+    ]
+    assert "Second delegation." in str(spans["r2"]["gen_ai.output.messages"])
+    assert "Continuation." in str(spans["r3"]["gen_ai.output.messages"])
+    assert "c1" not in str(spans["r3"])
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("ending", ["response.failed", "response.incomplete", "close"])
+async def test_unfinished_backend_traces_end_once(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, ending: str
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        # Application-initiated responses have no delegation id.
+        session._handle_event(
+            {
+                "type": "response.event",
+                "event": {
+                    "type": "response.created",
+                    "response": {"id": "r1"},
+                },
+            }
+        )
+        if ending != "close":
+            session._handle_event({"type": "response.event", "event": {"type": ending}})
+    finally:
+        await session.aclose()
+        await model.aclose()
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
+    assert len(spans) == 1
+    assert spans[0].status.is_ok is False
+    assert spans[0].attributes["error.type"] == (
+        "connection_closed" if ending == "close" else ending
+    )
+    assert not session._backend_traces
+
+
+@pytest.mark.no_concurrent
+async def test_backend_trace_ends_on_disconnect_before_reconnect(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
+) -> None:
+    sockets = [_LifecycleWS(), _FakeWS(auto_start=True)]
+    connections = 0
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS | _FakeWS:
+        nonlocal connections
+        ws = sockets[connections]
+        connections += 1
+        if isinstance(ws, _FakeWS):
+            ws.session = self
+        return ws
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    reconnected = asyncio.Event()
+    session.on("session_reconnected", lambda _: reconnected.set())
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        session._handle_event(
+            _response_event(
+                "d1",
+                {
+                    "type": "response.created",
+                    "response": {"id": "r1"},
+                },
+            )
+        )
+        session._handle_event(_response_event("d1", _backend_message("Before disconnect.")))
+        await sockets[0].close()
+        await asyncio.wait_for(reconnected.wait(), timeout=2)
+        assert not session._backend_traces
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        session._handle_event(_response_event("d1", _completed("r2")))
+    finally:
+        await session.aclose()
+        await model.aclose()
+    spans = [s for s in _backend_spans(backend_span_exporter) if s.name == "llm_request"]
+    assert len(spans) == 2
+    assert spans[0].attributes["gen_ai.response.id"] == "r1"
+    assert spans[0].attributes["error.type"] == "connection_closed"
+    assert spans[1].attributes["gen_ai.response.id"] == "r2"
+    assert "gen_ai.output.messages" not in spans[1].attributes
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("status", [None, "in_progress", "incomplete"])
+@pytest.mark.parametrize("kind", ["message", "function_call"])
+@pytest.mark.parametrize("ending", ["response.completed", "response.incomplete"])
+async def test_backend_trace_ignores_unfinished_items(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_span_exporter: InMemorySpanExporter,
+    status: str | None,
+    kind: str,
+    ending: str,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        event = (
+            _backend_message("Unfinished text") if kind == "message" else _function_call_done("c1")
+        )
+        event["item"]["status"] = status
+        session._handle_event(_response_event("d1", event))
+        session._handle_event(_response_event("d1", {"type": ending}))
+        assert not session._history.items
+    finally:
+        await session.aclose()
+        await model.aclose()
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
+    assert "gen_ai.output.messages" not in attrs
+    assert attrs["gen_ai.response.finish_reasons"] == (
+        "stop" if ending == "response.completed" else "error",
+    )
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("field", ["call_id", "name", "arguments"])
+@pytest.mark.parametrize("capture", [True, False])
+async def test_backend_trace_ignores_malformed_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_span_exporter: InMemorySpanExporter,
+    field: str,
+    capture: bool,
+) -> None:
+    _connect_hook(monkeypatch)
+    gen_ai.set_capture_content(capture)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        event = _function_call_done("c1")
+        del event["item"][field]
+        session._handle_event(_response_event("d1", event))
+        session._handle_event(_response_event("d1", _completed("r1")))
+        assert not session._history.items
+    finally:
+        await session.aclose()
+        await model.aclose()
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
+    assert "gen_ai.output.messages" not in attrs
+    assert attrs["gen_ai.response.finish_reasons"] == ("stop",)
+
+
+@pytest.mark.no_concurrent
+async def test_backend_trace_deduplicates_calls_like_dispatch(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        for _ in range(2):
+            session._handle_event(_response_event("d1", _function_call_done("c1")))
+        session._handle_event(_response_event("d1", _completed("r1")))
+        assert len(session._history.items) == 1
+    finally:
+        await session.aclose()
+        await model.aclose()
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
+    output = json.loads(str(attrs["gen_ai.output.messages"]))
+    assert len(output) == 1
+    assert len(output[0]["parts"]) == 1
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("kind", ["refusal", "empty_arguments"])
+async def test_backend_trace_preserves_valid_edge_case_output(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_span_exporter: InMemorySpanExporter,
+    kind: str,
+) -> None:
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        session._handle_event(_response_event("d1", {"type": "response.created"}))
+        if kind == "refusal":
+            event = _backend_message("")
+            event["item"]["content"] = [{"type": "refusal", "refusal": "Cannot help with that."}]
+            expected = {"type": "text", "content": "Cannot help with that."}
+        else:
+            event = _function_call_done("c1")
+            event["item"]["arguments"] = ""
+            expected = {"type": "tool_call", "id": "c1", "name": "_get_weather", "arguments": ""}
+        session._handle_event(_response_event("d1", event))
+        session._handle_event(_response_event("d1", _completed("r1")))
+    finally:
+        await session.aclose()
+        await model.aclose()
+    attrs = _backend_spans(backend_span_exporter)[0].attributes
+    assert json.loads(str(attrs["gen_ai.output.messages"])) == [
+        {"role": "assistant", "parts": [expected]}
+    ]
+    assert attrs["gen_ai.response.finish_reasons"] == (
+        "stop" if kind == "refusal" else "tool_call",
+    )
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("capture", [True, False])
+async def test_protocol_timeline_correlates_submission_receipts_and_speech(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, capture: bool
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    gen_ai.set_capture_content(capture)
+    model = GPTLiveModel(api_key="sk-test")
+    with tracer.start_as_current_span("session") as parent:
+        session = model.session()
+        try:
+            await session._update_session()
+            await session._session_started_fut
+            session._handle_event(
+                {
+                    "type": "session.delegation.created",
+                    "offset_ms": 50,
+                    "delegation": {"id": "d1", "target": "responses"},
+                }
+            )
+            session._handle_event(
+                _response_event("d1", {"type": "response.created", "response": {"id": "resp1"}})
+            )
+            session._handle_event(_response_event("d1", _backend_message("PRIVATE answer")))
+            session._handle_event(_response_event("d1", _completed("resp1")))
+            # Observe the actual transport path, not a synthetic call to the observer.
+            await session._ws_send(
+                ws,
+                {
+                    "type": "response.item.create",
+                    "event_id": "result1",
+                    "item": {
+                        "type": "function_call_output",
+                        "call_id": "tool1",
+                        "output": "PRIVATE result",
+                    },
+                },
+            )  # type: ignore[arg-type]
+            await session._ws_send(ws, {"type": "response.create", "event_id": "continue1"})  # type: ignore[arg-type]
+            await session._ws_send(
+                ws,
+                {
+                    "type": "session.commentary.append",
+                    "event_id": "context1",
+                    "delegation_id": "d1",
+                    "content": "PRIVATE context",
+                },
+            )  # type: ignore[arg-type]
+            session._handle_event(
+                {
+                    "type": "session.commentary.appended",
+                    "client_event_id": "context1",
+                    "offset_ms": 100,
+                }
+            )
+            session._handle_event(
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": "PRIVATE speech",
+                    "start_ms": 120,
+                    "end_ms": 150,
+                }
+            )
+        finally:
+            await session.aclose()
+            await model.aclose()
+    spans = [s for s in backend_span_exporter.get_finished_spans() if s.name == "gpt_live.protocol"]
+    assert spans
+    assert all(s.context.trace_id == parent.get_span_context().trace_id for s in spans)
+    events = [dict(s.attributes or {}) for s in spans]
+    commands = [e for e in events if e.get("lk.openai.event_id") == "result1"]
+    assert [e["lk.openai.direction"] for e in commands] == ["queued", "sent"]
+    assert all(e["lk.openai.item.call_id"] == "tool1" for e in commands)
+    assert commands[0]["lk.session_id"] == "live_test"
+    assert any(e.get("lk.openai.client_event_id") == "context1" for e in events)
+    assert any(e.get("lk.openai.delegation.id") == "d1" for e in events)
+    assert any(e.get("lk.openai.response.id") == "resp1" for e in events)
+    assert ("PRIVATE" in str(events)) is capture
+    assert "PRIVATE" not in str([pii.filter_attributes(e) for e in events])
+
+
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("event_type", ["response.create", "session.input_audio.append"])
+async def test_protocol_send_failure_never_claims_sent(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter, event_type: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session()
+        await session._session_started_fut
+        failing_ws = SimpleNamespace(send_str=AsyncMock(side_effect=ConnectionError("PRIVATE")))
+        with pytest.raises(APIConnectionError):
+            await session._ws_send(
+                failing_ws, {"type": event_type, "event_id": "failed-command", "delta": "PRIVATE"}
+            )  # type: ignore[arg-type]
+    finally:
+        await session.aclose()
+        await model.aclose()
+    events = [
+        s.attributes
+        for s in backend_span_exporter.get_finished_spans()
+        if s.name == "gpt_live.protocol"
+        and s.attributes.get("lk.openai.event_id") == "failed-command"
+    ]
+    assert [e["lk.openai.direction"] for e in events] == (
+        ["send_failed"] if event_type == "session.input_audio.append" else ["queued", "send_failed"]
+    )
+    assert "PRIVATE" not in str(events)
+
+
+@pytest.mark.no_concurrent
+def test_protocol_audio_is_bounded_and_reasoning_is_excluded(
+    monkeypatch: pytest.MonkeyPatch, backend_span_exporter: InMemorySpanExporter
+) -> None:
+    from livekit.plugins.openai.realtime._gpt_live_telemetry import ProtocolTrace
+
+    timeline = ProtocolTrace()
+    monkeypatch.setattr(
+        "livekit.plugins.openai.realtime._gpt_live_telemetry.time.time_ns", lambda: 100
+    )
+    timeline.record("received", {"type": "session.started", "session": {"id": "live_audio"}})
+    for _ in range(1000):
+        timeline.record(
+            "received", {"type": "session.output_audio.delta", "delta": "PRIVATE AUDIO"}
+        )
+    timeline.record(
+        "received",
+        _response_event(
+            "d1", {"type": "response.reasoning_text.delta", "delta": "PRIVATE REASONING"}
+        ),
+    )
+    timeline.close()
+    timeline.close()
+    spans = backend_span_exporter.get_finished_spans()
+    audio = [s for s in spans if s.name == "gpt_live.audio_activity"]
+    assert len(audio) == 1
+    assert audio[0].attributes["lk.openai.frame_count"] == 1000
+    assert audio[0].attributes["lk.session_id"] == "live_audio"
+    assert "PRIVATE" not in str([s.attributes for s in spans])
