@@ -46,10 +46,11 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import AgentSessionUsage, ModelUsageCollector
+from ..metrics import AgentMetrics, AgentSessionUsage, ModelUsageCollector
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
     loop_monitor,
+    otel_metrics,
     trace_types,
     tracer,
     utils as trace_utils,
@@ -76,6 +77,8 @@ from .events import (
     CloseReason,
     ConversationItemAddedEvent,
     EventTypes,
+    MetricsCollectedEvent,
+    SessionUsageUpdatedEvent,
     ToolCallEnded,
     ToolExecutionUpdatedEvent,
     UserInputTranscribedEvent,
@@ -1140,13 +1143,16 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 run_state = RunResult(output_type=None)
                 self._global_run_state = run_state
 
-            # it is ok to await it directly, there is no previous task to drain.
-            # _update_activity_task also watches on_enter on the run state: without it
-            # the run completes as soon as the first speech does, dropping whatever
-            # on_enter produces next — and never completes when on_enter says nothing.
-            tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
+            # On-demand evaluations can finish between agent activities.
+            if self._decision_model is not None:
+                self._decision_model.on("metrics_collected", self._on_metrics_collected)
 
             try:
+                # it is ok to await it directly, there is no previous task to drain.
+                # _update_activity_task also watches on_enter on the run state: without it
+                # the run completes as soon as the first speech does, dropping whatever
+                # on_enter produces next — and never completes when on_enter says nothing.
+                tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
                 try:
                     await asyncio.gather(*tasks)
                 finally:
@@ -1154,8 +1160,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
                 if self._session_host is not None:
                     await self._session_host.start()
-            except Exception as e:
-                trace_utils.record_exception(session_start_span, e)
+            except BaseException as e:
+                if self._decision_model is not None:
+                    self._decision_model.off("metrics_collected", self._on_metrics_collected)
+                if isinstance(e, Exception):
+                    trace_utils.record_exception(session_start_span, e)
                 raise
             finally:
                 session_start_span.end()
@@ -1342,6 +1351,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._room_io = None
             finally:
                 # the session is closed whatever the teardown raised
+                if self._decision_model is not None:
+                    self._decision_model.off("metrics_collected", self._on_metrics_collected)
                 self._started = False
                 self._cancel_user_away_timer()
                 self._user_state = "listening"
@@ -2011,6 +2022,12 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # super().emit bypasses AgentSession.emit's narrowed AgentEvent type;
         # debug messages ride the proto, not the Pydantic event union.
         super().emit("debug_message", agent_pb.DebugMessage(payload=st))
+
+    def _on_metrics_collected(self, ev: AgentMetrics) -> None:
+        self._usage_collector.collect(ev)
+        otel_metrics.collect_usage(ev)
+        self.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
+        self.emit("session_usage_updated", SessionUsageUpdatedEvent(usage=self.usage))
 
     def _on_error(
         self, error: llm.LLMError | stt.STTError | tts.TTSError | llm.RealtimeModelError

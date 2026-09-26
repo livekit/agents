@@ -6,9 +6,9 @@ from collections.abc import Mapping
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from livekit.agents import Agent, AgentSession, APIError, decisions
+from livekit.agents import Agent, AgentSession, APIError, APITimeoutError, decisions
 from livekit.agents.decisions import DecisionResponse, ProbabilityResult
-from livekit.agents.llm import ChatContext, ChatMessage
+from livekit.agents.llm import ChatContext, ChatMessage, Toolset
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.events import AgentEvent
 
@@ -83,7 +83,7 @@ async def next_call(model: ControlledModel):
 
 
 @pytest.mark.parametrize("background", [False, True], ids=["on_demand_only", "with_background"])
-async def test_on_demand_usage_is_collected_through_activity_transitions(background: bool) -> None:
+async def test_on_demand_usage_tracks_session_lifetime(background: bool) -> None:
     model = ControlledModel()
     session = session_for(model)
     collected = []
@@ -133,9 +133,77 @@ async def test_on_demand_usage_is_collected_through_activity_transitions(backgro
         await evaluate()
         assert_usage(4)
 
-    # The model can outlive the session. A later call must not update a closed session.
     await evaluate()
     assert_usage(4)
+
+
+async def test_on_demand_usage_is_collected_while_next_agent_initializes() -> None:
+    setup_started = asyncio.Event()
+    finish_setup = asyncio.Event()
+
+    class SlowTools(Toolset):
+        async def setup(self):
+            setup_started.set()
+            await finish_setup.wait()
+            return self
+
+    model = ControlledModel()
+    async with session_for(model) as session:
+        collected = []
+        session.on("session_usage_updated", collected.append)
+        await session.start(Receptionist(instructions="First agent."))
+        request = asyncio.create_task(
+            model.evaluate(
+                chat_ctx=ChatContext.empty(),
+                decisions={"check": decisions.Probability("True?")},
+            )
+        )
+        _, _, answer = await next_call(model)
+        session.update_agent(
+            Receptionist(
+                instructions="Next agent.",
+                tools=[SlowTools(id="slow_tools")],
+            )
+        )
+        try:
+            await asyncio.wait_for(setup_started.wait(), 2)
+            # The old activity has closed and the new one's models have not started.
+            answer.set_result(0.5)
+            await request
+            assert len(session.usage.model_usage) == 1
+            usage = session.usage.model_usage[0]
+            assert usage.type == "decision_usage"
+            assert (usage.total_requests, usage.input_tokens, usage.output_tokens) == (1, 12, 2)
+            assert len(collected) == 1
+        finally:
+            finish_setup.set()
+            assert session._update_activity_atask is not None
+            await session._update_activity_atask
+        assert len(collected) == 1
+
+
+@pytest.mark.parametrize("error", [RuntimeError("startup failed"), asyncio.CancelledError()])
+async def test_failed_start_does_not_collect_later_decision_usage(monkeypatch, error) -> None:
+    model = ControlledModel()
+    session = session_for(model)
+
+    async def fail_start(old_task, agent):
+        raise error
+
+    monkeypatch.setattr(session, "_update_activity_task", fail_start)
+    with pytest.raises(type(error)):
+        # Keep startup's tracing context in its own task.
+        await asyncio.create_task(session.start(Receptionist(instructions="First agent.")))
+    request = asyncio.create_task(
+        model.evaluate(
+            chat_ctx=ChatContext.empty(),
+            decisions={"check": decisions.Probability("True?")},
+        )
+    )
+    _, _, answer = await next_call(model)
+    answer.set_result(0.5)
+    await request
+    assert session.usage.model_usage == []
 
 
 async def test_overlap_keeps_running_and_latest_pending_snapshot() -> None:
@@ -186,7 +254,6 @@ async def test_cadence_and_context_are_independent_and_snapshot_is_isolated() ->
         third = add_user(session, "third")
         session._conversation_item_added(ChatMessage(role="assistant", content=["third reply"]))
         fourth = add_user(session, "fourth")
-        # An ineligible fifth turn cannot move the pending request's cutoff.
         add_user(session, "fifth")
         third.content[:] = ["edited later"]
         fourth.content[:] = ["edited later too"]
@@ -194,6 +261,50 @@ async def test_cadence_and_context_are_independent_and_snapshot_is_isolated() ->
         context, _, pending_answer = await next_call(model)
         assert [item.text_content for item in context.items] == ["third", "third reply", "fourth"]
         pending_answer.set_result(0.2)
+
+
+@pytest.mark.parametrize("context_turns", [1, 3])
+async def test_context_window_starts_with_user_and_ends_at_source_message(
+    context_turns: int,
+) -> None:
+    model = ControlledModel()
+    async with session_for(model, max_context_turns=context_turns) as session:
+        session.history.add_message(role="assistant", content="Greeting", created_at=1.0)
+        session.history.add_message(role="user", content="First turn", created_at=2.0)
+        session.history.add_message(role="system", content="Instructions", created_at=2.5)
+        session.history.add_message(role="assistant", content="Reply", created_at=3.0)
+        session.history.add_message(role="assistant", content="After the source", created_at=5.0)
+        await session.start(agent())
+
+        session._conversation_item_added(
+            ChatMessage(
+                role="user",
+                content=["Current turn"],
+                created_at=4.0,
+            )
+        )
+        context, _, answer = await next_call(model)
+        expected = (
+            ["Current turn"] if context_turns == 1 else ["First turn", "Reply", "Current turn"]
+        )
+        assert [item.text_content for item in context.items] == expected
+        answer.set_result(0.5)
+
+
+@pytest.mark.parametrize("max_retry", [0, 1])
+async def test_request_timeout_preserves_retry_count_and_exception_cause(max_retry: int) -> None:
+    model = ControlledModel()
+    collected = []
+    model.on("metrics_collected", collected.append)
+    with pytest.raises(APITimeoutError) as error:
+        await model.evaluate(
+            chat_ctx=ChatContext.empty(),
+            decisions={"check": decisions.Probability("True?")},
+            conn_options=APIConnectOptions(max_retry=max_retry, retry_interval=0, timeout=0.01),
+        )
+    assert model.calls.qsize() == max_retry + 1
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+    assert collected == []
 
 
 async def test_timeout_releases_pending_work_without_stopping_session() -> None:

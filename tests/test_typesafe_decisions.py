@@ -82,8 +82,7 @@ async def test_jev_batches_all_kinds_and_preserves_distributions_and_usage() -> 
 @pytest.mark.parametrize(
     ("value", "probabilities"),
     [
-        # Live Jev response to "I I actually hate talking to AI.": the score
-        # and probabilities are independently rounded to two decimal places.
+        # Captured Jev response: score 1.07 with probabilities implying 1.08.
         (1.07, {"0": 0.0, "1": 0.92, "2": 0.08}),
         (1.0, {"0": 0.33, "1": 0.33, "2": 0.33}),
         (1.4, {"0": 0.01, "1": 0.59, "2": 0.41}),
@@ -112,6 +111,24 @@ async def test_rounded_choice_distribution_is_preserved() -> None:
     result = response.results["intent"]
     assert result.kind == "choice"
     assert result.probabilities == {"booking": 0.66, "other": 0.33}
+
+
+async def test_five_level_score_rounding_includes_level_weights() -> None:
+    # Independently rounded from [0.2049, 0.2049, 0.2049, 0.2049, 0.1804]
+    # and expected score 1.951. The reported probabilities imply 1.92.
+    body = response_body()
+    body["answers"]["frustration"].update(
+        score=1.95, probabilities={"0": 0.2, "1": 0.2, "2": 0.2, "3": 0.2, "4": 0.18}
+    )
+    questions = QUESTIONS | {
+        "frustration": decisions.Score(
+            "Frustration?", levels=["Calm", "Uneasy", "Annoyed", "Angry", "Furious"]
+        )
+    }
+    model, _ = model_for(body)
+    response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=questions)
+    assert response.results.keys() == questions.keys()
+    assert response.results["frustration"].value == 1.95
 
 
 @pytest.mark.parametrize(

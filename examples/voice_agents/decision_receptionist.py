@@ -1,19 +1,6 @@
-"""A receptionist with background decisions, using an OPENROUTER_API_KEY.
+"""Receptionist with background Jev decisions and a simulated human handoff.
 
-From the repository root:
-    lk agent console examples/voice_agents/decision_receptionist.py
-    lk agent console --text examples/voice_agents/decision_receptionist.py
-
-For scripted testing:
-    lk agent debugger start examples/voice_agents/decision_receptionist.py
-    lk agent debugger say "I'd like to book a table for two tomorrow."
-    lk agent debugger say "I've asked three times. Please get me a person."
-    lk agent debugger logs --last 30
-    lk agent debugger stop
-
-Voice uses LiveKit inference credentials for STT/TTS. With only OPENROUTER_API_KEY,
-use --text or the debugger. Decisions appear in the console as each request completes.
-This example simulates a handoff; it does not transfer a real call.
+Run: lk agent console examples/voice_agents/decision_receptionist.py
 """
 
 import logging
@@ -113,7 +100,6 @@ async def entrypoint(ctx: JobContext) -> None:
             ev.source_message_id,
             {name: result.value for name, result in ev.results.items()},
         )
-        # These are observations about a snapshot. Only act on a current result.
         latest_user = next(
             (
                 item

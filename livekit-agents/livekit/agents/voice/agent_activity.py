@@ -27,7 +27,6 @@ from ..llm.tool_context import (
 )
 from ..log import logger
 from ..metrics import (
-    DecisionMetrics,
     EOUMetrics,
     LLMMetrics,
     RealtimeModelMetrics,
@@ -37,7 +36,6 @@ from ..metrics import (
 )
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
-    otel_metrics,
     trace_types,
     tracer,
     utils as trace_utils,
@@ -70,7 +68,6 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
-    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserTranscriptionTimeoutEvent,
@@ -1189,11 +1186,9 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
-        if self._session.decision_model is not None:
-            self._session.decision_model.on("metrics_collected", self._on_metrics_collected)
-            if self._agent.decisions:
-                self._decision_runner = _DecisionRunner(self, self._session.decision_model)
-                self._decision_runner.start()
+        if self._agent.decisions and self._session.decision_model is not None:
+            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
+            self._decision_runner.start()
 
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
@@ -1566,9 +1561,6 @@ class AgentActivity(RecognitionHooks):
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
-
-        if self._session.decision_model is not None:
-            self._session.decision_model.off("metrics_collected", self._on_metrics_collected)
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
@@ -2153,12 +2145,7 @@ class AgentActivity(RecognitionHooks):
 
     def _on_metrics_collected(
         self,
-        ev: STTMetrics
-        | TTSMetrics
-        | VADMetrics
-        | LLMMetrics
-        | RealtimeModelMetrics
-        | DecisionMetrics,
+        ev: STTMetrics | TTSMetrics | VADMetrics | LLMMetrics | RealtimeModelMetrics,
     ) -> None:
         if (speech_handle := _SpeechHandleContextVar.get(None)) and (
             isinstance(ev, LLMMetrics) or isinstance(ev, TTSMetrics)
@@ -2170,13 +2157,7 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
-        self._session._usage_collector.collect(ev)
-        otel_metrics.collect_usage(ev)
-        self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-        self._session.emit(
-            "session_usage_updated",
-            SessionUsageUpdatedEvent(usage=self._session.usage),
-        )
+        self._session._on_metrics_collected(ev)
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder

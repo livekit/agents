@@ -121,9 +121,7 @@ def encode_session_usage(usage: AgentSessionUsage) -> _pb.AgentSessionUsage:
     model_usages: list[_pb.ModelUsage] = []
     for mu in usage.model_usage:
         if isinstance(mu, DecisionModelUsage):
-            # The current protocol has no decision usage variant. Preserve provider,
-            # model, and token counts in the existing token-usage representation.
-            # The full SDK/Cloud session report retains decision_usage and total_requests.
+            # The current session protocol has no decision usage variant.
             mu = LLMModelUsage(
                 provider=mu.provider,
                 model=mu.model,

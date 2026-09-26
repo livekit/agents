@@ -22,9 +22,9 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 DecisionKind = Literal["probability", "choice", "score"]
 _Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
-# Providers such as Jev independently round scores and probabilities to two
-# decimal places. Each reported number can differ by half a hundredth.
+# Jev rounds scores and probabilities independently to two decimal places.
 _ROUNDING_ERROR = 0.005
+_FLOAT_EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -182,22 +182,23 @@ def _validate_response(response: DecisionResponse, decisions: Mapping[str, Decis
                 raise APIError("score distribution does not match levels", retryable=False)
             if result.value > len(decision.levels) - 1:
                 raise APIError("score is outside the defined scale", retryable=False)
-            expected = sum(index * p for index, p in result.probabilities.items())
-            # Accumulate the weighted probability errors and the score's own
-            # rounding error. The small epsilon covers binary float arithmetic.
-            tolerance = _ROUNDING_ERROR * (1 + sum(result.probabilities)) + 1e-9
-            if not math.isclose(result.value, expected, abs_tol=tolerance):
+            expected_score = sum(index * p for index, p in result.probabilities.items())
+            score_tolerance = (
+                _ROUNDING_ERROR * (1 + sum(range(len(decision.levels)))) + _FLOAT_EPSILON
+            )
+            if not math.isclose(result.value, expected_score, abs_tol=score_tolerance):
                 raise APIError("score must be the expected level index", retryable=False)
         if isinstance(result, (ChoiceResult, ScoreResult)) and result.probabilities is not None:
-            tolerance = _ROUNDING_ERROR * len(result.probabilities) + 1e-9
-            if not math.isclose(sum(result.probabilities.values()), 1.0, abs_tol=tolerance):
+            probability_sum_tolerance = _ROUNDING_ERROR * len(result.probabilities) + _FLOAT_EPSILON
+            if not math.isclose(
+                sum(result.probabilities.values()), 1.0, abs_tol=probability_sum_tolerance
+            ):
                 raise APIError("decision probabilities must sum to one", retryable=False)
 
 
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     """Provider-neutral batched decisions, also usable outside AgentSession.
 
-    Providers implement ``_evaluate_impl`` and declare the supported question kinds.
     For on-demand evaluation, pass an explicit ChatContext, including any new message
     received separately by ``on_user_turn_completed``.
     """
@@ -244,28 +245,30 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                     ),
                     timeout=conn_options.timeout,
                 )
-                _validate_response(response, definitions)
-                self.emit(
-                    "metrics_collected",
-                    DecisionMetrics(
-                        label=self.label,
-                        request_id=response.request_id,
-                        timestamp=time.time(),
-                        duration=time.perf_counter() - started,
-                        input_tokens=response.input_tokens,
-                        output_tokens=response.output_tokens,
-                        metadata=Metadata(model_name=self.model, model_provider=self.provider),
-                    ),
-                )
-                return response
-            except asyncio.TimeoutError as exc:
-                error: APIError = APITimeoutError("decision request timed out")
-                error.__cause__ = exc
-            except APIError as exc:
-                error = exc
-            if not error.retryable or attempt == conn_options.max_retry:
-                raise error
-            await asyncio.sleep(conn_options._interval_for_retry(attempt))
+            except (APIError, asyncio.TimeoutError) as error:
+                if isinstance(error, APIError) and not error.retryable:
+                    raise
+                if attempt == conn_options.max_retry:
+                    if isinstance(error, asyncio.TimeoutError):
+                        raise APITimeoutError("decision request timed out") from error
+                    raise
+                await asyncio.sleep(conn_options._interval_for_retry(attempt))
+                continue
+
+            _validate_response(response, definitions)
+            self.emit(
+                "metrics_collected",
+                DecisionMetrics(
+                    label=self.label,
+                    request_id=response.request_id,
+                    timestamp=time.time(),
+                    duration=time.perf_counter() - started,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    metadata=Metadata(model_name=self.model, model_provider=self.provider),
+                ),
+            )
+            return response
         raise RuntimeError("unreachable")
 
     @abstractmethod

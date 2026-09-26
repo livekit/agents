@@ -28,8 +28,7 @@ def test_release_updater_includes_typesafe(
     arguments: list[str],
     expected: str,
 ) -> None:
-    # Never run the release updater against the working tree. Give the isolated
-    # copy a fixed baseline so future releases do not change these test cases.
+    # A fixed fixture version keeps these cases stable across releases.
     plugin = tmp_path / PLUGIN_PATH
     shutil.copytree(REPO_ROOT / PLUGIN_PATH, plugin, ignore=shutil.ignore_patterns("__pycache__"))
     version_file = plugin / "livekit/plugins/typesafe/version.py"

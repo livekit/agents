@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 import aiohttp
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from livekit.agents import (
     APIConnectionError,
@@ -55,10 +55,11 @@ class _Usage(BaseModel):
     output_tokens: int | None = None
 
 
+_Answer = Annotated[_NoulAnswer | _ChoiceAnswer | _ScoreAnswer, Field(discriminator="type")]
+
+
 class _Response(BaseModel):
-    answers: dict[
-        str, Annotated[_NoulAnswer | _ChoiceAnswer | _ScoreAnswer, Field(discriminator="type")]
-    ]
+    answers: dict[str, _Answer]
     usage: _Usage = Field(default_factory=_Usage)
     id: str = ""
 
@@ -128,16 +129,7 @@ class Jev(DecisionModel):
         decisions: Mapping[str, Decision],
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
-        questions: dict[str, dict[str, Any]] = {}
-        for name, definition in decisions.items():
-            question: dict[str, Any] = {"instructions": definition.instructions}
-            if isinstance(definition, Probability):
-                question["type"] = "noul"
-            elif isinstance(definition, Choice):
-                question.update(type="choice", criteria=definition.options)
-            else:
-                question.update(type="score", criteria=definition.levels)
-            questions[name] = question
+        questions = {name: _encode_question(definition) for name, definition in decisions.items()}
         state = [
             {"role": item.role, "content": item.text_content}
             for item in chat_ctx.items
@@ -159,28 +151,11 @@ class Jev(DecisionModel):
                     )
                 parsed = _Response.model_validate(await response.json())
                 request_id = parsed.id or response.headers.get("x-request-id", "")
-            results: dict[str, DecisionResult] = {}
-            for name, answer in parsed.answers.items():
-                answer_definition = decisions.get(name)
-                if isinstance(answer, _NoulAnswer):
-                    results[name] = ProbabilityResult(value=answer.noul)
-                elif isinstance(answer, _ChoiceAnswer):
-                    results[name] = ChoiceResult(
-                        value=answer.choice,
-                        probabilities=answer.probabilities,
-                        provider_data={"confidence": answer.confidence},
-                    )
-                elif isinstance(answer_definition, Score):
-                    results[name] = ScoreResult(
-                        value=answer.score,
-                        probabilities=answer.probabilities,
-                        levels=answer_definition.levels,
-                        provider_data={"confidence": answer.confidence},
-                    )
-                else:
-                    raise APIError("unexpected score in Jev response", retryable=False)
             return DecisionResponse(
-                results=results,
+                results={
+                    name: _decode_answer(answer, decisions.get(name))
+                    for name, answer in parsed.answers.items()
+                },
                 request_id=request_id,
                 input_tokens=parsed.usage.input_tokens,
                 output_tokens=parsed.usage.output_tokens,
@@ -189,5 +164,35 @@ class Jev(DecisionModel):
             raise APITimeoutError("Jev request timed out") from exc
         except aiohttp.ClientError as exc:
             raise APIConnectionError("Jev connection failed") from exc
-        except (ValidationError, ValueError) as exc:
+        except ValueError as exc:
             raise APIError("invalid Jev decision response", retryable=False) from exc
+
+
+def _encode_question(definition: Decision) -> dict[str, Any]:
+    question: dict[str, Any] = {"instructions": definition.instructions}
+    if isinstance(definition, Probability):
+        question["type"] = "noul"
+    elif isinstance(definition, Choice):
+        question.update(type="choice", criteria=definition.options)
+    else:
+        question.update(type="score", criteria=definition.levels)
+    return question
+
+
+def _decode_answer(answer: _Answer, definition: Decision | None) -> DecisionResult:
+    if isinstance(answer, _NoulAnswer):
+        return ProbabilityResult(value=answer.noul)
+    if isinstance(answer, _ChoiceAnswer):
+        return ChoiceResult(
+            value=answer.choice,
+            probabilities=answer.probabilities,
+            provider_data={"confidence": answer.confidence},
+        )
+    if not isinstance(definition, Score):
+        raise APIError("unexpected score in Jev response", retryable=False)
+    return ScoreResult(
+        value=answer.score,
+        probabilities=answer.probabilities,
+        levels=definition.levels,
+        provider_data={"confidence": answer.confidence},
+    )

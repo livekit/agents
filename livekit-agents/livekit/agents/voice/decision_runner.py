@@ -56,32 +56,36 @@ class _DecisionRunner:
             self._task = asyncio.create_task(self._run(), name="agent_decisions")
 
     def _snapshot(self, source_id: str) -> ChatContext:
+        history = self._session.history
+        source_index = history.index_by_id(source_id)
+        if source_index is None:
+            return ChatContext.empty()
+
         messages: list[ChatMessage] = []
-        for item in self._session.history.items:
-            if isinstance(item, ChatMessage) and item.role in ("user", "assistant"):
-                if text := item.text_content:
-                    # Create new messages, including new content lists. ChatContext.copy()
-                    # alone does not isolate the contents from edits to session history.
-                    messages.append(
-                        ChatMessage(
-                            id=item.id,
-                            role=item.role,
-                            content=[text],
-                            created_at=item.created_at,
-                            interrupted=item.interrupted,
-                        )
-                    )
-            if item.id == source_id:
-                break
-        turns = 0
-        start = 0
-        for index in range(len(messages) - 1, -1, -1):
-            if messages[index].role == "user":
-                turns += 1
-                start = index
-                if turns == self._options["max_context_turns"]:
+        user_turns = 0
+        for index in range(source_index, -1, -1):
+            item = history.items[index]
+            if not isinstance(item, ChatMessage):
+                continue
+            if item.role not in ("user", "assistant") or not (text := item.text_content):
+                continue
+            # ChatContext.copy() shares message content with the live history.
+            messages.append(
+                ChatMessage(
+                    id=item.id,
+                    role=item.role,
+                    content=[text],
+                    created_at=item.created_at,
+                    interrupted=item.interrupted,
+                )
+            )
+            if item.role == "user":
+                user_turns += 1
+                if user_turns == self._options["max_context_turns"]:
                     break
-        return ChatContext([*messages[start:]])
+        while messages and messages[-1].role != "user":
+            messages.pop()
+        return ChatContext([*reversed(messages)])
 
     async def _run(self) -> None:
         while self._pending is not None and self._active():
@@ -100,11 +104,7 @@ class _DecisionRunner:
                         self._model.evaluate(chat_ctx=chat_ctx, decisions=self._definitions),
                         timeout=self._options["timeout"],
                     )
-            except asyncio.CancelledError:
-                raise
             except Exception:
-                # A failed sidecar pass must not interrupt the conversational reply or
-                # prevent a newer pending snapshot from being evaluated.
                 logger.exception(
                     "background decision evaluation failed", extra={"source_message_id": source_id}
                 )
@@ -127,3 +127,4 @@ class _DecisionRunner:
         self._session.off("conversation_item_added", self._on_item)
         if self._task is not None:
             await aio.cancel_and_wait(self._task)
+            self._task = None

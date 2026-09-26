@@ -149,8 +149,6 @@ def test_session_usage_carries_every_variant() -> None:
 
 
 def test_every_sdk_usage_type_is_encoded() -> None:
-    # Derive coverage from the SDK union, not the serializer's own mapping: a new
-    # usage type must not disappear merely because the mapping was not updated.
     sources = [kind(provider="test-provider", model=kind.__name__) for kind in get_args(ModelUsage)]
     encoded = encode_session_usage(AgentSessionUsage(model_usage=sources))
     assert len(encoded.model_usage) == len(sources)
@@ -179,7 +177,6 @@ def test_decision_token_usage_uses_existing_wire_format() -> None:
     assert item.llm.model == "typesafe/jev-1.13"
     assert item.llm.input_tokens == 123
     assert item.llm.output_tokens == 17
-    # Compatibility encoding must leave the full local/report record intact.
     assert usage.model_usage[0].type == "decision_usage"
     assert usage.model_usage[0].total_requests == 3
 
