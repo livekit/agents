@@ -35,6 +35,7 @@ session = AgentSession(
 - [`mcp/`](./mcp/) - Model Context Protocol (MCP) integration examples
   - [`mcp-agent.py`](./mcp/mcp-agent.py) - Connecting an agent to an MCP server
   - [`server.py`](./mcp/server.py) - MCP server example
+  - [Remote web search with Parallel](./mcp/README.md#add-remote-web-search-with-parallel) - Add anonymous search and page extraction alongside the local tools
 
 ### RAG & Knowledge Management
 
