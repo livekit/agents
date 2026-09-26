@@ -65,11 +65,16 @@ MAX_SPEED = 1.5
 SPEED_STEP = 0.05
 
 
-def _check_speed(speed: float) -> None:
-    if not MIN_SPEED <= speed <= MAX_SPEED:
-        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
-    if abs(speed / SPEED_STEP - round(speed / SPEED_STEP)) > 1e-6:
+def _validated_speed(speed: float) -> float:
+    steps = speed / SPEED_STEP
+    if abs(steps - round(steps)) > 1e-6:
         raise ValueError(f"speed must be a multiple of {SPEED_STEP}, but got {speed}")
+    # the exact step (1.5, not 1.5000000000000002 from float arithmetic), since the API
+    # rejects anything off the 0.05 grid
+    exact = round(round(steps) * SPEED_STEP, 2)
+    if not MIN_SPEED <= exact <= MAX_SPEED:
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
+    return exact
 
 
 @dataclass
@@ -137,7 +142,7 @@ class TTSv2(tts.TTS):
             raise ValueError("Deepgram API key required. Set DEEPGRAM_API_KEY or provide api_key.")
 
         if speed is not None:
-            _check_speed(speed)
+            speed = _validated_speed(speed)
 
         if not is_given(word_tokenizer):
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -242,7 +247,7 @@ class TTSv2(tts.TTS):
                 out of the request.
         """
         if is_given(speed) and speed is not None:
-            _check_speed(speed)
+            speed = _validated_speed(speed)
 
         connection_params_changed = False
         if is_given(model):

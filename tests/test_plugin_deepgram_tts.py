@@ -372,6 +372,19 @@ async def test_flux_speed_accepts_steps_in_range(speed: float):
     assert TTSv2(api_key="test-key", speed=speed)._opts.speed == speed
 
 
+@pytest.mark.parametrize(("speed", "sent"), [(1.00000001, "1.0"), (0.1 * 3 * 5, "1.5")])
+async def test_flux_near_step_speed_is_sent_as_the_exact_step(speed: float, sent: str):
+    # float noise within the tolerance must not reach the API, which only takes 0.05 steps
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(api_key="test-key", speed=speed, http_session=_RecordingSession())  # type: ignore[arg-type]
+    for url in await _request_urls(tts):
+        assert parse_qs(urlparse(url).query)["speed"] == [sent]
+
+    tts.update_options(speed=speed)
+    assert str(tts._opts.speed) == sent
+
+
 # 0.45 and 1.55 are out of range; 1.12 is not a multiple of 0.05
 @pytest.mark.parametrize("speed", [0.45, 1.55, 1.12])
 async def test_flux_invalid_speed_is_rejected(speed: float):
