@@ -13,6 +13,11 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..metrics.provider_request import (
+    _provider_request_context,
+    _provider_request_fallback_context,
+    _provider_request_recovery_context,
+)
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import aio
 from ..utils.audio import AudioBuffer
@@ -118,7 +123,9 @@ class FallbackAdapter(
 
         for stt_instance in self._stt_instances:
             stt_instance.on("metrics_collected", self._on_metrics_collected)
+            stt_instance.on("provider_request_completed", self._on_provider_request_completed)
         self._recognize_metrics_needed = False  # don't emit metrics via fallback adapter
+        self._emit_provider_request_attempts = False
 
     def _next_instance(self) -> STT:
         """The instance the next request goes to first: the first one marked available, or
@@ -164,19 +171,26 @@ class FallbackAdapter(
         buffer: utils.AudioBuffer,
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions,
+        fallback_index: int,
         recovering: bool = False,
     ) -> SpeechEvent:
         try:
-            return await stt.recognize(
-                buffer,
-                language=language,
-                conn_options=dataclasses.replace(
-                    conn_options,
-                    max_retry=self._max_retry_per_stt,
-                    timeout=self._attempt_timeout,
-                    retry_interval=self._retry_interval,
-                ),
+            request_context = (
+                _provider_request_recovery_context(fallback_index)
+                if recovering
+                else _provider_request_fallback_context(fallback_index)
             )
+            with request_context:
+                return await stt.recognize(
+                    buffer,
+                    language=language,
+                    conn_options=dataclasses.replace(
+                        conn_options,
+                        max_retry=self._max_retry_per_stt,
+                        timeout=self._attempt_timeout,
+                        retry_interval=self._retry_interval,
+                    ),
+                )
         except asyncio.TimeoutError:
             if recovering:
                 logger.warning(f"{stt.label} recovery timed out", extra={"streamed": False})
@@ -239,6 +253,7 @@ class FallbackAdapter(
                         buffer=buffer,
                         language=language,
                         conn_options=conn_options,
+                        fallback_index=self._stt_instances.index(stt),
                         recovering=True,
                     )
 
@@ -276,6 +291,7 @@ class FallbackAdapter(
                         buffer=buffer,
                         language=language,
                         conn_options=conn_options,
+                        fallback_index=i,
                         recovering=False,
                     )
                     self._active_instance = stt
@@ -330,12 +346,16 @@ class FallbackAdapter(
 
         for stt in self._stt_instances:
             stt.off("metrics_collected", self._on_metrics_collected)
+            stt.off("provider_request_completed", self._on_provider_request_completed)
 
         for stream_adapter in self._owned_stream_adapters:
             await stream_adapter.aclose()
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
+
+    def _on_provider_request_completed(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("provider_request_completed", *args, **kwargs)
 
 
 class FallbackRecognizeStream(RecognizeStream):
@@ -391,15 +411,16 @@ class FallbackRecognizeStream(RecognizeStream):
             stt_status = self._fallback_adapter._status[i]
             if stt_status.available or all_failed:
                 try:
-                    main_stream = stt.stream(
-                        language=self._language,
-                        conn_options=dataclasses.replace(
-                            self._conn_options,
-                            max_retry=self._fallback_adapter._max_retry_per_stt,
-                            timeout=self._fallback_adapter._attempt_timeout,
-                            retry_interval=self._fallback_adapter._retry_interval,
-                        ),
-                    )
+                    with _provider_request_context(self._provider_request_tracker.operation_id, i):
+                        main_stream = stt.stream(
+                            language=self._language,
+                            conn_options=dataclasses.replace(
+                                self._conn_options,
+                                max_retry=self._fallback_adapter._max_retry_per_stt,
+                                timeout=self._fallback_adapter._attempt_timeout,
+                                retry_interval=self._fallback_adapter._retry_interval,
+                            ),
+                        )
                     # update main_stream start time offset so transcript timestamps are properly adjusted
                     main_stream.start_time_offset = self.start_time_offset + (
                         time.time() - self._start_time
@@ -463,14 +484,17 @@ class FallbackRecognizeStream(RecognizeStream):
             self._fallback_adapter._stt_instances.index(stt)
         ]
         if stt_status.recovering_stream_task is None or stt_status.recovering_stream_task.done():
-            stream = stt.stream(
-                language=self._language,
-                conn_options=dataclasses.replace(
-                    self._conn_options,
-                    max_retry=0,
-                    timeout=self._fallback_adapter._attempt_timeout,
-                ),
-            )
+            with _provider_request_recovery_context(
+                self._fallback_adapter._stt_instances.index(stt)
+            ):
+                stream = stt.stream(
+                    language=self._language,
+                    conn_options=dataclasses.replace(
+                        self._conn_options,
+                        max_retry=0,
+                        timeout=self._fallback_adapter._attempt_timeout,
+                    ),
+                )
             self._recovering_streams.append(stream)
 
             async def _recover_stt_task() -> None:

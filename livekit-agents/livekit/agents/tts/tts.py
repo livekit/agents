@@ -5,7 +5,7 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
@@ -19,6 +19,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
+from ..metrics.provider_request import _ProviderRequestTracker
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -80,7 +81,7 @@ TEvent = TypeVar("TEvent")
 
 class TTS(
     ABC,
-    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    rtc.EventEmitter[Literal["metrics_collected", "error", "provider_request_completed"] | TEvent],
     Generic[TEvent],
 ):
     class Markup:
@@ -271,6 +272,7 @@ class ChunkedStream(ABC):
     """Used by the non-streamed synthesize API, some providers support chunked http responses"""
 
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    _emit_provider_request_attempts: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -293,6 +295,9 @@ class ChunkedStream(ABC):
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
         self._current_attempt_has_error = False
+        self._provider_request_tracker = _ProviderRequestTracker(
+            component="tts", provider=tts.provider, model=tts.model
+        )
         self._metrics_task = asyncio.create_task(
             self._metrics_monitor_task(monitor_aiter), name="TTS._metrics_task"
         )
@@ -387,7 +392,13 @@ class ChunkedStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
-            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+            self._provider_request_tracker.start(i)
+            output_emitter = AudioEmitter(
+                label=self._tts.label,
+                dst_ch=self._event_ch,
+                provider_request_id_cb=self._note_provider_request_id,
+                provider_trace_id_cb=self._note_provider_trace_id,
+            )
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
@@ -401,11 +412,18 @@ class ChunkedStream(ABC):
                     raise APIError(f"no audio frames were pushed for text: {self._input_text}")
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._input_text)
+                self._emit_provider_request_completed("success")
                 return
+            except asyncio.CancelledError as e:
+                self._emit_provider_request_completed("cancelled", error=e)
+                raise
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
+                    self._emit_provider_request_completed("cancelled", error=e)
                     return
+
+                self._emit_provider_request_completed("error", error=e)
 
                 # settle the emitter so no frames from this attempt are delivered after
                 # the retry starts; the retry restarts the synthesis under a fresh
@@ -434,8 +452,37 @@ class ChunkedStream(ABC):
                 await asyncio.sleep(retry_interval)
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
+            except Exception as e:
+                self._emit_provider_request_completed("error", error=e)
+                raise
             finally:
                 await output_emitter.aclose()
+
+    def _emit_provider_request_completed(
+        self,
+        outcome: Literal["success", "error", "cancelled"],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        if self._emit_provider_request_attempts:
+            self._tts.emit(
+                "provider_request_completed",
+                self._provider_request_tracker.complete(outcome, error=error),
+            )
+
+    def _note_provider_request_id(self, request_id: str | None) -> None:
+        self._provider_request_tracker.note_provider_request_id(request_id)
+
+    def _note_provider_trace_id(self, trace_id: str | None) -> None:
+        self._provider_request_tracker.note_provider_trace_id(trace_id)
+
+    def note_provider_request_id(self, request_id: str | None) -> None:
+        """Record an explicitly provider-known request ID for the current attempt."""
+        self._note_provider_request_id(request_id)
+
+    def note_provider_trace_id(self, trace_id: str | None) -> None:
+        """Record an explicitly provider-known trace/context ID for the current attempt."""
+        self._note_provider_trace_id(trace_id)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
@@ -529,6 +576,7 @@ class _ChunkedStreamFromStream(ChunkedStream):
 
 class SynthesizeStream(ABC):
     _tts_request_span_name: ClassVar[str] = "tts_request"
+    _emit_provider_request_attempts: ClassVar[bool] = True
 
     class _FlushSentinel: ...
 
@@ -549,6 +597,9 @@ class SynthesizeStream(ABC):
         self._task.add_done_callback(lambda _: self._event_ch.close())
         self._metrics_task: asyncio.Task[None] | None = None  # started on first push
         self._current_attempt_has_error = False
+        self._provider_request_tracker = _ProviderRequestTracker(
+            component="tts", provider=tts.provider, model=tts.model
+        )
         self._started_time: float = 0
         self._pushed_text: str = ""
 
@@ -584,7 +635,13 @@ class SynthesizeStream(ABC):
         )
 
         for i in range(self._conn_options.max_retry + 1):
-            output_emitter = AudioEmitter(label=self._tts.label, dst_ch=self._event_ch)
+            self._provider_request_tracker.start(i)
+            output_emitter = AudioEmitter(
+                label=self._tts.label,
+                dst_ch=self._event_ch,
+                provider_request_id_cb=self._note_provider_request_id,
+                provider_trace_id_cb=self._note_provider_trace_id,
+            )
             try:
                 with tracer.start_as_current_span("tts_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
@@ -605,11 +662,18 @@ class SynthesizeStream(ABC):
                         )
 
                 current_span.set_attribute(trace_types.ATTR_TTS_INPUT_TEXT, self._pushed_text)
+                self._emit_provider_request_completed("success")
                 return
+            except asyncio.CancelledError as e:
+                self._emit_provider_request_completed("cancelled", error=e)
+                raise
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
+                    self._emit_provider_request_completed("cancelled", error=e)
                     return
+
+                self._emit_provider_request_completed("error", error=e)
 
                 pushed_duration = output_emitter.pushed_duration()
                 should_retry = (
@@ -652,8 +716,37 @@ class SynthesizeStream(ABC):
 
                 # Reset the flag when retrying
                 self._current_attempt_has_error = False
+            except Exception as e:
+                self._emit_provider_request_completed("error", error=e)
+                raise
             finally:
                 await output_emitter.aclose()
+
+    def _emit_provider_request_completed(
+        self,
+        outcome: Literal["success", "error", "cancelled"],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        if self._emit_provider_request_attempts:
+            self._tts.emit(
+                "provider_request_completed",
+                self._provider_request_tracker.complete(outcome, error=error),
+            )
+
+    def _note_provider_request_id(self, request_id: str | None) -> None:
+        self._provider_request_tracker.note_provider_request_id(request_id)
+
+    def _note_provider_trace_id(self, trace_id: str | None) -> None:
+        self._provider_request_tracker.note_provider_trace_id(trace_id)
+
+    def note_provider_request_id(self, request_id: str | None) -> None:
+        """Record an explicitly provider-known request ID for the current attempt."""
+        self._note_provider_request_id(request_id)
+
+    def note_provider_trace_id(self, trace_id: str | None) -> None:
+        """Record an explicitly provider-known trace/context ID for the current attempt."""
+        self._note_provider_trace_id(trace_id)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
@@ -845,6 +938,8 @@ class AudioEmitter:
         *,
         label: str,
         dst_ch: aio.Chan[SynthesizedAudio],
+        provider_request_id_cb: Callable[[str | None], None] | None = None,
+        provider_trace_id_cb: Callable[[str | None], None] | None = None,
     ) -> None:
         self._dst_ch = dst_ch
         self._label = label
@@ -853,6 +948,8 @@ class AudioEmitter:
         self._num_segments = 0
         self._audio_durations: list[float] = []  # track durations per segment
         self._provider_request_ids: list[str] = []  # deduped provider-known segment ids
+        self._provider_request_id_cb = provider_request_id_cb
+        self._provider_trace_id_cb = provider_trace_id_cb
 
     def pushed_duration(self, idx: int = -1) -> float:
         return (
@@ -933,11 +1030,22 @@ class AudioEmitter:
         if not context_id or context_id in self._provider_request_ids:
             return
         self._provider_request_ids.append(context_id)
+        if self._provider_request_id_cb is not None:
+            self._provider_request_id_cb(context_id)
         current_span = trace.get_current_span()
         if current_span.is_recording():
             current_span.set_attribute(
                 trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
             )
+
+    def note_provider_request_id(self, request_id: str) -> None:
+        """Record a provider-known request ID for the current attempt."""
+        self._note_provider_request_id(request_id)
+
+    def note_provider_trace_id(self, trace_id: str) -> None:
+        """Record a provider-known trace or context ID for the current attempt."""
+        if trace_id and self._provider_trace_id_cb is not None:
+            self._provider_trace_id_cb(trace_id)
 
     def __start_segment(self, *, segment_id: str) -> None:
         if not self._started:
