@@ -7,18 +7,17 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Any
 
 import anyio
 import pytest
+from mcp import McpError
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.shared.memory import create_client_server_memory_streams
 from pydantic import BaseModel
 
 from livekit.agents.llm.mcp import (
     MCPElicitationContext,
-    MCPElicitationHandler,
     MCPElicitationResult,
     MCPServer,
     MCPTool,
@@ -54,6 +53,20 @@ def _make_fastmcp() -> FastMCP:
         params = ctx.session.client_params
         assert params is not None
         return str(params.capabilities.elicitation is not None)
+
+    @server.tool()
+    async def pick_two_seats(ctx: Context) -> str:  # type: ignore[type-arg]
+        seats = []
+        for leg in ("outbound", "return"):
+            result = await ctx.elicit(f"Seat for the {leg} flight?", schema=_Seat)
+            assert result.action == "accept"
+            seats.append(result.data.seat)
+        return f"booked seats {' '.join(seats)}"
+
+    @server.tool()
+    async def hang() -> str:
+        await asyncio.sleep(30)
+        return "done"
 
     @server.tool()
     def ping() -> str:
@@ -201,23 +214,33 @@ async def test_slow_answer_outlives_session_read_timeout() -> None:
         assert await _call(tools["pick_seat"]) == "booked seat 3C"
 
 
-def test_tool_call_timeout() -> None:
+async def test_elicitation_time_not_charged_to_tool_call() -> None:
+    # two answers, each slower than the session read timeout but within
+    # elicitation_timeout: time spent waiting on the user doesn't count
+    seats = iter(["12A", "14C"])
+
+    async def slow_handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
+        await asyncio.sleep(1.0)
+        return MCPElicitationResult(action="accept", content={"seat": next(seats)})
+
+    # the call takes ~2s in total, longer than read timeout + one elicitation_timeout
+    async with _connected(
+        elicitation_handler=slow_handler,
+        client_session_timeout_seconds=0.3,
+        elicitation_timeout=1.5,
+    ) as tools:
+        assert await _call(tools["pick_two_seats"]) == "booked seats 12A 14C"
+
+
+async def test_hung_tool_still_times_out_with_handler() -> None:
     async def handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
         return MCPElicitationResult(action="cancel")
 
-    typed_handler: MCPElicitationHandler = handler
-    server = _InMemoryMCPServer(elicitation_handler=typed_handler, client_session_timeout_seconds=5)
-    assert server._tool_call_timeout == timedelta(seconds=65)
-
-    # without a handler, tool calls keep the session read timeout
-    assert _InMemoryMCPServer(client_session_timeout_seconds=5)._tool_call_timeout is None
-
-
-def test_warns_when_elicitation_is_unbounded(caplog: pytest.LogCaptureFixture) -> None:
-    async def handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
-        return MCPElicitationResult(action="cancel")
-
-    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        server = _InMemoryMCPServer(elicitation_handler=handler, elicitation_timeout=None)
-    assert server._tool_call_timeout is None
-    assert "elicitation_timeout is None" in caplog.text
+    async with _connected(elicitation_handler=handler, client_session_timeout_seconds=0.3) as tools:
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        with pytest.raises(McpError, match="Timed out while waiting for response to tool 'hang'"):
+            await tools["hang"]({})
+        assert loop.time() - start < 2
+        # the session keeps working after the timeout
+        assert await _call(tools["ping"]) == "pong"
