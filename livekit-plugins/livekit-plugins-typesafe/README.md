@@ -98,6 +98,7 @@ All results expose `kind` and `value`. Probability values do not apply a boolean
 Choice results preserve the distribution across option names.
 Score results preserve the distribution across level indices and the level descriptions.
 A score is the expected zero-based level index, so it can be fractional.
+Validation allows independent rounding to two decimal places. Results retain the provider's values and distributions.
 The Jev `provider_data["confidence"]` value describes distribution concentration, not the probability that the answer is correct.
 
 Models declare supported decision kinds through `capabilities`.

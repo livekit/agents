@@ -22,6 +22,9 @@ from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 DecisionKind = Literal["probability", "choice", "score"]
 _Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+# Providers such as Jev independently round scores and probabilities to two
+# decimal places. Each reported number can differ by half a hundredth.
+_ROUNDING_ERROR = 0.005
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,7 @@ class ChoiceResult(BaseModel):
     kind: Literal["choice"] = "choice"
     value: str
     probabilities: dict[str, _Probability] | None = None
-    """Full distribution, or None if the provider does not supply one."""
+    """Provider distribution (possibly rounded), or None if unavailable."""
     provider_data: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -71,7 +74,9 @@ class ScoreResult(BaseModel):
     kind: Literal["score"] = "score"
     value: float = Field(ge=0, allow_inf_nan=False)
     probabilities: dict[int, _Probability]
-    """Full distribution over zero-based level indices; value is its expected index."""
+    """Provider distribution over zero-based level indices. The probabilities and
+    expected index can be independently rounded.
+    """
     levels: list[str]
     provider_data: dict[str, Any] = Field(default_factory=dict)
 
@@ -175,11 +180,17 @@ def _validate_response(response: DecisionResponse, decisions: Mapping[str, Decis
                 range(len(decision.levels))
             ):
                 raise APIError("score distribution does not match levels", retryable=False)
+            if result.value > len(decision.levels) - 1:
+                raise APIError("score is outside the defined scale", retryable=False)
             expected = sum(index * p for index, p in result.probabilities.items())
-            if not math.isclose(result.value, expected, abs_tol=1e-4):
+            # Accumulate the weighted probability errors and the score's own
+            # rounding error. The small epsilon covers binary float arithmetic.
+            tolerance = _ROUNDING_ERROR * (1 + sum(result.probabilities)) + 1e-9
+            if not math.isclose(result.value, expected, abs_tol=tolerance):
                 raise APIError("score must be the expected level index", retryable=False)
         if isinstance(result, (ChoiceResult, ScoreResult)) and result.probabilities is not None:
-            if not math.isclose(sum(result.probabilities.values()), 1.0, abs_tol=1e-4):
+            tolerance = _ROUNDING_ERROR * len(result.probabilities) + 1e-9
+            if not math.isclose(sum(result.probabilities.values()), 1.0, abs_tol=tolerance):
                 raise APIError("decision probabilities must sum to one", retryable=False)
 
 

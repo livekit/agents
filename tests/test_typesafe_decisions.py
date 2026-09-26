@@ -80,7 +80,52 @@ async def test_jev_batches_all_kinds_and_preserves_distributions_and_usage() -> 
 
 
 @pytest.mark.parametrize(
-    "failure", ["missing", "extra", "wrong_kind", "unknown_label", "bad_sum", "bad_score", "nan"]
+    ("value", "probabilities"),
+    [
+        # Live Jev response to "I I actually hate talking to AI.": the score
+        # and probabilities are independently rounded to two decimal places.
+        (1.07, {"0": 0.0, "1": 0.92, "2": 0.08}),
+        (1.0, {"0": 0.33, "1": 0.33, "2": 0.33}),
+        (1.4, {"0": 0.01, "1": 0.59, "2": 0.41}),
+    ],
+)
+async def test_rounded_score_and_distribution_preserve_the_whole_batch(
+    value, probabilities
+) -> None:
+    body = response_body()
+    body["answers"]["frustration"].update(score=value, probabilities=probabilities)
+    model, http = model_for(body)
+    response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+    assert response.results.keys() == QUESTIONS.keys()
+    result = response.results["frustration"]
+    assert result.kind == "score"
+    assert result.value == value
+    assert result.probabilities == {int(key): p for key, p in probabilities.items()}
+    http.post.assert_called_once()
+
+
+async def test_rounded_choice_distribution_is_preserved() -> None:
+    body = response_body()
+    body["answers"]["intent"]["probabilities"] = {"booking": 0.66, "other": 0.33}
+    model, _ = model_for(body)
+    response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+    result = response.results["intent"]
+    assert result.kind == "choice"
+    assert result.probabilities == {"booking": 0.66, "other": 0.33}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing",
+        "extra",
+        "wrong_kind",
+        "unknown_label",
+        "bad_sum",
+        "bad_score",
+        "out_of_range_score",
+        "nan",
+    ],
 )
 async def test_invalid_response_is_rejected_as_a_whole(failure: str) -> None:
     body = response_body()
@@ -96,6 +141,10 @@ async def test_invalid_response_is_rejected_as_a_whole(failure: str) -> None:
         body["answers"]["intent"]["probabilities"]["booking"] = 0.9
     elif failure == "bad_score":
         body["answers"]["frustration"]["score"] = 2.0
+    elif failure == "out_of_range_score":
+        body["answers"]["frustration"].update(
+            score=2.01, probabilities={"0": 0.0, "1": 0.0, "2": 1.0}
+        )
     else:
         body["answers"]["human"]["noul"] = float("nan")
     model, http = model_for(body)
