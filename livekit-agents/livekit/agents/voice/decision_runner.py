@@ -32,7 +32,6 @@ class _DecisionRunner:
 
     def start(self) -> None:
         self._session.on("conversation_item_added", self._on_item)
-        self._model.on("metrics_collected", self._activity._on_metrics_collected)
 
     def _active(self) -> bool:
         return (
@@ -128,4 +127,3 @@ class _DecisionRunner:
         self._session.off("conversation_item_added", self._on_item)
         if self._task is not None:
             await aio.cancel_and_wait(self._task)
-        self._model.off("metrics_collected", self._activity._on_metrics_collected)

@@ -1,13 +1,12 @@
 """TypeSafe Jev decision models for LiveKit Agents."""
 
 import logging
-from importlib.metadata import version
 
 from livekit.agents import Plugin
 
 from .jev import Jev
+from .version import __version__
 
-__version__ = version("livekit-plugins-typesafe")
 __all__ = ["Jev", "__version__"]
 
 

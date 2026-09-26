@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "livekit-plugins-typesafe"
-version = "0.1.0"
+dynamic = ["version"]
 description = "TypeSafe Jev decision models for LiveKit Agents"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,6 +15,9 @@ dependencies = ["livekit-agents>=1.8.3"]
 [project.urls]
 Documentation = "https://docs.livekit.io"
 Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/typesafe/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["livekit"]

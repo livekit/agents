@@ -1189,9 +1189,11 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
-        if self._agent.decisions and self._session.decision_model is not None:
-            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
-            self._decision_runner.start()
+        if self._session.decision_model is not None:
+            self._session.decision_model.on("metrics_collected", self._on_metrics_collected)
+            if self._agent.decisions:
+                self._decision_runner = _DecisionRunner(self, self._session.decision_model)
+                self._decision_runner.start()
 
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
@@ -1564,6 +1566,9 @@ class AgentActivity(RecognitionHooks):
 
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
+
+        if self._session.decision_model is not None:
+            self._session.decision_model.off("metrics_collected", self._on_metrics_collected)
 
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)

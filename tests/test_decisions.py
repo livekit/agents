@@ -82,6 +82,62 @@ async def next_call(model: ControlledModel):
     return await asyncio.wait_for(model.calls.get(), timeout=2)
 
 
+@pytest.mark.parametrize("background", [False, True], ids=["on_demand_only", "with_background"])
+async def test_on_demand_usage_is_collected_through_activity_transitions(background: bool) -> None:
+    model = ControlledModel()
+    session = session_for(model)
+    collected = []
+    session.on("session_usage_updated", collected.append)
+
+    async def evaluate() -> None:
+        assert session.decision_model is model
+        request = asyncio.create_task(
+            session.decision_model.evaluate(
+                chat_ctx=ChatContext.empty(),
+                decisions={"handoff": decisions.Probability("The caller requests a human.")},
+            )
+        )
+        _, _, answer = await next_call(model)
+        answer.set_result(0.75)
+        await request
+
+    def assert_usage(requests: int) -> None:
+        assert len(session.usage.model_usage) == 1
+        usage = session.usage.model_usage[0]
+        assert usage.type == "decision_usage"
+        assert usage.total_requests == requests
+        assert usage.input_tokens == 12 * requests
+        assert usage.output_tokens == 2 * requests
+        assert len(collected) == requests
+        assert collected[-1].usage.model_usage[0] == usage
+
+    async with session:
+        original = agent() if background else Receptionist(instructions="Use on-demand decisions.")
+        await session.start(original)
+        await evaluate()
+        assert_usage(1)
+
+        await session._update_activity(
+            Receptionist(instructions="Temporary task."), previous_activity="pause"
+        )
+        await evaluate()
+        assert_usage(2)
+
+        await session._update_activity(original, new_activity="resume")
+        await evaluate()
+        assert_usage(3)
+
+        session.update_agent(Receptionist(instructions="The next agent."))
+        assert session._update_activity_atask is not None
+        await session._update_activity_atask
+        await evaluate()
+        assert_usage(4)
+
+    # The model can outlive the session. A later call must not update a closed session.
+    await evaluate()
+    assert_usage(4)
+
+
 async def test_overlap_keeps_running_and_latest_pending_snapshot() -> None:
     model = ControlledModel()
     async with session_for(model) as session:

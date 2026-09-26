@@ -3633,7 +3633,6 @@ requires-dist = [
 
 [[package]]
 name = "livekit-plugins-typesafe"
-version = "0.1.0"
 source = { editable = "livekit-plugins/livekit-plugins-typesafe" }
 dependencies = [
     { name = "livekit-agents" },
