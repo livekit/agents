@@ -14,7 +14,9 @@
 # limitations under the License.
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -144,6 +146,10 @@ class LLM(llm.LLM):
         self._sampling_params_warned = False
         self._forced_tool_choice_warned = False
         self._session = _resolve_session(session)
+        self._client_stack = AsyncExitStack()
+        self._client_lock = asyncio.Lock()
+        self._client: Any | None = None
+        self._closed = False
         if session is None:
             if is_given(api_key) and api_key and is_given(api_secret) and api_secret:
                 self._session.set_credentials(api_key, api_secret)
@@ -172,6 +178,25 @@ class LLM(llm.LLM):
             if is_given(supports_sampling_params)
             else not _model_rejects_sampling_params(bedrock_model)
         )
+
+    async def _get_client(self) -> Any:
+        async with self._client_lock:
+            if self._closed:
+                raise RuntimeError("AWS Bedrock LLM is closed")
+            if self._client is None:
+                config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
+                self._client = await self._client_stack.enter_async_context(
+                    self._session.create_client("bedrock-runtime", config=config)
+                )
+            return self._client
+
+    async def aclose(self) -> None:
+        await super().aclose()
+        async with self._client_lock:
+            if not self._closed:
+                self._closed = True
+                await self._client_stack.aclose()
+                self._client = None
 
     @property
     def model(self) -> str:
@@ -319,32 +344,42 @@ class LLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         retryable = True
+        response_stream: Any | None = None
         try:
-            config = Config(user_agent_extra="x-client-framework:livekit-plugins-aws")
-            async with self._session.create_client("bedrock-runtime", config=config) as client:
-                response = await client.converse_stream(**self._opts)
-                request_id = response["ResponseMetadata"]["RequestId"]
-                if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
-                    raise APIStatusError(
-                        f"aws bedrock llm: error generating content: {response}",
-                        status_code=response["ResponseMetadata"]["HTTPStatusCode"],
-                        # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
-                        # body=response,
-                        retryable=False,
-                        request_id=request_id,
-                    )
+            client = await self._llm._get_client()
+            response = await client.converse_stream(**self._opts)
+            response_stream = response["stream"]
+            request_id = response["ResponseMetadata"]["RequestId"]
+            if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+                raise APIStatusError(
+                    f"aws bedrock llm: error generating content: {response}",
+                    status_code=response["ResponseMetadata"]["HTTPStatusCode"],
+                    # Not sure there is a single error field: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/bedrock-runtime/client/converse_stream.html#
+                    # body=response,
+                    retryable=False,
+                    request_id=request_id,
+                )
 
-                async for chunk in response["stream"]:
-                    chat_chunk = self._parse_chunk(request_id, chunk)
-                    if chat_chunk is not None:
-                        retryable = False
-                        self._event_ch.send_nowait(chat_chunk)
+            async for chunk in response_stream:
+                chat_chunk = self._parse_chunk(request_id, chunk)
+                if chat_chunk is not None:
+                    retryable = False
+                    self._event_ch.send_nowait(chat_chunk)
 
         except Exception as e:
             raise APIConnectionError(
                 f"aws bedrock llm: error generating content: {e}",
                 retryable=retryable,
             ) from e
+        finally:
+            if response_stream is not None:
+                try:
+                    response_stream.close()
+                except Exception as e:
+                    logger.warning(
+                        "aws bedrock llm: failed to close response stream",
+                        extra={"error": str(e)},
+                    )
 
     def _parse_chunk(self, request_id: str, chunk: dict) -> llm.ChatChunk | None:
         if "contentBlockStart" in chunk:
