@@ -580,8 +580,12 @@ class TTS(tts.TTS):
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
             close_cb=self._close_ws,
-            max_session_duration=3600,  # 1 hour
-            mark_refreshed_on_get=False,
+            # Sarvam's server closes the WebSocket after 60 s of inactivity
+            # (https://docs.sarvam.ai/api-reference-docs/api-guides-tutorials/text-to-speech/streaming-api/web-socket),
+            # so the pool must recycle connections well before that threshold and
+            # treat each get() as a refresh, mirroring Cartesia / Neuphonic / Murf / AsyncAI.
+            max_session_duration=50,
+            mark_refreshed_on_get=True,
         )
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
