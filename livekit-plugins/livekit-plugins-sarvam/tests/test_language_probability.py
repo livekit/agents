@@ -38,6 +38,8 @@ def _make_stream_under_test() -> tuple[SpeechStream, list[Any]]:
     instance._logger = MagicMock()  # type: ignore[attr-defined]
     instance._build_log_context = lambda: {}  # type: ignore[attr-defined]
     instance._server_request_id = None  # type: ignore[attr-defined]
+    instance._pending_eos = False  # type: ignore[attr-defined]
+    instance._start_time_offset = 0.0  # type: ignore[attr-defined]
     instance._opts = MagicMock(language="en-IN")  # type: ignore[attr-defined]
     return instance, captured
 
