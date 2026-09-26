@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 import anyio
@@ -186,21 +187,37 @@ async def test_capability_advertised_only_with_handler() -> None:
         assert await _call(tools["client_supports_elicitation"]) == "True"
 
 
-def test_warns_when_session_timeout_is_shorter(caplog: pytest.LogCaptureFixture) -> None:
+async def test_slow_answer_outlives_session_read_timeout() -> None:
+    # the user answers after the session read timeout; the tool call must still succeed
+    async def slow_handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
+        await asyncio.sleep(0.6)
+        return MCPElicitationResult(action="accept", content={"seat": "3C"})
+
+    async with _connected(
+        elicitation_handler=slow_handler,
+        client_session_timeout_seconds=0.3,
+        elicitation_timeout=2,
+    ) as tools:
+        assert await _call(tools["pick_seat"]) == "booked seat 3C"
+
+
+def test_tool_call_timeout() -> None:
     async def handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
         return MCPElicitationResult(action="cancel")
 
     typed_handler: MCPElicitationHandler = handler
-    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        _InMemoryMCPServer(elicitation_handler=typed_handler, client_session_timeout_seconds=5)
-    assert "elicitation_timeout should be lower" in caplog.text
+    server = _InMemoryMCPServer(elicitation_handler=typed_handler, client_session_timeout_seconds=5)
+    assert server._tool_call_timeout == timedelta(seconds=65)
 
-    caplog.clear()
+    # without a handler, tool calls keep the session read timeout
+    assert _InMemoryMCPServer(client_session_timeout_seconds=5)._tool_call_timeout is None
+
+
+def test_warns_when_elicitation_is_unbounded(caplog: pytest.LogCaptureFixture) -> None:
+    async def handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
+        return MCPElicitationResult(action="cancel")
+
     with caplog.at_level(logging.WARNING, logger="livekit.agents"):
-        _InMemoryMCPServer(
-            elicitation_handler=typed_handler,
-            client_session_timeout_seconds=120,
-            elicitation_timeout=60,
-        )
-        _InMemoryMCPServer(client_session_timeout_seconds=5)  # no handler, no warning
-    assert "elicitation_timeout should be lower" not in caplog.text
+        server = _InMemoryMCPServer(elicitation_handler=handler, elicitation_timeout=None)
+    assert server._tool_call_timeout is None
+    assert "elicitation_timeout is None" in caplog.text

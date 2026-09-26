@@ -178,23 +178,21 @@ class MCPServer(ABC):
         self._elicitation_handler = elicitation_handler
         self._elicitation_timeout = elicitation_timeout
 
-        if (
-            elicitation_handler is not None
-            and client_session_timeout_seconds
-            and (
-                elicitation_timeout is None or elicitation_timeout >= client_session_timeout_seconds
-            )
-        ):
-            # the tool call that triggered the elicitation keeps running under the session
-            # read timeout, so it would fail before a slow user answers.
-            logger.warning(
-                "MCP elicitation_timeout should be lower than client_session_timeout_seconds, "
-                "otherwise tool calls can time out while waiting for the user",
-                extra={
-                    "elicitation_timeout": elicitation_timeout,
-                    "client_session_timeout_seconds": client_session_timeout_seconds,
-                },
-            )
+        # a tool call stays pending while the server waits for the user's answer, so give
+        # tool calls the elicitation time on top of the session read timeout. None keeps
+        # the session default.
+        self._tool_call_timeout: timedelta | None = None
+        if elicitation_handler is not None and client_session_timeout_seconds:
+            if elicitation_timeout is not None:
+                self._tool_call_timeout = timedelta(
+                    seconds=client_session_timeout_seconds + elicitation_timeout
+                )
+            else:
+                logger.warning(
+                    "MCP elicitation_timeout is None, tool calls can still time out after "
+                    "client_session_timeout_seconds while waiting for the user",
+                    extra={"client_session_timeout_seconds": client_session_timeout_seconds},
+                )
 
         self._cache_dirty = True
         self._raw_tools: list[mcp.types.Tool] | None = None
@@ -361,7 +359,10 @@ class MCPServer(ABC):
                     await ctx.update(message)
 
                 tool_result = await self._client.call_tool(
-                    name, raw_arguments, progress_callback=_on_progress
+                    name,
+                    raw_arguments,
+                    read_timeout_seconds=self._tool_call_timeout,
+                    progress_callback=_on_progress,
                 )
                 return await _resolve(tool_result, raw_arguments)
 
@@ -376,7 +377,9 @@ class MCPServer(ABC):
                         "Please check that the MCPServer is still running."
                     )
 
-                tool_result = await self._client.call_tool(name, raw_arguments)
+                tool_result = await self._client.call_tool(
+                    name, raw_arguments, read_timeout_seconds=self._tool_call_timeout
+                )
                 return await _resolve(tool_result, raw_arguments)
 
             impl = _tool_called
@@ -444,8 +447,8 @@ class MCPServerHTTP(MCPServer):
             the server sends during tool calls. If None, the elicitation capability is
             not advertised and the server can't ask the user for input.
         elicitation_timeout: Seconds to wait for ``elicitation_handler`` before answering
-            ``"cancel"`` (default: 60, None waits forever). Keep it lower than
-            client_session_timeout_seconds, which still bounds the tool call.
+            ``"cancel"`` (default: 60, None waits forever). When a handler is set, tool
+            calls may take client_session_timeout_seconds + elicitation_timeout.
 
     Note: SSE transport is being deprecated in favor of streamable HTTP transport.
     See: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206

@@ -60,9 +60,9 @@ async def entrypoint(ctx: JobContext):
                 mcp_server=mcp.MCPServerHTTP(
                     url="http://localhost:8000/mcp",
                     elicitation_handler=on_elicit,
-                    # unanswered requests are cancelled after elicitation_timeout (60s by
-                    # default); the tool call waits for the user, so give it more time
-                    client_session_timeout_seconds=90,
+                    # unanswered requests are answered "cancel" after 60s; tool calls get
+                    # that time on top of client_session_timeout_seconds
+                    elicitation_timeout=60,
                 ),
             )
         ],
