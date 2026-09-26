@@ -385,8 +385,10 @@ async def test_flux_near_step_speed_is_sent_as_the_exact_step(speed: float, sent
     assert str(tts._opts.speed) == sent
 
 
-# 0.45 and 1.55 are out of range; 1.12 is not a multiple of 0.05
-@pytest.mark.parametrize("speed", [0.45, 1.55, 1.12])
+# out of range, not finite, or not a multiple of 0.05
+@pytest.mark.parametrize(
+    "speed", [0.45, 1.55, float("inf"), float("-inf"), float("nan"), 1e308, 1.12]
+)
 async def test_flux_invalid_speed_is_rejected(speed: float):
     from livekit.plugins.deepgram import TTSv2
 

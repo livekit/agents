@@ -66,15 +66,16 @@ SPEED_STEP = 0.05
 
 
 def _validated_speed(speed: float) -> float:
+    # a little slack at the ends for float noise (0.1 * 3 * 5 == 1.5000000000000002);
+    # also rejects nan and infinities before any rounding
+    if not MIN_SPEED - 1e-6 <= speed <= MAX_SPEED + 1e-6:
+        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
     steps = speed / SPEED_STEP
     if abs(steps - round(steps)) > 1e-6:
         raise ValueError(f"speed must be a multiple of {SPEED_STEP}, but got {speed}")
-    # the exact step (1.5, not 1.5000000000000002 from float arithmetic), since the API
-    # rejects anything off the 0.05 grid
-    exact = round(round(steps) * SPEED_STEP, 2)
-    if not MIN_SPEED <= exact <= MAX_SPEED:
-        raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, but got {speed}")
-    return exact
+    # the exact step (1.5, not 1.5000000000000002), since the API rejects anything off
+    # the 0.05 grid
+    return round(round(steps) * SPEED_STEP, 2)
 
 
 @dataclass
