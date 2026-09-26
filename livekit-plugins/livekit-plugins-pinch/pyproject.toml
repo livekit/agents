@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-pinch"
+version = "0.1.0"
+description = "LiveKit Agents plugin for Pinch real-time speech-to-speech translation"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Pinch", email = "support@startpinch.com" }]
+keywords = [
+    "livekit",
+    "agents",
+    "translation",
+    "speech-to-speech",
+    "real-time",
+    "pinch",
+]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "pinch-sdk>=0.1.1",
+    "livekit>=0.12.0",
+    "livekit-agents>=0.8.0",
+]
+
+[project.urls]
+Homepage = "https://www.startpinch.com"
+Documentation = "https://www.startpinch.com/docs"
+Repository = "https://github.com/pinch-eng/livekit-plugins-pinch"
+"Bug Tracker" = "https://github.com/pinch-eng/livekit-plugins-pinch/issues"
+
+# ---------------------------------------------------------------------------
+# Hatchling build — namespace package configuration
+#
+# livekit/ and livekit/plugins/ are *implicit* namespace packages (PEP 420)
+# and intentionally contain no __init__.py. Hatchling includes the entire
+# livekit/ tree; pip will merge it with any other livekit.* packages already
+# installed in the same environment.
+# ---------------------------------------------------------------------------
+
+[project.entry-points."livekit.agents.plugins"]
+pinch = "livekit.plugins.pinch"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"livekit/plugins/pinch/py.typed" = "livekit/plugins/pinch/py.typed"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "livekit/",
+    "examples/",
+    "README.md",
+    "pyproject.toml",
+]
