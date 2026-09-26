@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-typesafe"
+dynamic = ["version"]
+description = "TypeSafe Jev decision models for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "LiveKit" }]
+dependencies = ["livekit-agents>=1.8.3"]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/typesafe/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit", "/README.md"]

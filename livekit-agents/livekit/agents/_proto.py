@@ -16,6 +16,7 @@ from livekit.protocol.agent_pb import agent_session as _pb
 
 from .metrics import (
     AgentSessionUsage,
+    DecisionModelUsage,
     EOTModelUsage,
     InterruptionModelUsage,
     LLMModelUsage,
@@ -119,6 +120,16 @@ def encode_chat_item(item: ChatItem) -> _pb.ChatContext.ChatItem:
 def encode_session_usage(usage: AgentSessionUsage) -> _pb.AgentSessionUsage:
     model_usages: list[_pb.ModelUsage] = []
     for mu in usage.model_usage:
+        if isinstance(mu, DecisionModelUsage):
+            # The current protocol has no decision usage variant. Preserve provider,
+            # model, and token counts in the existing token-usage representation.
+            # The full SDK/Cloud session report retains decision_usage and total_requests.
+            mu = LLMModelUsage(
+                provider=mu.provider,
+                model=mu.model,
+                input_tokens=mu.input_tokens,
+                output_tokens=mu.output_tokens,
+            )
         for src_type, variant, msg_type in USAGE_VARIANTS:
             if isinstance(mu, src_type):
                 pb_usage = _pb.ModelUsage()
