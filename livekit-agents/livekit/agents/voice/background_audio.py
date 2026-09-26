@@ -347,7 +347,13 @@ class BackgroundAudioPlayer:
             if self._agent_session:
                 self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
-            await cancel_and_wait(*self._play_tasks)
+            try:
+                await cancel_and_wait(*self._play_tasks)
+            except asyncio.CancelledError:
+                # the mixer is still running, so keep thinking sounds working
+                if self._agent_session:
+                    self._agent_session.on("agent_state_changed", self._agent_state_changed)
+                raise
 
             await cancel_and_wait(self._mixer_atask)
             self._mixer_atask = None
