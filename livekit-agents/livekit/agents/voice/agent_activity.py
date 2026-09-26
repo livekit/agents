@@ -336,6 +336,8 @@ class AgentActivity(RecognitionHooks):
         self._lock = asyncio.Lock()
         # one awaited inline AgentTask may pause this activity at a time
         self._inline_task_lock = asyncio.Lock()
+        # the blocked tasks of each inline task still queued for the slot
+        self._inline_task_waiters: list[list[asyncio.Task[Any]]] = []
         self._tool_choice: llm.ToolChoice | None = None
 
         self._started = False
@@ -1444,8 +1446,10 @@ class AgentActivity(RecognitionHooks):
             # before the queue: a queued task absent from the drain set makes session close
             # wait on the slot it is still queued for
             self._add_drain_blocked_tasks(blocked_tasks)
+            self._inline_task_waiters.append(blocked_tasks)
 
             async with self._inline_task_lock:
+                self._inline_task_waiters.remove(blocked_tasks)
                 if self._closed or self._session._closing:
                     # reported to the model as a tool failure, the way a tool awaiting an
                     # inline task through a session close has always been
@@ -1466,6 +1470,9 @@ class AgentActivity(RecognitionHooks):
 
                 yield
         finally:
+            if blocked_tasks in self._inline_task_waiters:
+                # cancelled while still queued
+                self._inline_task_waiters.remove(blocked_tasks)
             if speech_handle is not None:
                 speech_handle._release_interruptions()
 
@@ -1484,6 +1491,10 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_paused = False
         self._new_turns_blocked = False
         self._drain_blocked_tasks.clear()
+        # an inline task still queued for the slot waits on the slot, not on this activity: its
+        # speech must stay out of the drain the next inline task's pause waits for
+        for waiting in self._inline_task_waiters:
+            self._drain_blocked_tasks.update(waiting)
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
