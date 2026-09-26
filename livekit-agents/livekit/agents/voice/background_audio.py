@@ -342,6 +342,11 @@ class BackgroundAudioPlayer:
             if not self._mixer_atask:
                 return  # not started
 
+            # detach before the awaits below: a "thinking" state change while closing
+            # would otherwise call play() on a half-closed player
+            if self._agent_session:
+                self._agent_session.off("agent_state_changed", self._agent_state_changed)
+
             await cancel_and_wait(*self._play_tasks)
 
             await cancel_and_wait(self._mixer_atask)
@@ -349,9 +354,6 @@ class BackgroundAudioPlayer:
 
             await self._audio_mixer.aclose()
             await self._audio_source.aclose()
-
-            if self._agent_session:
-                self._agent_session.off("agent_state_changed", self._agent_state_changed)
 
             with contextlib.suppress(Exception):
                 # The cached publication SID may be stale if the SDK
