@@ -333,10 +333,10 @@ class LLMStream(ABC):
                     self._emit_provider_request_completed("cancelled", error=e)
                     return
 
-                self._emit_provider_request_completed("error", error=e)
-
                 if not self._retry_on_chunk_sent and self._event_ch.output_sent:
                     e.retryable = False
+
+                self._emit_provider_request_completed("error", error=e)
 
                 retry_interval = self._conn_options._interval_for_retry(i)
 

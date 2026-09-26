@@ -20,17 +20,26 @@ from livekit.agents.metrics import (
     ProviderRequestLedger,
     RealtimeModelMetrics,
 )
-from livekit.agents.stt import FallbackAdapter as STTFallbackAdapter
-from livekit.agents.tts import FallbackAdapter as TTSFallbackAdapter
-from livekit.agents.types import APIConnectOptions
+from livekit.agents.stt import (
+    FallbackAdapter as STTFallbackAdapter,
+    StreamAdapter as STTStreamAdapter,
+)
+from livekit.agents.tts import (
+    FallbackAdapter as TTSFallbackAdapter,
+    StreamAdapter as TTSStreamAdapter,
+)
+from livekit.agents.tts.tts import AudioEmitter
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+from livekit.agents.utils.audio import silence_frame
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.report import SessionReport
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel
 from .fake_session import FakeActions, create_session, run_session
-from .fake_stt import FakeRecognizeStream, FakeSTT
-from .fake_tts import FakeTTS
+from .fake_stt import FakeRecognizeStream, FakeSTT, FakeUserSpeech
+from .fake_tts import FakeSynthesizeStream, FakeTTS
+from .fake_vad import FakeVAD
 
 pytestmark = [pytest.mark.unit]
 
@@ -209,6 +218,51 @@ async def test_retry_attempts_have_stable_operation_and_distinct_sdk_ids() -> No
     ]
     assert len({attempt.operation_id for attempt in attempts}) == 1
     assert len({attempt.sdk_request_id for attempt in attempts}) == 2
+    assert attempts[0].retryable is True
+
+
+class _OutputThenErrorLLM(_AttemptLLM):
+    def __init__(self) -> None:
+        super().__init__(fail=False, provider="output-then-error")
+        self.calls = 0
+
+    def chat(self, **kwargs):  # type: ignore[no-untyped-def]
+        return _OutputThenErrorStream(
+            self,
+            chat_ctx=kwargs["chat_ctx"],
+            tools=kwargs.get("tools") or [],
+            conn_options=kwargs.get("conn_options", APIConnectOptions()),
+        )
+
+
+class _OutputThenErrorStream(_AttemptStream):
+    async def _run(self) -> None:
+        assert isinstance(self._llm, _OutputThenErrorLLM)
+        self._llm.calls += 1
+        self._event_ch.send_nowait(
+            ChatChunk(id="sdk-local-chunk", delta=ChoiceDelta(content="visible"))
+        )
+        raise APIConnectionError("retryable failure after output")
+
+
+async def test_llm_attempt_retryable_reflects_output_retry_suppression() -> None:
+    model = _OutputThenErrorLLM()
+    attempts: list[ProviderRequestAttempt] = []
+    model.on("provider_request_completed", attempts.append)
+    stream = model.chat(
+        chat_ctx=ChatContext.empty(),
+        conn_options=APIConnectOptions(max_retry=2, retry_interval=0),
+    )
+    stream._retry_on_chunk_sent = False
+
+    with pytest.raises(APIConnectionError, match="retryable failure after output"):
+        async with stream:
+            assert [chunk async for chunk in stream]
+
+    assert model.calls == 1
+    assert len(attempts) == 1
+    assert attempts[0].outcome == "error"
+    assert attempts[0].retryable is False
 
 
 async def test_fallback_records_failed_and_successful_attempts_with_lineage() -> None:
@@ -314,6 +368,66 @@ async def test_tts_fallback_records_primary_error_and_backup_success() -> None:
         await adapter.aclose()
 
 
+class _ExplicitProviderIdStream(FakeSynthesizeStream):
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        output_emitter.note_provider_request_id("provider-id")
+        await super()._run(output_emitter)
+
+
+class _ExplicitProviderIdTTS(FakeTTS):
+    def stream(  # type: ignore[no-untyped-def]
+        self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS
+    ):
+        return _ExplicitProviderIdStream(tts=self, conn_options=conn_options)
+
+
+async def test_tts_segment_id_is_local_unless_explicitly_marked_provider_known() -> None:
+    tts = _ExplicitProviderIdTTS(fake_audio_duration=0.1)
+    attempts: list[ProviderRequestAttempt] = []
+    tts.on("provider_request_completed", attempts.append)
+
+    async with tts.stream(conn_options=APIConnectOptions(max_retry=0)) as stream:
+        stream.push_text("hello")
+        stream.end_input()
+        audio = [event async for event in stream]
+
+    assert audio
+    local_segment_id = audio[0].segment_id
+    assert local_segment_id.startswith("fake_segment_")
+    assert len(attempts) == 1
+    assert attempts[0].provider_request_ids == ("provider-id",)
+    assert local_segment_id not in attempts[0].provider_request_ids
+
+
+async def test_tts_stream_adapter_forwards_only_wrapped_attempts_and_cleans_listener() -> None:
+    wrapped = FakeTTS(
+        fake_audio_duration=0.1,
+        fake_exception=APIConnectionError("transient"),
+        fake_exception_count=1,
+    )
+    baseline = len(wrapped._events.get("provider_request_completed", set()))
+    adapter = TTSStreamAdapter(tts=wrapped)
+    attempts: list[ProviderRequestAttempt] = []
+    adapter.on("provider_request_completed", attempts.append)
+
+    try:
+        assert len(wrapped._events.get("provider_request_completed", set())) == baseline + 1
+        async with adapter.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+        ) as stream:
+            stream.push_text("hello world.")
+            stream.end_input()
+            assert [event async for event in stream]
+
+        assert [attempt.outcome for attempt in attempts] == ["error", "success"]
+        assert [attempt.retry_index for attempt in attempts] == [0, 1]
+        assert len({attempt.operation_id for attempt in attempts}) == 1
+    finally:
+        await adapter.aclose()
+
+    assert len(wrapped._events.get("provider_request_completed", set())) == baseline
+
+
 def _realtime_activity() -> tuple[AgentActivity, ProviderRequestLedger]:
     ledger = ProviderRequestLedger(capacity=4)
     session = AgentSession(vad=None, provider_request_ledger=ledger)
@@ -346,6 +460,37 @@ def test_connection_acquisition_metrics_do_not_create_realtime_attempt() -> None
     )
 
     assert ledger.snapshot() == ()
+
+
+def test_realtime_session_usage_metrics_do_not_create_generation_attempt() -> None:
+    activity, ledger = _realtime_activity()
+
+    AgentActivity._on_metrics_collected(
+        activity,
+        _realtime_metrics(
+            request_id="sess_123",
+            session_duration=3.5,
+            duration=0.0,
+        ),
+    )
+
+    assert ledger.snapshot() == ()
+    assert "sess_123" not in activity._realtime_completed_request_ids
+
+    generation = GenerationCreatedEvent(
+        message_stream=_empty_stream(),
+        function_stream=_empty_stream(),
+        user_initiated=True,
+        response_id="resp_123",
+    )
+    AgentActivity._on_generation_created(activity, generation)
+    AgentActivity._on_metrics_collected(
+        activity,
+        _realtime_metrics(request_id="resp_123", duration=0.1),
+    )
+
+    assert len(ledger.snapshot()) == 1
+    assert ledger.snapshot()[0].sdk_request_id == "resp_123"
 
 
 async def _empty_stream():
@@ -571,6 +716,21 @@ class _NamedLedgerSTT(FakeSTT):
         return f"{self._provider_name}-model"
 
 
+class _RetryBatchSTT(FakeSTT):
+    def __init__(self) -> None:
+        super().__init__(fake_transcript="hello")
+        self.calls = 0
+        self._capabilities.streaming = False
+
+    async def _recognize_impl(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if self.calls == 1:
+            raise APIConnectionError("transient")
+        event = await super()._recognize_impl(*args, **kwargs)
+        event.provider_request_ids = ("provider-stt-id",)
+        return event
+
+
 async def test_streaming_stt_captures_provider_ids_before_terminal_attempt() -> None:
     stt = _ProviderIdRaceSTT()
     attempts: list[ProviderRequestAttempt] = []
@@ -583,6 +743,51 @@ async def test_streaming_stt_captures_provider_ids_before_terminal_attempt() -> 
     assert attempts[0].provider_request_ids == ("provider-stt-id",)
     assert attempts[0].provider_trace_ids == ("provider-stt-trace",)
     await stream.aclose()
+
+
+async def test_stt_stream_adapter_forwards_only_wrapped_attempts_and_cleans_listener(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = silence_frame(duration=0.01, sample_rate=16_000)
+    monkeypatch.setattr("livekit.agents.stt.stream_adapter.utils.merge_frames", lambda _: frame)
+    wrapped = _RetryBatchSTT()
+    baseline = len(wrapped._events.get("provider_request_completed", set()))
+    adapter = STTStreamAdapter(
+        stt=wrapped,
+        vad=FakeVAD(
+            fake_user_speeches=[
+                FakeUserSpeech(
+                    start_time=0.0,
+                    end_time=0.01,
+                    transcript="hello",
+                    stt_delay=0.0,
+                )
+            ],
+            min_speech_duration=0.001,
+            min_silence_duration=0.001,
+        ),
+    )
+    attempts: list[ProviderRequestAttempt] = []
+    adapter.on("provider_request_completed", attempts.append)
+
+    try:
+        assert len(wrapped._events.get("provider_request_completed", set())) == baseline + 1
+        async with adapter.stream(
+            conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+        ) as stream:
+            stream.push_frame(frame)
+            stream.end_input()
+            assert [event async for event in stream]
+
+        assert wrapped.calls == 2
+        assert [attempt.outcome for attempt in attempts] == ["error", "success"]
+        assert [attempt.retry_index for attempt in attempts] == [0, 1]
+        assert len({attempt.operation_id for attempt in attempts}) == 1
+        assert attempts[1].provider_request_ids == ("provider-stt-id",)
+    finally:
+        await adapter.aclose()
+
+    assert len(wrapped._events.get("provider_request_completed", set())) == baseline
 
 
 async def test_non_streaming_stt_fallback_inherits_operation_lineage() -> None:

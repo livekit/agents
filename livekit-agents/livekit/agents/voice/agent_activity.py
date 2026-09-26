@@ -2197,9 +2197,15 @@ class AgentActivity(RecognitionHooks):
             return
 
         # Connection acquisition uses the same metrics type, but is not a generation request.
-        is_generation = bool(
+        has_tracked_generation = bool(
             ev.request_id
-            or ev.duration > 0
+            and (
+                ev.request_id in self._realtime_request_trackers
+                or ev.request_id in self._realtime_pending_errors
+            )
+        )
+        is_generation = has_tracked_generation or bool(
+            ev.duration > 0
             or ev.cancelled
             or ev.ttft >= 0
             or ev.input_tokens

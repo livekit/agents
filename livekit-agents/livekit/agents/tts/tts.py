@@ -1015,7 +1015,6 @@ class AudioEmitter:
                 "with stream=True"
             )
 
-        self._note_provider_request_id(segment_id)
         return self.__start_segment(segment_id=segment_id)
 
     def _note_provider_request_id(self, context_id: str) -> None:
@@ -1023,9 +1022,8 @@ class AudioEmitter:
 
         Exposed on the `tts_request_run` span as `lk.provider_request_ids` so users
         can correlate traces with the provider's server-side logs for debugging.
-        `start_segment()` calls this automatically; plugins can also call it when
-        the provider-known id becomes available later (e.g. from a response
-        message's `request_id`/`session_id` field after start_segment).
+        Plugins must call this explicitly when the provider-known ID becomes available
+        (e.g. from a response message's ``request_id`` or ``session_id`` field).
         """
         if not context_id or context_id in self._provider_request_ids:
             return
