@@ -199,6 +199,7 @@ class _RealtimeOptions:
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
     session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
     credentials: google.auth.credentials.Credentials | None = None
+    generate_reply_timeout: float = 5.0
 
 
 @dataclass
@@ -278,6 +279,7 @@ class RealtimeModel(llm.RealtimeModel):
         media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN,
         thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN,
         credentials: google.auth.credentials.Credentials | None = None,
+        generate_reply_timeout: float = 5.0,
     ) -> None:
         """
         Initializes a RealtimeModel instance for interacting with Google's Realtime API.
@@ -318,6 +320,7 @@ class RealtimeModel(llm.RealtimeModel):
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
+            generate_reply_timeout (float, optional): Seconds `generate_reply` waits for the model to start a generation. Defaults to 5.0.
 
         Raises:
             ValueError: If the API key is required but not found.
@@ -428,6 +431,7 @@ class RealtimeModel(llm.RealtimeModel):
             else _default_tool_behavior(model),
             tool_response_scheduling=tool_response_scheduling,
             conn_options=conn_options,
+            generate_reply_timeout=generate_reply_timeout,
             http_options=http_options,
             media_resolution=media_resolution,
             thinking_config=thinking_config,
@@ -881,7 +885,9 @@ class RealtimeSession(llm.RealtimeSession):
                 if self._pending_generation_fut is fut:
                     self._pending_generation_fut = None
 
-        timeout_handle = asyncio.get_event_loop().call_later(5.0, _on_timeout)
+        timeout_handle = asyncio.get_event_loop().call_later(
+            self._opts.generate_reply_timeout, _on_timeout
+        )
 
         def _on_fut_done(f: asyncio.Future[llm.GenerationCreatedEvent]) -> None:
             timeout_handle.cancel()
