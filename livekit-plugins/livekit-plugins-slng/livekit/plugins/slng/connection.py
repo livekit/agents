@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -64,8 +65,22 @@ class CandidateState:
         self._active = index
 
 
-def bridge_endpoint(base_url: str, service: Literal["stt", "tts"], model: str) -> str:
+def resolve_base_url(base_url: str | None) -> str | None:
+    """The caller's SLNG host, else the ``SLNG_BASE_URL`` env var, else None.
+
+    There is deliberately no built-in host: SLNG serves the API from regional
+    hosts, and which region is right is the caller's decision, not the plugin's.
+    """
+    return base_url or os.environ.get("SLNG_BASE_URL") or None
+
+
+def bridge_endpoint(base_url: str | None, service: Literal["stt", "tts"], model: str) -> str:
     validate_model_identifier(model)
+    if not base_url:
+        raise ValueError(
+            "slng_base_url is required, or set the SLNG_BASE_URL environment variable: "
+            "use the host of your SLNG region, for example 'us-east.api.slng.ai'"
+        )
     host = base_url.removeprefix("https://").removeprefix("http://").rstrip("/")
     protocol = "ws" if host.split(":", 1)[0] in {"localhost", "127.0.0.1"} else "wss"
     return f"{protocol}://{host}/v1/bridges/unmute/{service}/{model}"
