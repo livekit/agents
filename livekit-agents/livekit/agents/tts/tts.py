@@ -19,7 +19,7 @@ from livekit.agents.metrics.base import Metadata
 from .._exceptions import APIError, APIStatusError
 from ..log import logger
 from ..metrics import TTSMetrics
-from ..metrics.provider_request import _ProviderRequestTracker
+from ..metrics.provider_request import _provider_request_context, _ProviderRequestTracker
 from ..telemetry import trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -540,6 +540,8 @@ class _ChunkedStreamFromStream(ChunkedStream):
     the synthesize() method.
     """
 
+    _emit_provider_request_attempts: ClassVar[bool] = False
+
     def __init__(
         self,
         *,
@@ -547,10 +549,13 @@ class _ChunkedStreamFromStream(ChunkedStream):
         input_text: str,
         conn_options: APIConnectOptions,
     ) -> None:
+        self._stream_conn_options = conn_options
         super().__init__(
             tts=tts,
             input_text=input_text,
-            conn_options=conn_options,
+            # The inner stream owns the real provider retries. The outer adapter must not
+            # retry the whole already-retried operation a second time.
+            conn_options=APIConnectOptions(max_retry=0, timeout=conn_options.timeout),
         )
 
     async def _run(self, output_emitter: AudioEmitter) -> None:
@@ -561,15 +566,17 @@ class _ChunkedStreamFromStream(ChunkedStream):
             mime_type="audio/pcm",
             stream=False,
         )
-        async with self._tts.stream(
-            conn_options=APIConnectOptions(max_retry=0, timeout=self._conn_options.timeout)
-        ) as stream:
-            stream.push_text(self._input_text)
-            stream.end_input()
-            async for ev in stream:
-                output_emitter.push(ev.frame.data.tobytes())
-                if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
-                    output_emitter.push_timed_transcript(timed_transcripts)
+        tracker = self._provider_request_tracker
+        with _provider_request_context(
+            tracker.operation_id, tracker.fallback_index, tracker.purpose
+        ):
+            async with self._tts.stream(conn_options=self._stream_conn_options) as stream:
+                stream.push_text(self._input_text)
+                stream.end_input()
+                async for ev in stream:
+                    output_emitter.push(ev.frame.data.tobytes())
+                    if timed_transcripts := ev.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
+                        output_emitter.push_timed_transcript(timed_transcripts)
 
         output_emitter.flush()
 

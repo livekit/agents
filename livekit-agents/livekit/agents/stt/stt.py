@@ -231,7 +231,9 @@ class STT(
             tracker.start(i)
             try:
                 start_time = time.perf_counter()
-                with _provider_request_context(tracker.operation_id, tracker.fallback_index):
+                with _provider_request_context(
+                    tracker.operation_id, tracker.fallback_index, tracker.purpose
+                ):
                     event = await self._recognize_impl(
                         buffer, language=language, conn_options=conn_options
                     )

@@ -1225,6 +1225,10 @@ class AgentActivity(RecognitionHooks):
 
         # keyterm detection runs its own LLM, surface its usage
         self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
+        if self._session.provider_request_ledger is not None:
+            self._session._keyterm_detector.on(
+                "provider_request_completed", self._on_keyterm_provider_request_completed
+            )
 
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
@@ -1611,6 +1615,10 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
+        if self._session.provider_request_ledger is not None:
+            self._session._keyterm_detector.off(
+                "provider_request_completed", self._on_keyterm_provider_request_completed
+            )
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -2191,6 +2199,13 @@ class AgentActivity(RecognitionHooks):
                 attempt = attempt.model_copy(update={"speech_id": speech_handle.id})
         ledger.record(attempt)
 
+    def _on_keyterm_provider_request_completed(self, attempt: ProviderRequestAttempt) -> None:
+        # The conversational LLM already has a direct listener. Avoid double-recording when
+        # keyterm detection is explicitly configured with that same object.
+        if self._session._keyterm_detector.llm is self.llm:
+            return
+        self._on_provider_request_completed(attempt)
+
     def _record_realtime_metrics_attempt(self, ev: RealtimeModelMetrics) -> None:
         ledger = self._session.provider_request_ledger
         if ledger is None:
@@ -2222,6 +2237,10 @@ class AgentActivity(RecognitionHooks):
             self._realtime_pending_errors.pop(ev.request_id, None)
             return
 
+        # Metrics timestamps are specified as Unix wall-clock seconds. Do not copy an
+        # accidental monotonic/uptime value into the session ledger.
+        wall_clock_started_at = ev.timestamp if ev.timestamp >= 946_684_800 else time.time()
+
         trackers = self._realtime_request_trackers
         tracker = trackers.pop(ev.request_id, None) if ev.request_id else None
         pending_error = (
@@ -2237,14 +2256,19 @@ class AgentActivity(RecognitionHooks):
                 provider=ev.metadata.model_provider if ev.metadata else None,
                 model=ev.metadata.model_name if ev.metadata else None,
             )
-            tracker.start(0, sdk_request_id=ev.request_id or None, started_at=ev.timestamp)
+            tracker.start(0, sdk_request_id=ev.request_id or None, started_at=wall_clock_started_at)
         else:
             # Realtime metrics define timestamp as response creation time.
-            tracker.started_at = ev.timestamp
+            tracker.started_at = wall_clock_started_at
+            if ev.metadata is not None:
+                if ev.metadata.model_provider not in (None, "unknown"):
+                    tracker.provider = ev.metadata.model_provider
+                if ev.metadata.model_name not in (None, "unknown"):
+                    tracker.model = ev.metadata.model_name
 
         attempt = tracker.complete(
             "cancelled" if ev.cancelled else "success",
-            completed_at=ev.timestamp + ev.duration,
+            completed_at=wall_clock_started_at + ev.duration,
         )
         if attempt.speech_id is None and (speech_handle := _SpeechHandleContextVar.get(None)):
             attempt = attempt.model_copy(update={"speech_id": speech_handle.id})
@@ -2422,8 +2446,8 @@ class AgentActivity(RecognitionHooks):
                 self._session.provider_request_ledger.record(pending[1])
             tracker = _ProviderRequestTracker(
                 component="realtime",
-                provider=self.llm.provider,
-                model=self.llm.model,
+                provider=self.llm.metrics_metadata.get("model_provider"),
+                model=self.llm.metrics_metadata.get("model_name"),
             )
             # response_id is useful for framework correlation, but is not assumed to be a
             # provider server ID. Keep it in the SDK/local identifier namespace.

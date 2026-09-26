@@ -20,6 +20,8 @@ from livekit.agents.metrics import (
     ProviderRequestLedger,
     RealtimeModelMetrics,
 )
+from livekit.agents.metrics.base import Metadata
+from livekit.agents.metrics.provider_request import _provider_request_recovery_context
 from livekit.agents.stt import (
     FallbackAdapter as STTFallbackAdapter,
     StreamAdapter as STTStreamAdapter,
@@ -32,6 +34,7 @@ from livekit.agents.tts.tts import AudioEmitter
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import silence_frame
 from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.keyterm_detection import KeytermDetector
 from livekit.agents.voice.report import SessionReport
 
 from .fake_llm import FakeLLM
@@ -381,6 +384,28 @@ class _ExplicitProviderIdTTS(FakeTTS):
         return _ExplicitProviderIdStream(tts=self, conn_options=conn_options)
 
 
+class _StreamingOnlyTTS(_ExplicitProviderIdTTS):
+    def synthesize(  # type: ignore[no-untyped-def]
+        self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS
+    ):
+        return self._synthesize_with_stream(text, conn_options=conn_options)
+
+
+class _RetryingProviderIdStream(FakeSynthesizeStream):
+    async def _run(self, output_emitter: AudioEmitter) -> None:
+        output_emitter.note_provider_request_id("provider-id")
+        if (exc := self._tts._consume_fake_exception()) is not None:  # type: ignore[attr-defined]
+            raise exc
+        await super()._run(output_emitter)
+
+
+class _RetryingStreamingOnlyTTS(_StreamingOnlyTTS):
+    def stream(  # type: ignore[no-untyped-def]
+        self, *, conn_options=DEFAULT_API_CONNECT_OPTIONS
+    ):
+        return _RetryingProviderIdStream(tts=self, conn_options=conn_options)
+
+
 async def test_tts_segment_id_is_local_unless_explicitly_marked_provider_known() -> None:
     tts = _ExplicitProviderIdTTS(fake_audio_duration=0.1)
     attempts: list[ProviderRequestAttempt] = []
@@ -397,6 +422,76 @@ async def test_tts_segment_id_is_local_unless_explicitly_marked_provider_known()
     assert len(attempts) == 1
     assert attempts[0].provider_request_ids == ("provider-id",)
     assert local_segment_id not in attempts[0].provider_request_ids
+
+
+async def test_streaming_only_tts_emits_only_inner_attempt_with_lineage_and_provider_id() -> None:
+    tts = _RetryingStreamingOnlyTTS(
+        fake_audio_duration=0.1,
+        fake_exception=APIConnectionError("transient"),
+        fake_exception_count=1,
+    )
+    attempts: list[ProviderRequestAttempt] = []
+    tts.on("provider_request_completed", attempts.append)
+
+    async with tts.synthesize(
+        "hello", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    ) as stream:
+        assert [event async for event in stream]
+
+    assert [(a.outcome, a.retry_index) for a in attempts] == [("error", 0), ("success", 1)]
+    assert len({a.operation_id for a in attempts}) == 1
+    assert len({a.sdk_request_id for a in attempts}) == 2
+    assert all(a.provider_request_ids == ("provider-id",) for a in attempts)
+
+
+async def test_batch_stt_preserves_foreground_and_recovery_purpose() -> None:
+    class RetrySTT(FakeSTT):
+        calls = 0
+
+        async def _recognize_impl(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            if self.calls == 2:
+                raise APIConnectionError("transient")
+            return await super()._recognize_impl(*args, **kwargs)
+
+    stt = RetrySTT(fake_transcript="hello")
+    attempts: list[ProviderRequestAttempt] = []
+    stt.on("provider_request_completed", attempts.append)
+    frame = silence_frame(duration=0.01, sample_rate=16_000)
+
+    await stt.recognize(frame, conn_options=APIConnectOptions(max_retry=0))
+    with _provider_request_recovery_context(fallback_index=2):
+        await stt.recognize(frame, conn_options=APIConnectOptions(max_retry=1, retry_interval=0))
+
+    assert [attempt.purpose for attempt in attempts] == [
+        "foreground",
+        "recovery",
+        "recovery",
+    ]
+    assert [attempt.retry_index for attempt in attempts] == [0, 0, 1]
+    assert all(attempt.fallback_index == 2 for attempt in attempts[1:])
+    assert len({attempt.operation_id for attempt in attempts[1:]}) == 1
+    assert attempts[0].operation_id != attempts[1].operation_id
+
+
+async def test_keyterm_detector_forwards_provider_attempts_and_cleans_listener() -> None:
+    model = _AttemptLLM(fail=False, provider="keyterm")
+    detector = KeytermDetector(options={"enabled": True, "llm": model})
+    session = AgentSession(vad=None)
+    stt = FakeSTT()
+    stt._capabilities.keyterms = True
+    forwarded: list[ProviderRequestAttempt] = []
+    detector.on("provider_request_completed", forwarded.append)
+    baseline = len(model._events.get("provider_request_completed", set()))
+
+    detector.start(session, stt)
+    detector.start(session, stt)
+    assert len(model._events.get("provider_request_completed", set())) == baseline + 1
+    model.emit("provider_request_completed", _attempt(9))
+    assert forwarded == [_attempt(9)]
+
+    await detector.aclose()
+    assert len(model._events.get("provider_request_completed", set())) == baseline
 
 
 async def test_tts_stream_adapter_forwards_only_wrapped_attempts_and_cleans_listener() -> None:
@@ -525,6 +620,47 @@ def test_realtime_metrics_preserve_local_id_and_generation_lineage(cancelled: bo
     assert attempt.operation_id == operation_id
     assert attempt.sdk_request_id == "framework-response-id"
     assert attempt.provider_request_ids == ()
+
+
+def test_realtime_terminal_metrics_override_fallback_wrapper_metadata() -> None:
+    activity, ledger = _realtime_activity()
+    generation = GenerationCreatedEvent(
+        message_stream=_empty_stream(),
+        function_stream=_empty_stream(),
+        user_initiated=True,
+        response_id="framework-response-id",
+    )
+    AgentActivity._on_generation_created(activity, generation)
+    tracker = activity._realtime_request_trackers["framework-response-id"]
+    tracker.provider = "livekit"
+    tracker.model = "RealtimeModelFallbackAdapter"
+
+    AgentActivity._record_realtime_metrics_attempt(
+        activity,
+        _realtime_metrics(
+            request_id="framework-response-id",
+            duration=1.0,
+            metadata=Metadata(model_provider="openai", model_name="gpt-realtime"),
+        ),
+    )
+
+    attempt = ledger.snapshot()[0]
+    assert attempt.provider == "openai"
+    assert attempt.model == "gpt-realtime"
+
+
+def test_realtime_monotonic_like_timestamp_is_normalized_to_wall_clock() -> None:
+    activity, ledger = _realtime_activity()
+    before = time.time()
+
+    AgentActivity._record_realtime_metrics_attempt(
+        activity,
+        _realtime_metrics(request_id="aws-response-id", timestamp=12_345.0, duration=2.0),
+    )
+
+    attempt = ledger.snapshot()[0]
+    assert before <= attempt.started_at <= time.time()
+    assert attempt.completed_at == attempt.started_at + 2.0
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
