@@ -20,6 +20,7 @@ from hotel_db import (
     HotelDB,
 )
 from instructions import build_instructions
+from phone_handoff import greet_on_phone_handoff
 from policies import build_lookup_policy_tool
 from run_artifacts import dump_run_artifacts
 from tools_restaurant import RestaurantToolsMixin
@@ -194,7 +195,9 @@ async def hotel_receptionist_agent(ctx: JobContext) -> None:
         max_tool_steps=5,
     )
 
-    await session.start(agent=HotelReceptionistAgent(), room=ctx.room)
+    agent = HotelReceptionistAgent()
+    greet_on_phone_handoff(session, agent, ctx.room)
+    await session.start(agent=agent, room=ctx.room)
 
 
 if __name__ == "__main__":
