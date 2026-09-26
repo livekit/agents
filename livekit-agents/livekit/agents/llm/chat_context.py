@@ -982,7 +982,7 @@ class _ReadOnlyChatContext(ChatContext):
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
-        append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
+        append = extend = insert = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
         def copy(self) -> list[ChatItem]:
@@ -990,6 +990,15 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def items(self) -> list[ChatItem]:
+        return self._items
+
+    @items.setter
+    def items(self, items: list[ChatItem]) -> None:
+        logger.error(_ReadOnlyChatContext.error_msg)
+        raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
     @property
     def readonly(self) -> bool:
