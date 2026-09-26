@@ -255,24 +255,30 @@ class MCPServer(ABC):
         # this server wait until it returns, so the timeout also bounds that stall.
         assert self._elicitation_handler is not None
         self._elicitation_started_at = started_at = time.monotonic()
+        # a task rather than wait_for, so a TimeoutError raised by the handler itself (e.g. a
+        # timed out RPC) is reported as a handler failure, not as the user dismissing it
+        handler_task = asyncio.ensure_future(
+            self._elicitation_handler(MCPElicitationContext(server=self, params=params))
+        )
         try:
-            return await asyncio.wait_for(
-                self._elicitation_handler(MCPElicitationContext(server=self, params=params)),
-                timeout=self._elicitation_timeout,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "MCP elicitation timed out, answering cancel",
-                extra={"mode": params.mode, "elicitation_timeout": self._elicitation_timeout},
-            )
-            # "cancel": the user dismissed the request without an explicit choice
-            return mcp.types.ElicitResult(action="cancel")
+            done, _ = await asyncio.wait({handler_task}, timeout=self._elicitation_timeout)
+            if not done:
+                logger.warning(
+                    "MCP elicitation timed out, answering cancel",
+                    extra={"mode": params.mode, "elicitation_timeout": self._elicitation_timeout},
+                )
+                # "cancel": the user dismissed the request without an explicit choice
+                return mcp.types.ElicitResult(action="cancel")
+            return handler_task.result()
         except Exception:
             logger.exception("MCP elicitation handler failed", extra={"mode": params.mode})
             return mcp.types.ErrorData(
                 code=mcp.types.INTERNAL_ERROR, message="Elicitation handler failed"
             )
         finally:
+            if not handler_task.done():
+                handler_task.cancel()
+                await asyncio.gather(handler_task, return_exceptions=True)
             self._elicitation_seconds += time.monotonic() - started_at
             self._elicitation_started_at = None
 
@@ -493,7 +499,8 @@ class MCPServerHTTP(MCPServer):
             not advertised and the server can't ask the user for input.
         elicitation_timeout: Seconds to wait for ``elicitation_handler`` before answering
             ``"cancel"`` (default: 60, None waits forever). Time spent in the handler
-            doesn't count toward client_session_timeout_seconds for tool calls.
+            doesn't count toward client_session_timeout_seconds for tool calls. Keep it
+            lower than sse_read_timeout, which still bounds the HTTP stream.
 
     Note: SSE transport is being deprecated in favor of streamable HTTP transport.
     See: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206
@@ -524,6 +531,19 @@ class MCPServerHTTP(MCPServer):
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
         self._allowed_tools = set(allowed_tools) if allowed_tools else None
+
+        if elicitation_handler is not None and (
+            elicitation_timeout is None or elicitation_timeout >= sse_read_timeout
+        ):
+            # the server sends nothing on the tool call's stream while the user answers
+            logger.warning(
+                "MCP elicitation_timeout should be lower than sse_read_timeout, otherwise the "
+                "HTTP stream of a tool call can time out while waiting for the user",
+                extra={
+                    "elicitation_timeout": elicitation_timeout,
+                    "sse_read_timeout": sse_read_timeout,
+                },
+            )
 
         # Determine transport type: explicit > URL-based detection
         if transport_type is not None:

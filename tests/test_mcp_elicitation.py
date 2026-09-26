@@ -20,6 +20,7 @@ from livekit.agents.llm.mcp import (
     MCPElicitationContext,
     MCPElicitationResult,
     MCPServer,
+    MCPServerHTTP,
     MCPTool,
 )
 from livekit.agents.llm.tool_context import ToolError
@@ -244,3 +245,34 @@ async def test_hung_tool_still_times_out_with_handler() -> None:
         assert loop.time() - start < 2
         # the session keeps working after the timeout
         assert await _call(tools["ping"]) == "pong"
+
+
+async def test_handler_raised_timeout_is_an_error(caplog: pytest.LogCaptureFixture) -> None:
+    # a TimeoutError from inside the handler (e.g. a timed out RPC) is a failure, not "cancel"
+    async def rpc_timeout_handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
+        raise asyncio.TimeoutError()
+
+    with caplog.at_level(logging.ERROR, logger="livekit.agents"):
+        async with _connected(elicitation_handler=rpc_timeout_handler) as tools:
+            with pytest.raises(ToolError, match="Elicitation handler failed"):
+                await tools["pick_seat"]({})
+
+    assert "MCP elicitation handler failed" in caplog.text
+
+
+def test_http_warns_when_elicitation_outlives_sse_read_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handler(ctx: MCPElicitationContext) -> MCPElicitationResult:
+        return MCPElicitationResult(action="cancel")
+
+    with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+        MCPServerHTTP("http://localhost/mcp", elicitation_handler=handler)  # 60s < 300s
+        MCPServerHTTP("http://localhost/mcp", elicitation_timeout=None)  # no handler
+    assert "sse_read_timeout" not in caplog.text
+
+    for kwargs in ({"elicitation_timeout": None}, {"sse_read_timeout": 30}):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="livekit.agents"):
+            MCPServerHTTP("http://localhost/mcp", elicitation_handler=handler, **kwargs)  # type: ignore[arg-type]
+        assert "elicitation_timeout should be lower than sse_read_timeout" in caplog.text
