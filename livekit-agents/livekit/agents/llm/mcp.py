@@ -25,6 +25,7 @@ try:
     from mcp.client.sse import sse_client
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
+    from mcp.shared.context import RequestContext
     from mcp.shared.message import SessionMessage
 except ImportError as e:
     raise ImportError(
@@ -108,18 +109,92 @@ def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     )
 
 
+MCPElicitationResult = mcp.types.ElicitResult
+"""The answer to an elicitation request: ``action`` is ``"accept"``, ``"decline"`` or
+``"cancel"``, and ``content`` holds the form values when a form request is accepted."""
+
+
+@dataclass
+class MCPElicitationContext:
+    """An elicitation request received from an MCP server, passed to an
+    :data:`MCPElicitationHandler`.
+
+    MCP servers send these while handling a tool call, to ask the user for more
+    information (form mode) or to send them to a URL (URL mode), see
+    https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation.
+    """
+
+    server: MCPServer
+    """The MCP server that sent the request."""
+
+    params: mcp.types.ElicitRequestParams
+    """The raw request parameters from the MCP SDK."""
+
+    @property
+    def mode(self) -> Literal["form", "url"]:
+        """``"form"`` to collect values matching :attr:`requested_schema`, ``"url"`` to
+        send the user to :attr:`url`."""
+        return self.params.mode
+
+    @property
+    def message(self) -> str:
+        """The text to present to the user explaining what is being asked."""
+        return self.params.message
+
+    @property
+    def requested_schema(self) -> dict[str, Any] | None:
+        """The flat JSON schema of the requested values, or ``None`` in URL mode."""
+        if isinstance(self.params, mcp.types.ElicitRequestFormParams):
+            return self.params.requestedSchema
+        return None
+
+    @property
+    def url(self) -> str | None:
+        """The URL the user should open, or ``None`` in form mode."""
+        if isinstance(self.params, mcp.types.ElicitRequestURLParams):
+            return self.params.url
+        return None
+
+
+MCPElicitationHandler = Callable[[MCPElicitationContext], Awaitable[MCPElicitationResult]]
+"""Async callback that asks the user to answer an elicitation request, e.g. over RPC to
+the frontend or with a spoken prompt, and returns their answer."""
+
+
 class MCPServer(ABC):
     def __init__(
         self,
         *,
         client_session_timeout_seconds: float,
         tool_result_resolver: MCPToolResultResolver | None = None,
+        elicitation_handler: MCPElicitationHandler | None = None,
+        elicitation_timeout: float | None = 60,
     ) -> None:
         self._client: ClientSession | None = None
         self._read_timeout = client_session_timeout_seconds
         self._tool_result_resolver: MCPToolResultResolver = (
             tool_result_resolver or _default_tool_result_resolver
         )
+        self._elicitation_handler = elicitation_handler
+        self._elicitation_timeout = elicitation_timeout
+
+        if (
+            elicitation_handler is not None
+            and client_session_timeout_seconds
+            and (
+                elicitation_timeout is None or elicitation_timeout >= client_session_timeout_seconds
+            )
+        ):
+            # the tool call that triggered the elicitation keeps running under the session
+            # read timeout, so it would fail before a slow user answers.
+            logger.warning(
+                "MCP elicitation_timeout should be lower than client_session_timeout_seconds, "
+                "otherwise tool calls can time out while waiting for the user",
+                extra={
+                    "elicitation_timeout": elicitation_timeout,
+                    "client_session_timeout_seconds": client_session_timeout_seconds,
+                },
+            )
 
         self._cache_dirty = True
         self._raw_tools: list[mcp.types.Tool] | None = None
@@ -158,6 +233,10 @@ class MCPServer(ABC):
                     read_timeout_seconds=timedelta(seconds=self._read_timeout)
                     if self._read_timeout
                     else None,
+                    # only advertise the elicitation capability when there is a handler
+                    elicitation_callback=self._on_elicitation
+                    if self._elicitation_handler is not None
+                    else None,
                 ) as client:
                     await client.initialize()
                     self._client = client
@@ -175,6 +254,32 @@ class MCPServer(ABC):
             self._client = None
             self._raw_tools = None
             self._closing_ev.clear()
+
+    async def _on_elicitation(
+        self,
+        context: RequestContext[ClientSession, Any],
+        params: mcp.types.ElicitRequestParams,
+    ) -> mcp.types.ElicitResult | mcp.types.ErrorData:
+        # mcp 1.x awaits this callback inside the session's receive loop: other messages from
+        # this server wait until it returns, so the timeout also bounds that stall.
+        assert self._elicitation_handler is not None
+        try:
+            return await asyncio.wait_for(
+                self._elicitation_handler(MCPElicitationContext(server=self, params=params)),
+                timeout=self._elicitation_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "MCP elicitation timed out, answering cancel",
+                extra={"mode": params.mode, "elicitation_timeout": self._elicitation_timeout},
+            )
+            # "cancel": the user dismissed the request without an explicit choice
+            return mcp.types.ElicitResult(action="cancel")
+        except Exception:
+            logger.exception("MCP elicitation handler failed", extra={"mode": params.mode})
+            return mcp.types.ErrorData(
+                code=mcp.types.INTERNAL_ERROR, message="Elicitation handler failed"
+            )
 
     async def _list_raw_tools(self) -> list[mcp.types.Tool]:
         if self._client is None:
@@ -335,6 +440,12 @@ class MCPServerHTTP(MCPServer):
         timeout: Connection timeout in seconds (default: 5)
         sse_read_timeout: SSE read timeout in seconds (default: 300)
         client_session_timeout_seconds: Client session timeout in seconds (default: 5)
+        elicitation_handler: Optional async callback that answers elicitation requests
+            the server sends during tool calls. If None, the elicitation capability is
+            not advertised and the server can't ask the user for input.
+        elicitation_timeout: Seconds to wait for ``elicitation_handler`` before answering
+            ``"cancel"`` (default: 60, None waits forever). Keep it lower than
+            client_session_timeout_seconds, which still bounds the tool call.
 
     Note: SSE transport is being deprecated in favor of streamable HTTP transport.
     See: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206
@@ -351,10 +462,14 @@ class MCPServerHTTP(MCPServer):
         client_session_timeout_seconds: float = 5,
         *,
         tool_result_resolver: MCPToolResultResolver | None = None,
+        elicitation_handler: MCPElicitationHandler | None = None,
+        elicitation_timeout: float | None = 60,
     ) -> None:
         super().__init__(
             client_session_timeout_seconds=client_session_timeout_seconds,
             tool_result_resolver=tool_result_resolver,
+            elicitation_handler=elicitation_handler,
+            elicitation_timeout=elicitation_timeout,
         )
         self.url = url
         self._headers = headers or {}
@@ -502,10 +617,14 @@ class MCPServerStdio(MCPServer):
         client_session_timeout_seconds: float = 5,
         *,
         tool_result_resolver: MCPToolResultResolver | None = None,
+        elicitation_handler: MCPElicitationHandler | None = None,
+        elicitation_timeout: float | None = 60,
     ) -> None:
         super().__init__(
             client_session_timeout_seconds=client_session_timeout_seconds,
             tool_result_resolver=tool_result_resolver,
+            elicitation_handler=elicitation_handler,
+            elicitation_timeout=elicitation_timeout,
         )
         self.command = command
         self.args = args
