@@ -1512,7 +1512,7 @@ class RealtimeSession(  # noqa: F811
         metrics = RealtimeModelMetrics(
             label=self._realtime_model.label,
             request_id=event_data["event"]["usageEvent"]["completionId"],
-            timestamp=time.monotonic(),
+            timestamp=time.time(),
             duration=duration,
             ttft=ttft,
             cancelled=False,

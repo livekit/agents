@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import Enum, unique
 from types import TracebackType
@@ -18,6 +18,7 @@ from .._exceptions import APIConnectionError, APIError
 from ..language import LanguageCode
 from ..log import logger
 from ..metrics import STTMetrics
+from ..metrics.provider_request import _provider_request_context, _ProviderRequestTracker
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -126,6 +127,10 @@ class SpeechEvent:
     """Wall-clock time when this event was created."""
     speech_end_time: float | None = None
     """Wall-clock time when the recognized speech ended, when known."""
+    provider_request_ids: tuple[str, ...] = ()
+    """Provider-known request IDs. ``request_id`` is intentionally not inferred as one."""
+    provider_trace_ids: tuple[str, ...] = ()
+    """Provider-known trace or context IDs associated with this event."""
 
 
 @dataclass
@@ -156,7 +161,7 @@ TEvent = TypeVar("TEvent")
 
 class STT(
     ABC,
-    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    rtc.EventEmitter[Literal["metrics_collected", "error", "provider_request_completed"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self, *, capabilities: STTCapabilities) -> None:
@@ -166,6 +171,7 @@ class STT(
         self._recognize_metrics_needed = True
         self._keyterms_unsupported_warned = False
         self._chat_context_unsupported_warned = False
+        self._emit_provider_request_attempts = True
 
     @property
     def label(self) -> str:
@@ -220,12 +226,17 @@ class STT(
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> SpeechEvent:
+        tracker = _ProviderRequestTracker(component="stt", provider=self.provider, model=self.model)
         for i in range(conn_options.max_retry + 1):
+            tracker.start(i)
             try:
                 start_time = time.perf_counter()
-                event = await self._recognize_impl(
-                    buffer, language=language, conn_options=conn_options
-                )
+                with _provider_request_context(
+                    tracker.operation_id, tracker.fallback_index, tracker.purpose
+                ):
+                    event = await self._recognize_impl(
+                        buffer, language=language, conn_options=conn_options
+                    )
                 if self._recognize_metrics_needed:
                     duration = time.perf_counter() - start_time
                     stt_metrics = STTMetrics(
@@ -241,9 +252,22 @@ class STT(
                         ),
                     )
                     self.emit("metrics_collected", stt_metrics)
+                for request_id in event.provider_request_ids:
+                    tracker.note_provider_request_id(request_id)
+                for trace_id in event.provider_trace_ids:
+                    tracker.note_provider_trace_id(trace_id)
+                if self._emit_provider_request_attempts:
+                    self.emit("provider_request_completed", tracker.complete("success"))
                 return event
 
+            except asyncio.CancelledError as e:
+                if self._emit_provider_request_attempts:
+                    self.emit("provider_request_completed", tracker.complete("cancelled", error=e))
+                raise
+
             except APIError as e:
+                if self._emit_provider_request_attempts:
+                    self.emit("provider_request_completed", tracker.complete("error", error=e))
                 retry_interval = conn_options._interval_for_retry(i)
                 if conn_options.max_retry == 0:
                     self._emit_error(e, recoverable=False)
@@ -267,6 +291,8 @@ class STT(
                 await asyncio.sleep(retry_interval)
 
             except Exception as e:
+                if self._emit_provider_request_attempts:
+                    self.emit("provider_request_completed", tracker.complete("error", error=e))
                 self._emit_error(e, recoverable=False)
                 raise
 
@@ -356,6 +382,18 @@ class SpeakerContext(Protocol):
     def to_instructions(self) -> str: ...
 
 
+class _STTEventChannel(aio.Chan[SpeechEvent]):
+    """Capture provider IDs synchronously, before the producer can finish its attempt."""
+
+    def __init__(self, on_event: Callable[[SpeechEvent], None]) -> None:
+        super().__init__()
+        self._on_event = on_event
+
+    def send_nowait(self, value: SpeechEvent) -> None:
+        self._on_event(value)
+        super().send_nowait(value)
+
+
 class RecognizeStream(ABC):
     class _FlushSentinel:
         """Sentinel to mark when it was flushed"""
@@ -380,7 +418,10 @@ class RecognizeStream(ABC):
         self._stt = stt
         self._conn_options = conn_options
         self._input_ch = aio.Chan[rtc.AudioFrame | RecognizeStream._FlushSentinel]()
-        self._event_ch = aio.Chan[SpeechEvent]()
+        self._provider_request_tracker = _ProviderRequestTracker(
+            component="stt", provider=stt.provider, model=stt.model
+        )
+        self._event_ch = _STTEventChannel(self._note_event_provider_ids)
 
         self._tee = aio.itertools.tee(self._event_ch, 2)
         self._event_aiter, monitor_aiter = self._tee
@@ -469,12 +510,19 @@ class RecognizeStream(ABC):
         last_start_time = time.time()
 
         while self._num_retries <= max_retries:
+            self._provider_request_tracker.start(self._num_retries)
             try:
                 self._start_time_offset += time.time() - last_start_time
                 self._start_time = time.time()
                 last_start_time = time.time()
-                return await self._run()
+                await self._run()
+                self._emit_provider_request_completed("success")
+                return
+            except asyncio.CancelledError as e:
+                self._emit_provider_request_completed("cancelled", error=e)
+                raise
             except APIError as e:
+                self._emit_provider_request_completed("error", error=e)
                 # an attempt that outlived the connect timeout had connected, so this failure
                 # is not consecutive with the previous one and the budget starts over
                 if time.time() - last_start_time > self._conn_options.timeout:
@@ -505,8 +553,39 @@ class RecognizeStream(ABC):
                 self._num_retries += 1
 
             except Exception as e:
+                self._emit_provider_request_completed("error", error=e)
                 self._emit_error(e, recoverable=False)
                 raise
+
+    def _emit_provider_request_completed(
+        self,
+        outcome: Literal["success", "error", "cancelled"],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        if self._stt._emit_provider_request_attempts:
+            self._stt.emit(
+                "provider_request_completed",
+                self._provider_request_tracker.complete(outcome, error=error),
+            )
+
+    def note_provider_request_id(self, request_id: str | None) -> None:
+        """Record an explicitly provider-known request ID for the current attempt."""
+        self._provider_request_tracker.note_provider_request_id(request_id)
+
+    def note_provider_trace_id(self, trace_id: str | None) -> None:
+        """Record an explicitly provider-known trace/context ID for the current attempt."""
+        self._provider_request_tracker.note_provider_trace_id(trace_id)
+
+    # Kept for plugins that adopted the initial protected hook.
+    _note_provider_request_id = note_provider_request_id
+    _note_provider_trace_id = note_provider_trace_id
+
+    def _note_event_provider_ids(self, event: SpeechEvent) -> None:
+        for request_id in event.provider_request_ids:
+            self.note_provider_request_id(request_id)
+        for trace_id in event.provider_trace_ids:
+            self.note_provider_trace_id(trace_id)
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._stt.emit(

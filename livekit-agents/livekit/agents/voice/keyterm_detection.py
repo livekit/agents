@@ -13,6 +13,7 @@ from .. import llm as llm_module, utils
 from ..llm import LLM, ChatContext, FunctionToolCall, function_tool
 from ..llm.utils import parse_function_arguments
 from ..log import logger
+from ..metrics import ProviderRequestAttempt
 from ..stt.stt import STT
 from ..telemetry import trace_types, tracer
 from ..utils import aio
@@ -199,7 +200,7 @@ async def _record_keyterms(pending: list[str], confirm: list[str], remove: list[
     ...
 
 
-class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
+class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected", "provider_request_completed"]]):
     """Maintains the STT keyterm set and, when enabled, auto-detects keyterms during a call.
 
     Owned by the :class:`AgentSession` so keyterm state survives agent handoffs. Each agent
@@ -244,6 +245,10 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
     def static_keyterms(self) -> list[str]:
         return list(self._static_terms)
 
+    @property
+    def llm(self) -> LLM | None:
+        return self._llm
+
     def set_static_keyterms(self, terms: list[str]) -> None:
         self._static_terms = list(dict.fromkeys(terms))
         if self._stt is not None:
@@ -276,8 +281,17 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
             )
             return
 
+        # An activity can be restarted with this session-owned detector. Rebind instead of
+        # accumulating listeners on either the old model or session.
+        if self._llm is not None:
+            self._llm.off("metrics_collected", self._forward_metrics)
+            self._llm.off("provider_request_completed", self._forward_provider_request)
+        if self._session is not None:
+            self._session.off("conversation_item_added", self._on_conversation_item_added)
+
         self._llm = detect_llm
         detect_llm.on("metrics_collected", self._forward_metrics)
+        detect_llm.on("provider_request_completed", self._forward_provider_request)
         self._session = session
         self._turn_count = 0
         session.on("conversation_item_added", self._on_conversation_item_added)
@@ -294,6 +308,7 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
         """Stop detection for the current activity; keyterm state is kept."""
         if self._llm is not None:
             self._llm.off("metrics_collected", self._forward_metrics)
+            self._llm.off("provider_request_completed", self._forward_provider_request)
         if self._session is not None:
             self._session.off("conversation_item_added", self._on_conversation_item_added)
             self._session = None
@@ -303,6 +318,9 @@ class KeytermDetector(rtc.EventEmitter[Literal["metrics_collected"]]):
 
     def _forward_metrics(self, ev: LLMMetrics) -> None:
         self.emit("metrics_collected", ev)
+
+    def _forward_provider_request(self, ev: ProviderRequestAttempt) -> None:
+        self.emit("provider_request_completed", ev)
 
     def _on_conversation_item_added(self, ev: ConversationItemAddedEvent) -> None:
         if (session := self._session) is None:

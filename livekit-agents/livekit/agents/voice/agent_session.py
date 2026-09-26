@@ -44,7 +44,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..metrics import AgentSessionUsage, ModelUsageCollector
+from ..metrics import AgentSessionUsage, ModelUsageCollector, ProviderRequestLedger
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
     loop_monitor,
@@ -416,6 +416,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         # Runtime settings
         conn_options: NotGivenOr[SessionConnectOptions] = NOT_GIVEN,
         loop: asyncio.AbstractEventLoop | None = None,
+        provider_request_ledger: ProviderRequestLedger | None = None,
         # deprecated
         preemptive_generation: NotGivenOr[bool | PreemptiveGenerationOptions] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -501,6 +502,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 stt, llm, and tts.
             loop (asyncio.AbstractEventLoop, optional): Event loop to bind the
                 session to. Falls back to :pyfunc:`asyncio.get_event_loop()`.
+            provider_request_ledger (ProviderRequestLedger, optional): Bounded in-process
+                provider attempt history. Disabled when omitted.
             user_away_timeout (float, optional): If set, set the user state as
                 "away" after this amount of time after user and agent are silent.
                 Defaults to ``15.0`` s, set to ``None`` to disable.
@@ -612,6 +615,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         self._expressive: bool | ExpressiveOptions = expressive
         self._conn_options = conn_options or SessionConnectOptions()
         self._started = False
+        self._provider_request_ledger = provider_request_ledger
 
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
@@ -837,6 +841,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def usage(self) -> AgentSessionUsage:
         """Returns usage summaries for this session, one per model/provider combination."""
         return AgentSessionUsage(model_usage=self._usage_collector.flatten())
+
+    @property
+    def provider_request_ledger(self) -> ProviderRequestLedger | None:
+        """The configured provider request ledger, or ``None`` when disabled."""
+        return self._provider_request_ledger
 
     def run(
         self,

@@ -11,6 +11,10 @@ from opentelemetry import trace
 
 from .._exceptions import APIConnectionError, APIError
 from ..log import logger
+from ..metrics.provider_request import (
+    _provider_request_context,
+    _provider_request_recovery_context,
+)
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
@@ -85,6 +89,7 @@ class FallbackAdapter(
 
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
+            llm_instance.on("provider_request_completed", self._on_provider_request_completed)
 
     def _next_instance(self) -> LLM:
         """The instance the next request goes to first: the first one marked available, or
@@ -149,9 +154,13 @@ class FallbackAdapter(
     async def aclose(self) -> None:
         for llm_instance in self._llm_instances:
             llm_instance.off("metrics_collected", self._on_metrics_collected)
+            llm_instance.off("provider_request_completed", self._on_provider_request_completed)
 
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
+
+    def _on_provider_request_completed(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("provider_request_completed", *args, **kwargs)
 
 
 def _provider_attr(llm: LLM) -> dict[str, str]:
@@ -173,6 +182,7 @@ class FallbackLLMStream(LLMStream):
     _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
     # Provider request spans own the inference operation.
     _genai_operation_name: ClassVar[str | None] = None
+    _emit_provider_request_attempts: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -209,7 +219,7 @@ class FallbackLLMStream(LLMStream):
         return self._current_stream.tools
 
     async def _try_generate(
-        self, *, llm: LLM, check_recovery: bool = False
+        self, *, llm: LLM, fallback_index: int, check_recovery: bool = False
     ) -> AsyncIterable[ChatChunk]:
         """
         Try to generate with the given LLM.
@@ -221,28 +231,36 @@ class FallbackLLMStream(LLMStream):
                           failed LLM has become available again.
         """
         try:
-            async with llm.chat(
-                chat_ctx=self._chat_ctx,
-                tools=self._tools,
-                parallel_tool_calls=self._parallel_tool_calls,
-                tool_choice=self._tool_choice,
-                extra_kwargs=self._extra_kwargs,
-                conn_options=dataclasses.replace(
-                    self._conn_options,
-                    max_retry=self._fallback_adapter._max_retry_per_llm,
-                    timeout=self._fallback_adapter._attempt_timeout,
-                    retry_interval=self._fallback_adapter._retry_interval,
-                ),
-            ) as stream:
-                if not check_recovery:
-                    stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
-                should_set_current = not check_recovery
-                async for chunk in stream:
-                    if should_set_current:
-                        should_set_current = False
-                        self._current_stream = stream
-                        self._fallback_adapter._active_instance = llm
-                    yield chunk
+            request_context = (
+                _provider_request_recovery_context(fallback_index)
+                if check_recovery
+                else _provider_request_context(
+                    self._provider_request_tracker.operation_id, fallback_index
+                )
+            )
+            with request_context:
+                async with llm.chat(
+                    chat_ctx=self._chat_ctx,
+                    tools=self._tools,
+                    parallel_tool_calls=self._parallel_tool_calls,
+                    tool_choice=self._tool_choice,
+                    extra_kwargs=self._extra_kwargs,
+                    conn_options=dataclasses.replace(
+                        self._conn_options,
+                        max_retry=self._fallback_adapter._max_retry_per_llm,
+                        timeout=self._fallback_adapter._attempt_timeout,
+                        retry_interval=self._fallback_adapter._retry_interval,
+                    ),
+                ) as stream:
+                    if not check_recovery:
+                        stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
+                    should_set_current = not check_recovery
+                    async for chunk in stream:
+                        if should_set_current:
+                            should_set_current = False
+                            self._current_stream = stream
+                            self._fallback_adapter._active_instance = llm
+                        yield chunk
 
         except asyncio.TimeoutError:
             if check_recovery:
@@ -289,7 +307,11 @@ class FallbackLLMStream(LLMStream):
 
             async def _recover_llm_task(llm: LLM) -> None:
                 try:
-                    async for _ in self._try_generate(llm=llm, check_recovery=True):
+                    async for _ in self._try_generate(
+                        llm=llm,
+                        fallback_index=self._fallback_adapter._llm_instances.index(llm),
+                        check_recovery=True,
+                    ):
                         pass
 
                     llm_status.available = True
@@ -316,7 +338,9 @@ class FallbackLLMStream(LLMStream):
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
-                    async for result in self._try_generate(llm=llm, check_recovery=False):
+                    async for result in self._try_generate(
+                        llm=llm, fallback_index=i, check_recovery=False
+                    ):
                         if result.delta:
                             if result.delta.content:
                                 text_sent += result.delta.content
