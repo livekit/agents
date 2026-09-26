@@ -255,7 +255,7 @@ async def test_stream_run_rejects_non_linear16_encoding():
 
 
 class _RecordingSession:
-    """Records the URLs the v1 TTS connects and posts to, without touching the network."""
+    """Records the URLs a TTS connects and posts to, without touching the network."""
 
     def __init__(self) -> None:
         self.urls: list[str] = []
@@ -273,7 +273,9 @@ async def _request_urls(tts) -> list[str]:  # noqa: ANN001
     """The WebSocket URL (streaming) and the HTTP URL (synthesize) this TTS would use."""
     from livekit.agents import APIConnectionError
     from livekit.plugins.deepgram.tts import ChunkedStream
+    from livekit.plugins.deepgram.tts_v2 import ChunkedStreamv2, TTSv2
 
+    chunked_stream = ChunkedStreamv2 if isinstance(tts, TTSv2) else ChunkedStream
     await tts._connect_ws(timeout=5.0)
 
     stream = SimpleNamespace(
@@ -283,7 +285,7 @@ async def _request_urls(tts) -> list[str]:  # noqa: ANN001
         _conn_options=SimpleNamespace(timeout=5.0),
     )
     with pytest.raises(APIConnectionError):
-        await ChunkedStream._run.__get__(stream)(_FakeEmitter())
+        await chunked_stream._run.__get__(stream)(_FakeEmitter())
 
     return tts._session.urls
 
@@ -334,6 +336,66 @@ async def test_update_options_speed_invalidates_pool():
     assert tts._opts.speed == 0.9
 
     # None goes back to the model's normal rate by leaving `speed` out again
+    tts.update_options(speed=None)
+    assert tts._opts.speed is None
+
+    assert calls == [True, True]
+
+
+# --- speed (v2 / Flux) ---------------------------------------------------------------
+
+
+async def test_flux_speed_is_sent_on_websocket_and_http():
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(api_key="test-key", speed=1.15, http_session=_RecordingSession())  # type: ignore[arg-type]
+
+    ws_url, http_url = await _request_urls(tts)
+
+    assert parse_qs(urlparse(ws_url).query)["speed"] == ["1.15"]
+    assert parse_qs(urlparse(http_url).query)["speed"] == ["1.15"]
+
+
+async def test_flux_speed_is_left_out_unless_set():
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(api_key="test-key", http_session=_RecordingSession())  # type: ignore[arg-type]
+
+    for url in await _request_urls(tts):
+        assert "speed" not in parse_qs(urlparse(url).query)
+
+
+@pytest.mark.parametrize("speed", [0.5, 1.15, 1.5])
+async def test_flux_speed_accepts_steps_in_range(speed: float):
+    from livekit.plugins.deepgram import TTSv2
+
+    assert TTSv2(api_key="test-key", speed=speed)._opts.speed == speed
+
+
+# 0.45 and 1.55 are out of range; 1.12 is not a multiple of 0.05
+@pytest.mark.parametrize("speed", [0.45, 1.55, 1.12])
+async def test_flux_invalid_speed_is_rejected(speed: float):
+    from livekit.plugins.deepgram import TTSv2
+
+    with pytest.raises(ValueError, match="speed"):
+        TTSv2(api_key="test-key", speed=speed)
+
+    tts = TTSv2(api_key="test-key")
+    with pytest.raises(ValueError, match="speed"):
+        tts.update_options(speed=speed)
+    assert tts._opts.speed is None
+
+
+async def test_flux_update_options_speed_invalidates_pool():
+    from livekit.plugins.deepgram import TTSv2
+
+    tts = TTSv2(api_key="test-key")
+    calls: list[bool] = []
+    tts._pool.invalidate = lambda: calls.append(True)  # type: ignore[method-assign]
+
+    tts.update_options(speed=0.9)
+    assert tts._opts.speed == 0.9
+
     tts.update_options(speed=None)
     assert tts._opts.speed is None
 
