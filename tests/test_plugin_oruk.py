@@ -65,7 +65,7 @@ async def test_authenticated_upload_and_audio_conversion(rate, channels):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 403, 409, 400])
+@pytest.mark.parametrize("status", [302, 401, 403, 409, 400])
 async def test_permanent_errors_do_not_retry(status):
     calls = []
 
