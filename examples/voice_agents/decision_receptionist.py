@@ -15,6 +15,25 @@ load_dotenv()
 
 logger = logging.getLogger("decision-receptionist")
 
+CALLER_DECISIONS: dict[str, decisions.Decision] = {
+    "intent": decisions.Choice(
+        "What is the caller's current main request?",
+        options={
+            "booking": "Make or change a restaurant reservation.",
+            "billing": "Resolve a charge or billing question.",
+            "other": "Any other request, including asking for a person.",
+        },
+    ),
+    "frustration": decisions.Score(
+        "How frustrated is the caller in their latest turn?",
+        levels=[
+            "Calm; expresses no frustration.",
+            "Expresses annoyance with the situation.",
+            "Expresses strong anger or repeated complaints.",
+        ],
+    ),
+}
+
 
 class Receptionist(Agent):
     def __init__(self) -> None:
@@ -30,22 +49,7 @@ class Receptionist(Agent):
                     "The caller currently wants to speak to a human representative. "
                     "Use the latest user turn in context; a withdrawn request is false."
                 ),
-                "intent": decisions.Choice(
-                    "What is the caller's current main request?",
-                    options={
-                        "booking": "Make or change a restaurant reservation.",
-                        "billing": "Resolve a charge or billing question.",
-                        "other": "Any other request, including asking for a person.",
-                    },
-                ),
-                "frustration": decisions.Score(
-                    "How frustrated is the caller in their latest turn?",
-                    levels=[
-                        "Calm; expresses no frustration.",
-                        "Expresses annoyance with the situation.",
-                        "Expresses strong anger or repeated complaints.",
-                    ],
-                ),
+                **CALLER_DECISIONS,
             },
         )
 
@@ -59,7 +63,8 @@ class HandoffRequested(Agent):
             instructions=(
                 "The caller requested a human. This demo cannot transfer calls. "
                 "Acknowledge their request and do not resume collecting reservation details."
-            )
+            ),
+            decisions=CALLER_DECISIONS,
         )
 
     async def on_enter(self) -> None:
@@ -111,8 +116,8 @@ async def entrypoint(ctx: JobContext) -> None:
         if latest_user is None or latest_user.id != ev.source_message_id:
             return
 
-        result = ev.results["wants_human"]
-        if result.kind == "probability" and result.value >= 0.9:
+        result = ev.results.get("wants_human")
+        if result is not None and result.kind == "probability" and result.value >= 0.9:
             logger.info("Demo handoff requested (probability %.2f)", result.value)
             session.interrupt()
             session.update_agent(HandoffRequested())

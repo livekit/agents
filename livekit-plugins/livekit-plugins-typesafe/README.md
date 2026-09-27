@@ -24,7 +24,7 @@ lk agent console examples/voice_agents/decision_receptionist.py
 ```
 
 The console shows the transcript and decision results as they arrive.
-Each completed user turn triggers a decision request. Decisions stop after the simulated handoff.
+Each completed user turn triggers a decision request. Intent and frustration checks continue after the simulated handoff.
 Press `m` to mute the microphone, `Ctrl+T` to switch to typing, or `q` to quit voice mode.
 
 With only an OpenRouter key, start in text mode:
@@ -43,8 +43,8 @@ lk agent debugger logs --last 30
 lk agent debugger stop
 ```
 
-The example logs three decisions for each completed request. At a human-request probability of 0.9, it switches to an acknowledgement agent.
-This simulates a handoff without transferring a real call. The acknowledgement agent has no background decisions.
+The receptionist logs three decisions for each completed request. At a human-request probability of 0.9, it switches to an acknowledgement agent.
+This simulates a handoff without transferring a real call. The acknowledgement agent keeps the intent and frustration checks, without another handoff check.
 Voice uses Deepgram STT and Cartesia TTS through LiveKit inference.
 
 ## Background decisions
