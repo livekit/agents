@@ -11,6 +11,10 @@ from livekit import api
 from ..utils.misc import shortuuid
 from ..version import __version__
 
+InferenceClass = Literal["priority", "standard", "low"]
+"""Scheduling class for a request. ``low`` yields to voice traffic, so it is only
+appropriate for work no caller is waiting on."""
+
 DEFAULT_INFERENCE_URL = "https://agent-gateway.livekit.cloud/v1"
 STAGING_INFERENCE_URL = "https://agent-gateway.staging.livekit.cloud/v1"
 
@@ -68,6 +72,29 @@ def get_default_inference_url() -> str:
         return STAGING_INFERENCE_URL
 
     return DEFAULT_INFERENCE_URL
+
+
+def resolve_credentials(
+    api_key: str | None,
+    api_secret: str | None,
+) -> tuple[str, str]:
+    resolved_api_key = api_key or os.getenv(
+        "LIVEKIT_INFERENCE_API_KEY", os.getenv("LIVEKIT_API_KEY", "")
+    )
+    if not resolved_api_key:
+        raise ValueError(
+            "api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable"
+        )
+
+    resolved_api_secret = api_secret or os.getenv(
+        "LIVEKIT_INFERENCE_API_SECRET", os.getenv("LIVEKIT_API_SECRET", "")
+    )
+    if not resolved_api_secret:
+        raise ValueError(
+            "api_secret is required, either as argument or set LIVEKIT_API_SECRET environmental variable"
+        )
+
+    return resolved_api_key, resolved_api_secret
 
 
 def get_inference_headers(*, inference_class: str | None = None) -> dict[str, str]:

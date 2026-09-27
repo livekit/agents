@@ -5,6 +5,8 @@ import os
 import weakref
 from dataclasses import dataclass
 
+import httpx
+
 from livekit import rtc
 from livekit.agents import (
     APIConnectionError,
@@ -24,7 +26,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 from mistralai.client import Mistral
-from mistralai.client.errors import SDKError
+from mistralai.client.errors import HTTPValidationError, SDKError
 from mistralai.client.models import (
     RealtimeTranscriptionError,
     RealtimeTranscriptionSessionCreated,
@@ -232,10 +234,15 @@ class STT(stt.STT):
                 ],
             )
 
-        except SDKError as e:
-            if e.status_code in (408, 504):
-                raise APITimeoutError() from e
-            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError() from e
+        except (SDKError, HTTPValidationError) as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id"),
+                body=e.body,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e
 
@@ -449,9 +456,14 @@ class SpeechStream(stt.RecognizeStream):
 
         except (APIStatusError, APITimeoutError, APIConnectionError):
             raise
-        except SDKError as e:
-            if e.status_code in (408, 504):
-                raise APITimeoutError() from e
-            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+            raise APITimeoutError() from e
+        except (SDKError, HTTPValidationError) as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id"),
+                body=e.body,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e

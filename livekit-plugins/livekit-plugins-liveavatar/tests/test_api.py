@@ -1,6 +1,6 @@
 import pytest
 
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError, utils
 from livekit.plugins.liveavatar.api import LiveAvatarAPI
 
 pytestmark = pytest.mark.unit
@@ -43,3 +43,10 @@ async def test_post_preserves_non_retryable_status_error():
     assert exc.value.status_code == 401
     assert exc.value.body == '{"error":"bad api key"}'
     assert exc.value.retryable is False
+
+
+async def test_uses_the_shared_http_session_when_none_is_given():
+    api = LiveAvatarAPI(api_key="test-key")
+
+    async with utils.http_context.open() as shared:
+        assert api._ensure_http_session() is shared

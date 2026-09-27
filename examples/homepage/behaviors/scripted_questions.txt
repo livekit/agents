@@ -1,0 +1,56 @@
+# Opening lines of the scripted callers that hit the homepage agent.
+#
+# Two fixed question banks run against the public homepage from several
+# countries at once: an opinion bank that always ends "please limit your
+# answers to about forty words", and a flat trivia bank. Over 2026-09-04..11
+# they were two thirds of all sessions in which the caller spoke.
+#
+# One line per question, as the STT transcribes it after normalizing to
+# lowercase alphanumerics (see scripted_callers.normalize). Several spellings
+# of one question appear because the STT hears it differently. The 40 most
+# frequent lines caught 94% of scripted sessions in that window and matched
+# one real conversation, which was itself a bank question.
+#
+# Regenerate from a fresh session dump: count distinct normalized caller
+# lines of four or more words across sessions classified as scripted, keep
+# lines said in three or more sessions, take the top 40 by session count.
+please list a few environmental actions that you think help protect the earth please limit your answers to about forty words
+share a few social skills that you think are important please limit your answers to about forty words
+what do you think a healthy lifestyle includes please limit your answers to about forty words
+what qualities do you think a person should have to be a good leader please limit your answers to about forty words
+what is one plus one
+how many continents are there on earth
+what is the speed of light
+what does the moon go around
+what is the highest mountain in the world
+what is usually color of apples
+how many days are there in a year
+what is the largest ocean on world
+how many teeth does the human body have
+what is the chemical equation for water
+what do you think we should do to develop good hobbies in todays society
+please talk about some ways you think you can improve your work efficiency please limit your answers to about forty words
+what do you think is the main source of happiness in our busy lives
+please share what you think are some effective time management strategies please limit your answers to about forty words
+in what aspects is the importance of communication at work please limit your answers to about forty words
+what you think are the two most important characteristics of successful people
+please list a step or method that you think will help you achieve your personal goal
+what are the two ways technology affects relationships today
+which sports do you think are the most suitable for reducing stress please keep your answer within about forty words
+please talk about two effective ways to cultivate childrens interest please limit your answers to about forty words
+talk about some ways you think you can improve your work efficiency please limit your answers to about forty words
+please list three effective ways to deal with stress please limit your answers to about forty words
+please share some suggestions for improving sleep quality please keep your answer within about forty words
+please list what you think are the most important factors that affect your learning please limit your answers to about forty words
+what do you think are the two major problems in society and describe them briefly please limit your answers to about forty words
+what do you think is the one key factor of entrepreneurial success explain it briefly please limit your answers to about forty words
+what do you think is the one key factor of entrepreneurial success and explain it briefly please limit your answers to about forty words
+qualities do you think a person should have to be a good leader please limit your answers to about forty words
+please list a few environmental that you think help protect the earth please limit your answers to about forty words
+what are the two ways technology affect relationships today
+what do you think a healthy life style includes please limit your answers to about forty words
+what do you think are the two major problems in and describe them briefly please limit your answers to about forty words
+in what aspect is the importance of communication at work please limit your answers to about forty words
+what do you think a healthy life includes please limit your answers to about forty words
+is the chemical equation for water
+what qualities do you think person should have to be a good leader please limit your answers to about forty words

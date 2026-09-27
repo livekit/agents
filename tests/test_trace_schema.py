@@ -152,6 +152,14 @@ def test_bounds_are_checked_except_where_deliberately_allowed() -> None:
     assert check_trace(spans) == []
 
 
+def test_negative_duration_is_reported() -> None:
+    # #7307: user_speaking starts on the STT anchor and ends on a backdated VAD one
+    spans = _sound_trace()
+    spans.append(_span("user_speaking", "sp", "u", 6.0, 5.8))
+    [v] = check_trace(spans)
+    assert v.startswith("user_speaking: ends 200.0 ms before it starts")
+
+
 def test_turn_invariants_are_checked() -> None:
     spans = _sound_trace()
     spans.append(

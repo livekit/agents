@@ -320,13 +320,13 @@ class FallbackChunkedStream(ChunkedStream):
 
                         if resampler is not None:
                             for rf in resampler.push(synthesized_audio.frame):
-                                output_emitter.push(rf.data.tobytes())
+                                output_emitter.push_frame(rf)
                         else:
-                            output_emitter.push(synthesized_audio.frame.data.tobytes())
+                            output_emitter.push_frame(synthesized_audio.frame)
 
                     if resampler is not None:
                         for rf in resampler.flush():
-                            output_emitter.push(rf.data.tobytes())
+                            output_emitter.push_frame(rf)
 
                     _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                     return
@@ -516,13 +516,13 @@ class FallbackSynthesizeStream(SynthesizeStream):
 
                             if resampler is not None:
                                 for resampled_frame in resampler.push(synthesized_audio.frame):
-                                    output_emitter.push(resampled_frame.data.tobytes())
+                                    output_emitter.push_frame(resampled_frame)
 
                                 if synthesized_audio.is_final:
                                     for resampled_frame in resampler.flush():
-                                        output_emitter.push(resampled_frame.data.tobytes())
+                                        output_emitter.push_frame(resampled_frame)
                             else:
-                                output_emitter.push(synthesized_audio.frame.data.tobytes())
+                                output_emitter.push_frame(synthesized_audio.frame)
 
                         _record_fallback_served(tts, i, self._tts_request_span, self._caller_span)
                         return

@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from opentelemetry import trace
@@ -51,26 +51,39 @@ def capture_content_enabled() -> bool:
 # paths have no nested `llm_request` span to carry the convention's attributes, so the node
 # span records them instead. LLMStream marks the context when it does create one, which is
 # what tells the two cases apart.
-_inference_recorded: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar(
-    "lk_inference_recorded", default=None
+_on_inference_span_created: contextvars.ContextVar[Callable[[], None] | None] = (
+    contextvars.ContextVar("lk_inference_recorded", default=None)
 )
 
 
-def track_inference_span() -> list[bool]:
+def track_inference_span(*, model: str | None = None, provider: str | None = None) -> list[bool]:
     """Start tracking, returning a marker that fills in if an ``llm_request`` span is created.
+
+    Record the node's request identity before a fallback can replace the provider with
+    the instance that served the request.
 
     No reset: the caller runs as its own asyncio task, so the context copy — and this
     variable with it — is discarded when that task finishes.
     """
+    span = trace.get_current_span()
     recorded: list[bool] = []
-    _inference_recorded.set(recorded)
+
+    def on_created() -> None:
+        if not recorded and span.is_recording():
+            if model:
+                span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+            if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
+                span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
+        recorded.append(True)
+
+    _on_inference_span_created.set(on_created)
     return recorded
 
 
 def mark_inference_span_recorded() -> None:
     """Called where an ``llm_request`` span is created, so the enclosing node stands down."""
-    if (recorded := _inference_recorded.get()) is not None:
-        recorded.append(True)
+    if (on_created := _on_inference_span_created.get()) is not None:
+        on_created()
 
 
 def _text_part(content: str) -> dict[str, Any]:
@@ -300,17 +313,19 @@ def set_content_attributes(
 def set_request_attributes(
     span: trace.Span,
     *,
-    operation: str,
+    operation: str | None,
     provider: str | None = None,
     model: str | None = None,
     stream: bool | None = None,
     output_type: str | None = None,
 ) -> None:
-    """The attributes the convention asks for at span creation time."""
+    """Request attributes, with no operation name for a delegating span."""
     if not span.is_recording():
         return
 
-    attrs: dict[str, AttributeValue] = {trace_types.ATTR_GEN_AI_OPERATION_NAME: operation}
+    attrs: dict[str, AttributeValue] = {}
+    if operation is not None:
+        attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = operation
     if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
         attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     if model:

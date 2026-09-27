@@ -171,6 +171,8 @@ def _fallback_attrs(llm: LLM, index: int) -> dict[str, Any]:
 
 class FallbackLLMStream(LLMStream):
     _llm_request_span_name: ClassVar[str] = "llm_fallback_adapter"
+    # Provider request spans own the inference operation.
+    _genai_operation_name: ClassVar[str | None] = None
 
     def __init__(
         self,
@@ -185,6 +187,7 @@ class FallbackLLMStream(LLMStream):
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._fallback_adapter = llm
+        self._retry_on_chunk_sent = llm._retry_on_chunk_sent
         # the span this request was made under (llm_node): told which instance served
         self._caller_span = trace.get_current_span()
         self._parallel_tool_calls = parallel_tool_calls
@@ -231,6 +234,8 @@ class FallbackLLMStream(LLMStream):
                     retry_interval=self._fallback_adapter._retry_interval,
                 ),
             ) as stream:
+                if not check_recovery:
+                    stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
                 async for chunk in stream:
                     if should_set_current:

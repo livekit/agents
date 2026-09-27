@@ -83,7 +83,8 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """
 
     model: str
-    """Responses model slug; ``gpt-5.6-luna`` when unset."""
+    """Responses model slug; ``gpt-5.6-luna`` when unset. On Azure, the name of a Responses
+    deployment in the same resource, which is required there."""
     instructions: str
     """Instructions for the backend model, distinct from the voice model's."""
     tool_choice: llm.ToolChoice | None
@@ -92,7 +93,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
     text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
-    service_tier: Literal["auto", "default", "flex", "priority"]
+    service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
 
@@ -128,15 +129,8 @@ class _Speech:
 #   response.created ─► response.output_item.done ×N (function calls) ─► response.completed
 #
 # A response completes with its calls unanswered. Each result is queued with response.item.create,
-# and response.create runs the next response, the continuation, once every call has one; a partial
-# batch is rejected. The voice model speaks the continuation's text on its own.
-@dataclass
-class _DelegatedResponse:
-    """The current response of one delegation, and the tool calls it waits on."""
-
-    call_ids: set[str] = field(default_factory=set)
-    returned: set[str] = field(default_factory=set)
-    completed: bool = False
+# and one response.create runs the next response, the continuation, once every call in the session
+# has one; a partial batch is rejected. The voice model speaks the continuation's text on its own.
 
 
 @dataclass
@@ -145,10 +139,13 @@ class _LiveOptions:
     voice: str | dict[str, Any]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
-    api_key: str
+    service_tier: types.ServiceTier | None
+    api_key: str | None
     base_url: str
     conn_options: APIConnectOptions
     max_session_duration: float | None
+    is_azure: bool
+    entra_token: str | None
 
 
 class GPTLiveModel(llm.DuplexModel):
@@ -161,15 +158,19 @@ class GPTLiveModel(llm.DuplexModel):
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        azure_deployment: str | None = None,
+        entra_token: str | None = None,
     ) -> None:
         """
         Args:
-            model: GPT-Live voice model slug.
+            model: GPT-Live voice model slug. Ignored on Azure, where ``azure_deployment`` names
+                the model.
             voice: Output voice: a name from :data:`GPTLiveVoices`, another supported name, or
                 ``{"id": "voice_..."}`` for an authorized custom voice. Defaults to ``marin``.
                 Immutable after the session starts.
@@ -178,11 +179,19 @@ class GPTLiveModel(llm.DuplexModel):
                 ``client`` hands it to the application as a ``delegation_created`` event, which
                 no framework tool can answer.
             responses_options: The backend Responses model, under ``delegation="responses"``.
-            api_key: OpenAI API key. Falls back to ``OPENAI_API_KEY``.
-            base_url: HTTP base url of the OpenAI API.
+            service_tier: Processing tier the session runs under, sent as the
+                ``OpenAI-Service-Tier`` header on the connection, for example ``ultrafast``.
+                Unset leaves the header off, and the account's default applies.
+            api_key: OpenAI API key. Falls back to ``OPENAI_API_KEY``, or to
+                ``AZURE_OPENAI_API_KEY`` on Azure unless ``entra_token`` is given.
+            base_url: HTTP base url of the OpenAI API. On Azure, the resource endpoint, falling
+                back to ``AZURE_OPENAI_ENDPOINT``.
             http_session: Optional shared HTTP session.
             max_session_duration: Seconds before the connection is recycled.
             conn_options: Retry/backoff and connection settings.
+            azure_deployment: Azure OpenAI deployment of the voice model. Giving it or
+                ``entra_token`` selects Azure; prefer :meth:`with_azure`.
+            entra_token: Microsoft Entra ID token for Azure, instead of ``api_key``.
         """
         super().__init__(
             capabilities=llm.DuplexCapabilities(
@@ -195,30 +204,143 @@ class GPTLiveModel(llm.DuplexModel):
                 mutable_tools=delegation == "responses",
             )
         )
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "The api_key client option must be set either by passing api_key "
-                "to the client or by setting the OPENAI_API_KEY environment variable"
+        responses = (
+            responses_options if is_given(responses_options) else ResponsesDelegationOptions()
+        )
+        is_azure = azure_deployment is not None or entra_token is not None
+        if not is_azure:
+            api_key = api_key or os.environ.get("OPENAI_API_KEY")
+            if api_key is None:
+                raise ValueError(
+                    "The api_key client option must be set either by passing api_key "
+                    "to the client or by setting the OPENAI_API_KEY environment variable"
+                )
+            resolved_base_url = (
+                base_url if is_given(base_url) else os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL)
             )
+        else:
+            if not azure_deployment:
+                raise ValueError("Azure needs azure_deployment, the voice model's deployment name")
+            model = azure_deployment
+
+            if api_key and entra_token:
+                raise ValueError("api_key and entra_token are mutually exclusive")
+            if entra_token is None:
+                api_key = api_key or os.environ.get("AZURE_OPENAI_API_KEY")
+                if not api_key:
+                    raise ValueError(
+                        "Missing Azure credentials. Pass api_key or entra_token, "
+                        "or set the AZURE_OPENAI_API_KEY environment variable"
+                    )
+
+            endpoint = base_url if is_given(base_url) else os.environ.get("AZURE_OPENAI_ENDPOINT")
+            if not endpoint:
+                raise ValueError(
+                    "Missing Azure endpoint. Pass azure_endpoint or base_url, or set the "
+                    "AZURE_OPENAI_ENDPOINT environment variable"
+                )
+            resolved_base_url = endpoint
+
+            # the service resolves the backend model as a deployment of this resource, where the
+            # OpenAI default names nothing: every delegated turn would fail while the voice
+            # model keeps promising an answer, so ask for the deployment up front
+            if delegation == "responses" and not responses.get("model"):
+                raise ValueError(
+                    "Azure responses delegation needs responses_options['model'], the name of a "
+                    "Responses deployment in the same resource; or use delegation='client'"
+                )
 
         self._opts = _LiveOptions(
             model=model,
             voice=voice,
             delegation=delegation,
-            responses=(
-                responses_options if is_given(responses_options) else ResponsesDelegationOptions()
-            ),
+            responses=responses,
+            service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
-            base_url=base_url
-            if is_given(base_url)
-            else os.getenv("OPENAI_BASE_URL", OPENAI_BASE_URL),
+            base_url=resolved_base_url,
             conn_options=conn_options,
             max_session_duration=max_session_duration if is_given(max_session_duration) else None,
+            is_azure=is_azure,
+            entra_token=entra_token,
         )
         self._http_session = http_session
         self._http_session_owned = False
         self._provider_label = "OpenAI Live API"
+
+    @classmethod
+    def with_azure(
+        cls,
+        *,
+        azure_deployment: str,
+        azure_endpoint: str | None = None,
+        api_key: str | None = None,
+        entra_token: str | None = None,
+        base_url: str | None = None,
+        voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
+        delegation: types.DelegationTarget = "responses",
+        responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
+        http_session: aiohttp.ClientSession | None = None,
+        max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> GPTLiveModel:
+        """Create a GPTLiveModel served by Azure OpenAI.
+
+        Args:
+            azure_deployment: Deployment name of the GPT-Live voice model.
+            azure_endpoint: Resource endpoint, such as ``https://<resource>.openai.azure.com``.
+                Falls back to ``AZURE_OPENAI_ENDPOINT``.
+            api_key: Azure API key. Falls back to ``AZURE_OPENAI_API_KEY`` unless
+                ``entra_token`` is given.
+            entra_token: Microsoft Entra ID token, instead of ``api_key``.
+            base_url: Explicit base URL, for example a gateway in front of the resource.
+                Mutually exclusive with ``azure_endpoint``.
+            voice: Output voice, as in :class:`GPTLiveModel`.
+            delegation: Where delegated work goes, as in :class:`GPTLiveModel`.
+            responses_options: The backend Responses model under ``delegation="responses"``.
+                Its ``model`` is required, and names a deployment in the same resource.
+            service_tier: Processing tier, as in :class:`GPTLiveModel`.
+            http_session: Optional shared HTTP session.
+            max_session_duration: Seconds before the connection is recycled.
+            conn_options: Retry/backoff and connection settings.
+
+        Returns:
+            GPTLiveModel: A model that connects to the Azure resource.
+
+        Raises:
+            ValueError: If the deployment, credentials, or endpoint are missing, if both
+                ``api_key`` and ``entra_token`` or both ``base_url`` and ``azure_endpoint`` are
+                given, or if responses delegation has no backend deployment.
+
+        Example:
+            ```python
+            from livekit.plugins.openai.realtime import GPTLiveModel
+
+            model = GPTLiveModel.with_azure(
+                azure_deployment="gpt-live-1",
+                azure_endpoint="https://<resource>.openai.azure.com",
+                api_key="<api-key>",
+                responses_options={"model": "<responses-deployment>"},
+            )
+            ```
+        """
+        if base_url is not None and azure_endpoint is not None:
+            raise ValueError("base_url and azure_endpoint are mutually exclusive")
+        endpoint = base_url if base_url is not None else azure_endpoint
+
+        return cls(
+            voice=voice,
+            delegation=delegation,
+            responses_options=responses_options,
+            service_tier=service_tier,
+            api_key=api_key,
+            base_url=endpoint if endpoint is not None else NOT_GIVEN,
+            http_session=http_session,
+            max_session_duration=max_session_duration,
+            conn_options=conn_options,
+            azure_deployment=azure_deployment,
+            entra_token=entra_token,
+        )
 
     @property
     def model(self) -> str:
@@ -289,10 +411,12 @@ class GPTLiveSession(
         self._history = llm.ChatContext.empty()
         self._speech: dict[Role, _Speech] = {}
 
-        # the current response per delegation and the delegation each tool call belongs to,
-        # since the framework hands a result back by call id alone
-        self._delegated_responses: dict[str | None, _DelegatedResponse] = {}
-        self._fnc_call_to_delegation: dict[str, str | None] = {}
+        # delegation_id -> call_ids of its response that has not completed yet; on completion the
+        # call_ids move to the open set, and stay there until each output is sent to the backend.
+        # response_pending is set once an output is sent and cleared by the response.create
+        self._backend_running_responses: dict[str | None, set[str]] = {}
+        self._backend_open_calls: set[str] = set()
+        self._backend_response_pending = False
 
         # the newest history item the last ask was about, so an ask never repeats one
         self._asked_item_id: str | None = None
@@ -437,21 +561,25 @@ class GPTLiveSession(
         self._session_closed_fut = asyncio.Future()
         self._end_speech("user")
         self._speech.clear()
-        self._delegated_responses.clear()
-        self._fnc_call_to_delegation.clear()
+        self._backend_running_responses.clear()
+        self._backend_open_calls.clear()
+        self._backend_response_pending = False
         self._usage_total = types.Usage()
         self._session_id = None
 
     async def _create_ws_conn(self) -> aiohttp.ClientWebSocketResponse:
-        headers = {
-            "User-Agent": "LiveKit Agents",
-            "Authorization": f"Bearer {self._opts.api_key}",
-        }
-        parsed = urlparse(self._opts.base_url.replace("http", "ws", 1))
-        path = parsed.path.rstrip("/")
-        if not path.endswith("/live/sessions"):
-            path = f"{path}/live/sessions"
-        url = urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+        headers = {"User-Agent": "LiveKit Agents"}
+        if not self._opts.is_azure:
+            headers["Authorization"] = f"Bearer {self._opts.api_key}"
+        elif self._opts.entra_token:
+            headers["Authorization"] = f"Bearer {self._opts.entra_token}"
+        elif self._opts.api_key:
+            # Azure answers a bearer api key with a redirect to ?api-key=, which aiohttp does not
+            # follow for a websocket, so the key goes in its own header
+            headers["api-key"] = self._opts.api_key
+        if self._opts.service_tier:
+            headers["OpenAI-Service-Tier"] = self._opts.service_tier
+        url = _live_sessions_url(self._opts.base_url, is_azure=self._opts.is_azure)
         if lk_oai_debug:
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
 
@@ -727,27 +855,34 @@ class GPTLiveSession(
         d_id = envelope.delegation_id
 
         if event.type == "response.created":
-            self._delegated_responses[d_id] = _DelegatedResponse()
+            self._backend_running_responses[d_id] = set()
 
         elif event.type == "response.output_item.done":
             # only the completed item carries the name, call id and arguments together
             item = event.item
             if item is None or item.type != "function_call":
                 return
+            if item.status != "completed":
+                logger.debug(
+                    "gpt-live ignoring incomplete function call",
+                    extra={"function": item.name, "status": item.status},
+                )
+                return
             if not item.call_id or not item.name or item.arguments is None:
                 logger.warning(
                     "gpt-live dropping function call with missing fields",
-                    extra={"call_id": item.call_id, "name": item.name},
+                    extra={"call_id": item.call_id, "function": item.name},
                 )
                 return
-            if (pending := self._delegated_responses.get(d_id)) is None:
+            if (calls := self._backend_running_responses.get(d_id)) is None:
                 logger.warning(
                     "gpt-live function call outside a known response",
-                    extra={"call_id": item.call_id, "delegation_id": d_id},
+                    extra={"call_id": item.call_id, "function": item.name, "delegation_id": d_id},
                 )
-                pending = self._delegated_responses[d_id] = _DelegatedResponse(completed=True)
-            pending.call_ids.add(item.call_id)
-            self._fnc_call_to_delegation[item.call_id] = d_id
+                calls = self._backend_open_calls
+            if item.call_id in calls:
+                return
+            calls.add(item.call_id)
 
             fnc_call = llm.FunctionCall(
                 id=item.id or utils.shortuuid("fc_"),
@@ -785,9 +920,9 @@ class GPTLiveSession(
                         ),
                     ),
                 )
-            if (pending := self._delegated_responses.get(d_id)) is not None:
-                pending.completed = True
-                self._maybe_continue_response(d_id)
+            if (calls := self._backend_running_responses.pop(d_id, None)) is not None:
+                self._backend_open_calls |= calls
+            self._maybe_continue_response()
 
         elif event.type in ("response.failed", "response.incomplete"):
             logger.warning(
@@ -799,21 +934,21 @@ class GPTLiveSession(
                     "lk.pii.incomplete_details": response.incomplete_details if response else None,
                 },
             )
-            if (pending := self._delegated_responses.pop(d_id, None)) is not None:
-                for call_id in pending.call_ids:
-                    self._fnc_call_to_delegation.pop(call_id, None)
+            # the service discards a failed response's calls: an output for one is refused, so
+            # it goes to the voice model as context instead
+            self._backend_running_responses.pop(d_id, None)
+            self._maybe_continue_response()
 
-    def _maybe_continue_response(self, delegation_id: str | None) -> None:
-        # response.create runs the continuation, and only once the response has finished asking
-        # and every call it made has its answer; a partial batch is rejected
-        pending = self._delegated_responses.get(delegation_id)
-        if pending is None or not pending.completed or not pending.call_ids <= pending.returned:
+    def _maybe_continue_response(self) -> None:
+        # one response.create continues the chain, and only once nothing is still asking and every
+        # call in the conversation has its answer: the service refuses a partial batch
+        if (
+            self._backend_running_responses
+            or self._backend_open_calls
+            or not self._backend_response_pending
+        ):
             return
-        del self._delegated_responses[delegation_id]
-        if not pending.call_ids:
-            return
-        for call_id in pending.call_ids:
-            self._fnc_call_to_delegation.pop(call_id, None)
+        self._backend_response_pending = False
         self.send_event(types.ResponseCreateEvent(event_id=utils.shortuuid("response_create_")))
 
     # metrics and errors
@@ -1001,24 +1136,24 @@ class GPTLiveSession(
         # a system or developer message is a standing rule for the voice model, a tool result
         # answering a call the backend delegated goes back on the backend's channel, and everything
         # else is context for the voice model, as one append
-        backend_outputs: list[tuple[llm.FunctionCallOutput, str | None]] = []
+        backend_outputs: list[llm.FunctionCallOutput] = []
         lines: list[str] = []
         for item in items:
             if isinstance(item, llm.ChatMessage) and item.role in ("system", "developer"):
                 if text := item.text_content:
                     self.append_instructions(text)
-            elif (
-                isinstance(item, llm.FunctionCallOutput)
-                and item.call_id in self._fnc_call_to_delegation
+            elif isinstance(item, llm.FunctionCallOutput) and (
+                item.call_id in self._backend_open_calls
+                or any(item.call_id in c for c in self._backend_running_responses.values())
             ):
-                backend_outputs.append((item, self._fnc_call_to_delegation[item.call_id]))
+                backend_outputs.append(item)
             elif (rendered := _render_item(item)) is not None:
                 lines.append("{}: {}".format(*rendered))
 
         if lines:
             self.append_thinking("\n".join(lines))
 
-        for output, delegation_id in backend_outputs:
+        for output in backend_outputs:
             self.send_event(
                 types.ResponseItemCreateEvent(
                     event_id=utils.shortuuid("tool_output_"),
@@ -1027,9 +1162,19 @@ class GPTLiveSession(
                     ),
                 )
             )
-            if (pending := self._delegated_responses.get(delegation_id)) is not None:
-                pending.returned.add(output.call_id)
-            self._maybe_continue_response(delegation_id)
+            self._backend_open_calls.discard(output.call_id)
+            for calls in self._backend_running_responses.values():
+                calls.discard(output.call_id)
+        if backend_outputs:
+            if silenced := [o.name or o.call_id for o in backend_outputs if not o.reply_required]:
+                logger.warning(
+                    "a tool result wants no reply, but GPT Live will answer it anyway: the "
+                    "backend has no way to close a call without a spoken continuation, and an "
+                    "unanswered call holds every later tool call. Continuing regardless.",
+                    extra={"functions": silenced},
+                )
+            self._backend_response_pending = True
+            self._maybe_continue_response()
 
         # TODO: under client delegation, answer a GPTLiveDelegation handled as a tool call with
         # append_commentary(output, delegation_id=...) here; nothing reaches the model for it yet
@@ -1067,6 +1212,19 @@ class GPTLiveSession(
             self._send_delegation_update(
                 types.ResponsesConfig(tool_choice=_to_tool_choice(tool_choice))
             )
+
+
+def _live_sessions_url(base_url: str, *, is_azure: bool) -> str:
+    """The websocket URL of the sessions endpoint under ``base_url``, without a query string."""
+    parsed = urlparse(base_url)
+    scheme = {"http": "ws", "https": "wss"}.get(parsed.scheme, parsed.scheme)
+    path = parsed.path.rstrip("/")
+    if is_azure and path in ("", "/openai"):
+        # Azure serves GPT-Live only on its v1 surface: /openai/live/sessions is a 404
+        path = "/openai/v1"
+    if not path.endswith("/live/sessions"):
+        path = f"{path}/live/sessions"
+    return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
 def _to_tool_choice(tool_choice: llm.ToolChoice | None) -> str | dict[str, Any]:

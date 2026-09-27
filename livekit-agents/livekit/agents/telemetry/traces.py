@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import inspect
 import json
 import logging
 import os
@@ -163,6 +164,10 @@ def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
     return serialized
 
 
+_USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
+_START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
+
+
 class _DynamicTracer(Tracer):
     def __init__(self, instrumenting_module_name: str) -> None:
         self._instrumenting_module_name = instrumenting_module_name
@@ -181,14 +186,18 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils.redaction_enabled():
-            kwargs = {
-                **kwargs,
-                "record_exception": False,
-                "set_status_on_exception": False,
-            }
-        with trace_api.use_span(*args, **kwargs) as span:
-            yield span
+        bound = _USE_SPAN_SIGNATURE.bind(*args, **kwargs)
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with trace_api.use_span(*bound.args, **bound.kwargs) as span:
+            try:
+                yield span
+            except Exception as exc:
+                telemetry_utils.record_exception(
+                    span, exc, record_event=record_exception, set_status=set_status_on_exception
+                )
+                raise
 
     @_agnosticcontextmanager
     def detached_span(
@@ -216,14 +225,18 @@ class _DynamicTracer(Tracer):
 
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
-        if telemetry_utils.redaction_enabled():
-            kwargs = {
-                **kwargs,
-                "record_exception": False,
-                "set_status_on_exception": False,
-            }
-        with self._tracer.start_as_current_span(*args, **kwargs) as span:
-            yield span
+        bound = _START_AS_CURRENT_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        record_exception = bound.arguments.get("record_exception", True)
+        set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
+        bound.arguments.update(record_exception=False, set_status_on_exception=False)
+        with self._tracer.start_as_current_span(*bound.args[1:], **bound.kwargs) as span:
+            try:
+                yield span
+            except Exception as exc:
+                telemetry_utils.record_exception(
+                    span, exc, record_event=record_exception, set_status=set_status_on_exception
+                )
+                raise
 
 
 tracer: _DynamicTracer = _DynamicTracer("livekit-agents")
@@ -337,26 +350,31 @@ def _job_stamp_attributes() -> dict[str, AttributeValue] | None:
 
 
 class _MetadataSpanProcessor(SpanProcessor):
-    """Stamps per-job metadata on every span, resolved from the originating
-    job's context. The process-wide slot remains as a fallback for spans created
-    outside a job context (worker-level telemetry) while a job is running."""
+    """Stamps provider metadata and the current job's attributes on every span.
+
+    The last configured job's metadata is only a fallback outside a job context.
+    """
 
     def __init__(self, metadata: dict[str, AttributeValue] | None = None) -> None:
-        self._metadata = dict(metadata) if metadata else {}
+        self._provider_metadata = dict(metadata) if metadata else {}
+        self._fallback_metadata: dict[str, AttributeValue] = {}
 
     def set_metadata(self, metadata: dict[str, AttributeValue]) -> None:
+        """Set the fallback for spans created outside a job context."""
         # rebind rather than mutate: on_start may read it from another thread
-        self._metadata = dict(metadata)
+        self._fallback_metadata = dict(metadata)
 
     def clear_metadata(self) -> None:
-        self._metadata = {}
+        self._fallback_metadata = {}
 
     def on_start(self, span: Span, parent_context: otel_context.Context | None = None) -> None:
-        if (attributes := _job_stamp_attributes()) is not None:
+        attributes = _job_stamp_attributes()
+        if attributes is None:
+            attributes = self._fallback_metadata
+        if self._provider_metadata:
+            attributes = {**self._provider_metadata, **attributes}
+        if attributes:
             span.set_attributes(attributes)
-            return
-        if self._metadata:
-            span.set_attributes(self._metadata)
 
 
 class _MetadataLogProcessor(LogRecordProcessor):

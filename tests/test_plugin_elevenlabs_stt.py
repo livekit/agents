@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import json
 import time
@@ -15,7 +16,7 @@ from multidict import CIMultiDict
 from yarl import URL
 
 from livekit import rtc
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, stt
+from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, LanguageCode, stt
 from livekit.agents.types import NOT_GIVEN
 from livekit.plugins.elevenlabs import stt as elevenlabs_stt
 from livekit.plugins.elevenlabs._utils import trace_id_from_headers
@@ -31,24 +32,35 @@ class _EventSink:
         self.events.append(event)
 
 
-def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
+def _new_stream(
+    *,
+    server_vad=NOT_GIVEN,
+    language: str | None = "en",
+    include_timestamps: bool = False,
+    include_language_detection=NOT_GIVEN,
+    secondary_languages: list[str] | Any = NOT_GIVEN,
+) -> elevenlabs_stt.SpeechStream:
+    # mirrors what STT.__init__ stores: both language options are normalized on the way in
     stream = object.__new__(elevenlabs_stt.SpeechStream)
     stream._opts = elevenlabs_stt.STTOptions(
         model_id="scribe_v2_realtime",
         api_key="test-key",
         base_url=elevenlabs_stt.API_BASE_URL_V1,
         language_code=None,
+        secondary_languages=[LanguageCode(code) for code in secondary_languages]
+        if secondary_languages is not NOT_GIVEN
+        else NOT_GIVEN,
+        include_language_detection=include_language_detection,
         tag_audio_events=True,
-        include_timestamps=False,
+        include_timestamps=include_timestamps,
         sample_rate=16000,
         server_vad=server_vad,
         keyterms=NOT_GIVEN,
-        secondary_languages=NOT_GIVEN,
         no_verbatim=False,
         enable_logging=True,
         previous_text=None,
     )
-    stream._language = None
+    stream._language = LanguageCode(language) if language else None
     stream._event_ch = _EventSink()
     stream._speaking = False
     stream._last_partial_text = ""
@@ -56,9 +68,16 @@ def _new_stream(*, server_vad=NOT_GIVEN) -> elevenlabs_stt.SpeechStream:
     return stream
 
 
-def _committed_transcript(text: str) -> dict:
-    return {
-        "message_type": "committed_transcript",
+def _committed_transcript(
+    text: str,
+    *,
+    with_timestamps: bool = False,
+    language_code: str | None = None,
+) -> dict:
+    message: dict = {
+        "message_type": "committed_transcript_with_timestamps"
+        if with_timestamps
+        else "committed_transcript",
         "text": text,
         "words": [
             {"text": text, "start": 0.1, "end": 0.4},
@@ -66,6 +85,11 @@ def _committed_transcript(text: str) -> dict:
         if text
         else [],
     }
+    # the server only carries the detected language on the delayed copy, and only when
+    # language detection is enabled
+    if language_code is not None:
+        message["language_code"] = language_code
+    return message
 
 
 def _partial_transcript(text: str) -> dict:
@@ -327,6 +351,197 @@ def test_stream_update_options_sets_keyterms_and_requests_reconnect() -> None:
     assert stream._reconnect_event.is_set()
 
 
+async def test_connect_ws_normalizes_the_primary_language() -> None:
+    # LanguageCode keeps the region ("en-US") but the realtime API rejects it, so the primary
+    # language goes on the wire through the same normalization the secondary ones get
+    stream = _new_stream(language="en_US", secondary_languages=["ru-RU"])
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("language_code") == ["en"]
+    assert URL(url).query.getall("secondary_languages") == ["ru"]
+
+
+async def test_connect_ws_includes_secondary_languages() -> None:
+    # secondary languages ride along with the pinned primary one and are sent as
+    # repeated query params, the only serialization the realtime API accepts.
+    stream = _new_stream(language="en", secondary_languages=["ru", "es"])
+
+    url = await _connect_ws_url(stream)
+
+    assert "language_code=en" in url
+    assert URL(url).query.getall("secondary_languages") == ["ru", "es"]
+
+
+async def test_connect_ws_normalizes_secondary_languages() -> None:
+    # the realtime API takes ISO-639-1/3 and rejects anything else, including the region-tagged
+    # tags LanguageCode produces, so names and regions are mapped before the connect URL
+    stream = _new_stream(language="en", secondary_languages=["ru_RU", "french", "spa"])
+
+    url = await _connect_ws_url(stream)
+
+    assert URL(url).query.getall("secondary_languages") == ["ru", "fr", "es"]
+
+
+async def test_connect_ws_omits_secondary_languages_when_not_given() -> None:
+    url = await _connect_ws_url(_new_stream(language="en"))
+
+    assert "secondary_languages=" not in url
+
+
+def test_secondary_languages_are_normalized_on_the_options() -> None:
+    instance = elevenlabs_stt.STT(
+        api_key="test-key",
+        model="scribe_v2_realtime",
+        language_code="en_US",
+        secondary_languages=["ru_RU", "french", "spa"],
+    )
+
+    assert instance._opts.language_code == LanguageCode("en-US")
+    assert instance._opts.secondary_languages == ["ru-RU", "fr", "es"]
+    assert all(
+        isinstance(code, LanguageCode) for code in cast(list, instance._opts.secondary_languages)
+    )
+
+
+def test_secondary_languages_ignored_for_batch_model(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = elevenlabs_stt.STT(
+            api_key="test-key", model="scribe_v2", secondary_languages=["ru"]
+        )
+
+    assert instance._opts.secondary_languages is NOT_GIVEN
+    assert "only supported for Scribe v2 realtime" in caplog.text
+
+
+async def test_connect_ws_requests_language_detection_when_no_language_is_pinned() -> None:
+    url = await _connect_ws_url(_new_stream(language=None))
+
+    assert "include_language_detection=true" in url
+
+
+async def test_connect_ws_omits_language_detection_when_language_is_pinned() -> None:
+    url = await _connect_ws_url(_new_stream(language="en"))
+
+    assert "include_language_detection" not in url
+
+
+async def test_connect_ws_requests_language_detection_when_explicitly_enabled() -> None:
+    stream = _new_stream(language="en", include_language_detection=True)
+
+    url = await _connect_ws_url(stream)
+
+    assert "include_language_detection=true" in url
+
+
+async def test_connect_ws_omits_language_detection_when_explicitly_disabled() -> None:
+    url = await _connect_ws_url(_new_stream(language=None, include_language_detection=False))
+
+    assert "include_language_detection" not in url
+
+
+def test_final_transcript_reports_the_detected_language() -> None:
+    # with detection on, the detected language only reaches the delayed copy of the
+    # commit, so that copy has to be the final one or every transcript is labelled
+    # with the pinned language (or "en" when nothing is pinned).
+    stream = _new_stream(
+        server_vad={"vad_silence_threshold_secs": 0.5},
+        language="en",
+        include_language_detection=True,
+        secondary_languages=["ru"],
+    )
+
+    stream._process_stream_event(_committed_transcript("привет"))
+    stream._process_stream_event(
+        _committed_transcript("привет", with_timestamps=True, language_code="ru")
+    )
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "ru"
+
+
+def test_autodetected_language_reaches_the_final_transcript() -> None:
+    # without a pinned language the plugin asks the server to detect one; that language
+    # only rides on the delayed copy, so dropping it labelled every transcript "en"
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language=None)
+
+    stream._process_stream_event(
+        _committed_transcript("привет", with_timestamps=True, language_code="ru")
+    )
+    stream._process_stream_event(_committed_transcript("привет"))
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "ru"
+    # reading the timestamped copy must not start handing out word timings the caller
+    # never asked for
+    assert finals[0].alternatives[0].words is None
+
+
+def test_final_transcript_keeps_the_plain_copy_without_detection() -> None:
+    stream = _new_stream(server_vad={"vad_silence_threshold_secs": 0.5}, language="es")
+
+    stream._process_stream_event(_committed_transcript("hola"))
+    stream._process_stream_event(_committed_transcript("hola", with_timestamps=True))
+
+    finals = [
+        event
+        for event in stream._event_ch.events
+        if event.type is stt.SpeechEventType.FINAL_TRANSCRIPT
+    ]
+    assert len(finals) == 1
+    assert finals[0].alternatives[0].language == "es"
+
+
+@pytest.mark.parametrize(
+    "message_type",
+    ["partial_transcript", "committed_transcript", "committed_transcript_with_timestamps"],
+)
+@pytest.mark.parametrize(
+    ("language", "language_data", "expected_language"),
+    [
+        ("es", {}, "es"),
+        ("es", {"language_code": None}, "es"),
+        ("es", {"language_code": ""}, "es"),
+        ("es", {"language_code": "fra"}, "fr"),
+        (None, {}, "en"),
+        (None, {"language_code": None}, "en"),
+        (None, {"language_code": ""}, "en"),
+        (None, {"language_code": "fra"}, "fr"),
+    ],
+)
+def test_transcript_language_falls_back_to_configured_language(
+    message_type: str,
+    language: str | None,
+    language_data: dict[str, str | None],
+    expected_language: str,
+) -> None:
+    stream = _new_stream(
+        language=language,
+        include_timestamps=message_type == "committed_transcript_with_timestamps",
+        include_language_detection=False,
+    )
+
+    stream._process_stream_event({"message_type": message_type, "text": "hola", **language_data})
+
+    transcript = stream._event_ch.events[-1]
+    assert transcript.type == (
+        stt.SpeechEventType.INTERIM_TRANSCRIPT
+        if message_type == "partial_transcript"
+        else stt.SpeechEventType.FINAL_TRANSCRIPT
+    )
+    assert transcript.alternatives[0].language == expected_language
+
+
 class _FakeWS:
     """Records outgoing messages. receive() parks so recv_task stays alive."""
 
@@ -345,10 +560,10 @@ class _FakeWS:
         self._closed.set()
 
 
-def _live_stream(ws: _FakeWS) -> elevenlabs_stt.SpeechStream:
+def _live_stream(ws: _FakeWS, **kwargs: Any) -> elevenlabs_stt.SpeechStream:
     """A real SpeechStream running its real _run loop against a fake socket."""
-    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime")
-    opts = dataclasses.replace(instance._opts, sample_rate=16000)
+    instance = elevenlabs_stt.STT(api_key="test-key", model="scribe_v2_realtime", **kwargs)
+    opts = dataclasses.replace(instance._opts)
     stream = elevenlabs_stt.SpeechStream(
         stt=instance,
         opts=opts,
@@ -462,3 +677,51 @@ def test_committed_transcript_sets_confidence() -> None:
     final = stream._event_ch.events[1]
     assert final.type == stt.SpeechEventType.FINAL_TRANSCRIPT
     assert final.alternatives[0].confidence > 0.9
+
+
+def test_audio_chunk_duration_defaults_to_50ms() -> None:
+    assert _stt()._opts.audio_chunk_duration_ms == 50
+
+
+@pytest.mark.parametrize("duration", [0, -1, 0.5, 100.0, True, False, None, "100"])
+def test_invalid_audio_chunk_duration_is_rejected(duration: Any) -> None:
+    with pytest.raises(ValueError, match="audio_chunk_duration_ms must be a positive integer"):
+        _stt(audio_chunk_duration_ms=duration)
+
+
+@pytest.mark.parametrize("sample_rate", [8000, 16000, 48000])
+@pytest.mark.parametrize("duration", [1, 50, 75, 100, 200])
+@pytest.mark.parametrize("tail_ms", [0, 1])
+async def test_configured_audio_chunks_preserve_audio_and_commit(
+    sample_rate: int, duration: int, tail_ms: int
+) -> None:
+    ws = _FakeWS()
+    stream = _live_stream(ws, sample_rate=sample_rate, audio_chunk_duration_ms=duration)
+    # Distinct PCM bytes reveal drops, duplication and reordering across input frames.
+    total_samples = sample_rate * (duration * 2 + tail_ms) // 1000
+    audio = bytes(i % 251 for i in range(total_samples * 2))
+    input_frame_bytes = sample_rate * 20 // 1000 * 2
+    chunk_bytes = sample_rate * duration // 1000 * 2
+    expected_chunks = [audio[i : i + chunk_bytes] for i in range(0, len(audio), chunk_bytes)]
+    try:
+        for offset in range(0, len(audio), input_frame_bytes):
+            data = audio[offset : offset + input_frame_bytes]
+            stream.push_frame(
+                rtc.AudioFrame(
+                    data=data,
+                    sample_rate=sample_rate,
+                    num_channels=1,
+                    samples_per_channel=len(data) // 2,
+                )
+            )
+        # Complete chunks must be released before the caller flushes.
+        await _wait_until(lambda: len(ws.sent) >= len(audio) // chunk_bytes)
+        stream.flush()
+        await _wait_until(lambda: len(ws.sent) >= len(expected_chunks) + 1)
+
+        assert [base64.b64decode(msg["audio_base_64"]) for msg in ws.sent[:-1]] == expected_chunks
+        assert [msg["commit"] for msg in ws.sent] == [False] * len(expected_chunks) + [True]
+        assert all(msg["sample_rate"] == sample_rate for msg in ws.sent)
+        assert ws.sent[-1]["audio_base_64"] == ""
+    finally:
+        await stream.aclose()

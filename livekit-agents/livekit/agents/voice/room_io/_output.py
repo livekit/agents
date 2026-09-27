@@ -58,8 +58,10 @@ class _ParticipantAudioOutput(io.AudioOutput):
 
         self._audio_buf = utils.aio.Chan[rtc.AudioFrame]()
         self._audio_bstream = utils.audio.AudioByteStream(
-            sample_rate, num_channels, samples_per_channel=sample_rate // 20, progressive=True
+            sample_rate, num_channels, samples_per_channel=sample_rate // 20
         )
+        # flushes the byte stream's tail before the source runs dry
+        self._bstream_flush_timer: asyncio.TimerHandle | None = None
 
         self._flush_task: asyncio.Task[None] | None = None
         self._interrupted_event = asyncio.Event()
@@ -106,6 +108,8 @@ class _ParticipantAudioOutput(io.AudioOutput):
                 span.set_attribute(trace_types.ATTR_TRACK_SID, self._publication.sid)
 
     async def aclose(self) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
         if self._flush_task:
             await utils.aio.cancel_and_wait(self._flush_task)
         if self._forwarding_task:
@@ -125,13 +129,11 @@ class _ParticipantAudioOutput(io.AudioOutput):
         for f in self._audio_bstream.push(frame.data):
             self._audio_buf.send_nowait(f)
             self._pushed_duration += f.duration
+        self._arm_bstream_flush()
 
     def flush(self) -> None:
         super().flush()
-
-        for f in self._audio_bstream.flush():
-            self._audio_buf.send_nowait(f)
-            self._pushed_duration += f.duration
+        self._flush_bstream(force=True)
 
         if not self._pushed_duration:
             return
@@ -144,6 +146,9 @@ class _ParticipantAudioOutput(io.AudioOutput):
         self._flush_task = asyncio.create_task(self._wait_for_playout())
 
     def clear_buffer(self) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
         self._audio_bstream.clear()
 
         if not self._pushed_duration:
@@ -159,11 +164,43 @@ class _ParticipantAudioOutput(io.AudioOutput):
     def pause(self) -> None:
         super().pause()
         self._playback_enabled.clear()
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
         # self._audio_source.clear_queue()
 
     def resume(self) -> None:
         super().resume()
         self._playback_enabled.set()
+        self._arm_bstream_flush()
+
+    def _arm_bstream_flush(self, *, margin: float = 0.02) -> None:
+        # audio short of a frame waits for more, and the timer flushes it `margin` seconds before
+        # the output runs dry; a paused output needs no frames, so no timer runs while paused
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
+        if not self._playback_enabled.is_set():
+            return
+        queued = (
+            self._audio_source.queued_duration
+            + self._pushed_duration
+            - self._source_pushed_duration
+        )
+        self._bstream_flush_timer = asyncio.get_running_loop().call_later(
+            max(queued - margin, 0.0), self._flush_bstream
+        )
+
+    def _flush_bstream(self, *, force: bool = False) -> None:
+        if self._bstream_flush_timer:
+            self._bstream_flush_timer.cancel()
+            self._bstream_flush_timer = None
+        # nothing plays before the first frame, so one under 20 ms waits for more instead
+        if not force and not self._pushed_duration and self._audio_bstream.buffered_duration < 0.02:
+            return
+        for f in self._audio_bstream.flush():
+            self._audio_buf.send_nowait(f)
+            self._pushed_duration += f.duration
 
     def _report_run(
         self, *, offset: float, ended_at: float, resumes_at: float | None = None

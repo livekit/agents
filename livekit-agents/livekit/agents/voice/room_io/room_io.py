@@ -187,6 +187,7 @@ class RoomIO:
         self._room.on("participant_connected", self._on_participant_connected)
         self._room.on("connection_state_changed", self._on_connection_state_changed)
         self._room.on("participant_disconnected", self._on_participant_disconnected)
+        self._room.on("sip_dtmf_received", self._on_sip_dtmf_received)
         if self._room.isconnected():
             self._on_connection_state_changed(rtc.ConnectionState.CONN_CONNECTED)
 
@@ -217,6 +218,7 @@ class RoomIO:
         self._room.off("participant_connected", self._on_participant_connected)
         self._room.off("connection_state_changed", self._on_connection_state_changed)
         self._room.off("participant_disconnected", self._on_participant_disconnected)
+        self._room.off("sip_dtmf_received", self._on_sip_dtmf_received)
         self._agent_session.off("agent_state_changed", self._on_agent_state_changed)
         self._agent_session.off("user_input_transcribed", self._on_user_input_transcribed)
         self._agent_session.off("close", self._on_agent_session_close)
@@ -313,17 +315,17 @@ class RoomIO:
             self.unset_participant()
             return
 
-        if (
-            self._participant_identity is not None
-            and self._participant_identity != participant_identity
-        ):
-            # reset future if switching to a different participant
-            self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        linked = self.linked_participant
+        if linked is None or linked.identity != participant_identity:
+            if self._participant_available_fut.done():
+                self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+            self._agent_session._cancel_user_away_timer()
 
             # check if new participant is already connected
             for participant in self._room.remote_participants.values():
                 if participant.identity == participant_identity:
                     self._participant_available_fut.set_result(participant)
+                    self._agent_session._on_room_io_participant_linked(participant)
                     break
 
         # update participant identity and handlers
@@ -347,6 +349,7 @@ class RoomIO:
     def unset_participant(self) -> None:
         self._participant_identity = None
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
         if self._audio_input:
             self._audio_input.set_participant(None)
         if self._video_input:
@@ -464,6 +467,7 @@ class RoomIO:
             },
         )
         self._participant_available_fut = asyncio.Future[rtc.RemoteParticipant]()
+        self._agent_session._cancel_user_away_timer()
 
         if (
             self._options.close_on_disconnect
@@ -483,6 +487,13 @@ class RoomIO:
                 },
             )
             self._agent_session._close_soon(reason=CloseReason.PARTICIPANT_DISCONNECTED)
+
+    def _on_sip_dtmf_received(self, ev: rtc.SipDTMF) -> None:
+        linked = self.linked_participant
+        if linked is None or ev.participant is None or ev.participant.identity != linked.identity:
+            return
+
+        self._agent_session.reset_away_timer()
 
     def _on_user_input_transcribed(self, ev: UserInputTranscribedEvent) -> None:
         if self._user_transcript_ch:
