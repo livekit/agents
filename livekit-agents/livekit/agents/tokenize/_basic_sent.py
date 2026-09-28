@@ -14,7 +14,7 @@ def split_sentences(
     starters = r"(Mr|Mrs|Ms|Dr|Prof|Capt|Cpt|Lt|He\s|She\s|It\s|They\s|Their\s|Our\s|We\s|But\s|However\s|That\s|This\s|Wherever)"  # noqa: E501
     acronyms = r"([A-Z][.][A-Z][.](?:[A-Z][.])?)"
     websites = r"[.](com|net|org|io|gov|edu|me)"
-    digits = r"([0-9])"
+    digits = r"[0-9]"
     multiple_dots = r"\.{2,}"
 
     # fmt: off
@@ -25,7 +25,9 @@ def split_sentences(
 
     text = re.sub(prefixes,"\\1<prd>", text)
     text = re.sub(websites,"<prd>\\1", text)
-    text = re.sub(digits + "[.]" + digits,"\\1<prd>\\2",text)
+    # a number can hold several dot-separated groups ("1.2.3", "192.168.1.1"), and
+    # re.sub skips overlapping matches, so protect every inner dot by lookaround
+    text = re.sub(r"(?<=" + digits + r")\.(?=" + digits + ")", "<prd>", text)
     # text = re.sub(multiple_dots, lambda match: "<prd>" * len(match.group(0)) + "<stop>", text)
     # TODO(theomonnom): need improvement for ""..." dots", check capital + next sentence should not be  # noqa: E501
     # small

@@ -250,11 +250,31 @@ def test_public_model_preserves_default_identity(monkeypatch: pytest.MonkeyPatch
     assert funasr_stt.FunASRSTT().model == "iic/SenseVoiceSmall"
 
 
-def test_plugin_version_matches_livekit_agents_release() -> None:
+def test_plugin_distribution_and_extra_are_compatible() -> None:
+    from importlib.metadata import metadata, version
+
+    from packaging.requirements import Requirement
+
     from livekit.agents import __version__ as agents_version
     from livekit.plugins.funasr.version import __version__ as plugin_version
 
-    assert plugin_version == agents_version
+    assert plugin_version == version("livekit-plugins-funasr")
+    plugin_requirements = [
+        Requirement(value)
+        for value in metadata("livekit-plugins-funasr").get_all("Requires-Dist", [])
+    ]
+    agents_requirement = next(req for req in plugin_requirements if req.name == "livekit-agents")
+    assert agents_version in agents_requirement.specifier
+
+    agents_requirements = [
+        Requirement(value) for value in metadata("livekit-agents").get_all("Requires-Dist", [])
+    ]
+    plugin_requirement = next(
+        req for req in agents_requirements if req.name == "livekit-plugins-funasr"
+    )
+    assert plugin_requirement.marker is not None
+    assert plugin_requirement.marker.evaluate({"extra": "funasr"})
+    assert plugin_version in plugin_requirement.specifier
 
 
 def test_plugin_download_files_prefetches_default_model(

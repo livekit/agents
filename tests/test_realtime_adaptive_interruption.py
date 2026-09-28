@@ -113,7 +113,7 @@ def test_audio_activity_waits_for_min_words() -> None:
     activity._audio_recognition._current_transcript = "now enough words"
     activity._interrupt_by_audio_activity()
 
-    activity._current_speech.interrupt.assert_called_once_with()
+    activity._current_speech.interrupt.assert_called_once_with(source="audio_activity")
 
 
 def test_rejected_audio_interruption_clears_confirmed_verdict() -> None:

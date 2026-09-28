@@ -214,7 +214,7 @@ async def _llm_inference_task(
     # provider call the convention describes — setting them here as well would make a
     # backend summing gen_ai.usage.* report twice the calls and tokens. A custom node that
     # never builds an LLMStream has no such span, and records them here instead.
-    inference_recorded = gen_ai_telemetry.track_inference_span()
+    inference_recorded = gen_ai_telemetry.track_inference_span(model=model, provider=provider)
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -238,8 +238,6 @@ async def _llm_inference_task(
             chat_ctx,
             tools,
             data,
-            model,
-            provider,
             streaming=False,
         )
         return True
@@ -319,7 +317,7 @@ async def _llm_inference_task(
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(
-            current_span, inference_recorded, chat_ctx, tools, data, model, provider, error=exc
+            current_span, inference_recorded, chat_ctx, tools, data, error=exc
         )
         raise
     finally:
@@ -343,7 +341,7 @@ async def _llm_inference_task(
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     _record_uninstrumented_inference(
-        current_span, inference_recorded, chat_ctx, tools, data, model, provider, usage=usage
+        current_span, inference_recorded, chat_ctx, tools, data, usage=usage
     )
     return True
 
@@ -354,8 +352,6 @@ def _record_uninstrumented_inference(
     chat_ctx: ChatContext,
     tools: list[llm.Tool],
     data: _LLMGenerationData,
-    model: str | None,
-    provider: str | None,
     *,
     usage: CompletionUsage | None = None,
     streaming: bool = True,
@@ -368,16 +364,9 @@ def _record_uninstrumented_inference(
     nested ``llm_request`` span to carry the convention's attributes. When one was created,
     this stands down so the counts are not reported twice.
 
-    The configured model and provider are only reported when that LLM served the request.
-    Reaching here means it did not, so a third-party engine is left unattributed rather
-    than credited to the model the agent happens to be configured with.
+    Custom nodes without an LLMStream are left unattributed to the configured model.
     """
     if inference_recorded:
-        # the configured LLM served this, so its identity describes the call
-        if model:
-            span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-        if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
-            span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
         return
 
     gen_ai_telemetry.set_request_attributes(
@@ -1198,8 +1187,9 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
-    # a tool with nothing to say, such as a bare handoff, expects no reply
-    base_result.fnc_call_out.reply_required = fnc_out is not None
+    if not isinstance(fnc_out, llm.ToolResult):
+        # a tool with nothing to say, such as a bare handoff, expects no reply
+        base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),

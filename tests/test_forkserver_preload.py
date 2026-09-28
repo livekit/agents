@@ -41,7 +41,11 @@ async def test_agent_server_runs_freeze_preload_last() -> None:
             await asyncio.wait_for(pool_started.wait(), timeout=5)
             preloads = mp_context.set_forkserver_preload.call_args.args[0]
 
-            assert preloads[-1] == "livekit.agents.ipc._preload_freeze"
+            # the framework's warm-up runs in the forkserver, and the freeze comes after it
+            assert preloads[-2:] == [
+                "livekit.agents.ipc._preload",
+                "livekit.agents.ipc._preload_freeze",
+            ]
         finally:
             await server.aclose()
             await run_task

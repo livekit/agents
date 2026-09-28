@@ -143,7 +143,7 @@ class AnamAPI:
         url = f"{self._api_url}{endpoint}"
         session = self._session or aiohttp.ClientSession()
         try:
-            for attempt in range(self._conn_options.max_retry):
+            for attempt in range(self._conn_options.max_retry + 1):
                 try:
                     async with session.post(
                         url,
@@ -159,12 +159,22 @@ class AnamAPI:
                                 body=text,
                             )
                         return await response.json()  # type: ignore
+                except APIStatusError as e:
+                    if not e.retryable:
+                        raise
+                    logger.warning(
+                        f"API request to {url} failed on attempt {attempt + 1}",
+                        extra={"error": str(e)},
+                    )
+                    if attempt >= self._conn_options.max_retry:
+                        raise
+                    await asyncio.sleep(self._conn_options.retry_interval)
                 except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                     logger.warning(
                         f"API request to {url} failed on attempt {attempt + 1}",
                         extra={"error": str(e)},
                     )
-                    if attempt >= self._conn_options.max_retry - 1:
+                    if attempt >= self._conn_options.max_retry:
                         raise APIConnectionError(f"Failed to connect to Anam API at {url}") from e
                     await asyncio.sleep(self._conn_options.retry_interval)
         finally:

@@ -131,8 +131,8 @@ async def test_wrappers_delegate_metadata_without_changing_identity(
     else:
         wrapped = FallbackAdapter([provider])
     try:
-        assert wrapped.model == ("FallbackAdapter" if wrapper == "fallback" else provider.model)
-        assert wrapped.provider == ("livekit" if wrapper == "fallback" else provider.provider)
+        assert wrapped.model == provider.model
+        assert wrapped.provider == provider.provider
         assert wrapped.metrics_metadata == provider.metrics_metadata
         source = ErrorEvent(error=RuntimeError("safe error"), source=wrapped).model_dump()["source"]
         assert source == {

@@ -28,6 +28,42 @@ async def test_channel():
     assert sum == 10
 
 
+@pytest.mark.parametrize("wait_for_senders", [False, True])
+async def test_channel_close_with_blocked_senders(wait_for_senders):
+    channel = aio.Chan[int](maxsize=1)
+    channel.send_nowait(1)
+    started = [asyncio.Event(), asyncio.Event()]
+
+    async def send(value, ready):
+        ready.set()
+        await channel.send(value)
+
+    senders = [asyncio.create_task(send(i + 2, ready)) for i, ready in enumerate(started)]
+    try:
+        for ready in started:
+            await ready.wait()
+        channel.close()
+        if wait_for_senders:
+            for sender in senders:
+                with pytest.raises(aio.ChanClosed):
+                    await sender
+
+        # Both immediate and later shutdown paths may close the same channel.
+        channel.close()
+        for sender in senders:
+            with pytest.raises(aio.ChanClosed):
+                await sender
+        assert channel.recv_nowait() == 1
+        with pytest.raises(aio.ChanClosed):
+            await channel.recv()
+        with pytest.raises(aio.ChanClosed):
+            await channel.send(4)
+    finally:
+        for sender in senders:
+            sender.cancel()
+        await asyncio.gather(*senders, return_exceptions=True)
+
+
 async def test_interval():
     interval = aio.interval(0.1)
 

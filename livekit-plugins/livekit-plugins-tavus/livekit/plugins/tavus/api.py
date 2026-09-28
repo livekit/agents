@@ -24,6 +24,8 @@ class TavusException(Exception):
 DEFAULT_API_URL = "https://tavusapi.com/v2"
 # Stock Tavus PAL. Use create_pal() to create a PAL with the appearance you'd like.
 DEFAULT_PAL_ID = "pb87e71797da"
+# Stock Tavus face ("Lucy - Home", phoenix-4.5) used with DEFAULT_PAL_ID when no face is given.
+DEFAULT_FACE_ID = "r4067604db72"
 
 
 def _coalesce_with_deprecated(
@@ -96,17 +98,20 @@ class TavusAPI:
             or NOT_GIVEN
         )
 
-        if not pal_id:
-            # no pal supplied — use the default stock pal (carries its own face)
+        # extra_payload overrides the payload wholesale, so a pal named there counts
+        # as user-supplied when deciding whether to fill in the stock face.
+        extra = dict(extra_payload) if utils.is_given(extra_payload) else {}
+        if not pal_id and not extra.get("pal_id"):
+            # no pal supplied — use the default stock pal and, unless overridden, its stock face
             pal_id = DEFAULT_PAL_ID
+            face_id = face_id or DEFAULT_FACE_ID
 
         properties = properties or {}
         payload: dict[str, Any] = {"pal_id": pal_id, "properties": properties}
-        # send face_id only when given; otherwise the pal's default_face_id is used
+        # a user-supplied pal carries its own default face, so only send face_id when we have one
         if face_id:
             payload["face_id"] = face_id
-        if utils.is_given(extra_payload):
-            payload.update(extra_payload)
+        payload.update(extra)
 
         if "conversation_name" not in payload:
             payload["conversation_name"] = utils.shortuuid("lk_conversation_")

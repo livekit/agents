@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from opentelemetry import context as otel_context
+from opentelemetry import context as otel_context, trace
 
 from .. import llm, utils
 from ..log import logger
+from ..telemetry import trace_types
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
 
@@ -20,6 +22,12 @@ class InputDetails:
 
 
 DEFAULT_INPUT_DETAILS = InputDetails(modality="audio")
+
+
+InterruptionSource = Literal["audio_activity", "user_turn", "programmatic"]
+"""Why a speech was interrupted, for the ``agent_turn`` trace: the user started talking over
+it (``audio_activity``), a committed user turn preempted it (``user_turn``), or code did
+(``programmatic``: ``session.interrupt()``, a tool, teardown)."""
 
 
 class SpeechHandle:
@@ -50,7 +58,15 @@ class SpeechHandle:
         self._tasks: list[asyncio.Task] = []
         self._chat_items: list[llm.ChatItem] = []
         self._num_steps = 1
+        # one agent_turn span for the whole speech, however many generations (LLM steps) it
+        # takes; opened by the first reply task, ended with the speech in _mark_done
+        self._agent_turn_span: trace.Span | None = None
         self._agent_turn_context: otel_context.Context | None = None
+        self._agent_turn_started_at: float | None = None
+        self._agent_turn_agent_name: str | None = None
+        self._scheduled_at: float | None = None
+        self._authorized_at: float | None = None
+        self._interrupt_source: InterruptionSource | None = None  # first interrupt's cause
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
 
@@ -182,8 +198,15 @@ class SpeechHandle:
 
         return self._error
 
-    def interrupt(self, *, force: bool = False) -> SpeechHandle:
+    def interrupt(
+        self, *, force: bool = False, source: InterruptionSource = "programmatic"
+    ) -> SpeechHandle:
         """Interrupt the current speech generation.
+
+        Args:
+            force: Interrupt even if this speech disallows interruptions.
+            source: Why, for the ``agent_turn`` trace (see ``InterruptionSource``). The first
+                interruption's cause is the one recorded.
 
         Raises:
             RuntimeError: If this speech handle is still running and does not allow
@@ -199,6 +222,7 @@ class SpeechHandle:
         if not force and not self._allow_interruptions:
             raise RuntimeError("This generation handle does not allow interruptions")
 
+        self._interrupt_source = source  # first interrupt only: later calls return above
         self._cancel()
         return self
 
@@ -298,6 +322,8 @@ class SpeechHandle:
     def _authorize_generation(self) -> None:
         fut = asyncio.Future[None]()
         self._generations.append(fut)
+        if self._authorized_at is None:
+            self._authorized_at = time.perf_counter()
         self._authorize_event.set()
 
     def _clear_authorization(self) -> None:
@@ -329,6 +355,8 @@ class SpeechHandle:
             if error is not None:
                 self._error = error
             self._done_fut.set_result(None)
+        # a pipeline LLM failure is stored on the handle before the tasks finish
+        self._end_agent_turn(error if error is not None else self._error)
 
         if self._generations:
             self._mark_generation_done()
@@ -337,6 +365,64 @@ class SpeechHandle:
             self._interrupt_timeout_handle.cancel()
             self._interrupt_timeout_handle = None
 
+    def _take_agent_turn(self) -> tuple[trace.Span, float | None, str | None] | None:
+        """Detach this speech's open ``agent_turn`` so a successor can continue it.
+
+        Used when a preemptive generation is discarded for another speech answering the same
+        user turn: the wasted generation stays visible under the one turn instead of becoming
+        a turn of its own. After this the speech ends without touching the span."""
+        span = self._agent_turn_span
+        if span is None:
+            return None
+        carry = (span, self._agent_turn_started_at, self._agent_turn_agent_name)
+        self._agent_turn_span = None
+        self._agent_turn_context = None
+        self._agent_turn_started_at = None
+        self._agent_turn_agent_name = None
+        return carry
+
+    def _continue_agent_turn(
+        self, carry: tuple[trace.Span, float | None, str | None], *, discarded: SpeechHandle
+    ) -> None:
+        """Adopt the ``agent_turn`` taken from ``discarded`` (see ``_take_agent_turn``)."""
+        # adopted even when sampled out: the duration metric still needs the start time
+        span, started_at, agent_name = carry
+        span.add_event(
+            "preemptive_generation_discarded", {trace_types.ATTR_SPEECH_ID: discarded.id}
+        )
+        span.set_attribute(trace_types.ATTR_SPEECH_ID, self.id)
+        self._agent_turn_span = span
+        self._agent_turn_context = trace.set_span_in_context(span)
+        self._agent_turn_started_at = started_at
+        self._agent_turn_agent_name = agent_name
+
+    def _end_agent_turn(self, error: BaseException | None) -> None:
+        """Close the speech's ``agent_turn`` span: the speech is done, whatever step it was on."""
+        span, self._agent_turn_span = self._agent_turn_span, None
+        if span is None:
+            return
+        from ..telemetry import otel_metrics, utils as trace_utils
+
+        # the duration metric does not depend on the span being sampled in
+        if self._agent_turn_started_at is not None and self._agent_turn_agent_name is not None:
+            otel_metrics.record_invoke_agent_duration(
+                time.perf_counter() - self._agent_turn_started_at,
+                agent_name=self._agent_turn_agent_name,
+            )
+        if not span.is_recording():
+            return
+        if isinstance(error, Exception):
+            trace_utils.record_exception(span, error)
+        span.end()
+
     def _mark_scheduled(self) -> None:
+        if self._scheduled_at is None:
+            self._scheduled_at = time.perf_counter()
         with contextlib.suppress(asyncio.InvalidStateError):
             self._scheduled_fut.set_result(None)
+
+    def _queue_wait(self) -> float | None:
+        """Seconds between scheduling and the first generation authorization, once known."""
+        if self._scheduled_at is None or self._authorized_at is None:
+            return None
+        return max(self._authorized_at - self._scheduled_at, 0.0)

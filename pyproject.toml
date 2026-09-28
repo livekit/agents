@@ -67,6 +67,7 @@ livekit-plugins-browser = { workspace = true }
 livekit-plugins-speechmatics = { workspace = true }
 livekit-plugins-spatius = { workspace = true }
 livekit-plugins-spitch = { workspace = true }
+livekit-plugins-synthesia = { workspace = true }
 livekit-plugins-tavus = { workspace = true }
 livekit-plugins-telnyx = { workspace = true }
 livekit-plugins-trugen = { workspace = true }
