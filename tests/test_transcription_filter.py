@@ -231,6 +231,39 @@ async def test_non_markdown_preserved(text: str, chunk_size: int):
     assert await _filtered(text, chunk_size) == text
 
 
+# --- delimiters that can never pair up must not hold the stream ---
+
+STRAY_DELIMITER_CASES = [
+    "the confirmation went to first_last@example.com and your table is ready.",
+    "10*4 is 40 and that is four tens.",
+    "10 * 4 is 40 and that is four tens.",
+    "rates rose last year [1] and may rise again.",
+    "see ]( broken formatting and please continue.",
+]
+
+
+@pytest.mark.parametrize("text", STRAY_DELIMITER_CASES)
+async def test_stray_delimiter_does_not_hold_the_stream(text: str):
+    words = text.split(" ")
+    consumed = 0
+
+    async def word_stream():
+        nonlocal consumed
+        for word in words:
+            consumed += 1
+            yield word + " "
+
+    output = ""
+    consumed_at_and = None
+    async for chunk in filter_markdown(word_stream()):
+        output += chunk
+        if consumed_at_and is None and " and" in output:
+            consumed_at_and = consumed
+
+    assert output == text + " "
+    assert consumed_at_and is not None and consumed_at_and < len(words)
+
+
 # --- horizontal rules ---
 #
 # A rule carries no spoken content, so the whole line goes. Dashes that are
@@ -268,7 +301,10 @@ async def test_horizontal_rule(text: str, expected: str, chunk_size: int):
 
 @pytest.mark.parametrize(
     "text",
-    [t for t, _ in EMPHASIS_CASES] + PRESERVE_CASES + [t for t, _ in HORIZONTAL_RULE_CASES],
+    [t for t, _ in EMPHASIS_CASES]
+    + PRESERVE_CASES
+    + STRAY_DELIMITER_CASES
+    + [t for t, _ in HORIZONTAL_RULE_CASES],
 )
 async def test_output_independent_of_chunking(text: str):
     """Buffering must not change the result: every chunk size yields one output."""
