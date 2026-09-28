@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 
+import httpx
 import pytest
 from speechify.types.error_detail import ErrorDetail
 from speechify.types.nested_chunk import NestedChunk
@@ -11,7 +13,7 @@ from speechify.types.speech_stream_event import (
     SpeechStreamEvent_SpeechError,
 )
 
-from livekit.agents import APIStatusError, tts
+from livekit.agents import APIConnectOptions, APIStatusError, tts
 from livekit.agents.types import NOT_GIVEN, USERDATA_TIMED_TRANSCRIPT
 from livekit.plugins.speechify import tts as sfy_tts
 
@@ -24,6 +26,7 @@ class _FakeAudio:
     def __init__(self) -> None:
         self.stream_calls: list[dict] = []
         self.speech_calls: list[dict] = []
+        self.streams_read_to_end = 0
 
     async def stream_with_timestamps(self, **kwargs: object) -> object:
         self.stream_calls.append(kwargs)
@@ -48,6 +51,8 @@ class _FakeAudio:
         yield SpeechStreamEvent_SpeechDone(
             type="speech.done", billable_characters_count=11, audio_duration_ms=700
         )
+        # only reached when the caller keeps reading after speech.done
+        self.streams_read_to_end += 1
 
     async def speech(self, **kwargs: object) -> _FakeSpeechResponse:
         self.speech_calls.append(kwargs)
@@ -81,6 +86,9 @@ class _FakeClient:
     def __init__(self) -> None:
         self.audio = _FakeAudio()
         self.voices = _FakeVoices()
+
+
+_NO_RETRY = APIConnectOptions(max_retry=0)
 
 
 def _make_tts(model: str, client: _FakeClient) -> sfy_tts.TTS:
@@ -121,6 +129,9 @@ async def test_stream_with_timestamps() -> None:
     assert words["Hello"].end_time == pytest.approx(0.32)
     assert words["world"].start_time == pytest.approx(0.34)
 
+    # the body is read past speech.done, so its connection can go back to the pool
+    assert client.audio.streams_read_to_end == 1
+
 
 async def test_stream_falls_back_for_legacy_model() -> None:
     client = _FakeClient()
@@ -158,6 +169,99 @@ async def test_stream_predicates_speech_error() -> None:
 
     with pytest.raises(APIStatusError, match="boom"):
         await _collect(stream)
+
+
+async def test_synthesize_streams_with_timestamps() -> None:
+    client = _FakeClient()
+    frames = [f async for f in _make_tts("simba-3.2", client).synthesize("Hello world.")]
+
+    # synthesize() now streams on the streaming-native models instead of one batch request
+    assert len(client.audio.stream_calls) == 1
+    assert client.audio.stream_calls[0]["input"] == "Hello world."
+    assert client.audio.stream_calls[0]["output_format"] == "pcm_24000"
+    assert client.audio.speech_calls == []
+    assert client.audio.streams_read_to_end == 1
+
+    assert sum(f.frame.duration for f in frames) > 0.4
+    transcripts = [t for f in frames for t in f.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT, [])]
+    assert [str(t) for t in transcripts] == ["Hello", "world"]
+    assert transcripts[1].start_time == pytest.approx(0.34)
+
+
+async def test_synthesize_uses_speech_endpoint_for_legacy_model() -> None:
+    client = _FakeClient()
+    frames = [f async for f in _make_tts("simba-english", client).synthesize("Hello world.")]
+
+    assert client.audio.stream_calls == []
+    assert len(client.audio.speech_calls) == 1
+    assert client.audio.speech_calls[0]["audio_format"] == "pcm"
+    assert sum(f.frame.duration for f in frames) > 0.4
+
+
+async def test_synthesize_predicates_speech_error() -> None:
+    client = _FakeClient()
+    client.audio = _ErrorAudio()
+    t = _make_tts("simba-3.2", client)
+
+    with pytest.raises(APIStatusError, match="boom"):
+        async with t.synthesize("Hello world.", conn_options=_NO_RETRY) as stream:
+            async for _ in stream:
+                pass
+
+
+def _mock_http(monkeypatch: pytest.MonkeyPatch, handler: object) -> None:
+    real_init = httpx.AsyncClient.__init__
+
+    def init(self: httpx.AsyncClient, *args: object, **kwargs: object) -> None:
+        kwargs["transport"] = httpx.MockTransport(handler)  # type: ignore[arg-type]
+        real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", init)
+
+
+async def test_prewarm_opens_connection_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok"})
+
+    _mock_http(monkeypatch, handler)
+    t = sfy_tts.TTS(api_key="sk-test", base_url="https://api.example.test/")
+    t.prewarm()
+    t.prewarm()  # a second call while the first is in flight is a no-op
+    assert t._prewarm_task is not None
+    await t._prewarm_task
+
+    assert [(r.method, str(r.url)) for r in requests] == [
+        ("GET", "https://api.example.test/health")
+    ]
+    assert "authorization" not in requests[0].headers
+    assert requests[0].headers[sfy_tts.CALLER_HEADER] == "livekit"
+    await t.aclose()
+
+
+async def test_aclose_cancels_pending_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    _mock_http(monkeypatch, handler)
+    t = sfy_tts.TTS(api_key="sk-test")
+    t.prewarm()
+    task = t._prewarm_task
+    assert task is not None
+
+    await asyncio.wait_for(t.aclose(), timeout=1)
+    assert task.cancelled()
+
+
+def test_prewarm_is_noop_with_injected_client() -> None:
+    t = _make_tts("simba-3.2", _FakeClient())
+    t.prewarm()
+    assert t._prewarm_task is None
 
 
 def test_supports_streaming_marks() -> None:
