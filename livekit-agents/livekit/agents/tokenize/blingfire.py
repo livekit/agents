@@ -12,7 +12,8 @@ __all__ = [
     "SentenceTokenizer",
 ]
 
-_DANDA_BOUNDARY_RE = re.compile(r"[।॥](?=\s)")
+# a danda, plus any closing quotes/brackets it ends, followed by whitespace
+_DANDA_BOUNDARY_RE = re.compile(r"[।॥][\"'”’»)]*(?=\s)")
 
 
 def _split_sentences(
