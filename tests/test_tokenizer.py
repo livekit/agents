@@ -248,6 +248,21 @@ async def test_streamed_punct_word_tokenizer(tokenizer: tokenize.WordTokenizer):
         assert ev.token == WORDS_PUNCT_EXPECTED[i]
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("مرحبا، كيف حالك؟", ["مرحبا", "كيف", "حالك"]),  # Arabic comma and question mark
+        ("تم الحجز؛ شكراً", ["تم", "الحجز", "شكراً"]),  # Arabic semicolon
+        ("آپ کیسے ہیں۔", ["آپ", "کیسے", "ہیں"]),  # Urdu full stop
+        ("आप कैसे हैं।", ["आप", "कैसे", "हैं"]),  # Devanagari danda
+        ("你好，我很好。", ["你", "好", "我", "很", "好"]),  # fullwidth CJK punctuation
+    ],
+)
+def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=True, split_character=True)
+    assert tokenizer.tokenize(text=text) == expected
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",

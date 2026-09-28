@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 from . import tokenizer
 
@@ -43,6 +44,8 @@ def split_words(
         word = text[start:end]
         if translation_table and word:
             word = word.translate(translation_table)
+            # also drop non-ASCII punctuation (e.g. Arabic "،؟", Devanagari "।", CJK "，。")
+            word = "".join(c for c in word if not unicodedata.category(c).startswith("P"))
 
         if word:
             words.append((word, start, end))
