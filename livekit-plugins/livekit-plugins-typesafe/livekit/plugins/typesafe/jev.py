@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import aiohttp
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -24,7 +24,6 @@ from livekit.agents.decisions import (
     DecisionResult,
     Probability,
     ProbabilityResult,
-    Score,
     ScoreResult,
 )
 from livekit.agents.llm import ChatContext
@@ -134,15 +133,7 @@ class Jev(DecisionModel):
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
         questions = {name: _encode_question(definition) for name, definition in decisions.items()}
-        state = (
-            chat_ctx.to_dict(exclude_metrics=True, exclude_config_update=True)["items"]
-            if include_context_events
-            else [
-                {"role": item.role, "content": item.text_content}
-                for item in chat_ctx.items
-                if item.type == "message" and item.text_content
-            ]
-        )
+        state = _encode_context(chat_ctx, include_context_events=include_context_events)
         session = self._session or utils.http_context.http_session()
         try:
             async with session.post(
@@ -163,9 +154,7 @@ class Jev(DecisionModel):
             errors: dict[str, str] = {}
             for name, raw_answer in parsed.answers.items():
                 try:
-                    results[name] = _decode_answer(
-                        _answer_adapter.validate_python(raw_answer), decisions.get(name)
-                    )
+                    results[name] = _decode_answer(_answer_adapter.validate_python(raw_answer))
                 except ValidationError:
                     errors[name] = "invalid Jev decision answer"
                 except APIError as error:
@@ -187,6 +176,26 @@ class Jev(DecisionModel):
             raise APIError("invalid Jev decision response", retryable=False) from exc
 
 
+def _encode_context(chat_ctx: ChatContext, *, include_context_events: bool) -> list[dict[str, Any]]:
+    context = ChatContext(
+        [
+            item
+            for item in chat_ctx.items
+            if item.type != "message" or item.role in ("user", "assistant")
+        ]
+    )
+    if include_context_events:
+        return cast(
+            list[dict[str, Any]],
+            context.to_dict(exclude_metrics=True, exclude_config_update=True)["items"],
+        )
+    return [
+        {"role": item.role, "content": item.text_content}
+        for item in context.items
+        if item.type == "message" and item.text_content
+    ]
+
+
 def _encode_question(definition: Decision) -> dict[str, Any]:
     question: dict[str, Any] = {"instructions": definition.instructions}
     if isinstance(definition, Probability):
@@ -198,7 +207,7 @@ def _encode_question(definition: Decision) -> dict[str, Any]:
     return question
 
 
-def _decode_answer(answer: _Answer, definition: Decision | None) -> DecisionResult:
+def _decode_answer(answer: _Answer) -> DecisionResult:
     if isinstance(answer, _NoulAnswer):
         return ProbabilityResult(value=answer.noul)
     if isinstance(answer, _ChoiceAnswer):
@@ -207,13 +216,11 @@ def _decode_answer(answer: _Answer, definition: Decision | None) -> DecisionResu
             probabilities=answer.probabilities,
             provider_data={"confidence": answer.confidence},
         )
-    if not isinstance(definition, Score):
-        raise APIError("unexpected score in Jev response", retryable=False)
-    if answer.legend != dict(enumerate(definition.levels)):
-        raise APIError("score legend does not match requested levels", retryable=False)
+    if answer.legend.keys() != answer.probabilities.keys():
+        raise APIError("score legend does not match distribution", retryable=False)
     return ScoreResult(
         value=answer.score,
         probabilities=answer.probabilities,
-        levels=[answer.legend[index] for index in range(len(answer.legend))],
+        levels=[answer.legend[index] for index in sorted(answer.legend)],
         provider_data={"confidence": answer.confidence},
     )

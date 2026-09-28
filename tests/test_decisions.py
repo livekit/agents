@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from contextlib import AsyncExitStack
 from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from livekit.agents import Agent, AgentSession, APIError, APITimeoutError, decisions
+from livekit.agents import Agent, AgentSession, APIError, APITimeoutError, decisions, utils
 from livekit.agents.decisions import DecisionResponse, ProbabilityResult
 from livekit.agents.llm import (
     AgentHandoff,
@@ -91,6 +92,79 @@ async def next_call(model: ControlledModel):
     return await asyncio.wait_for(model.calls.get(), timeout=2)
 
 
+@pytest.mark.parametrize("background", [False, True], ids=["on_demand", "background"])
+@pytest.mark.parametrize("reuse_session_model", [False, True])
+async def test_shared_model_usage_belongs_only_to_the_calling_session(
+    background: bool,
+    reuse_session_model: bool,
+) -> None:
+    model = ControlledModel()
+    provider_metrics = []
+    model.on("metrics_collected", provider_metrics.append)
+    async with (
+        session_for(model) as first,
+        session_for(first.decision_model if reuse_session_model else model) as second,
+        AsyncExitStack() as pending,
+    ):
+        first_metrics, second_metrics = [], []
+        first.on("session_usage_updated", first_metrics.append)
+        second.on("session_usage_updated", second_metrics.append)
+        await first.start(agent("first"))
+        await second.start(agent("second"))
+
+        async def start_request(session):
+            if background:
+                add_user(session, "Please call me back.")
+                task = session._activity._decision_runner._task
+            else:
+                task = asyncio.create_task(
+                    session.decision_model.evaluate(
+                        chat_ctx=ChatContext.empty(),
+                        decisions={"handoff": decisions.Probability("The caller wants a human.")},
+                    )
+                )
+            pending.push_async_callback(utils.aio.cancel_and_wait, task)
+            _, _, answer = await next_call(model)
+            return task, answer
+
+        first_request, first_answer = await start_request(first)
+        second_request, second_answer = await start_request(second)
+        first_answer.set_result(0.9)
+        await first_request
+        assert first.usage.model_usage[0].input_tokens == 12
+        assert second.usage.model_usage == []
+        assert len(first_metrics) == 1
+        assert second_metrics == []
+
+        second_answer.set_result(0.8)
+        await second_request
+        assert second.usage.model_usage[0].input_tokens == 12
+        assert first.usage.model_usage[0].input_tokens == 12
+        assert len(provider_metrics) == 2
+        assert len(second_metrics) == 1
+
+        standalone = asyncio.create_task(
+            model.evaluate(
+                chat_ctx=ChatContext.empty(),
+                decisions={"handoff": decisions.Probability("The caller wants a human.")},
+            )
+        )
+        pending.push_async_callback(utils.aio.cancel_and_wait, standalone)
+        _, _, answer = await next_call(model)
+        answer.set_result(0.7)
+        await standalone
+        assert len(provider_metrics) == 3
+        assert len(first_metrics) == len(second_metrics) == 1
+
+        await first.aclose()
+        request, answer = await start_request(second)
+        answer.set_result(0.6)
+        await request
+        assert first.usage.model_usage[0].total_requests == 1
+        assert second.usage.model_usage[0].total_requests == 2
+        assert len(provider_metrics) == 4
+
+
 @pytest.mark.parametrize("background", [False, True], ids=["on_demand_only", "with_background"])
 async def test_on_demand_usage_tracks_session_lifetime(background: bool) -> None:
     model = ControlledModel()
@@ -99,7 +173,7 @@ async def test_on_demand_usage_tracks_session_lifetime(background: bool) -> None
     session.on("session_usage_updated", collected.append)
 
     async def evaluate() -> None:
-        assert session.decision_model is model
+        assert session.decision_model is not None
         request = asyncio.create_task(
             session.decision_model.evaluate(
                 chat_ctx=ChatContext.empty(),
@@ -162,7 +236,7 @@ async def test_on_demand_usage_is_collected_while_next_agent_initializes() -> No
         session.on("session_usage_updated", collected.append)
         await session.start(Receptionist(instructions="First agent."))
         request = asyncio.create_task(
-            model.evaluate(
+            session.decision_model.evaluate(
                 chat_ctx=ChatContext.empty(),
                 decisions={"check": decisions.Probability("True?")},
             )
@@ -204,7 +278,7 @@ async def test_failed_start_does_not_collect_later_decision_usage(monkeypatch, e
         # Keep startup's tracing context in its own task.
         await asyncio.create_task(session.start(Receptionist(instructions="First agent.")))
     request = asyncio.create_task(
-        model.evaluate(
+        session.decision_model.evaluate(
             chat_ctx=ChatContext.empty(),
             decisions={"check": decisions.Probability("True?")},
         )

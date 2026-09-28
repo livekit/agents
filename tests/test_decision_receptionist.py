@@ -69,3 +69,10 @@ async def test_callback_logging_failure_never_confirms_success(receptionist) -> 
         on_decisions(callback_event(message))
     session.generate_reply.assert_not_called()
     assert actions == []
+
+    log_callback.side_effect = lambda **kwargs: actions.append("log")
+    repeated = session.history.add_message(role="user", content="Please try that callback again.")
+    on_decisions(callback_event(repeated))
+    on_decisions(callback_event(repeated))
+    assert actions == ["log", "confirm"]
+    assert log_callback.call_count == 2

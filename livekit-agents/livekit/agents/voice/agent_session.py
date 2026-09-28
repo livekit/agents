@@ -69,6 +69,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .decision_runner import _SessionDecisionModel
 from .events import (
     AgentEvent,
     AgentState,
@@ -645,7 +646,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             DuplexRealtimeAdapter(llm) if isinstance(llm, DuplexModel) else (llm or None)
         )
         self._tts = tts or None
-        self._decision_model = decision_model
+        self._decision_model = _SessionDecisionModel(decision_model) if decision_model else None
 
         # eagerly establish DNS/TLS to the LLM provider so the first inference
         # request doesn't pay connection setup costs
@@ -793,7 +794,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @property
     def decision_model(self) -> DecisionModel | None:
-        """Model used for the active agent's background decisions and on-demand evaluation."""
+        """Session-bound model for background and on-demand evaluation.
+
+        Calls through this model contribute only to this session's usage. Calls
+        through the original provider model are independent of session usage.
+        """
         return self._decision_model
 
     @property

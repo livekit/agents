@@ -117,8 +117,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
         result = ev.results["wants_callback"]
         if result.kind == "probability" and result.value >= 0.9:
-            callback_logged = True
             log_callback_desire(source_message_id=ev.source_message_id, probability=result.value)
+            callback_logged = True
             session.generate_reply(
                 instructions="The callback request was successfully recorded. "
                 "Briefly confirm this to the caller."

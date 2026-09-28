@@ -1,18 +1,58 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from .. import utils
-from ..decisions import DecisionModel, DecisionsCompletedEvent
+from ..decisions import Decision, DecisionModel, DecisionResponse, DecisionsCompletedEvent
 from ..llm import ChatContext, ChatItem, ChatMessage
 from ..log import logger
 from ..telemetry import tracer
+from ..types import APIConnectOptions
 from ..utils import aio
 from .events import ConversationItemAddedEvent
 
 if TYPE_CHECKING:
     from .agent_activity import AgentActivity
+
+
+class _SessionDecisionModel(DecisionModel):
+    """Share provider requests while keeping each session's metrics separate."""
+
+    def __init__(self, model: DecisionModel) -> None:
+        if isinstance(model, _SessionDecisionModel):
+            model = model._model
+        super().__init__(capabilities=model.capabilities)
+        self._model: DecisionModel = model
+        self._label = model.label
+        self.on("metrics_collected", lambda ev: model.emit("metrics_collected", ev))
+
+    @property
+    def model(self) -> str:
+        return self._model.model
+
+    @property
+    def provider(self) -> str:
+        return self._model.provider
+
+    async def _evaluate_impl(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        decisions: Mapping[str, Decision],
+        include_context_events: bool,
+        conn_options: APIConnectOptions,
+    ) -> DecisionResponse:
+        return await self._model._evaluate_impl(
+            chat_ctx=chat_ctx,
+            decisions=decisions,
+            include_context_events=include_context_events,
+            conn_options=conn_options,
+        )
+
+    async def aclose(self) -> None:
+        await self._model.aclose()
 
 
 class _DecisionRunner:

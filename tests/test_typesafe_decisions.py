@@ -7,11 +7,14 @@ import pytest
 
 from livekit.agents import APIError, APIStatusError, decisions
 from livekit.agents.llm import (
+    AgentConfigUpdate,
     AgentHandoff,
+    AudioContent,
     ChatContext,
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
+    ImageContent,
 )
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins import typesafe
@@ -252,6 +255,18 @@ async def test_legend_key_order_does_not_change_level_order() -> None:
     assert response.results["frustration"].levels == ["Calm", "Annoyed", "Angry"]
 
 
+@pytest.mark.parametrize("shift_probabilities", [False, True])
+async def test_score_legend_cannot_shift_level_indices(shift_probabilities: bool) -> None:
+    body = response_body()
+    score = body["answers"]["frustration"]
+    score["legend"] = {"1": "Calm", "2": "Annoyed", "3": "Angry"}
+    if shift_probabilities:
+        score["probabilities"] = {"1": 0.1, "2": 0.4, "3": 0.5}
+    model, _ = model_for(body)
+    with pytest.raises(APIError):
+        await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+
+
 async def test_model_identity_falls_back_to_configured_model() -> None:
     body = response_body()
     del body["model"]
@@ -303,3 +318,38 @@ async def test_context_events_are_opt_in(include_context_events: bool) -> None:
             {"role": "user", "content": "Book a table."},
             {"role": "assistant", "content": "I can offer"},
         ]
+
+
+@pytest.mark.parametrize("include_context_events", [False, True])
+async def test_decision_context_excludes_instructions_and_media(
+    include_context_events: bool,
+) -> None:
+    context = ChatContext(
+        [
+            ChatMessage(role="system", content=["Answer only in Spanish."]),
+            ChatMessage(role="developer", content=["Internal instructions."]),
+            AgentConfigUpdate(instructions="More internal instructions."),
+            ChatMessage(
+                role="user",
+                content=[
+                    "Reserve a table.",
+                    ImageContent(image="https://example.com/image.png"),
+                    AudioContent(frame=[]),
+                ],
+            ),
+            ChatMessage(role="assistant", content=["For how many?"], interrupted=True),
+        ]
+    )
+    model, http = model_for(response_body())
+    await model.evaluate(
+        chat_ctx=context, decisions=QUESTIONS, include_context_events=include_context_events
+    )
+    state = http.post.call_args.kwargs["json"]["state"]
+    assert [item["role"] for item in state] == ["user", "assistant"]
+    if include_context_events:
+        assert [item["content"] for item in state] == [["Reserve a table."], ["For how many?"]]
+        assert state[1]["interrupted"] is True
+    else:
+        assert [item["content"] for item in state] == ["Reserve a table.", "For how many?"]
+    assert len(context.items) == 5
+    assert len(context.items[3].content) == 3

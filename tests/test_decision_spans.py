@@ -6,7 +6,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
-from livekit.agents import APIError
+from livekit.agents import AgentSession, APIError
 from livekit.agents.llm import ChatContext
 from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
 
@@ -29,10 +29,16 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
         provider.shutdown()
 
 
-async def test_on_demand_decision_span_records_response_identity_and_usage(span_exporter) -> None:
+@pytest.mark.parametrize("session_bound", [False, True])
+async def test_on_demand_decision_span_records_response_identity_and_usage(
+    span_exporter, session_bound
+) -> None:
     model, _ = model_for(response_body())
+    evaluated_model = (
+        AgentSession(decision_model=model, vad=None).decision_model if session_bound else model
+    )
     with tracer.start_as_current_span("caller") as parent:
-        await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+        await evaluated_model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
     [span] = [s for s in span_exporter.get_finished_spans() if s.name == "decision_model.evaluate"]
     assert span.parent.span_id == parent.get_span_context().span_id
     assert span.attributes[trace_types.ATTR_GEN_AI_REQUEST_MODEL] == model.model

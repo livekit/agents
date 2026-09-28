@@ -45,7 +45,8 @@ lk agent debugger stop
 ```
 
 Jev detects explicit callback requests and acceptance of an offered callback. At a probability of 0.9, the example calls `log_callback_desire`.
-This placeholder only writes to the console. A session-local guard limits it to one invocation, even when the caller repeats the request.
+This placeholder only writes to the console. A session-local guard limits it to one successful invocation, even when the caller repeats the request.
+If the placeholder fails, a later decision can retry it.
 The LLM can offer and acknowledge callbacks, but has no callback tool.
 After the placeholder succeeds, the handler asks the LLM to confirm that it recorded the request.
 A failed or timed-out decision produces no confirmation. Background detection does not guarantee callback capture.
@@ -68,7 +69,7 @@ The options are:
 | `include_context_events` | `False` | Include tool calls, tool outputs, handoffs, and interruption metadata within the context window. |
 | `allow_partial` | `False` | Emit valid results and an `errors` mapping for decisions with missing or invalid answers. |
 
-By default, context contains user and assistant text only. Background context always excludes system instructions and non-text content.
+By default, context contains user and assistant text only. Jev excludes system and developer messages, agent instructions, and non-text content in both modes.
 Context can include earlier agents' conversation.
 Each activity starts a new cadence count.
 
@@ -143,5 +144,9 @@ The Jev `provider_data["confidence"]` value describes distribution concentration
 Models declare supported decision kinds through `capabilities`.
 The session validates decisions before startup or handoff. A missing model or unsupported kind raises `ValueError` without changing the active agent.
 The session reports completed request duration and token usage through `metrics_collected` and `session.usage`.
+For on-demand requests that belong to a session, use `session.decision_model.evaluate(...)`.
+This session-bound model isolates usage, even when multiple sessions share one provider model.
+Calls through the original provider model are standalone evaluations and do not contribute to session usage.
+The original model's `metrics_collected` event still includes all requests.
 The current session protocol has no decision usage variant, so it carries decision token counts in its LLM usage variant.
 The full session report retains the decision usage type and request count.
