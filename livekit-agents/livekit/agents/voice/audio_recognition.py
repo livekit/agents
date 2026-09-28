@@ -1046,11 +1046,20 @@ class AudioRecognition:
             return fut
 
         async def _commit_user_turn() -> None:
+            final_is_stale = (
+                self._last_final_transcript_time is not None
+                and time.time() - self._last_final_transcript_time > 0.5
+            )
+            has_complete_manual_final = (
+                self._turn_detection_mode == "manual"
+                and audio_detached
+                and bool(self._audio_transcript)
+                and not self._audio_interim_transcript
+            )
             if self._last_final_transcript_time is None or (
-                time.time() - self._last_final_transcript_time > 0.5
+                final_is_stale and not has_complete_manual_final
             ):
-                # if the last final transcript is received more than 0.5s ago
-                # append a silence frame to the stt to flush the buffer
+                # A missing final or pending interim may still need an STT flush.
 
                 self._final_transcript_received.clear()
 
