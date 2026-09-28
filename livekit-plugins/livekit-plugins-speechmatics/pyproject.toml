@@ -23,7 +23,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "livekit-agents>=1.8.2",
+    "livekit-agents>=1.8.3",
     "speechmatics-agent-stt~=0.1.0",
     # Serves the public names this plugin used before Agent STT. Remove after 2026-10-05.
     "speechmatics-voice>=0.2.8",

@@ -625,6 +625,25 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-ai-voicelive"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4c/41/f5ba6c453c4602afb4ed4d6d835fac13e2c5029b72f546e8ccaa899ed540/azure_ai_voicelive-1.3.0.tar.gz", hash = "sha256:93183a534763c35eed50b23b5c5caf170e3fac88a7132698371245b775adcc72", size = 265319, upload-time = "2026-08-03T21:00:58.814Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/e2/bf2c30ebeb09a44613d28d76d12056df9a62e92d72ed08a0653976e7f5a2/azure_ai_voicelive-1.3.0-py3-none-any.whl", hash = "sha256:afc1ae488dd06b04cb000410129769d89c1f028c412c06536ff6a3f472e2258c", size = 160363, upload-time = "2026-08-03T21:01:00.292Z" },
+]
+
+[package.optional-dependencies]
+aiohttp = [
+    { name = "aiohttp" },
+]
+
+[[package]]
 name = "azure-cognitiveservices-speech"
 version = "1.50.0"
 source = { registry = "https://pypi.org/simple" }
@@ -651,6 +670,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a6/f3/b416179e408990df5db0d516283022dde0f5d0111d98c1a848e41853e81c/azure_core-1.41.0.tar.gz", hash = "sha256:f46ff5dfcd230f25cf1c19e8a34b8dc08a337b2503e268bb600a16c00db8ad5a", size = 381042, upload-time = "2026-05-07T23:30:54.302Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5b/db/325c6d7312d2200251c52323878281045aaffcb5586612296484e4280eaa/azure_core-1.41.0-py3-none-any.whl", hash = "sha256:522b4011e8180b1a3dcd2024396a4e7fe9ac37fb8597db47163d230b5efe892d", size = 220920, upload-time = "2026-05-07T23:30:56.357Z" },
+]
+
+[[package]]
+name = "azure-identity"
+version = "1.25.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "cryptography" },
+    { name = "msal" },
+    { name = "msal-extensions" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c5/0e/3a63efb48aa4a5ae2cfca61ee152fbcb668092134d3eb8bfda472dd5c617/azure_identity-1.25.3.tar.gz", hash = "sha256:ab23c0d63015f50b630ef6c6cf395e7262f439ce06e5d07a64e874c724f8d9e6", size = 286304, upload-time = "2026-03-13T01:12:20.892Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/49/9a/417b3a533e01953a7c618884df2cb05a71e7b68bdbce4fbdb62349d2a2e8/azure_identity-1.25.3-py3-none-any.whl", hash = "sha256:f4d0b956a8146f30333e071374171f3cfa7bdb8073adb8c3814b65567aa7447c", size = 192138, upload-time = "2026-03-13T01:12:22.951Z" },
 ]
 
 [[package]]
@@ -1538,6 +1573,15 @@ wheels = [
 ]
 
 [[package]]
+name = "isodate"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/54/4d/e940025e2ce31a8ce1202635910747e5a87cc3a6a6bb2d00973375014749/isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6", size = 29705, upload-time = "2024-10-08T23:04:11.5Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/15/aa/0aca39a37d3c7eb941ba736ede56d689e7be91cab5d9ca846bde3999eba6/isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15", size = 22320, upload-time = "2024-10-08T23:04:09.501Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2267,7 +2311,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'codecs'", specifier = ">=1.26.0" },
-    { name = "openai", specifier = ">=2,<3" },
+    { name = "openai", specifier = ">=2.50,<3" },
     { name = "opentelemetry-api", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.39.0,<1.45" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.0,<1.45" },
@@ -2698,11 +2742,20 @@ dependencies = [
     { name = "livekit-agents", extra = ["openai"] },
 ]
 
+[package.optional-dependencies]
+realtime = [
+    { name = "azure-ai-voicelive", extra = ["aiohttp"] },
+    { name = "azure-identity" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "azure-ai-voicelive", extras = ["aiohttp"], marker = "extra == 'realtime'", specifier = ">=1.2.0" },
     { name = "azure-cognitiveservices-speech", specifier = ">=1.48.2" },
+    { name = "azure-identity", marker = "extra == 'realtime'", specifier = ">=1.15.0" },
     { name = "livekit-agents", extras = ["openai"], editable = "livekit-agents" },
 ]
+provides-extras = ["realtime"]
 
 [[package]]
 name = "livekit-plugins-baseten"
@@ -3224,7 +3277,7 @@ name = "livekit-plugins-openai"
 source = { editable = "livekit-plugins/livekit-plugins-openai" }
 dependencies = [
     { name = "livekit-agents", extra = ["codecs", "images"] },
-    { name = "openai", extra = ["realtime"] },
+    { name = "openai" },
 ]
 
 [package.optional-dependencies]
@@ -3236,7 +3289,7 @@ vertex = [
 requires-dist = [
     { name = "google-auth", marker = "extra == 'vertex'", specifier = ">=2.0.0" },
     { name = "livekit-agents", extras = ["codecs", "images"], editable = "livekit-agents" },
-    { name = "openai", extras = ["realtime"], specifier = ">=2.50" },
+    { name = "openai", specifier = ">=2.50" },
 ]
 provides-extras = ["vertex"]
 
@@ -3278,7 +3331,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "livekit-agents", editable = "livekit-agents" },
-    { name = "phonic", specifier = ">=0.32.27" },
+    { name = "phonic", specifier = ">=0.32.34" },
     { name = "websockets", specifier = ">=11.0" },
 ]
 
@@ -3897,6 +3950,32 @@ realtime = [
 ]
 
 [[package]]
+name = "msal"
+version = "1.39.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/85/747d28986a44b715cc51cf57aa021c8fd94e9614064261ceec77320e8b0b/msal-1.39.0.tar.gz", hash = "sha256:6ab7de335e6d7f5717e2c7e1dbf86e4dda2f6acf3c56773b78dc53ebc6395b5f", size = 205360, upload-time = "2026-09-17T16:07:45.1Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a4/32/178457385925ce301c7b3232bd85665d4df57da39568b62dcfc74031873f/msal-1.39.0-py3-none-any.whl", hash = "sha256:2d2577886906cd7293850dffa2da29119966c213bfc6ec0cecf8bf7621e1ca77", size = 131629, upload-time = "2026-09-17T16:07:46.722Z" },
+]
+
+[[package]]
+name = "msal-extensions"
+version = "1.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "msal" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/01/99/5d239b6156eddf761a636bded1118414d161bd6b7b37a9335549ed159396/msal_extensions-1.3.1.tar.gz", hash = "sha256:c5b0fd10f65ef62b5f1d62f4251d51cbcaf003fcedae8c91b040a488614be1a4", size = 23315, upload-time = "2025-03-14T23:51:03.902Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/75/bd9b7bb966668920f06b200e84454c8f3566b102183bc55c5473d96cb2b9/msal_extensions-1.3.1-py3-none-any.whl", hash = "sha256:96d3de4d034504e969ac5e85bae8106c8373b5c6568e4c8fa7af2eca9dbe6bca", size = 20583, upload-time = "2025-03-14T23:51:03.016Z" },
+]
+
+[[package]]
 name = "msgpack"
 version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4283,11 +4362,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/78/0f/cc6afea3542a5142c5d8fc8211c5e059a8375105d004a41dfa2c7948dbb0/openai-2.53.0-py3-none-any.whl", hash = "sha256:c694ffc747a3c4d1663ef2b07b811315a476164ee5efa3a993967349ebca7618", size = 1659829, upload-time = "2026-08-03T21:41:59.581Z" },
 ]
 
-[package.optional-dependencies]
-realtime = [
-    { name = "websockets" },
-]
-
 [[package]]
 name = "opencv-python-headless"
 version = "5.0.0.93"
@@ -4597,7 +4671,7 @@ wheels = [
 
 [[package]]
 name = "phonic"
-version = "0.32.27"
+version = "0.32.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -4606,9 +4680,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6d/f6/20676f8034bbe856e70641b6ae98fc55ed9ba309d72c5c0e7e184fbd48d8/phonic-0.32.27.tar.gz", hash = "sha256:3141577486e978cbe4e06b2f47797fe5699ec2e86270bae35e1fdb5fd0f92631", size = 201750, upload-time = "2026-09-04T03:49:21.799Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/9a/a60f80b3ecefe91d87498f5683b99268e13a6109de40809b13afad7f3375/phonic-0.32.34.tar.gz", hash = "sha256:e678cd74228cbbe5c3e4915b51873ec060abf8e99f5e4cf829f3d1297b304ae7", size = 213403, upload-time = "2026-09-22T03:52:08.824Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5e/ac/95fb438600d1b47fd004e928ed1eafdbe08d3d0cba5ba2a0c175f7f715bb/phonic-0.32.27-py3-none-any.whl", hash = "sha256:ff264f5c515e879151442f1a36cfa66e6178d480592b8c7c2c3f85bad1ea0f8d", size = 435797, upload-time = "2026-09-04T03:49:20.404Z" },
+    { url = "https://files.pythonhosted.org/packages/54/ed/57c4dc7cdb0476561d995d0e6c7bdef1b62f1a18f94fcae30fa964dcc7d2/phonic-0.32.34-py3-none-any.whl", hash = "sha256:0e9187dc3bb5c0617c3bed209f0529f79a9a39c340cf9e2236a3a205c57c6659", size = 460677, upload-time = "2026-09-22T03:52:07.519Z" },
 ]
 
 [[package]]

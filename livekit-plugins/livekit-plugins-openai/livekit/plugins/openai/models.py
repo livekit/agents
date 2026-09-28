@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
+from livekit.agents.llm._realtime.openai_types import RealtimeModels as RealtimeModels
 from openai.types import AudioModel
 
 # AudioModel covers the transcriptions endpoint; these two are served only over realtime
@@ -58,13 +59,6 @@ ChatModels = Literal[
     "gpt-3.5-turbo-0613",
     "gpt-3.5-turbo-1106",
     "gpt-3.5-turbo-16k-0613",
-]
-RealtimeModels = Literal[
-    "gpt-realtime",
-    "gpt-realtime-1.5",
-    "gpt-realtime-2",
-    "gpt-realtime-2025-08-28",
-    "gpt-4o-realtime-preview",
 ]
 EmbeddingModels = Literal[
     "text-embedding-ada-002", "text-embedding-3-small", "text-embedding-3-large"

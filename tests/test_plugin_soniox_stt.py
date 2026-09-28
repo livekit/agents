@@ -214,7 +214,7 @@ async def test_endpoint_latency_adjustment_level_websocket_config(level: int | N
         def __init__(self, ws: FakeWebSocket) -> None:
             self.ws = ws
 
-        async def ws_connect(self, url: str) -> FakeWebSocket:
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
             return self.ws
 
     ws = FakeWebSocket()
@@ -656,3 +656,92 @@ async def test_recognition_usage_still_reported_on_endpoint_frame():
     ]
     assert events[-1].recognition_usage is not None
     assert events[-1].recognition_usage.audio_duration == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------------------
+# Half-open socket detection (same fix as #7206 for Deepgram v1)
+# ---------------------------------------------------------------------------
+
+
+async def test_socket_is_opened_with_a_heartbeat():
+    """aiohttp defaults `heartbeat` to None, so without it the read side of a
+    half-open socket parks forever and the reconnect in `_run`, which only fires
+    when `_recv_messages_task` ends, never gets a turn."""
+    stream = _make_stream()
+
+    class RecordingWebSocket:
+        async def send_str(self, message: str) -> None:
+            pass
+
+    class RecordingSession:
+        kwargs: dict[str, Any] | None = None
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> RecordingWebSocket:
+            self.kwargs = kwargs
+            return RecordingWebSocket()
+
+    session = RecordingSession()
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.kwargs is not None
+    assert session.kwargs.get("heartbeat") == 30.0
+
+
+async def test_keepalive_write_drop_requests_reconnect():
+    """The keepalive used to catch every exception and return. When no audio is
+    flowing that write is the only thing touching the socket, so swallowing it
+    left the stream on a dead connection with nothing ever logged."""
+    stream = _make_stream()
+
+    class DeadWebSocket:
+        closed = False
+
+        async def send_str(self, message: str) -> None:
+            raise aiohttp.ClientConnectionResetError("Cannot write to closing transport")
+
+    stream._ws = DeadWebSocket()
+
+    await asyncio.wait_for(stream._keepalive_task(), timeout=1.0)
+
+    assert stream._reconnect_event.is_set()
+
+
+async def test_error_frame_ends_recv_loop_and_keeps_the_cause(caplog):
+    """A heartbeat timeout arrives as WSMsgType.ERROR, not as a close frame.
+    Logging it as an unexpected type and continuing only worked because aiohttp
+    happens to report CLOSED next, and it threw away the one value that says
+    why the socket went."""
+    stream = _make_stream()
+
+    class HeartbeatTimeoutWebSocket:
+        closed = False
+
+        def __init__(self) -> None:
+            self.receives = 0
+
+        def exception(self) -> BaseException:
+            return aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
+
+        def __aiter__(self) -> HeartbeatTimeoutWebSocket:
+            return self
+
+        async def __anext__(self) -> _FakeWSMessage:
+            self.receives += 1
+            # yield, so a recv loop that steps over the error instead of ending
+            # fails the receive-count assertion rather than starving the loop
+            await asyncio.sleep(0)
+            if self.receives > 5:
+                raise StopAsyncIteration
+            return _FakeWSMessage("", msg_type=aiohttp.WSMsgType.ERROR)
+
+    ws = HeartbeatTimeoutWebSocket()
+    stream._ws = ws
+
+    with caplog.at_level("WARNING", logger="livekit.plugins.soniox"):
+        await asyncio.wait_for(stream._recv_messages_task(), timeout=1.0)
+
+    assert ws.receives == 1
+    assert stream._reconnect_event.is_set()
+    assert any("No PONG received" in r.getMessage() for r in caplog.records)

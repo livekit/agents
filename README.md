@@ -146,7 +146,7 @@ You'll need the following environment variables for this example:
 
 ---
 
-This code snippet is abbreviated. For the full example, see the [LiveKit docs](https://docs.livekit.io/agents/handoffs/)
+This code snippet is abbreviated. For the full example, see the [LiveKit docs](https://docs.livekit.io/agents/logic/agents-handoffs/)
 
 ```python
 ...

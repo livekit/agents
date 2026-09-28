@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from livekit.agents.llm import ChatContext
+from livekit.agents.llm import ChatContext, ToolChoice, function_tool
 from livekit.plugins.aws import LLM as BedrockLLM
 
 pytestmark = pytest.mark.unit
@@ -97,3 +97,59 @@ async def test_temperature_omitted_for_region_prefix_and_arn() -> None:
 async def test_default_model_still_receives_temperature() -> None:
     config = await _inference_config("amazon.nova-2-lite-v1:0", temperature=0.7)
     assert config["temperature"] == 0.7
+
+
+@function_tool
+async def get_weather(city: str) -> str:
+    """Look up the weather."""
+    return city
+
+
+async def _tool_choice(model: str, tool_choice: ToolChoice) -> dict:
+    instance = BedrockLLM(model=model)
+    stream = instance.chat(chat_ctx=ChatContext(), tools=[get_weather], tool_choice=tool_choice)
+    choice = stream._opts["toolConfig"]["toolChoice"]
+    await stream.aclose()
+    return choice
+
+
+_NAMED: ToolChoice = {"type": "function", "function": {"name": "get_weather"}}
+
+
+async def test_forced_tool_choice_sent_as_auto_for_opus_5_5() -> None:
+    # Claude Opus 5.5 and Fable 5.1 reject forced tool use with a ValidationException
+    # ('tool_choice: type "tool" and "any" are not supported for this model.').
+    for model in (
+        "us.anthropic.claude-opus-5-5",
+        "global.anthropic.claude-opus-5-5",
+        "anthropic.claude-opus-5-5",
+        "us.anthropic.claude-fable-5-1",
+    ):
+        assert await _tool_choice(model, "required") == {"auto": {}}
+        assert await _tool_choice(model, _NAMED) == {"auto": {}}
+
+
+async def test_forced_tool_choice_kept_for_other_models() -> None:
+    # Opus 5 and Fable 5 still accept any/tool; "claude-fable-5" must not match "-5-1".
+    for model in (
+        "us.anthropic.claude-opus-5",
+        "us.anthropic.claude-fable-5",
+        "us.anthropic.claude-sonnet-4-6",
+    ):
+        assert await _tool_choice(model, "required") == {"any": {}}
+        assert await _tool_choice(model, _NAMED) == {"tool": {"name": "get_weather"}}
+
+
+async def test_forced_tool_choice_warning_logged_once(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING"):
+        instance = BedrockLLM(model="us.anthropic.claude-opus-5-5")
+        for _ in range(3):
+            stream = instance.chat(
+                chat_ctx=ChatContext(), tools=[get_weather], tool_choice="required"
+            )
+            await stream.aclose()
+
+    warnings = [r for r in caplog.records if "forced tool_choice" in r.message]
+    assert len(warnings) == 1
+    assert "claude-opus-5-5" not in warnings[0].getMessage()
+    assert warnings[0].__dict__.get("lk.pii.model") == "us.anthropic.claude-opus-5-5"

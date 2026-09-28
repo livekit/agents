@@ -880,7 +880,7 @@ def make_function_call_output(
 ) -> FunctionCallResult:
     """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
     from .chat_context import FunctionCallOutput
-    from .tool_context import StopResponse, ToolError
+    from .tool_context import StopResponse, ToolError, ToolResult
 
     if isinstance(output, BaseException):
         exception = output
@@ -927,6 +927,12 @@ def make_function_call_output(
             raw_exception=exception,
         )
 
+    raw_output = output
+    reply_required = True
+    if isinstance(output, ToolResult):
+        reply_required = output.reply_required
+        output = output.output
+
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
@@ -940,7 +946,7 @@ def make_function_call_output(
                 output="the tool returned an invalid output",
                 is_error=True,
             ),
-            raw_output=output,
+            raw_output=raw_output,
             raw_exception=None,
         )
 
@@ -951,8 +957,9 @@ def make_function_call_output(
             call_id=fnc_call.call_id,
             output="" if output is None else str(output),
             is_error=False,
+            reply_required=reply_required,
         ),
-        raw_output=output,
+        raw_output=raw_output,
         raw_exception=None,
     )
 
