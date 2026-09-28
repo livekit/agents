@@ -823,6 +823,47 @@ async def test_stream_create_discarded_when_superseded() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.real_time
+async def test_cancelled_aclose_disposes_inflight_created_stream() -> None:
+    """Cancelling aclose() while a creation is inside the worker thread must not orphan
+    the stream the worker returns: the creators settle (and discard it) first."""
+    room = _FakeRoom()
+    audio_input = _make_audio_input_stream(room, noise_cancellation=None)
+    audio_input.set_participant("test-user")
+    track, publication, participant = _make_track_available_args()
+    rtc_stream = _MockAudioStream()
+    creation_in_flight = threading.Event()
+
+    def fake_from_track(**kwargs: object) -> _MockAudioStream:
+        creation_in_flight.set()
+        time.sleep(0.15)
+        return rtc_stream
+
+    with patch("livekit.rtc.AudioStream.from_track", side_effect=fake_from_track):
+        assert audio_input._on_track_available(track, publication, participant)
+        create_task = audio_input._create_task
+        assert create_task is not None
+
+        for _ in range(500):
+            if creation_in_flight.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert creation_in_flight.is_set()
+
+        aclose_task = asyncio.create_task(audio_input.aclose())
+        await asyncio.sleep(0.05)
+        assert not aclose_task.done()
+        aclose_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await aclose_task
+
+        await asyncio.wait_for(create_task, timeout=5)
+        assert rtc_stream.ended.is_set()
+        assert audio_input._stream is None
+        assert not audio_input._create_tasks
+
+
+@pytest.mark.asyncio
 async def test_stale_track_unsubscribe_does_not_close_replacement() -> None:
     room = _FakeRoom()
     audio_input = _make_audio_input_stream(room, noise_cancellation=None)

@@ -153,9 +153,17 @@ class _ParticipantInputStream(Generic[T], ABC):
         self._closed = True
 
         # let in-flight creations settle first: they discard their stream and run
-        # the deferred processor cleanup before we tear the rest down
+        # the deferred processor cleanup before we tear the rest down. shield, because
+        # a creator may be inside asyncio.to_thread, which cannot be interrupted: if
+        # cancelling the teardown cancelled them, their worker would still return a
+        # stream that nothing closes. settle them ourselves, then propagate.
         if self._create_tasks:
-            await asyncio.gather(*list(self._create_tasks), return_exceptions=True)
+            settle = asyncio.gather(*list(self._create_tasks), return_exceptions=True)
+            try:
+                await asyncio.shield(settle)
+            except asyncio.CancelledError:
+                await settle
+                raise
 
         stream = self._stream
         self._stream = None
