@@ -1170,6 +1170,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                     self._decision_model.off("metrics_collected", self._on_metrics_collected)
                 if self._activity is not None:
                     await self._activity.aclose()
+                    self._activity = None
                 if isinstance(e, Exception):
                     trace_utils.record_exception(session_start_span, e)
                 raise

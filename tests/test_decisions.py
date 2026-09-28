@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from contextlib import AsyncExitStack, nullcontext
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -290,42 +291,61 @@ async def test_failed_start_does_not_collect_later_decision_usage(monkeypatch, e
 
 
 @pytest.mark.parametrize("error", [RuntimeError("startup failed"), asyncio.CancelledError()])
-@pytest.mark.parametrize("stage", ["activity_initialization", "after_activity_initialization"])
-async def test_failed_activity_start_does_not_leave_a_decision_listener(
-    monkeypatch, error, stage
+@pytest.mark.parametrize("stage", ["activity_initialization", "session_host_start"])
+@pytest.mark.parametrize("with_decisions", [False, True])
+@pytest.mark.no_concurrent
+async def test_failed_start_cleans_up_and_can_retry(
+    monkeypatch,
+    error,
+    stage,
+    with_decisions: bool,
 ) -> None:
     from livekit.agents.voice.agent_activity import AgentActivity
 
     model = ControlledModel()
-    session = session_for(model)
+    session = session_for(model if with_decisions else None)
+    original = agent() if with_decisions else Receptionist(instructions="Help the caller.")
 
     async def fail_scheduling(self):
         raise error
 
     update_activity = session._update_activity_task
 
-    async def fail_after_initialization(old_task, agent):
+    async def install_failing_host(old_task, agent):
         await update_activity(old_task, agent)
-        raise error
+        session._session_host = SimpleNamespace(start=AsyncMock(side_effect=error))
 
-    if stage == "activity_initialization":
-        monkeypatch.setattr(AgentActivity, "_resume_scheduling_task", fail_scheduling)
-    else:
-        monkeypatch.setattr(session, "_update_activity_task", fail_after_initialization)
-    events = []
-    session.on("decisions_completed", events.append)
-    try:
-        with pytest.raises(type(error)):
-            await asyncio.create_task(session.start(agent()))
+    events: asyncio.Queue[decisions.DecisionsCompletedEvent] = asyncio.Queue()
+    session.on("decisions_completed", events.put_nowait)
+    async with session:
+        with monkeypatch.context() as patch:
+            if stage == "activity_initialization":
+                patch.setattr(AgentActivity, "_resume_scheduling_task", fail_scheduling)
+            else:
+                patch.setattr(session, "_update_activity_task", install_failing_host)
+            with pytest.raises(type(error)):
+                await session.start(original)
         assert not session._started
         await session.aclose()
         add_user(session, "Please call me back.")
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(model.calls.get(), 0.02)
-        assert events == []
-    finally:
-        if session._activity is not None:
-            await session._activity.aclose()
+        assert events.empty()
+
+        await session.start(original)
+        await asyncio.wait_for(session.run(user_input="Hello after retrying."), 2)
+        assert session.current_agent is original
+        assert any(
+            item.type == "message" and item.text_content == "Hello after retrying."
+            for item in session.history.items
+        )
+        if with_decisions:
+            _, _, answer = await next_call(model)
+            answer.set_result(0.9)
+            await asyncio.wait_for(events.get(), 2)
+            assert events.empty() and model.calls.empty()
+            usage = next(u for u in session.usage.model_usage if u.type == "decision_usage")
+            assert usage.total_requests == 1
 
 
 async def test_overlap_keeps_running_and_latest_pending_snapshot() -> None:
