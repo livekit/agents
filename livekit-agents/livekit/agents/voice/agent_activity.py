@@ -4050,9 +4050,9 @@ class AgentActivity(RecognitionHooks):
             and llm_task.exception() is None
             and llm_task.result()
             and not llm_gen_data.generated_text.strip()
-            and not llm_gen_data.generated_functions
+            and not tool_output.output
         ):
-            message = "LLM returned an empty completion (no text, no tool calls)"
+            message = "LLM returned an empty completion (no text or handled tool calls)"
             logger.warning(
                 message,
                 extra={"speech_id": speech_handle.id, "llm_generation_id": llm_gen_data.id},

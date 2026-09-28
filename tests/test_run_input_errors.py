@@ -276,6 +276,53 @@ async def test_blank_custom_llm_reply_emits_recoverable_error(reply):
 
 
 @pytest.mark.asyncio
+async def test_ignored_tool_only_reply_emits_recoverable_error():
+    """A rejected tool call cannot count as an answer to the user."""
+    from livekit.agents import function_tool
+    from livekit.agents.llm import FunctionToolCall
+
+    from .fake_llm import FakeLLMResponse
+
+    executions = 0
+
+    class ToolAgent(Agent):
+        @function_tool
+        async def look_up(self) -> str:
+            """Look up a value for the user."""
+            nonlocal executions
+            executions += 1
+            return "lookup complete"
+
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="hello",
+                content="",
+                ttft=0,
+                duration=0.01,
+                tool_calls=[FunctionToolCall(name="look_up", arguments="{}", call_id="call_1")],
+            )
+        ]
+    )
+    session = AgentSession(llm=llm)
+    errors = []
+    session.on("error", errors.append)
+
+    try:
+        await session.start(agent=ToolAgent(instructions="test agent"))
+        handle = session.generate_reply(user_input="hello", tool_choice="none")
+        await asyncio.wait_for(handle, timeout=10.0)
+
+        assert executions == 0
+        assert len(errors) == 1
+        assert errors[0].source is llm
+        assert errors[0].error.recoverable is True
+        assert "empty" in str(errors[0].error.error).lower()
+    finally:
+        await session.aclose()
+
+
+@pytest.mark.asyncio
 async def test_failed_llm_does_not_emit_empty_completion_error():
     """A provider failure is already surfaced and is not a completed blank response."""
     session = AgentSession(
