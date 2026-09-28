@@ -862,3 +862,33 @@ def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+def test_gemini_3_8_live_accepted_on_vertex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """gemini-3.8-live is served by both APIs, so vertexai=True must not be rejected."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    model = RealtimeModel(model="gemini-3.8-live", vertexai=True, project="p", location="eu")
+    assert model._opts.vertexai
+    assert model._opts.location == "eu"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.8-live-extended-thinking",
+        "gemini-3.1-flash-live-preview",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+    ],
+)
+def test_gemini_api_only_models_still_rejected_on_vertex(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    with pytest.raises(ValueError, match="is a Gemini API model"):
+        RealtimeModel(model=model, vertexai=True, project="p", location="us-central1")
+
+
+def test_vertex_only_model_still_rejected_on_gemini_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    with pytest.raises(ValueError, match="is a VertexAI model"):
+        RealtimeModel(model="gemini-live-2.5-flash-native-audio", vertexai=False)

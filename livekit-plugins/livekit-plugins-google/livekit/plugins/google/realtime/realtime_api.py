@@ -67,6 +67,7 @@ MAX_TOOL_CALL_REJECTIONS = 3
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
         "gemini-live-2.5-flash-native-audio",
+        "gemini-3.8-live",
     }
 )
 
@@ -107,11 +108,15 @@ def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
     Validate that the model name matches the API being used.
 
     Raises ValueError if a known model is used with the wrong API configuration.
+    Models served by both APIs are listed in both sets and are never rejected.
 
     Args:
         model: The model name being used
         use_vertexai: Whether VertexAI is enabled
     """
+    if model in KNOWN_GEMINI_API_MODELS and model in KNOWN_VERTEXAI_MODELS:
+        return
+
     if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
         raise ValueError(
             f"Model '{model}' is a Gemini API model, but vertexai=True. "
