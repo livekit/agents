@@ -34,6 +34,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils import is_given
 
+from .log import logger
 from .models import ChatModels
 from .utils import CACHE_CONTROL_EPHEMERAL
 
@@ -44,6 +45,10 @@ _NO_PREFILL_PATTERNS = ("claude-sonnet-4-6", "claude-opus-4-6")
 def _model_disables_prefill(model: str) -> bool:
     """Return True if the model does not support assistant message prefilling."""
     return any(model.startswith(p) for p in _NO_PREFILL_PATTERNS)
+
+
+# These models reject a forced tool_choice ("any" or "tool").
+_NO_FORCED_TOOL_CHOICE_PATTERNS = ("claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1")
 
 
 @dataclass
@@ -101,11 +106,14 @@ class LLM(llm.LLM):
         temperature (float, optional): The temperature for the Anthropic API. Defaults to None.
         parallel_tool_calls (bool, optional): Whether to parallelize tool calls. Defaults to None.
         tool_choice (ToolChoice, optional): The tool choice for the Anthropic API. Defaults to "auto".
+            Forced choices ("required" or a named tool) are sent as "auto" (with a warning) for
+            models that reject them, e.g. Claude Opus 5.5 and Fable 5.1.
         caching (Literal["ephemeral"], optional): If set to "ephemeral", caching will be enabled for the system prompt, tools, and chat history.
         """  # noqa: E501
 
         super().__init__()
 
+        self._forced_tool_choice_warned = False
         self._opts = _LLMOptions(
             model=model,
             user=user,
@@ -208,6 +216,16 @@ class LLM(llm.LLM):
                         extra["tools"] = []
                         anthropic_tool_choice = None
                 if anthropic_tool_choice is not None:
+                    forced = anthropic_tool_choice["type"] in ("any", "tool")
+                    if forced and self._opts.model.startswith(_NO_FORCED_TOOL_CHOICE_PATTERNS):
+                        if not self._forced_tool_choice_warned:
+                            logger.warning(
+                                "anthropic llm: this model does not support a forced "
+                                "tool_choice; sending 'auto' instead",
+                                extra={"lk.pii.model": self._opts.model},
+                            )
+                            self._forced_tool_choice_warned = True
+                        anthropic_tool_choice = {"type": "auto"}
                     parallel_tool_calls = (
                         parallel_tool_calls
                         if is_given(parallel_tool_calls)
