@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
+from opentelemetry import trace
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -18,6 +19,7 @@ from .._exceptions import APIError, APITimeoutError
 from ..llm import ChatContext
 from ..metrics import DecisionMetrics
 from ..metrics.base import Metadata
+from ..telemetry import gen_ai, trace_types, tracer
 from ..types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 DecisionKind = Literal["probability", "choice", "score"]
@@ -88,6 +90,10 @@ DecisionResult = Annotated[
 
 class DecisionResponse(BaseModel):
     results: dict[str, DecisionResult]
+    errors: dict[str, str] = Field(default_factory=dict)
+    """Errors keyed by decision name. Failed decisions are absent from results."""
+    model: str = ""
+    provider: str = ""
     request_id: str = ""
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
@@ -96,6 +102,9 @@ class DecisionResponse(BaseModel):
 class DecisionsCompletedEvent(BaseModel):
     type: Literal["decisions_completed"] = "decisions_completed"
     results: dict[str, DecisionResult]
+    errors: dict[str, str] = Field(default_factory=dict)
+    model: str = ""
+    provider: str = ""
     source_message_id: str
     agent_id: str
     activity_id: str
@@ -114,15 +123,29 @@ class DecisionOptions(TypedDict, total=False):
     """Evaluate every N committed, non-empty user text turns. Default: 1."""
     max_context_turns: int
     """Include the last N user turns and intervening assistant text, ending at the
-    triggering user message. Instructions, tools, and non-text content are excluded.
+    triggering user message. By default, tools and other context events are excluded.
     Default: 6. Context can include conversation from before an agent handoff.
+    """
+    include_context_events: bool
+    """Include tool calls, tool outputs, handoffs, and interruption metadata.
+    Default: False. Instructions and non-text content remain excluded.
+    """
+    allow_partial: bool
+    """Emit valid results and per-decision errors when some answers fail validation.
+    Default: False, which rejects the whole batch.
     """
     timeout: float
     """Maximum seconds per background evaluation, including retries. Default: 10."""
 
 
 def _resolve_options(options: DecisionOptions | None) -> DecisionOptions:
-    resolved = DecisionOptions(turn_interval=1, max_context_turns=6, timeout=10.0)
+    resolved = DecisionOptions(
+        turn_interval=1,
+        max_context_turns=6,
+        timeout=10.0,
+        include_context_events=False,
+        allow_partial=False,
+    )
     resolved.update(options or {})
     for name in ("turn_interval", "max_context_turns"):
         value = resolved[name]
@@ -161,39 +184,49 @@ def _validate_decisions(
 
 
 def _validate_response(response: DecisionResponse, decisions: Mapping[str, Decision]) -> None:
-    if response.results.keys() != decisions.keys():
-        raise APIError("decision response must answer every requested decision", retryable=False)
+    if (response.results.keys() | response.errors.keys()) - decisions.keys():
+        raise APIError("decision response contains unknown decisions", retryable=False)
+    if response.results.keys() & response.errors.keys():
+        raise APIError("decision response contains both a result and an error", retryable=False)
     for name, decision in decisions.items():
-        result = response.results[name]
-        if result.kind != _kind(decision):
-            raise APIError(f"wrong result kind for decision {name!r}", retryable=False)
-        if isinstance(decision, Choice) and isinstance(result, ChoiceResult):
-            if result.value not in decision.options:
-                raise APIError(f"unknown choice for decision {name!r}", retryable=False)
-            if result.probabilities is not None:
-                if result.probabilities.keys() != decision.options.keys():
-                    raise APIError("choice distribution does not match options", retryable=False)
-                if result.probabilities[result.value] != max(result.probabilities.values()):
-                    raise APIError("choice is not a most probable option", retryable=False)
-        if isinstance(decision, Score) and isinstance(result, ScoreResult):
-            if result.levels != decision.levels or set(result.probabilities) != set(
-                range(len(decision.levels))
-            ):
-                raise APIError("score distribution does not match levels", retryable=False)
-            if result.value > len(decision.levels) - 1:
-                raise APIError("score is outside the defined scale", retryable=False)
-            expected_score = sum(index * p for index, p in result.probabilities.items())
-            score_tolerance = (
-                _ROUNDING_ERROR * (1 + sum(range(len(decision.levels)))) + _FLOAT_EPSILON
-            )
-            if not math.isclose(result.value, expected_score, abs_tol=score_tolerance):
-                raise APIError("score must be the expected level index", retryable=False)
-        if isinstance(result, (ChoiceResult, ScoreResult)) and result.probabilities is not None:
-            probability_sum_tolerance = _ROUNDING_ERROR * len(result.probabilities) + _FLOAT_EPSILON
-            if not math.isclose(
-                sum(result.probabilities.values()), 1.0, abs_tol=probability_sum_tolerance
-            ):
-                raise APIError("decision probabilities must sum to one", retryable=False)
+        if name not in response.results:
+            response.errors.setdefault(name, "missing decision answer")
+            continue
+        try:
+            _validate_result(response.results[name], decision)
+        except APIError as error:
+            del response.results[name]
+            response.errors[name] = error.message
+
+
+def _validate_result(result: DecisionResult, decision: Decision) -> None:
+    if result.kind != _kind(decision):
+        raise APIError("wrong result kind", retryable=False)
+    if isinstance(decision, Choice) and isinstance(result, ChoiceResult):
+        if result.value not in decision.options:
+            raise APIError("unknown choice", retryable=False)
+        if result.probabilities is not None:
+            if result.probabilities.keys() != decision.options.keys():
+                raise APIError("choice distribution does not match options", retryable=False)
+            if result.probabilities[result.value] != max(result.probabilities.values()):
+                raise APIError("choice is not a most probable option", retryable=False)
+    if isinstance(decision, Score) and isinstance(result, ScoreResult):
+        if result.levels != decision.levels or set(result.probabilities) != set(
+            range(len(decision.levels))
+        ):
+            raise APIError("score distribution does not match levels", retryable=False)
+        if result.value > len(decision.levels) - 1:
+            raise APIError("score is outside the defined scale", retryable=False)
+        expected_score = sum(index * p for index, p in result.probabilities.items())
+        score_tolerance = _ROUNDING_ERROR * (1 + sum(range(len(decision.levels)))) + _FLOAT_EPSILON
+        if not math.isclose(result.value, expected_score, abs_tol=score_tolerance):
+            raise APIError("score must be the expected level index", retryable=False)
+    if isinstance(result, (ChoiceResult, ScoreResult)) and result.probabilities is not None:
+        probability_sum_tolerance = _ROUNDING_ERROR * len(result.probabilities) + _FLOAT_EPSILON
+        if not math.isclose(
+            sum(result.probabilities.values()), 1.0, abs_tol=probability_sum_tolerance
+        ):
+            raise APIError("decision probabilities must sum to one", retryable=False)
 
 
 class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
@@ -224,24 +257,44 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
     def provider(self) -> str:
         return "unknown"
 
+    @tracer.start_as_current_span("decision_model.evaluate")
     async def evaluate(
         self,
         *,
         chat_ctx: ChatContext,
         decisions: Mapping[str, Decision],
+        allow_partial: bool = False,
+        include_context_events: bool = False,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> DecisionResponse:
+        """Evaluate a batch, rejecting invalid answers unless ``allow_partial`` is set.
+
+        With partial results, each requested name appears in either ``results`` or
+        ``errors``. Request failures still raise. ``include_context_events`` includes
+        tools, handoffs, and interruption metadata in the provider input.
+        """
+        span = trace.get_current_span()
+        span.set_attributes(
+            {
+                trace_types.ATTR_GEN_AI_REQUEST_MODEL: self.model,
+                trace_types.ATTR_GEN_AI_PROVIDER_NAME: self.provider,
+                "lk.decision_count": len(decisions),
+            }
+        )
         definitions = copy.deepcopy(dict(decisions))
         _validate_decisions(definitions, capabilities=self.capabilities)
         if not definitions:
-            return DecisionResponse(results={})
+            return DecisionResponse(results={}, model=self.model, provider=self.provider)
 
         started = time.perf_counter()
         for attempt in range(conn_options.max_retry + 1):
             try:
                 response = await asyncio.wait_for(
                     self._evaluate_impl(
-                        chat_ctx=chat_ctx, decisions=definitions, conn_options=conn_options
+                        chat_ctx=chat_ctx,
+                        decisions=definitions,
+                        include_context_events=include_context_events,
+                        conn_options=conn_options,
                     ),
                     timeout=conn_options.timeout,
                 )
@@ -256,6 +309,20 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                 continue
 
             _validate_response(response, definitions)
+            response.model = response.model or self.model
+            response.provider = response.provider or self.provider
+            gen_ai.set_response_attributes(
+                span, response_id=response.request_id, model=response.model
+            )
+            span.set_attribute("lk.decision_error_count", len(response.errors))
+            if response.input_tokens is not None:
+                span.set_attribute(
+                    trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS, response.input_tokens
+                )
+            if response.output_tokens is not None:
+                span.set_attribute(
+                    trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS, response.output_tokens
+                )
             self.emit(
                 "metrics_collected",
                 DecisionMetrics(
@@ -265,9 +332,15 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                     duration=time.perf_counter() - started,
                     input_tokens=response.input_tokens,
                     output_tokens=response.output_tokens,
-                    metadata=Metadata(model_name=self.model, model_provider=self.provider),
+                    metadata=Metadata(model_name=response.model, model_provider=response.provider),
                 ),
             )
+            if response.errors and not allow_partial:
+                raise APIError(
+                    "invalid decision answers: "
+                    + "; ".join(f"{name}: {error}" for name, error in response.errors.items()),
+                    retryable=False,
+                )
             return response
         raise RuntimeError("unreachable")
 
@@ -277,6 +350,7 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
         *,
         chat_ctx: ChatContext,
         decisions: Mapping[str, Decision],
+        include_context_events: bool,
         conn_options: APIConnectOptions,
     ) -> DecisionResponse: ...
 

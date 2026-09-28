@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from livekit.agents import Agent, AgentSession, APIError, APITimeoutError, decisions
 from livekit.agents.decisions import DecisionResponse, ProbabilityResult
-from livekit.agents.llm import ChatContext, ChatMessage, Toolset
+from livekit.agents.llm import (
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    Toolset,
+)
 from livekit.agents.types import APIConnectOptions
 from livekit.agents.voice.events import AgentEvent
 
@@ -31,6 +39,7 @@ class ControlledModel(decisions.DecisionModel):
         *,
         chat_ctx: ChatContext,
         decisions: Mapping[str, decisions.Decision],
+        include_context_events: bool,
         conn_options: APIConnectOptions,
     ) -> decisions.DecisionResponse:
         answer: asyncio.Future[float] = asyncio.get_running_loop().create_future()
@@ -206,6 +215,45 @@ async def test_failed_start_does_not_collect_later_decision_usage(monkeypatch, e
     assert session.usage.model_usage == []
 
 
+@pytest.mark.parametrize("error", [RuntimeError("startup failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize("stage", ["activity_initialization", "after_activity_initialization"])
+async def test_failed_activity_start_does_not_leave_a_decision_listener(
+    monkeypatch, error, stage
+) -> None:
+    from livekit.agents.voice.agent_activity import AgentActivity
+
+    model = ControlledModel()
+    session = session_for(model)
+
+    async def fail_scheduling(self):
+        raise error
+
+    update_activity = session._update_activity_task
+
+    async def fail_after_initialization(old_task, agent):
+        await update_activity(old_task, agent)
+        raise error
+
+    if stage == "activity_initialization":
+        monkeypatch.setattr(AgentActivity, "_resume_scheduling_task", fail_scheduling)
+    else:
+        monkeypatch.setattr(session, "_update_activity_task", fail_after_initialization)
+    events = []
+    session.on("decisions_completed", events.append)
+    try:
+        with pytest.raises(type(error)):
+            await asyncio.create_task(session.start(agent()))
+        assert not session._started
+        await session.aclose()
+        add_user(session, "Please call me back.")
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(model.calls.get(), 0.02)
+        assert events == []
+    finally:
+        if session._activity is not None:
+            await session._activity.aclose()
+
+
 async def test_overlap_keeps_running_and_latest_pending_snapshot() -> None:
     model = ControlledModel()
     async with session_for(model) as session:
@@ -289,6 +337,97 @@ async def test_context_window_starts_with_user_and_ends_at_source_message(
         )
         assert [item.text_content for item in context.items] == expected
         answer.set_result(0.5)
+
+
+@pytest.mark.parametrize("include_context_events", [False, True])
+async def test_background_context_events_respect_window_and_snapshot_isolation(
+    include_context_events: bool,
+) -> None:
+    model = ControlledModel()
+    async with session_for(
+        model, max_context_turns=2, include_context_events=include_context_events
+    ) as session:
+        session.history.add_message(role="user", content="Old turn", created_at=1)
+        session.history.insert(
+            FunctionCall(call_id="old", name="old", arguments="{}", created_at=2)
+        )
+        session.history.add_message(role="user", content="Book a table", created_at=3)
+        call = FunctionCall(call_id="new", name="book", arguments="{}", created_at=4)
+        output = FunctionCallOutput(call_id="new", output="Full", is_error=False, created_at=5)
+        handoff = AgentHandoff(old_agent_id="booking", new_agent_id="receptionist", created_at=6)
+        session.history.insert([call, output, handoff])
+        session.history.insert(
+            ChatMessage(role="assistant", content=["I can offer"], interrupted=True, created_at=7)
+        )
+        await session.start(agent())
+        session._conversation_item_added(
+            ChatMessage(role="user", content=["Please call me back"], created_at=8)
+        )
+        context, _, answer = await next_call(model)
+        call.arguments = '{"changed": true}'
+        output.output = "Changed"
+        handoff.new_agent_id = "changed"
+        if include_context_events:
+            assert [item.type for item in context.items] == [
+                "message",
+                "function_call",
+                "function_call_output",
+                "agent_handoff",
+                "message",
+                "message",
+            ]
+            assert context.items[1].arguments == "{}"
+            assert context.items[2].output == "Full"
+            assert context.items[3].new_agent_id == "receptionist"
+            assert context.items[4].interrupted is True
+        else:
+            assert all(item.type == "message" for item in context.items)
+        assert context.items[0].text_content == "Book a table"
+        assert context.items[-1].text_content == "Please call me back"
+        answer.set_result(0.5)
+
+
+@pytest.mark.parametrize("allow_partial", [False, True])
+async def test_background_partial_results_and_model_identity(
+    monkeypatch, allow_partial: bool
+) -> None:
+    model = ControlledModel()
+    evaluate = AsyncMock(
+        return_value=DecisionResponse(
+            results={"handoff": ProbabilityResult(value=0.95)},
+            errors={"tag": "invalid answer"},
+            model="resolved-model",
+            provider="test-provider",
+            input_tokens=10,
+            output_tokens=2,
+        )
+    )
+    monkeypatch.setattr(model, "_evaluate_impl", evaluate)
+    async with session_for(model, allow_partial=allow_partial) as session:
+        events = []
+        session.on("decisions_completed", events.append)
+        await session.start(
+            Agent(
+                instructions="Help the caller.",
+                decisions={
+                    "handoff": decisions.Probability("Wants a human?"),
+                    "tag": decisions.Probability("Wants a booking?"),
+                },
+            )
+        )
+        source = add_user(session, "Please call me back.")
+        await session._activity._decision_runner._task
+        assert len(events) == int(allow_partial)
+        if allow_partial:
+            [event] = events
+            assert set(event.results) == {"handoff"}
+            assert event.errors == {"tag": "invalid answer"}
+            assert (event.model, event.provider) == ("resolved-model", "test-provider")
+            assert event.source_message_id == source.id
+            assert TypeAdapter(AgentEvent).validate_json(event.model_dump_json()) == event
+        [usage] = session.usage.model_usage
+        assert usage.input_tokens == 10
+        assert usage.total_requests == 1
 
 
 @pytest.mark.parametrize("max_retry", [0, 1])

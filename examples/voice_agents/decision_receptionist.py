@@ -24,8 +24,9 @@ class Receptionist(Agent):
                 "and billing questions. Ask for the date, time, and party size for a booking. "
                 "You can request a callback from a staff member. If the caller wants a "
                 "person, offer a callback instead of a live transfer. When they request "
-                "or accept a callback, acknowledge their request briefly. Callback requests "
-                "are recorded automatically. Do not collect contact details, promise a "
+                "or accept a callback, acknowledge their request briefly. Requests are "
+                "processed in the background. Do not say a request has been recorded until "
+                "you receive explicit confirmation. Do not collect contact details, promise a "
                 "callback time, or claim to book a table. Keep spoken replies brief."
             ),
             decisions={
@@ -118,6 +119,10 @@ async def entrypoint(ctx: JobContext) -> None:
         if result.kind == "probability" and result.value >= 0.9:
             callback_logged = True
             log_callback_desire(source_message_id=ev.source_message_id, probability=result.value)
+            session.generate_reply(
+                instructions="The callback request was successfully recorded. "
+                "Briefly confirm this to the caller."
+            )
 
     await session.start(agent=Receptionist(), room=ctx.room)
 

@@ -6,7 +6,13 @@ import aiohttp
 import pytest
 
 from livekit.agents import APIError, APIStatusError, decisions
-from livekit.agents.llm import ChatContext
+from livekit.agents.llm import (
+    AgentHandoff,
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+)
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins import typesafe
 
@@ -21,6 +27,7 @@ QUESTIONS = {
 
 def response_body():
     return {
+        "model": "typesafe/jev-1.13.0",
         "answers": {
             "human": {"type": "noul", "noul": 0.9},
             "intent": {
@@ -33,6 +40,7 @@ def response_body():
                 "type": "score",
                 "score": 1.4,
                 "probabilities": {"0": 0.1, "1": 0.4, "2": 0.5},
+                "legend": {"0": "Calm", "1": "Annoyed", "2": "Angry"},
                 "confidence": 0.1,
             },
         },
@@ -75,7 +83,11 @@ async def test_jev_batches_all_kinds_and_preserves_distributions_and_usage() -> 
     assert score.value == 1.4
     assert score.probabilities == {0: 0.1, 1: 0.4, 2: 0.5}
     assert response.request_id == "request-1"
+    assert response.model == "typesafe/jev-1.13.0"
+    assert response.provider == "openrouter"
+    assert response.errors == {}
     assert metrics[0].input_tokens == 50
+    assert metrics[0].metadata.model_name == response.model
     assert metrics[0].metadata.model_provider == "openrouter"
 
 
@@ -125,6 +137,7 @@ async def test_five_level_score_rounding_includes_level_weights() -> None:
             "Frustration?", levels=["Calm", "Uneasy", "Annoyed", "Angry", "Furious"]
         )
     }
+    body["answers"]["frustration"]["legend"] = dict(enumerate(questions["frustration"].levels))
     model, _ = model_for(body)
     response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=questions)
     assert response.results.keys() == questions.keys()
@@ -170,10 +183,13 @@ async def test_invalid_response_is_rejected_as_a_whole(failure: str) -> None:
     http.post.assert_called_once()
 
 
-async def test_auth_errors_are_not_retried() -> None:
+@pytest.mark.parametrize("allow_partial", [False, True])
+async def test_auth_errors_are_not_retried(allow_partial: bool) -> None:
     model, http = model_for({}, status=401)
     with pytest.raises(APIStatusError) as error:
-        await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+        await model.evaluate(
+            chat_ctx=ChatContext.empty(), decisions=QUESTIONS, allow_partial=allow_partial
+        )
     assert error.value.status_code == 401
     http.post.assert_called_once()
 
@@ -187,3 +203,103 @@ async def test_retryable_errors_obey_connection_options() -> None:
             conn_options=APIConnectOptions(max_retry=1, retry_interval=0),
         )
     assert http.post.call_count == 2
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed", "wrong_kind", "bad_score"])
+async def test_partial_results_preserve_valid_answers_and_usage(failure: str) -> None:
+    body = response_body()
+    if failure == "missing":
+        del body["answers"]["frustration"]
+    elif failure == "malformed":
+        body["answers"]["frustration"] = {"type": "score"}
+    elif failure == "wrong_kind":
+        body["answers"]["frustration"] = {"type": "noul", "noul": 0.5}
+    else:
+        body["answers"]["frustration"]["score"] = 2.0
+    model, http = model_for(body)
+    response = await model.evaluate(
+        chat_ctx=ChatContext.empty(), decisions=QUESTIONS, allow_partial=True
+    )
+    assert set(response.results) == {"human", "intent"}
+    assert set(response.errors) == {"frustration"}
+    assert response.errors["frustration"]
+    assert response.input_tokens == 50
+    http.post.assert_called_once()
+
+
+@pytest.mark.parametrize("legend", [None, {"0": "Angry", "1": "Annoyed", "2": "Calm"}])
+async def test_missing_or_mismatched_legend_is_rejected(legend) -> None:
+    body = response_body()
+    if legend is None:
+        del body["answers"]["frustration"]["legend"]
+    else:
+        body["answers"]["frustration"]["legend"] = legend
+    model, _ = model_for(body)
+    with pytest.raises(APIError):
+        await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+    response = await model.evaluate(
+        chat_ctx=ChatContext.empty(), decisions=QUESTIONS, allow_partial=True
+    )
+    assert set(response.errors) == {"frustration"}
+    assert set(response.results) == {"human", "intent"}
+
+
+async def test_legend_key_order_does_not_change_level_order() -> None:
+    body = response_body()
+    body["answers"]["frustration"]["legend"] = {"2": "Angry", "0": "Calm", "1": "Annoyed"}
+    model, _ = model_for(body)
+    response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+    assert response.results["frustration"].levels == ["Calm", "Annoyed", "Angry"]
+
+
+async def test_model_identity_falls_back_to_configured_model() -> None:
+    body = response_body()
+    del body["model"]
+    model, _ = model_for(body)
+    response = await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
+    assert (response.model, response.provider) == (model.model, model.provider)
+
+
+async def test_partial_results_can_report_every_answer_missing() -> None:
+    model, _ = model_for({"answers": {}})
+    response = await model.evaluate(
+        chat_ctx=ChatContext.empty(), decisions=QUESTIONS, allow_partial=True
+    )
+    assert response.results == {}
+    assert set(response.errors) == set(QUESTIONS)
+
+
+@pytest.mark.parametrize("body", [{}, {"answers": []}, {"answers": {"unknown": None}}])
+async def test_partial_results_do_not_accept_invalid_batch_structure(body) -> None:
+    model, _ = model_for(body)
+    with pytest.raises(APIError):
+        await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS, allow_partial=True)
+
+
+@pytest.mark.parametrize("include_context_events", [False, True])
+async def test_context_events_are_opt_in(include_context_events: bool) -> None:
+    context = ChatContext(
+        [
+            ChatMessage(role="user", content=["Book a table."]),
+            FunctionCall(call_id="call-1", name="book", arguments='{"party_size": 2}'),
+            FunctionCallOutput(call_id="call-1", name="book", output="No tables", is_error=False),
+            AgentHandoff(old_agent_id="booking", new_agent_id="receptionist"),
+            ChatMessage(role="assistant", content=["I can offer"], interrupted=True),
+        ]
+    )
+    model, http = model_for(response_body())
+    await model.evaluate(
+        chat_ctx=context, decisions=QUESTIONS, include_context_events=include_context_events
+    )
+    state = http.post.call_args.kwargs["json"]["state"]
+    if include_context_events:
+        assert [item["type"] for item in state] == [item.type for item in context.items]
+        assert state[1]["arguments"] == '{"party_size": 2}'
+        assert state[2]["output"] == "No tables"
+        assert state[3]["new_agent_id"] == "receptionist"
+        assert state[4]["interrupted"] is True
+    else:
+        assert state == [
+            {"role": "user", "content": "Book a table."},
+            {"role": "assistant", "content": "I can offer"},
+        ]

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from .. import utils
 from ..decisions import DecisionModel, DecisionsCompletedEvent
-from ..llm import ChatContext, ChatMessage
+from ..llm import ChatContext, ChatItem, ChatMessage
 from ..log import logger
 from ..telemetry import tracer
 from ..utils import aio
@@ -61,16 +61,22 @@ class _DecisionRunner:
         if source_index is None:
             return ChatContext.empty()
 
-        messages: list[ChatMessage] = []
+        items: list[ChatItem] = []
         user_turns = 0
         for index in range(source_index, -1, -1):
             item = history.items[index]
             if not isinstance(item, ChatMessage):
+                if self._options["include_context_events"] and item.type in (
+                    "function_call",
+                    "function_call_output",
+                    "agent_handoff",
+                ):
+                    items.append(item.model_copy(deep=True))
                 continue
             if item.role not in ("user", "assistant") or not (text := item.text_content):
                 continue
             # ChatContext.copy() shares message content with the live history.
-            messages.append(
+            items.append(
                 ChatMessage(
                     id=item.id,
                     role=item.role,
@@ -83,9 +89,9 @@ class _DecisionRunner:
                 user_turns += 1
                 if user_turns == self._options["max_context_turns"]:
                     break
-        while messages and messages[-1].role != "user":
-            messages.pop()
-        return ChatContext([*reversed(messages)])
+        while items and not (isinstance(items[-1], ChatMessage) and items[-1].role == "user"):
+            items.pop()
+        return ChatContext([*reversed(items)])
 
     async def _run(self) -> None:
         while self._pending is not None and self._active():
@@ -101,7 +107,12 @@ class _DecisionRunner:
                     },
                 ):
                     response = await asyncio.wait_for(
-                        self._model.evaluate(chat_ctx=chat_ctx, decisions=self._definitions),
+                        self._model.evaluate(
+                            chat_ctx=chat_ctx,
+                            decisions=self._definitions,
+                            allow_partial=self._options["allow_partial"],
+                            include_context_events=self._options["include_context_events"],
+                        ),
                         timeout=self._options["timeout"],
                     )
             except Exception:
@@ -114,6 +125,9 @@ class _DecisionRunner:
                     "decisions_completed",
                     DecisionsCompletedEvent(
                         results=response.results,
+                        errors=response.errors,
+                        model=response.model,
+                        provider=response.provider,
                         source_message_id=source_id,
                         agent_id=self._activity.agent.id,
                         activity_id=self._activity_id,

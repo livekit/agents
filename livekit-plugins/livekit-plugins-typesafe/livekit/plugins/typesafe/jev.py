@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 import aiohttp
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from livekit.agents import (
     APIConnectionError,
@@ -47,6 +47,7 @@ class _ScoreAnswer(BaseModel):
     type: Literal["score"]
     score: float
     probabilities: dict[int, float]
+    legend: dict[int, str]
     confidence: float | None = None
 
 
@@ -56,10 +57,12 @@ class _Usage(BaseModel):
 
 
 _Answer = Annotated[_NoulAnswer | _ChoiceAnswer | _ScoreAnswer, Field(discriminator="type")]
+_answer_adapter = TypeAdapter[_Answer](_Answer)
 
 
 class _Response(BaseModel):
-    answers: dict[str, _Answer]
+    answers: dict[str, Any]
+    model: str = ""
     usage: _Usage = Field(default_factory=_Usage)
     id: str = ""
 
@@ -127,14 +130,19 @@ class Jev(DecisionModel):
         *,
         chat_ctx: ChatContext,
         decisions: Mapping[str, Decision],
+        include_context_events: bool,
         conn_options: APIConnectOptions,
     ) -> DecisionResponse:
         questions = {name: _encode_question(definition) for name, definition in decisions.items()}
-        state = [
-            {"role": item.role, "content": item.text_content}
-            for item in chat_ctx.items
-            if item.type == "message" and item.text_content
-        ]
+        state = (
+            chat_ctx.to_dict(exclude_metrics=True, exclude_config_update=True)["items"]
+            if include_context_events
+            else [
+                {"role": item.role, "content": item.text_content}
+                for item in chat_ctx.items
+                if item.type == "message" and item.text_content
+            ]
+        )
         session = self._session or utils.http_context.http_session()
         try:
             async with session.post(
@@ -151,11 +159,22 @@ class Jev(DecisionModel):
                     )
                 parsed = _Response.model_validate(await response.json())
                 request_id = parsed.id or response.headers.get("x-request-id", "")
+            results: dict[str, DecisionResult] = {}
+            errors: dict[str, str] = {}
+            for name, raw_answer in parsed.answers.items():
+                try:
+                    results[name] = _decode_answer(
+                        _answer_adapter.validate_python(raw_answer), decisions.get(name)
+                    )
+                except ValidationError:
+                    errors[name] = "invalid Jev decision answer"
+                except APIError as error:
+                    errors[name] = error.message
             return DecisionResponse(
-                results={
-                    name: _decode_answer(answer, decisions.get(name))
-                    for name, answer in parsed.answers.items()
-                },
+                results=results,
+                errors=errors,
+                model=parsed.model,
+                provider=self.provider,
                 request_id=request_id,
                 input_tokens=parsed.usage.input_tokens,
                 output_tokens=parsed.usage.output_tokens,
@@ -190,9 +209,11 @@ def _decode_answer(answer: _Answer, definition: Decision | None) -> DecisionResu
         )
     if not isinstance(definition, Score):
         raise APIError("unexpected score in Jev response", retryable=False)
+    if answer.legend != dict(enumerate(definition.levels)):
+        raise APIError("score legend does not match requested levels", retryable=False)
     return ScoreResult(
         value=answer.score,
         probabilities=answer.probabilities,
-        levels=definition.levels,
+        levels=[answer.legend[index] for index in range(len(answer.legend))],
         provider_data={"confidence": answer.confidence},
     )

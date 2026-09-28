@@ -1186,10 +1186,6 @@ class AgentActivity(RecognitionHooks):
     async def _start_session(self, *, reuse_resources: _ReusableResources | None = None) -> None:
         assert self._lock.locked(), "_start_session should only be used when locked."
 
-        if self._agent.decisions and self._session.decision_model is not None:
-            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
-            self._decision_runner.start()
-
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
@@ -1349,6 +1345,10 @@ class AgentActivity(RecognitionHooks):
             forward_chat_ctx = self._session._opts.stt_context_options["forward_chat_context"]
             if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
+
+        if self._agent.decisions and self._session.decision_model is not None:
+            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
+            self._decision_runner.start()
 
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
