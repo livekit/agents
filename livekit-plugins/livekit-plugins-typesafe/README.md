@@ -24,7 +24,7 @@ lk agent console examples/voice_agents/decision_receptionist.py
 ```
 
 The console shows the transcript and decision results as they arrive.
-Each completed user turn triggers a decision request. Intent and frustration checks continue after the simulated handoff.
+Each completed user turn triggers callback-intent, request-category, and frustration checks.
 Press `m` to mute the microphone, `Ctrl+T` to switch to typing, or `q` to quit voice mode.
 
 With only an OpenRouter key, start in text mode:
@@ -38,13 +38,15 @@ For scripted testing, use the debugger:
 ```sh
 lk agent debugger start examples/voice_agents/decision_receptionist.py
 lk agent debugger say "I'd like a table for two tomorrow."
-lk agent debugger say "I've asked three times. Please get me a person."
+lk agent debugger say "Please ask a staff member to call me back."
+lk agent debugger say "Yes, I still want that callback."
 lk agent debugger logs --last 30
 lk agent debugger stop
 ```
 
-The receptionist logs three decisions for each completed request. At a human-request probability of 0.9, it switches to an acknowledgement agent.
-This simulates a handoff without transferring a real call. The acknowledgement agent keeps the intent and frustration checks, without another handoff check.
+Jev detects explicit callback requests and acceptance of an offered callback. At a probability of 0.9, the example calls `log_callback_desire`.
+This placeholder only writes to the console. A session-local guard limits it to one invocation, even when the caller repeats the request.
+The LLM can offer and acknowledge callbacks, but has no callback tool. All three decision checks continue throughout the conversation.
 Voice uses Deepgram STT and Cartesia TTS through LiveKit inference.
 
 ## Background decisions

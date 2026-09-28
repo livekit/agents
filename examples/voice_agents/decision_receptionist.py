@@ -1,4 +1,4 @@
-"""Receptionist with background Jev decisions and a simulated human handoff.
+"""Receptionist with Jev-driven callback requests, mocked in the console.
 
 Run: lk agent console examples/voice_agents/decision_receptionist.py
 """
@@ -15,25 +15,6 @@ load_dotenv()
 
 logger = logging.getLogger("decision-receptionist")
 
-CALLER_DECISIONS: dict[str, decisions.Decision] = {
-    "intent": decisions.Choice(
-        "What is the caller's current main request?",
-        options={
-            "booking": "Make or change a restaurant reservation.",
-            "billing": "Resolve a charge or billing question.",
-            "other": "Any other request, including asking for a person.",
-        },
-    ),
-    "frustration": decisions.Score(
-        "How frustrated is the caller in their latest turn?",
-        levels=[
-            "Calm; expresses no frustration.",
-            "Expresses annoyance with the situation.",
-            "Expresses strong anger or repeated complaints.",
-        ],
-    ),
-}
-
 
 class Receptionist(Agent):
     def __init__(self) -> None:
@@ -41,15 +22,35 @@ class Receptionist(Agent):
             instructions=(
                 "You are the receptionist at Maple House restaurant. Help with reservation "
                 "and billing questions. Ask for the date, time, and party size for a booking. "
-                "This is a demo: do not claim to book a table or transfer a call. If asked "
-                "for a person, acknowledge the request. Keep spoken replies brief."
+                "You can request a callback from a staff member. If the caller wants a "
+                "person, offer a callback instead of a live transfer. When they request "
+                "or accept a callback, acknowledge their request briefly. Callback requests "
+                "are recorded automatically. Do not collect contact details, promise a "
+                "callback time, or claim to book a table. Keep spoken replies brief."
             ),
             decisions={
-                "wants_human": decisions.Probability(
-                    "The caller currently wants to speak to a human representative. "
-                    "Use the latest user turn in context; a withdrawn request is false."
+                "wants_callback": decisions.Probability(
+                    "The caller has explicitly requested or accepted a staff callback and "
+                    "has not withdrawn that request. Use the conversation context. Frustration "
+                    "alone, asking for a live transfer, or an assistant offer without the caller's "
+                    "acceptance do not count. A declined or withdrawn request is false."
                 ),
-                **CALLER_DECISIONS,
+                "intent": decisions.Choice(
+                    "What is the caller's current main request?",
+                    options={
+                        "booking": "Make or change a restaurant reservation.",
+                        "billing": "Resolve a charge or billing question.",
+                        "other": "Any other request, including a staff callback.",
+                    },
+                ),
+                "frustration": decisions.Score(
+                    "How frustrated is the caller in their latest turn?",
+                    levels=[
+                        "Calm; expresses no frustration.",
+                        "Expresses annoyance with the situation.",
+                        "Expresses strong anger or repeated complaints.",
+                    ],
+                ),
             },
         )
 
@@ -57,21 +58,12 @@ class Receptionist(Agent):
         self.session.generate_reply(instructions="Greet the caller and offer to help.")
 
 
-class HandoffRequested(Agent):
-    def __init__(self) -> None:
-        super().__init__(
-            instructions=(
-                "The caller requested a human. This demo cannot transfer calls. "
-                "Acknowledge their request and do not resume collecting reservation details."
-            ),
-            decisions=CALLER_DECISIONS,
-        )
-
-    async def on_enter(self) -> None:
-        await self.session.say(
-            "I've noted your request to speak to a person. "
-            "This demo cannot connect you to a real staff member."
-        )
+def log_callback_desire(*, source_message_id: str, probability: float) -> None:
+    logger.info(
+        "MOCK callback request logged for this call (message=%s, probability=%.2f)",
+        source_message_id,
+        probability,
+    )
 
 
 server = AgentServer()
@@ -98,13 +90,19 @@ async def entrypoint(ctx: JobContext) -> None:
         session.output.set_audio_enabled(False)
         logger.info("Speech is disabled. Use --text, or configure LiveKit inference credentials.")
 
+    callback_logged = False
+
     @session.on("decisions_completed")
     def on_decisions(ev: decisions.DecisionsCompletedEvent) -> None:
+        nonlocal callback_logged
         logger.info(
             "Decisions for %s: %s",
             ev.source_message_id,
             {name: result.value for name, result in ev.results.items()},
         )
+        if callback_logged:
+            return
+
         latest_user = next(
             (
                 item
@@ -116,11 +114,10 @@ async def entrypoint(ctx: JobContext) -> None:
         if latest_user is None or latest_user.id != ev.source_message_id:
             return
 
-        result = ev.results.get("wants_human")
-        if result is not None and result.kind == "probability" and result.value >= 0.9:
-            logger.info("Demo handoff requested (probability %.2f)", result.value)
-            session.interrupt()
-            session.update_agent(HandoffRequested())
+        result = ev.results["wants_callback"]
+        if result.kind == "probability" and result.value >= 0.9:
+            callback_logged = True
+            log_callback_desire(source_message_id=ev.source_message_id, probability=result.value)
 
     await session.start(agent=Receptionist(), room=ctx.room)
 
