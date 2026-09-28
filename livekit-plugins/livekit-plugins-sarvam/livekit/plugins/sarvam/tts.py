@@ -216,6 +216,15 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
 # Model-Speaker compatibility mapping
@@ -294,8 +303,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -317,6 +324,15 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
         "all": [
             "shubh",
@@ -342,13 +358,20 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
             "shruti",
             "kavitha",
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
     },
 }
@@ -361,6 +384,18 @@ class ConnectionState(enum.Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     FAILED = "failed"
+
+
+# Sample rates the Sarvam streaming (WebSocket) API accepts. 32000/44100/48000 Hz
+# are REST-only per the Sarvam Bulbul docs.
+_STREAMING_SAMPLE_RATES = frozenset({8000, 16000, 22050, 24000})
+
+
+def _pace_bounds(model: str) -> tuple[float, float]:
+    """Accepted pace range for a Bulbul model, per the Sarvam API docs."""
+    if model in ("bulbul:v3", "bulbul:v3-beta"):
+        return (0.5, 2.0)
+    return (0.3, 3.0)
 
 
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
@@ -389,7 +424,7 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3/v3-beta, 0.3 to 3.0 for bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
@@ -441,7 +476,7 @@ class TTS(tts.TTS):
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3/v3-beta, 0.3 to 3.0 for bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -514,8 +549,9 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        pace_min, pace_max = _pace_bounds(model)
+        if not pace_min <= pace <= pace_max:
+            raise ValueError(f"Pace must be between {pace_min} and {pace_max} for model '{model}'")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -795,8 +831,11 @@ class TTS(tts.TTS):
             self._opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
+            pace_min, pace_max = _pace_bounds(self._opts.model)
+            if not pace_min <= pace <= pace_max:
+                raise ValueError(
+                    f"Pace must be between {pace_min} and {pace_max} for model '{self._opts.model}'"
+                )
             self._opts.pace = pace
 
         if loudness is not None:
@@ -860,6 +899,11 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        if self._opts.speech_sample_rate not in _STREAMING_SAMPLE_RATES:
+            raise ValueError(
+                "speech_sample_rate must be one of 8000, 16000, 22050, or 24000 Hz for "
+                f"streaming; {self._opts.speech_sample_rate} Hz is REST-only"
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
