@@ -51,6 +51,7 @@ def convert_mid_conversation_instructions(
     *,
     role: llm.ChatRole = "user",
     template: str = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE,
+    fold_dynamic_instructions: bool = True,
 ) -> llm.ChatContext:
     """Convert mid-conversation system messages to the given role to preserve their position.
 
@@ -65,6 +66,13 @@ def convert_mid_conversation_instructions(
     Anthropic, and AWS fall back to ``inject_dummy_user_message``
     (a literal ``"."`` user turn the model frequently responds to with
     "you didn't say anything").
+
+    The one exception is the per-call instructions message
+    (:data:`~livekit.agents.llm.chat_context.DYNAMIC_INSTRUCTIONS_MESSAGE_ID`)
+    directly after the preamble: it is folded into the preamble so the per-call
+    context keeps system priority on providers that take one system text. Pass
+    ``fold_dynamic_instructions=False`` when the preamble will not reach the model
+    (Gemini ``cached_content``); the message is then rewritten like any other.
     """
     preamble_allowed = True
     items: list[llm.ChatItem] = []
@@ -74,6 +82,8 @@ def convert_mid_conversation_instructions(
             if preamble_allowed:
                 preamble_allowed = False
                 items.append(item)
+            elif fold_dynamic_instructions and _is_dynamic_after_preamble(items, item):
+                items[0] = _merge_content(items[0], item)
             elif text := item.raw_text_content:
                 items.append(
                     llm.ChatMessage(
@@ -90,6 +100,41 @@ def convert_mid_conversation_instructions(
         items.append(item)
 
     return llm.ChatContext(items)
+
+
+def fold_dynamic_instructions(chat_ctx: llm.ChatContext) -> llm.ChatContext:
+    """Fold the per-call instructions message into the preamble right before it.
+
+    Without prompt cache breakpoints the split buys nothing, and a backend that keeps
+    one system prompt demotes the second system message to a user turn (the LiveKit
+    gateway does this for Gemini and Gemma). Folded, the request reads exactly as one
+    ``Instructions.render()`` system prompt.
+    """
+    items = chat_ctx.items
+    for i, item in enumerate(items):
+        if item.type == "message" and item.role in ("system", "developer"):
+            nxt = items[i + 1] if i + 1 < len(items) else None
+            if nxt is None or nxt.type != "message" or not _is_dynamic_after_preamble([item], nxt):
+                return chat_ctx
+            return llm.ChatContext([*items[:i], _merge_content(item, nxt), *items[i + 2 :]])
+        if item.type in ("message", "function_call", "function_call_output"):
+            return chat_ctx
+    return chat_ctx
+
+
+def _is_dynamic_after_preamble(items: list[llm.ChatItem], item: llm.ChatMessage) -> bool:
+    # attribute access, not a module-level import: chat_context imports this package
+    return (
+        item.id == llm.chat_context.DYNAMIC_INSTRUCTIONS_MESSAGE_ID
+        and len(items) == 1
+        and items[0].type == "message"
+        and items[0].role in ("system", "developer")
+    )
+
+
+def _merge_content(preamble: llm.ChatItem, item: llm.ChatMessage) -> llm.ChatMessage:
+    assert preamble.type == "message"
+    return preamble.model_copy(update={"content": [*preamble.content, *item.content]})
 
 
 def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
