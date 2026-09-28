@@ -324,15 +324,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "anand",
-            "tarun",
-            "sunny",
-            "mani",
-            "gokul",
-            "vijay",
-            "mohit",
-            "rehan",
-            "soham",
         ],
         "all": [
             "shubh",
@@ -363,6 +354,9 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "tanya",
             "shruti",
             "kavitha",
+            # Newly documented v3 speakers. The Sarvam docs list speakers
+            # without gender information, so they are intentionally kept out
+            # of the male/female subgroups.
             "anand",
             "tarun",
             "sunny",
@@ -392,8 +386,12 @@ _STREAMING_SAMPLE_RATES = frozenset({8000, 16000, 22050, 24000})
 
 
 def _pace_bounds(model: str) -> tuple[float, float]:
-    """Accepted pace range for a Bulbul model, per the Sarvam API docs."""
-    if model in ("bulbul:v3", "bulbul:v3-beta"):
+    """Accepted pace range for a Bulbul model, per the Sarvam API docs.
+
+    The docs specify 0.5–2.0 for bulbul:v3 and 0.3–3.0 for bulbul:v2.
+    bulbul:v3-beta is not documented, so it keeps the previous 0.3–3.0 bound.
+    """
+    if model == "bulbul:v3":
         return (0.5, 2.0)
     return (0.3, 3.0)
 
@@ -424,7 +422,7 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3/v3-beta, 0.3 to 3.0 for bulbul:v2)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3, 0.3 to 3.0 for bulbul:v2 and bulbul:v3-beta)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
@@ -476,7 +474,7 @@ class TTS(tts.TTS):
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3/v3-beta, 0.3 to 3.0 for bulbul:v2)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3, 0.3 to 3.0 for bulbul:v2 and bulbul:v3-beta)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -798,6 +796,17 @@ class TTS(tts.TTS):
             if not model.strip():
                 raise ValueError("Model cannot be empty")
             self._opts.model = model
+            # A pace that was valid for the previous model may be invalid for
+            # the new one (e.g. 2.5 is fine for bulbul:v2 but rejected by
+            # bulbul:v3), so re-validate the already-configured pace now
+            # instead of failing later with a server-side error.
+            pace_min, pace_max = _pace_bounds(self._opts.model)
+            if not pace_min <= self._opts.pace <= pace_max:
+                raise ValueError(
+                    f"Pace {self._opts.pace} is outside the accepted range "
+                    f"{pace_min}–{pace_max} for model '{self._opts.model}'. "
+                    "Pass a valid pace along with the model change."
+                )
             if speaker is None and self._opts.speaker is not None:
                 if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
                     compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
