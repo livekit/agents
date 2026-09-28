@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext
 from unittest.mock import AsyncMock
 
 import pytest
@@ -459,6 +459,46 @@ async def test_background_context_events_respect_window_and_snapshot_isolation(
         assert context.items[0].text_content == "Book a table"
         assert context.items[-1].text_content == "Please call me back"
         answer.set_result(0.5)
+
+
+@pytest.mark.parametrize("failure", [None, "unknown decisions", "both a result and an error"])
+@pytest.mark.parametrize("allow_partial", [False, True])
+async def test_completed_batch_records_usage_once_even_when_rejected(
+    monkeypatch,
+    failure,
+    allow_partial: bool,
+) -> None:
+    response = DecisionResponse(
+        results={"handoff": ProbabilityResult(value=0.9)},
+        model="resolved-model",
+        provider="test-provider",
+        input_tokens=50,
+        output_tokens=5,
+    )
+    if failure == "unknown decisions":
+        response.results["extra"] = ProbabilityResult(value=0.5)
+    elif failure:
+        response.errors["handoff"] = "invalid answer"
+    model = ControlledModel()
+    evaluate = AsyncMock(return_value=response)
+    monkeypatch.setattr(model, "_evaluate_impl", evaluate)
+    collected = []
+    model.on("metrics_collected", collected.append)
+    async with session_for(model) as session:
+        await session.start(Receptionist(instructions="Help the caller."))
+        expectation = pytest.raises(APIError, match=failure) if failure else nullcontext()
+        with expectation:
+            await session.decision_model.evaluate(
+                chat_ctx=ChatContext.empty(),
+                decisions={"handoff": decisions.Probability("Wants a human?")},
+                allow_partial=allow_partial,
+            )
+        evaluate.assert_awaited_once()
+        [metrics] = collected
+        assert (metrics.input_tokens, metrics.output_tokens) == (50, 5)
+        [usage] = session.usage.model_usage
+        assert (usage.model, usage.provider) == ("resolved-model", "test-provider")
+        assert (usage.input_tokens, usage.output_tokens, usage.total_requests) == (50, 5, 1)
 
 
 @pytest.mark.parametrize("allow_partial", [False, True])

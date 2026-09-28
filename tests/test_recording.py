@@ -1438,6 +1438,42 @@ def test_metric_measurements_carry_job_identity() -> None:
     assert "room_id" not in attrs and "job_id" not in attrs
 
 
+@pytest.mark.parametrize("input_tokens,output_tokens", [(50, 5), (None, 5), (50, None), (0, 0)])
+def test_decision_tokens_use_separate_counters_with_model_metadata(
+    input_tokens, output_tokens
+) -> None:
+    from livekit.agents.metrics.base import DecisionMetrics, Metadata
+    from livekit.agents.telemetry import otel_metrics
+
+    ev = DecisionMetrics(
+        label="test.DecisionModel",
+        request_id="request-1",
+        timestamp=0,
+        duration=0.1,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        metadata=Metadata(model_provider="typesafe", model_name="jev"),
+    )
+    with (
+        patch.object(otel_metrics, "_decision_input_tokens") as inputs,
+        patch.object(otel_metrics, "_decision_output_tokens") as outputs,
+        patch.object(otel_metrics, "_llm_input_tokens") as llm_inputs,
+        patch.object(otel_metrics, "_llm_output_tokens") as llm_outputs,
+    ):
+        otel_metrics.collect_usage(ev)
+    attrs = {"model_provider": "typesafe", "model_name": "jev"}
+    if input_tokens:
+        inputs.add.assert_called_once_with(input_tokens, attributes=attrs)
+    else:
+        inputs.add.assert_not_called()
+    if output_tokens:
+        outputs.add.assert_called_once_with(output_tokens, attributes=attrs)
+    else:
+        outputs.add.assert_not_called()
+    llm_inputs.add.assert_not_called()
+    llm_outputs.add.assert_not_called()
+
+
 def test_provider_swap_keeps_the_old_pipeline_and_shuts_both_down_at_exit() -> None:
     """If the integrator replaces a framework-created tracer provider mid-process (a
     ``set_tracer_provider`` in the entrypoint), the old batch processor must stay alive:

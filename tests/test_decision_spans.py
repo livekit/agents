@@ -50,13 +50,23 @@ async def test_on_demand_decision_span_records_response_identity_and_usage(
     assert span.attributes["lk.decision_error_count"] == 0
 
 
-async def test_failed_decision_evaluation_marks_span_as_error(span_exporter) -> None:
+@pytest.mark.parametrize("invalid_batch", [False, True])
+async def test_failed_decision_evaluation_preserves_usage_and_marks_span_as_error(
+    span_exporter,
+    invalid_batch: bool,
+) -> None:
     body = response_body()
-    body["answers"]["human"] = {"type": "noul", "noul": "invalid"}
+    if invalid_batch:
+        body["answers"]["extra"] = {"type": "noul", "noul": 0.5}
+    else:
+        body["answers"]["human"] = {"type": "noul", "noul": "invalid"}
     model, _ = model_for(body)
     with pytest.raises(APIError):
         await model.evaluate(chat_ctx=ChatContext.empty(), decisions=QUESTIONS)
     [span] = span_exporter.get_finished_spans()
     assert span.name == "decision_model.evaluate"
     assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes["lk.decision_error_count"] == 1
+    assert span.attributes[trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS] == 50
+    assert span.attributes[trace_types.ATTR_GEN_AI_USAGE_OUTPUT_TOKENS] == 5
+    if not invalid_batch:
+        assert span.attributes["lk.decision_error_count"] == 1

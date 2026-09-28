@@ -148,5 +148,7 @@ For on-demand requests that belong to a session, use `session.decision_model.eva
 This session-bound model isolates usage, even when multiple sessions share one provider model.
 Calls through the original provider model are standalone evaluations and do not contribute to session usage.
 The original model's `metrics_collected` event still includes all requests.
+OpenTelemetry exports reported tokens as `lk.agents.usage.decision_input_tokens` and
+`lk.agents.usage.decision_output_tokens`, with provider and model attributes.
 The current session protocol has no decision usage variant, so it carries decision token counts in its LLM usage variant.
 The full session report retains the decision usage type and request count.

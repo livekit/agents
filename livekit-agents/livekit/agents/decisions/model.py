@@ -308,13 +308,11 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                 await asyncio.sleep(conn_options._interval_for_retry(attempt))
                 continue
 
-            _validate_response(response, definitions)
             response.model = response.model or self.model
             response.provider = response.provider or self.provider
             gen_ai.set_response_attributes(
                 span, response_id=response.request_id, model=response.model
             )
-            span.set_attribute("lk.decision_error_count", len(response.errors))
             if response.input_tokens is not None:
                 span.set_attribute(
                     trace_types.ATTR_GEN_AI_USAGE_INPUT_TOKENS, response.input_tokens
@@ -335,6 +333,8 @@ class DecisionModel(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
                     metadata=Metadata(model_name=response.model, model_provider=response.provider),
                 ),
             )
+            _validate_response(response, definitions)
+            span.set_attribute("lk.decision_error_count", len(response.errors))
             if response.errors and not allow_partial:
                 raise APIError(
                     "invalid decision answers: "
