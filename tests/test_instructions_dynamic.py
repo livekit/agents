@@ -366,6 +366,47 @@ def test_truncate_without_dynamic_keeps_only_the_first_instructions():
     assert len(ctx.items) == 3
 
 
+def test_openai_format_without_breakpoints_folds_dynamic_into_one_system_message():
+    # gpt-4.1 and every inference google/* model: the old single-system-prompt bytes
+    ctx = _dynamic_ctx()
+    mark_instructions_cache_boundary(ctx)
+
+    messages, _ = ctx.to_provider_format("openai", prompt_cache_breakpoints=False)
+
+    assert messages[0] == {"role": "system", "content": f"{COMMON}\n{DYNAMIC}"}
+    assert [m["role"] for m in messages] == ["system", "user"]
+
+
+def test_responses_format_without_breakpoints_folds_dynamic_into_one_system_message():
+    ctx = _dynamic_ctx()
+
+    items, _ = ctx.to_provider_format("openai.responses", prompt_cache_breakpoints=False)
+
+    assert items[0] == {"role": "system", "content": f"{COMMON}\n{DYNAMIC}"}
+    assert [i["role"] for i in items] == ["system", "user"]
+
+
+def test_openai_format_with_breakpoints_keeps_dynamic_separate():
+    ctx = _dynamic_ctx()
+
+    messages, _ = ctx.to_provider_format("openai", prompt_cache_breakpoints=True)
+
+    assert messages[1] == {"role": "system", "content": DYNAMIC}
+
+
+def test_openai_format_does_not_fold_per_turn_instructions():
+    ctx = ChatContext()
+    ctx.add_message(role="system", content=COMMON, id=INSTRUCTIONS_MESSAGE_ID)
+    ctx.add_message(role="system", content="Greet the caller.")
+
+    messages, _ = ctx.to_provider_format("openai", prompt_cache_breakpoints=False)
+
+    assert messages == [
+        {"role": "system", "content": COMMON},
+        {"role": "system", "content": "Greet the caller."},
+    ]
+
+
 class _CapturingLLM(FakeLLM):
     def __init__(self, fake_responses: list[FakeLLMResponse]) -> None:
         super().__init__(fake_responses=fake_responses)

@@ -102,6 +102,26 @@ def convert_mid_conversation_instructions(
     return llm.ChatContext(items)
 
 
+def fold_dynamic_instructions(chat_ctx: llm.ChatContext) -> llm.ChatContext:
+    """Fold the per-call instructions message into the preamble right before it.
+
+    Without prompt cache breakpoints the split buys nothing, and a backend that keeps
+    one system prompt demotes the second system message to a user turn (the LiveKit
+    gateway does this for Gemini and Gemma). Folded, the request reads exactly as one
+    ``Instructions.render()`` system prompt.
+    """
+    items = chat_ctx.items
+    for i, item in enumerate(items):
+        if item.type == "message" and item.role in ("system", "developer"):
+            nxt = items[i + 1] if i + 1 < len(items) else None
+            if nxt is None or nxt.type != "message" or not _is_dynamic_after_preamble([item], nxt):
+                return chat_ctx
+            return llm.ChatContext([*items[:i], _merge_content(item, nxt), *items[i + 2 :]])
+        if item.type in ("message", "function_call", "function_call_output"):
+            return chat_ctx
+    return chat_ctx
+
+
 def _is_dynamic_after_preamble(items: list[llm.ChatItem], item: llm.ChatMessage) -> bool:
     # attribute access, not a module-level import: chat_context imports this package
     return (
