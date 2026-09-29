@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from livekit.agents import AgentSession, llm, stt
-from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
 from livekit.agents.voice.audio_recognition import AudioRecognition
 from livekit.agents.voice.endpointing import BaseEndpointing
 
@@ -162,3 +162,35 @@ async def test_transcript_list_is_not_limited_by_span_event_count(
     [events] = _turn_events(exporter)
     assert len(events) == 130
     assert all(event["transcript_length"] == 0 for event in events)
+
+
+@pytest.mark.parametrize("capture", [True, False])
+async def test_committed_transcript_is_the_user_turn_output(
+    recognition: AudioRecognition,
+    exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+) -> None:
+    monkeypatch.setattr(gen_ai, "_capture_content", capture)
+    recognition._stt_provider = "google"
+    recognition._stt_model = "test-stt"
+    for transcript in ["first turn", "second turn"]:
+        await recognition._on_stt_event(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[stt.SpeechData(language="en", text=transcript)],
+            )
+        )
+        await _commit(recognition)
+    turns = [span for span in exporter.get_finished_spans() if span.name == "user_turn"]
+    assert len(turns) == 2
+    for turn, transcript in zip(turns, ["first turn", "second turn"], strict=True):
+        assert turn.attributes["gen_ai.provider.name"] == "gcp.gen_ai"
+        assert turn.attributes["gen_ai.request.model"] == "test-stt"
+        assert "gen_ai.input.messages" not in turn.attributes
+        if capture:
+            assert json.loads(turn.attributes["gen_ai.output.messages"]) == [
+                {"role": "user", "parts": [{"type": "text", "content": transcript}]}
+            ]
+        else:
+            assert "gen_ai.output.messages" not in turn.attributes
