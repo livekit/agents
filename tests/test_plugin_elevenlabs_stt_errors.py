@@ -48,7 +48,7 @@ async def _wait_until(predicate, *, timeout: float = 3.0) -> None:
         await asyncio.sleep(0.01)
 
 
-@pytest.mark.parametrize("message_type", ["auth_error", "quota_exceeded", "transcriber_error"])
+@pytest.mark.parametrize("message_type", ["quota_exceeded", "transcriber_error"])
 async def test_realtime_error_message_fails_the_connection(message_type):
     from livekit.plugins.elevenlabs import STT
 
@@ -74,3 +74,35 @@ async def test_realtime_error_message_fails_the_connection(message_type):
         await _wait_until(lambda: len(sockets) > 1 or errors)
     finally:
         await stream.aclose()
+
+
+@pytest.mark.parametrize("message_type", ["auth_error", "input_error"])
+async def test_permanent_error_message_is_not_retried(message_type):
+    from livekit.plugins.elevenlabs import STT
+
+    sockets: list[_ErrorSocket] = []
+    errors: list[Any] = []
+
+    class _Session:
+        closed = False
+
+        async def ws_connect(self, url, **kwargs):
+            ws = _ErrorSocket(message_type)
+            sockets.append(ws)
+            return ws
+
+    instance = STT(api_key="test-key", language_code="en", http_session=cast(Any, _Session()))
+    instance.on("error", errors.append)
+    stream = instance.stream(
+        conn_options=APIConnectOptions(max_retry=3, retry_interval=0.01, timeout=1.0)
+    )
+    try:
+        await _wait_until(lambda: errors)
+        # leave time for a reconnect that would follow a retryable error
+        await asyncio.sleep(0.2)
+    finally:
+        await stream.aclose()
+
+    assert len(sockets) == 1
+    assert len(errors) == 1
+    assert errors[0].recoverable is False

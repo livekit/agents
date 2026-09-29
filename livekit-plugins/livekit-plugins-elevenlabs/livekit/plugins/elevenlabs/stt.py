@@ -858,13 +858,21 @@ class SpeechStream(stt.SpeechStream):
                 error_msg,
                 details_suffix,
             )
-            raise APIConnectionError(f"{message_type}: {error_msg}{details_suffix}")
+            # invalid credentials or input do not change between attempts, so retrying only
+            # delays the terminal error
+            raise APIConnectionError(
+                f"{message_type}: {error_msg}{details_suffix}",
+                retryable=message_type not in _NON_RETRYABLE_ERROR_TYPES,
+            )
         else:
             logger.warning(
                 "ElevenLabs STT unknown message type: %s",
                 message_type,
                 extra={"lk.pii.data": data},
             )
+
+
+_NON_RETRYABLE_ERROR_TYPES = frozenset({"auth_error", "input_error"})
 
 
 def _synthesize_url(opts: STTOptions) -> str:
