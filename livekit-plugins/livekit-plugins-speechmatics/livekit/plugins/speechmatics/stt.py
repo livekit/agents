@@ -659,7 +659,9 @@ class SpeechStream(stt.RecognizeStream):
             vad_task = asyncio.create_task(self._process_vad(self._vad_stream))
             self._tasks.append(vad_task)
 
-        # Wait for tasks to complete
+        # Wait for tasks to complete. A task that fails after the first one finished (the message
+        # task while `disconnect()` flushes final messages, the audio task after the VAD
+        # task finished) is only seen during cleanup, so the cleanup records its error.
         try:
             done, pending = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
@@ -687,6 +689,14 @@ class SpeechStream(stt.RecognizeStream):
             # Remove from active streams so stale streams aren't iterated
             if self in self._stt._streams:
                 self._stt._streams.remove(self)
+
+        # Reached only when the wait above did not raise: surface a failure that was only
+        # observed while tearing down, so the stream does not end as if it had succeeded.
+        for finished in (audio_task, vad_task, message_task):
+            if finished is None or finished.cancelled():
+                continue
+            if (exc := finished.exception()) is not None:
+                raise exc
 
     async def _process_audio(self) -> None:
         """Process audio from the input channel."""

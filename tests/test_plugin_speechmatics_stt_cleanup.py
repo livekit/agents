@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectionError
+from livekit.agents import APIConnectionError, APIError
 from livekit.plugins.speechmatics import stt as speechmatics_stt
 
 pytestmark = pytest.mark.plugin("speechmatics")
@@ -43,3 +43,39 @@ async def test_audio_failure_still_disconnects_client(monkeypatch) -> None:
     assert client.disconnect.await_count == 1, "client was never disconnected"
     assert message_task.done(), "message task leaked"
     assert stream not in instance._streams, "stream left in the active streams list"
+
+
+async def test_error_received_while_disconnecting_is_raised(monkeypatch) -> None:
+    client = MagicMock()
+    client.connect = AsyncMock()
+    client.send_audio = AsyncMock()
+    client.on = MagicMock()
+    client.is_ready_for_audio = True
+    client.session_error = None
+    monkeypatch.setattr(speechmatics_stt, "AgentSttAsyncClient", lambda **kw: client)
+
+    instance = speechmatics_stt.STT(api_key="test-key", vad=None)
+    stream = instance.stream()
+    stream._task.cancel()
+    stream._metrics_task.cancel()
+
+    async def disconnect() -> None:
+        # the service reports the failure while it flushes its final messages, after the
+        # audio task has already finished
+        stream._msg_queue.put_nowait(
+            {"message": "Error", "type": "internal_error", "reason": "boom"}
+        )
+        await asyncio.sleep(0.05)
+
+    client.disconnect = AsyncMock(side_effect=disconnect)
+
+    frame = rtc.AudioFrame(
+        data=b"\x00\x00" * 1600, sample_rate=16000, num_channels=1, samples_per_channel=1600
+    )
+    stream.push_frame(frame)
+    stream.end_input()
+
+    with pytest.raises(APIError, match="boom"):
+        await stream._run()
+
+    assert stream not in instance._streams
