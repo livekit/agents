@@ -639,3 +639,126 @@ async def test_what_was_said_before_a_request_is_relayed_stamped_and_stored_as_i
     relayed = [u.item for u in updates if u.item is not None and u.item.id == greeting.id]
     assert [item.extra.get(TASK_ID_KEY) for item in relayed] == ["r1"]
     assert TASK_ID_KEY not in greeting.extra
+
+
+async def test_an_interrupt_stops_the_response_and_leaves_nothing_to_wait_for() -> None:
+    """With no tool running, the request ends at once, and ends completed rather than
+    canceled: nothing the caller asked for was stopped."""
+    llm = _AnsweringLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="tell me a story",
+                content="Once upon a time there was a fare desk.",
+                ttft=1.0,
+                duration=5.0,
+            )
+        ],
+        fallbacks=[],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
+
+    run = runner.submit(TaskInput(text="tell me a story"), task_id="r1")
+    # before the turn has a response to stop, which the stop still has to reach
+    run.interrupt()
+    updates = await _collect(run)
+    await _close(session, runner)
+
+    assert [u.state for u in updates if u.state != "working"] == ["completed"]
+    assert "Once upon a time there was a fare desk." not in _texts(updates)
+
+
+async def test_an_interrupted_request_waits_for_its_tool_and_ends_with_its_result() -> None:
+    """Interrupting stops what is being said, not what is being done: the tool is not
+    cancelled even though it allows it, and its result arrives on the same request."""
+    released = asyncio.Event()
+    resume = asyncio.Event()
+    cancelled: list[str] = []
+
+    @function_tool(flags={ToolFlag.CANCELLABLE})
+    async def book_flight(ctx: RunContext) -> str:
+        """Book the flight, slowly."""
+        await ctx.update("booking the flight")
+        released.set()
+        try:
+            await resume.wait()
+        except asyncio.CancelledError:
+            cancelled.append("book_flight")
+            raise
+        return "booked on UA 12"
+
+    llm = _AnsweringLLM(
+        fake_responses=[_says("book it", "", calls=[_tool_call("book_flight", "bf1")])],
+        fallbacks=["You are booked on UA 12."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[book_flight]), llm=llm)
+
+    run = runner.submit(TaskInput(instruction="book it"), task_id="r1")
+    reading = asyncio.create_task(_collect(run))
+    await asyncio.wait_for(released.wait(), timeout=10.0)
+
+    run.interrupt()
+    await asyncio.sleep(2)
+    # still open: the tool it started is running
+    assert not run.finished()
+
+    resume.set()
+    updates = await asyncio.wait_for(reading, timeout=30.0)
+    await _close(session, runner)
+
+    assert cancelled == []
+    assert (updates[-1].state, updates[-1].text) == ("completed", "You are booked on UA 12.")
+
+
+async def test_a_cancelled_requests_late_result_goes_into_the_history_not_the_next_request() -> (
+    None
+):
+    """A cancel is best-effort: a tool that does not allow it runs on, and the request's
+    end says so. What it returns is recorded in the session and relayed to nobody, rather
+    than surfacing as part of whichever request comes next."""
+    released = asyncio.Event()
+    resume = asyncio.Event()
+
+    @function_tool
+    async def book_flight(ctx: RunContext) -> str:
+        """Book the flight, slowly, and not cancellably."""
+        await ctx.update("booking the flight")
+        released.set()
+        await resume.wait()
+        return "booked on UA 12"
+
+    llm = _AnsweringLLM(
+        fake_responses=[
+            _says("book it", "", calls=[_tool_call("book_flight", "bf1")]),
+            _says("what is the change fee", "The change fee is $75."),
+        ],
+        fallbacks=["You are booked on UA 12."],
+    )
+    session, runner = await _serve(Agent(instructions="fare desk", tools=[book_flight]), llm=llm)
+
+    run = runner.submit(TaskInput(instruction="book it"), task_id="r1")
+
+    async def _until_booking() -> None:
+        async for update in run:
+            if update.text == "booking the flight":
+                return
+
+    await asyncio.wait_for(_until_booking(), timeout=10.0)
+    ended = await asyncio.wait_for(run.cancel(), timeout=10.0)
+    await asyncio.wait_for(run.aclose(), timeout=10.0)
+
+    resume.set()
+    await asyncio.sleep(5)  # the tool returns, and the session replies to its result
+
+    second = await _collect(
+        runner.submit(TaskInput(instruction="what is the change fee"), task_id="r2")
+    )
+    history = [m.text_content for m in session.history.messages() if m.role == "assistant"]
+    await _close(session, runner)
+
+    assert "You are booked on UA 12." in history
+    assert "You are booked on UA 12." not in _texts(second)
+    assert [(u.state, u.text) for u in second if u.state != "working"] == [
+        ("completed", "The change fee is $75.")
+    ]
+    assert ended.state == "canceled"
+    assert "book_flight is still running" in ended.text

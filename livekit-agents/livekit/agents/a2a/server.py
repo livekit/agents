@@ -149,16 +149,30 @@ class _Context:
         self._handler = handler
         self._ready: asyncio.Task[None] | None = None
         self.runs: dict[str, RequestRun] = {}
+        self.starting: set[str] = set()
+        """tasks waiting for the session to start, which have no run to interrupt yet."""
+        self.interrupted: set[str] = set()
+        """of those, the ones an interrupt reached before their run existed."""
         self.touched_at = time.monotonic()
 
     @property
     def idle_for(self) -> float:
-        return 0.0 if self.runs else time.monotonic() - self.touched_at
+        runner = self._ctx._runner
+        if self.runs or self.starting or (runner is not None and runner.has_running_tools):
+            # a tool outlives the request that started it, and the clock starts when it ends
+            self.touched_at = time.monotonic()
+            return 0.0
+        return time.monotonic() - self.touched_at
 
     async def runner(self) -> SessionRunner:
-        if self._ready is None:
-            self._ready = asyncio.create_task(self._handler(self._ctx))
-        await self._ready
+        if self._ready is None or (self._ready.done() and self._ctx._runner is None):
+            # the first request starts the handler, and the next one retries a failed start
+            self._ready = asyncio.create_task(self._handler(self._ctx), name="a2a_session_start")
+            # whoever awaits it reports a failure, and nobody else has to
+            self._ready.add_done_callback(lambda t: t.cancelled() or t.exception())
+        # every request of the context shares the start, so one of them being cancelled
+        # leaves it running for the others
+        await asyncio.shield(self._ready)
         if self._ctx._runner is None:
             raise RuntimeError(
                 "the A2A session handler returned without calling ctx.attach(session)"
@@ -257,14 +271,28 @@ class _SessionExecutor(AgentExecutor):
             request.metadata.CopyFrom(struct(dict(context.metadata)))
         task_input = from_a2a_request(request)
 
+        if task_input.interrupting is not None:
+            # a context that is not loaded has no response to stop, and is not loaded for it
+            if (held := self._contexts.get(context_id)) is not None:
+                held.touched_at = time.monotonic()
+                for target in task_input.interrupting or [*held.runs, *held.starting]:
+                    if (target_run := held.runs.get(target)) is not None:
+                        target_run.interrupt()
+                    elif target in held.starting:
+                        held.interrupted.add(target)
+            if task_input.control == "interrupt":
+                await self._emit(event_queue, TaskUpdate(state="completed"), task_id, context_id)
+                return
+
         held = self._context(context_id, task_input)
-        if task_input.closing:
+        if task_input.control == "close":
             # the caller is done, so the context goes now rather than when it times out
             self._contexts.pop(context_id, None)
             await held.aclose()
             await self._emit(event_queue, TaskUpdate(state="completed"), task_id, context_id)
             return
 
+        held.starting.add(task_id)
         try:
             runner = await held.runner()
         except Exception as exc:
@@ -272,10 +300,21 @@ class _SessionExecutor(AgentExecutor):
             failed = TaskUpdate(state="failed", text=str(exc) or type(exc).__name__)
             await self._emit(event_queue, failed, task_id, context_id)
             return
+        finally:
+            held.starting.discard(task_id)
+            interrupted_early = task_id in held.interrupted
+            held.interrupted.discard(task_id)
+
+        if task_input.control == "prewarm":
+            # the session is ready, and nothing was asked of it
+            await self._emit(event_queue, TaskUpdate(state="completed"), task_id, context_id)
+            return
 
         run = runner.submit(task_input, task_id=task_id)
         held.runs[task_id] = run
         self._by_task[task_id] = run
+        if interrupted_early:
+            run.interrupt()
         try:
             async with run:
                 async for update in run:
@@ -289,6 +328,10 @@ class _SessionExecutor(AgentExecutor):
         task_id = context.task_id or ""
         run = self._by_task.get(task_id)
         if run is None:
+            if any(task_id in held.starting for held in self._contexts.values()):
+                # the start it was waiting for goes on, for the context's next request
+                ended = TaskUpdate(state="canceled", text="cancelled before the session started")
+                await self._emit(event_queue, ended, task_id, context.context_id or "")
             return
         # a2a-sdk's ActiveTask.cancel builds this context without the cancel request, so the
         # reason the caller sent arrives empty until the SDK hands the params over

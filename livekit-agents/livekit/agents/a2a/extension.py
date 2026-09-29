@@ -29,6 +29,9 @@ __all__ = [
     "KIND_CLOSE",
     "KIND_CHAT_ITEM",
     "KIND_DELEGATION",
+    "INTERRUPT",
+    "KIND_INTERRUPT",
+    "KIND_PREWARM",
     "REASON",
     "VERBATIM",
     "agent_card",
@@ -57,7 +60,8 @@ def _key(name: str) -> str:
 
 
 KIND = _key("kind")
-"""On a message: ``delegation`` when an agent is asking, absent for a person's turn.
+"""On a message: ``delegation`` when an agent is asking, absent for a person's turn, and
+``prewarm``, ``interrupt`` or ``close`` for a control message, which takes no turn.
 On a part: ``chat_ctx`` for the chat history, ``chat_item`` for one typed item."""
 
 VERBATIM = _key("verbatim")
@@ -67,7 +71,7 @@ DIRECTIVE = _key("directive")
 """On a terminal ``COMPLETED`` event: what the caller does after saying the text."""
 
 REASON = _key("reason")
-"""On a ``CancelTaskRequest``: why the caller is stopping the task."""
+"""On a ``CancelTaskRequest``: why the caller is stopping the task and its running tools."""
 
 CONVERSATION = _key("conversation")
 """On a message: the caller's conversation id, whose database the expert persists into."""
@@ -75,10 +79,20 @@ CONVERSATION = _key("conversation")
 CALLER = _key("caller")
 """On a message: the caller's session id, which the expert's session names as its parent."""
 
+INTERRUPT = _key("interrupt")
+"""On a message: the tasks whose response to interrupt, keeping their background tool calls
+running, or every task of the context when empty. A turn carrying it runs after them."""
+
 KIND_DELEGATION = "delegation"
 KIND_CLOSE = "close"
 """On a message: the context is over, and the server may drop it now rather than wait
 for it to go idle."""
+KIND_PREWARM = "prewarm"
+"""On a message: start the context's session now, before anything is asked of it. The task
+completes once the session is ready, with no answer and no turn."""
+KIND_INTERRUPT = "interrupt"
+"""On a message: only interrupt the tasks named by ``INTERRUPT``, and take no turn;
+``CancelTask`` is what stops their tools too."""
 KIND_CHAT_CTX = "chat_ctx"
 KIND_CHAT_ITEM = "chat_item"
 

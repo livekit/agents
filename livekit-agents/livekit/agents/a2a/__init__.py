@@ -30,7 +30,7 @@ from .extension import (
 )
 from .runner import TASK_ID_KEY
 from .server import A2ASessionContext, A2ASessionHandler
-from .types import TaskInput, TaskState, TaskUpdate
+from .types import TaskControl, TaskInput, TaskState, TaskUpdate
 
 __all__ = [
     "ANSWER_ARTIFACT_NAME",
@@ -46,6 +46,7 @@ __all__ = [
     "A2ASessionContext",
     "A2ASessionHandler",
     "Directive",
+    "TaskControl",
     "TaskInput",
     "TaskState",
     "TaskStream",

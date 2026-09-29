@@ -20,7 +20,7 @@ from livekit.agents.a2a.server import AGENT_CARD_PATH, A2ASessionContext, mount
 from livekit.agents.llm import ToolFlag
 from livekit.agents.store import SessionStore
 
-from .fake_llm import FakeLLM
+from .fake_llm import FakeLLM, FakeLLMResponse
 from .test_a2a_runner import _AnsweringLLM, _says, _tool_call
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
@@ -134,19 +134,23 @@ async def _drain_sse_watcher() -> None:
         for task in asyncio.all_tasks()
         if "_shutdown_watcher" in getattr(task.get_coro(), "__qualname__", "")
     ]
-    if not watchers:
-        return
     AppStatus.should_exit = True
     try:
-        await asyncio.wait(watchers, timeout=10.0)
+        if watchers:
+            await asyncio.wait(watchers, timeout=10.0)
     finally:
-        # the next test serves its own stream, and a latched flag would stop it dead
+        # the next test serves its own stream, and a latched flag would stop it dead. The
+        # watcher can latch it by itself, when it sees the server stop before we look for it
         AppStatus.should_exit = False
 
 
 async def _collect(client: Any, task_input: TaskInput) -> list[TaskUpdate]:
     async with client.send(task_input) as stream:
         return [update async for update in stream]
+
+
+async def _read_all(stream: Any) -> list[TaskUpdate]:
+    return [update async for update in stream]
 
 
 def test_the_shipped_example_still_wires_up() -> None:
@@ -544,3 +548,254 @@ async def test_a_dropped_context_rehydrates_on_the_next_request(
     ]
     assert rows == [{"session_id": "ctx-1", "parent_session_id": "voice", "closed": 1}]
     await reopened.aclose()
+
+
+async def test_a_cancel_during_the_session_start_leaves_it_to_the_next_request() -> None:
+    """Every request of a context shares its start, so cancelling the first one must not
+    tear the start down for the rest."""
+    from livekit.agents.a2a import A2AClient
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    starts: list[str] = []
+
+    async def slow_start(ctx: A2ASessionContext, served: _Served) -> None:
+        starts.append(ctx.context_id)
+        entered.set()
+        await release.wait()
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk"))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async with _serving(handler=slow_start) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            async with client.send(TaskInput(text="what is the change fee")) as stream:
+                # the acknowledgment carries the task id and no update, so it is read aside
+                reading = asyncio.create_task(_read_all(stream))
+                await asyncio.wait_for(entered.wait(), timeout=10.0)
+                while not stream.task_id:
+                    await asyncio.sleep(0.01)
+                await stream.cancel("user_interrupted")
+                first = await asyncio.wait_for(reading, timeout=10.0)
+            release.set()
+            second = await asyncio.wait_for(
+                _collect(client, TaskInput(text="what is the change fee")), timeout=30.0
+            )
+        finally:
+            await client.aclose()
+
+    assert [u.text for u in second if u.state == "completed"] == ["The change fee is $75."]
+    assert first[-1].state == "canceled"
+    assert starts == [client.context_id]
+
+
+async def test_a_failed_session_start_is_retried_by_the_next_request() -> None:
+    from livekit.agents.a2a import A2AClient
+
+    starts: list[str] = []
+
+    async def flaky_start(ctx: A2ASessionContext, served: _Served) -> None:
+        starts.append(ctx.context_id)
+        if len(starts) == 1:
+            raise RuntimeError("the MCP server did not answer")
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk"))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async with _serving(handler=flaky_start) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            first = await _collect(client, TaskInput(text="what is the change fee"))
+            second = await _collect(client, TaskInput(text="what is the change fee"))
+        finally:
+            await client.aclose()
+
+    assert [(u.state, u.text) for u in first] == [("failed", "the MCP server did not answer")]
+    assert [u.text for u in second if u.state == "completed"] == ["The change fee is $75."]
+    assert len(starts) == 2
+
+
+def _booking_desk(
+    *also: FakeLLMResponse,
+) -> tuple[Callable[[A2ASessionContext, _Served], Awaitable[None]], asyncio.Event]:
+    """A desk whose one tool reports, then waits for the test to let the booking through.
+
+    The event is made per test: an asyncio primitive binds to the loop that first waits on
+    it, and each test runs its own loop.
+    """
+    booked = asyncio.Event()
+
+    @function_tool
+    async def book_flight(ctx: RunContext) -> str:
+        """Book the flight, slowly, and not cancellably."""
+        await ctx.update("booking the flight")
+        await booked.wait()
+        return "booked on UA 12"
+
+    async def booking_desk(ctx: A2ASessionContext, served: _Served) -> None:
+        llm = _AnsweringLLM(
+            fake_responses=[_says("book it", "", calls=[_tool_call("book_flight", "bf1")]), *also],
+            fallbacks=["You are booked on UA 12."],
+        )
+        session = AgentSession(llm=llm)
+        await session.start(agent=Agent(instructions="fare desk", tools=[book_flight]))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    return booking_desk, booked
+
+
+def _outputs(updates: list[TaskUpdate]) -> list[str]:
+    return [
+        u.item.output
+        for u in updates
+        if u.item is not None and u.item.type == "function_call_output"
+    ]
+
+
+async def test_a_context_is_not_idle_while_a_cancelled_requests_tool_runs() -> None:
+    """A tool that does not allow cancellation outlives its request, and dropping the
+    context would kill it and lose its result."""
+    from livekit.agents.a2a import A2AClient
+
+    booking_desk, booked = _booking_desk()
+
+    async with _serving(handler=booking_desk, idle_timeout=0.05) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            updates: list[TaskUpdate] = []
+            async with client.send(TaskInput(instruction="book it")) as stream:
+                async for update in stream:
+                    updates.append(update)
+                    if update.text == "booking the flight":
+                        await stream.cancel("timed_out")
+            await asyncio.sleep(0.1)
+            await served.executor._drop_idle()
+            assert len(served.executor._contexts) == 1
+
+            # once the tool has ended, the context is idle like any other
+            booked.set()
+            await asyncio.sleep(0.5)
+            await served.executor._drop_idle()
+            assert served.executor._contexts == {}
+        finally:
+            booked.set()
+            await client.aclose()
+
+    # the end names what the cancel could not stop
+    assert updates[-1].state == "canceled"
+    assert "book_flight is still running" in updates[-1].text
+
+
+@pytest.mark.parametrize("whole_context", [False, True], ids=["its-task", "every-task"])
+async def test_an_interrupt_leaves_the_task_open_until_its_tool_returns(
+    whole_context: bool,
+) -> None:
+    """The interrupt travels as a message on the context, and the tool it leaves running
+    answers on the task that started it; a plain cancel still stops the tool too."""
+    from livekit.agents.a2a import A2AClient
+
+    booking_desk, booked = _booking_desk()
+
+    async with _serving(handler=booking_desk) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            updates: list[TaskUpdate] = []
+            async with client.send(TaskInput(instruction="book it")) as stream:
+                async for update in stream:
+                    updates.append(update)
+                    if update.text == "booking the flight":
+                        if whole_context:
+                            # a caller that does not track which task is speaking
+                            await client.interrupt()
+                        else:
+                            await stream.interrupt()
+                        # the interrupt has been taken, and the task is still working
+                        booked.set()
+        finally:
+            booked.set()
+            await client.aclose()
+
+    assert _outputs(updates) == ["booked on UA 12"]
+    assert (updates[-1].state, updates[-1].text) == ("completed", "You are booked on UA 12.")
+
+
+async def test_a_prewarm_starts_the_session_without_a_turn() -> None:
+    """A prewarm shares the start the first request would make, and asks nothing of it."""
+    from livekit.agents.a2a import A2AClient
+
+    starts: list[tuple[str, str | None]] = []
+
+    async def counting(ctx: A2ASessionContext, served: _Served) -> None:
+        starts.append((ctx.context_id, ctx.conversation_id))
+        await asyncio.sleep(0.2)
+        session = AgentSession(llm=_fare_desk_llm())
+        await session.start(agent=Agent(instructions="fare desk"))
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async with _serving(handler=counting) as served:
+        # over the wire, carrying where the context persists as a first message would
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            await client.prewarm(conversation_id="DB_1")
+            assert starts == [(client.context_id, "DB_1")]
+            assert served.sessions[0].history.messages() == []
+
+            answered = await _collect(client, TaskInput(text="what is the change fee"))
+        finally:
+            await client.aclose()
+        assert [u.text for u in answered if u.state == "completed"] == ["The change fee is $75."]
+
+        # racing the first request on the same context: one start between the two
+        other = A2AClient(f"{served.base_url}/fare-desk")
+        warming = A2AClient(f"{served.base_url}/fare-desk", context_id=other.context_id)
+        try:
+            warm = asyncio.create_task(warming.prewarm())
+            racing = await _collect(other, TaskInput(text="what is the change fee"))
+            await warm
+            await warming.prewarm()  # already running
+            history = served.sessions[-1].history.messages()
+        finally:
+            await other.aclose()
+            await warming.aclose()
+
+    assert [u.text for u in racing if u.state == "completed"] == ["The change fee is $75."]
+    assert [context_id for context_id, _ in starts] == [client.context_id, other.context_id]
+    # the prewarms took no turn: the one exchange is the request's
+    assert [m.role for m in history] == ["user", "assistant"]
+
+
+async def test_an_interrupt_on_a_turn_stops_the_last_answer_before_the_next() -> None:
+    """A person talking over the expert: the new message interrupts the running task, whose
+    tool still answers on it, and is then taken as a turn of its own."""
+    from livekit.agents.a2a import A2AClient
+
+    booking_desk, booked = _booking_desk(_says("what is the change fee", "The change fee is $75."))
+
+    async with _serving(handler=booking_desk) as served:
+        client = A2AClient(f"{served.base_url}/fare-desk")
+        try:
+            first: list[TaskUpdate] = []
+            async with client.send(TaskInput(instruction="book it")) as stream:
+                async for update in stream:
+                    first.append(update)
+                    if update.text == "booking the flight":
+                        second = await _collect(
+                            client,
+                            TaskInput(
+                                instruction="what is the change fee",
+                                interrupting=[stream.task_id],
+                            ),
+                        )
+                        booked.set()
+        finally:
+            booked.set()
+            await client.aclose()
+
+    assert [u.text for u in second if u.state == "completed"] == ["The change fee is $75."]
+    assert _outputs(first) == ["booked on UA 12"]
+    assert first[-1].state == "completed"

@@ -9,7 +9,7 @@ type, and nothing here invents an item format: a chat item travels as the JSON
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, AsyncIterator, Sequence
-from typing import Any
+from typing import Any, get_args
 
 from ..llm.chat_context import ChatContext, ChatItem
 from ..utils import shortuuid
@@ -19,10 +19,10 @@ from .extension import (
     CALLER,
     CONVERSATION,
     DIRECTIVE,
+    INTERRUPT,
     KIND,
     KIND_CHAT_CTX,
     KIND_CHAT_ITEM,
-    KIND_CLOSE,
     KIND_DELEGATION,
     VERBATIM,
     as_dict,
@@ -31,7 +31,7 @@ from .extension import (
     text_of,
     value,
 )
-from .types import TaskInput, TaskState, TaskUpdate
+from .types import TaskControl, TaskInput, TaskState, TaskUpdate
 
 _STATE_FROM_A2A: dict[Any, TaskState] = {
     pb.TaskState.TASK_STATE_SUBMITTED: "working",
@@ -97,10 +97,13 @@ def to_a2a_request(
         reference_task_ids=list(reference_task_ids),
     )
     metadata: dict[str, Any] = {}
-    if task_input.closing:
-        metadata[KIND] = KIND_CLOSE
+    if task_input.control is not None:
+        # each control is spelled on the wire as its own kind
+        metadata[KIND] = task_input.control
     elif task_input.is_delegation:
         metadata[KIND] = KIND_DELEGATION
+    if task_input.interrupting is not None:
+        metadata[INTERRUPT] = task_input.interrupting
     if task_input.conversation_id:
         metadata[CONVERSATION] = task_input.conversation_id
     if task_input.caller_session_id:
@@ -133,13 +136,20 @@ def from_a2a_request(request: pb.SendMessageRequest) -> TaskInput:
     body = text_of(message.parts)
     message_metadata = as_dict(message.metadata)
     kind = message_metadata.get(KIND)
+    control = kind if kind in get_args(TaskControl) else None
     delegation = kind == KIND_DELEGATION
+    interrupting = message_metadata.get(INTERRUPT)
+    if control == "interrupt" and interrupting is None:
+        interrupting = []  # an interrupt that names nothing interrupts every task
     return TaskInput(
-        text=None if delegation else body,
+        text=None if delegation or control else body,
         instruction=body if delegation else None,
         chat_ctx=chat_ctx,
         metadata=as_dict(request.metadata),
-        closing=kind == KIND_CLOSE,
+        control=control,
+        interrupting=[str(task_id) for task_id in interrupting]
+        if interrupting is not None
+        else None,
         conversation_id=message_metadata.get(CONVERSATION),
         caller_session_id=message_metadata.get(CALLER),
         context_id=message.context_id or None,

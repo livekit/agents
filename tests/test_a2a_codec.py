@@ -11,10 +11,13 @@ from livekit.agents import a2a
 from livekit.agents.a2a.extension import (
     ANSWER_ARTIFACT_NAME,
     DIRECTIVE,
+    INTERRUPT,
     KIND,
     KIND_CHAT_CTX,
     KIND_CHAT_ITEM,
     KIND_DELEGATION,
+    KIND_INTERRUPT,
+    KIND_PREWARM,
     VERBATIM,
     as_dict,
     pb,
@@ -132,6 +135,48 @@ def test_the_persistence_keys_round_trip_beside_the_kind() -> None:
     assert as_dict(turn.message.metadata) == {a2a.CONVERSATION: "DB_abc"}
     plain = a2a.from_a2a_request(a2a.to_a2a_request(a2a.TaskInput(text="hi")))
     assert (plain.conversation_id, plain.caller_session_id, plain.context_id) == (None,) * 3
+
+
+def test_a_control_message_takes_no_turn() -> None:
+    """Each control is its own kind, and carries neither text nor an instruction."""
+    prewarm = a2a.to_a2a_request(a2a.TaskInput(control="prewarm", conversation_id="DB_abc"))
+    assert as_dict(prewarm.message.metadata) == {KIND: KIND_PREWARM, a2a.CONVERSATION: "DB_abc"}
+    back = a2a.from_a2a_request(prewarm)
+    assert (back.control, back.text, back.instruction) == ("prewarm", None, None)
+    assert (back.conversation_id, back.is_turn) == ("DB_abc", False)
+
+    interrupt = a2a.to_a2a_request(
+        a2a.TaskInput(control="interrupt", interrupting=["task-1"]),
+        reference_task_ids=["task-open"],
+    )
+    assert as_dict(interrupt.message.metadata) == {KIND: KIND_INTERRUPT, INTERRUPT: ["task-1"]}
+    back = a2a.from_a2a_request(interrupt)
+    assert (back.control, back.interrupting) == ("interrupt", ["task-1"])
+
+
+def test_an_interrupt_rides_on_a_turn() -> None:
+    """The turn stays what it is, delegation or not, and names the tasks it interrupts."""
+    request = a2a.to_a2a_request(
+        a2a.TaskInput(instruction="", interrupting=["task-1"]), reference_task_ids=["task-open"]
+    )
+    assert as_dict(request.message.metadata) == {KIND: KIND_DELEGATION, INTERRUPT: ["task-1"]}
+    # the open question it answers is still referenced, apart from what it interrupts
+    assert list(request.message.reference_task_ids) == ["task-open"]
+    back = a2a.from_a2a_request(request)
+    assert (back.instruction, back.interrupting, back.is_turn) == ("", ["task-1"], True)
+
+
+def test_a_control_carries_no_body_and_a_turn_carries_one() -> None:
+    with pytest.raises(ValueError, match="neither"):
+        a2a.TaskInput(control="close", text="")
+    with pytest.raises(ValueError, match="neither"):
+        a2a.TaskInput(control="prewarm", instruction="")
+    with pytest.raises(ValueError, match="interrupts nothing"):
+        a2a.TaskInput(control="close", interrupting=["task-1"])
+    with pytest.raises(ValueError, match="carries `interrupting`"):
+        a2a.TaskInput(control="interrupt")
+    # an empty string is still a turn: a delegation with nothing of its own to say
+    assert a2a.TaskInput(instruction="").is_turn
 
 
 def test_a_persons_turn_is_not_tagged_a_delegation() -> None:
