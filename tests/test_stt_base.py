@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from livekit.agents import APIConnectionError, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIError, APIStatusError
 from livekit.agents.stt import (
     STT,
     RecognizeStream,
@@ -143,6 +143,42 @@ async def test_non_retryable_error_is_not_retried() -> None:
     assert stream.run_count == 1
 
     await stream.aclose()
+
+
+class _RecognizeFailingSTT(STT):
+    def __init__(self, error: APIError) -> None:
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
+        self._error = error
+        self.calls = 0
+
+    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+        self.calls += 1
+        raise self._error
+
+
+async def test_recognize_does_not_retry_non_retryable_error() -> None:
+    stt = _RecognizeFailingSTT(APIStatusError("Unauthorized", status_code=401))
+    errors: list[object] = []
+    stt.on("error", errors.append)
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stt.recognize([silence_frame(0.1, 16000, 1)])
+
+    assert exc_info.value.status_code == 401
+    assert stt.calls == 1
+    assert len(errors) == 1
+
+
+async def test_recognize_retries_retryable_error() -> None:
+    stt = _RecognizeFailingSTT(APIStatusError("Unavailable", status_code=503))
+
+    with pytest.raises(APIConnectionError):
+        await stt.recognize(
+            [silence_frame(0.1, 16000, 1)],
+            conn_options=APIConnectOptions(max_retry=2, retry_interval=0.01),
+        )
+
+    assert stt.calls == 3
 
 
 async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
