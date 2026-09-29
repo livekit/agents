@@ -39,3 +39,14 @@ async def test_update_model_name_to_chirp_3_clears_voice_model_name():
     assert tts._opts.voice.model_name == ""
     assert tts._opts.voice.name == "Puck"
     await tts.aclose()
+
+
+async def test_update_model_name_to_gemini_clears_voice_clone():
+    tts = _tts(voice_cloning_key="clone-key")
+    assert tts._opts.voice.voice_clone.voice_cloning_key == "clone-key"
+
+    tts.update_options(model_name="gemini-2.5-flash-tts")
+
+    assert tts._opts.voice.model_name == "gemini-2.5-flash-tts"
+    assert not tts._opts.voice.voice_clone.voice_cloning_key
+    await tts.aclose()

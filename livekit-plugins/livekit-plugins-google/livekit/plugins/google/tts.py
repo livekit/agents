@@ -246,6 +246,8 @@ class TTS(tts.TTS):
             self._opts.model_name = model_name
             if model_name != "chirp_3":  # voice.model_name must not be set for Chirp 3
                 voice.model_name = model_name
+                # only Chirp 3 supports voice cloning
+                texttospeech.VoiceSelectionParams.pb(voice).ClearField("voice_clone")
             else:
                 voice.model_name = ""
         self._opts.voice = voice
