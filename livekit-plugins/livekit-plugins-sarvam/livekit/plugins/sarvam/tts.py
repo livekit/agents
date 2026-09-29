@@ -792,42 +792,46 @@ class TTS(tts.TTS):
                 raise ValueError("Target language code cannot be empty")
             self._opts.target_language_code = LanguageCode(target_language_code)
 
-        if model is not None:
-            if not model.strip():
+        if model is not None or pace is not None or speaker is not None:
+            # Validate the *proposed* model/pace/speaker trio before mutating
+            # anything, so a rejected update leaves the current options in a
+            # fully valid state (atomic update). In particular, a call like
+            # update_options(model="bulbul:v3", pace=1.0) after configuring
+            # pace=2.5 for bulbul:v2 must succeed: the new pace is valid for
+            # the new model even though the old pace was not.
+            if model is not None and not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            # A pace that was valid for the previous model may be invalid for
-            # the new one (e.g. 2.5 is fine for bulbul:v2 but rejected by
-            # bulbul:v3), so re-validate the already-configured pace now
-            # instead of failing later with a server-side error.
-            pace_min, pace_max = _pace_bounds(self._opts.model)
-            if not pace_min <= self._opts.pace <= pace_max:
+            if speaker is not None and not speaker.strip():
+                raise ValueError("Speaker cannot be empty")
+            proposed_model = model if model is not None else self._opts.model
+            proposed_pace = pace if pace is not None else self._opts.pace
+            pace_min, pace_max = _pace_bounds(proposed_model)
+            if not pace_min <= proposed_pace <= pace_max:
+                if model is not None:
+                    raise ValueError(
+                        f"Pace {proposed_pace} is outside the accepted range "
+                        f"{pace_min}–{pace_max} for model '{proposed_model}'. "
+                        "Pass a valid pace along with the model change."
+                    )
                 raise ValueError(
-                    f"Pace {self._opts.pace} is outside the accepted range "
-                    f"{pace_min}–{pace_max} for model '{self._opts.model}'. "
-                    "Pass a valid pace along with the model change."
+                    f"Pace must be between {pace_min} and {pace_max} for model '{proposed_model}'"
                 )
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+            effective_speaker = speaker if speaker is not None else self._opts.speaker
+            if effective_speaker is not None:
+                if not validate_model_speaker_compatibility(proposed_model, effective_speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(proposed_model, {}).get(
                         "all", []
                     )
                     raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Speaker '{effective_speaker}' incompatible with {proposed_model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers)}"
                     )
-        if speaker is not None:
-            if not speaker.strip():
-                raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
-                raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
-                )
-            self._opts.speaker = speaker
+            if model is not None:
+                self._opts.model = model
+            if pace is not None:
+                self._opts.pace = pace
+            if speaker is not None:
+                self._opts.speaker = speaker
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
@@ -839,13 +843,6 @@ class TTS(tts.TTS):
                 pitch = max(-0.75, min(0.75, pitch))
             self._opts.pitch = pitch
 
-        if pace is not None:
-            pace_min, pace_max = _pace_bounds(self._opts.model)
-            if not pace_min <= pace <= pace_max:
-                raise ValueError(
-                    f"Pace must be between {pace_min} and {pace_max} for model '{self._opts.model}'"
-                )
-            self._opts.pace = pace
 
         if loudness is not None:
             if not 0.5 <= loudness <= 2.0:
