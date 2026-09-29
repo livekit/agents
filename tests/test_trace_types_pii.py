@@ -137,6 +137,8 @@ SAFE_KEYS = frozenset(
         "error.type",
         "gen_ai.agent.name",
         "gen_ai.conversation.id",
+        "lk.gen_ai.input.messages_dropped",
+        "lk.gen_ai.input.messages_mode",
         "gen_ai.output.type",
         "gen_ai.request.stream",
         "gen_ai.response.finish_reasons",

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
-from collections.abc import Callable, Iterable, Sequence
+import weakref
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from opentelemetry import trace
+from opentelemetry import context as otel_context, trace
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor
 from opentelemetry.util.types import AttributeValue
 
 from . import trace_types
@@ -33,17 +36,206 @@ _capture_content: bool = (
     os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "").strip().lower()
     not in _FALSY
 )
+_capture_system_instructions = True
+_max_input_messages = 0
+_capture_input_delta = False
+_input_capture_version = 0
+
+_INPUT_MESSAGES_STATE = otel_context.create_key("lk_input_messages_state")
+_standalone_input_states: weakref.WeakKeyDictionary[ChatContext, _InputMessagesState] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def set_capture_content(enabled: bool) -> None:
     """When off, spans keep every non-content GenAI attribute and omit the message
     payloads, tool definitions and tool call arguments/results."""
-    global _capture_content
+    global _capture_content, _input_capture_version
+    if _capture_content != enabled:
+        _input_capture_version += 1
     _capture_content = enabled
 
 
 def capture_content_enabled() -> bool:
     return _capture_content
+
+
+def set_capture_system_instructions(enabled: bool) -> None:
+    """Set process-wide prompt capture (default: enabled).
+
+    When disabled, exports omit system instructions and legacy full-chat payloads.
+    Configure before starting sessions. Model requests are unchanged.
+    """
+    global _capture_system_instructions
+    _capture_system_instructions = enabled
+
+
+def set_max_input_messages(count: int) -> None:
+    """Keep the newest ``count`` exported GenAI input messages; zero means unlimited.
+
+    Full capture is the default. A positive limit omits legacy full-chat payloads
+    and reports omitted messages in ``lk.gen_ai.input.messages_dropped``. It can
+    separate tool results from their calls. Model requests are unchanged.
+    Configure this process-wide setting before starting sessions.
+    """
+    if not isinstance(count, int) or count < 0:
+        raise ValueError("count must be a non-negative integer")
+    global _max_input_messages
+    _max_input_messages = count
+
+
+def set_capture_input_delta(enabled: bool) -> None:
+    """Export only new or changed LLM input messages (default: disabled).
+
+    Compare with the previous captured request in the same AgentSession, or on
+    the same ChatContext for standalone LLM calls. The first request includes
+    all input messages. An unchanged request exports an empty list. Message IDs
+    distinguish repeated text from repeated history; edits are exported again.
+
+    This omits legacy full-chat payloads. System instructions use their separate
+    capture setting, and any input-message limit applies after delta selection.
+    Model requests, speech input and session transcripts are unchanged.
+    Configure this process-wide setting before starting sessions.
+    """
+    global _capture_input_delta, _input_capture_version
+    if _capture_input_delta != enabled:
+        _input_capture_version += 1
+    _capture_input_delta = enabled
+    _standalone_input_states.clear()
+
+
+def legacy_chat_capture_enabled() -> bool:
+    return (
+        _capture_content
+        and _capture_system_instructions
+        and _max_input_messages == 0
+        and not _capture_input_delta
+    )
+
+
+class _InputMessagesState:
+    def __init__(self) -> None:
+        self._previous: dict[tuple[str, ...], bytes] = {}
+        self._version = _input_capture_version
+
+    def delta(self, chat_ctx: ChatContext) -> list[dict[str, Any]]:
+        if self._version != _input_capture_version:
+            self._previous.clear()
+            self._version = _input_capture_version
+        current: dict[tuple[str, ...], bytes] = {}
+        changed: list[dict[str, Any]] = []
+        for ids, message in _input_messages_with_ids(chat_ctx.items):
+            key = tuple(ids)
+            fingerprint = hashlib.sha256(_json(message).encode()).digest()
+            current[key] = fingerprint
+            if self._previous.get(key) != fingerprint:
+                changed.append(message)
+        # Retain fingerprints of the current history, not copies of message content.
+        self._previous = current
+        return changed
+
+
+def _with_input_messages_state(ctx: otel_context.Context) -> otel_context.Context:
+    return otel_context.set_value(_INPUT_MESSAGES_STATE, _InputMessagesState(), ctx)
+
+
+def record_llm_input_messages(
+    span: trace.Span, chat_ctx: ChatContext, *, is_delegating: bool = False
+) -> None:
+    if not _capture_content or not span.is_recording():
+        return
+
+    attrs: dict[str, Any] = {}
+    if _capture_input_delta:
+        # A fallback wrapper must not consume the delta before the provider span.
+        if is_delegating:
+            return
+        state = otel_context.get_value(_INPUT_MESSAGES_STATE)
+        if not isinstance(state, _InputMessagesState):
+            state = _standalone_input_states.get(chat_ctx)
+            if state is None:
+                state = _standalone_input_states[chat_ctx] = _InputMessagesState()
+        messages = state.delta(chat_ctx)
+        attrs[trace_types.ATTR_GEN_AI_INPUT_MESSAGES_MODE] = "delta"
+    else:
+        messages = to_input_messages(chat_ctx)
+        if not messages:
+            return
+    _set_input_messages(attrs, messages)
+    span.set_attributes(attrs)
+
+
+class _ContentFilteringSpanProcessor(SpanProcessor):
+    """Apply capture controls before PII filtering can stash content for Cloud export."""
+
+    def on_end(self, span: ReadableSpan) -> None:
+        if legacy_chat_capture_enabled():
+            return
+        from . import pii
+
+        span._attributes = self._filter_attributes(span.attributes)
+        # Deprecated content events cannot represent a bounded conversation reliably.
+        span._events = tuple(
+            Event(
+                name=event.name,
+                attributes=self._filter_attributes(event.attributes),
+                timestamp=event.timestamp,
+            )
+            for event in span.events
+            if event.name not in pii.PII_EVENT_NAMES
+        )
+
+    @staticmethod
+    def _filter_attributes(attributes: Mapping[str, Any] | None) -> dict[str, Any]:
+        from . import pii
+
+        attributes = dict(attributes or {})
+        attributes.pop(trace_types.ATTR_CHAT_CTX, None)
+        if not _capture_system_instructions:
+            attributes.pop(trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, None)
+            attributes.pop(trace_types.ATTR_INSTRUCTIONS, None)
+        if not _capture_content:
+            legacy_content = {
+                trace_types.ATTR_INSTRUCTIONS,
+                trace_types.ATTR_USER_INPUT,
+                trace_types.ATTR_USER_TRANSCRIPT,
+                trace_types.ATTR_RESPONSE_TEXT,
+                trace_types.ATTR_RESPONSE_FUNCTION_CALLS,
+                trace_types.ATTR_FUNCTION_TOOL_ARGS,
+                trace_types.ATTR_FUNCTION_TOOL_OUTPUT,
+                trace_types.ATTR_TTS_INPUT_TEXT,
+            }
+            attributes = {
+                key: value
+                for key, value in attributes.items()
+                if key not in legacy_content
+                and key not in pii.GEN_AI_PII_ATTRIBUTES
+                and not key.startswith(trace_types.ATTR_GEN_AI_PROMPT_VARIABLE)
+            }
+        elif _max_input_messages and (
+            raw := attributes.get(trace_types.ATTR_GEN_AI_INPUT_MESSAGES)
+        ):
+            try:
+                messages = json.loads(raw) if isinstance(raw, str) else None
+            except (ValueError, TypeError):
+                messages = None
+            if isinstance(messages, list):
+                _set_input_messages(attributes, messages)
+            else:
+                # An unparseable payload must not bypass an explicit export limit.
+                attributes.pop(trace_types.ATTR_GEN_AI_INPUT_MESSAGES, None)
+        return attributes
+
+
+def _set_input_messages(attrs: dict[str, Any], messages: list[dict[str, Any]]) -> None:
+    if _max_input_messages and len(messages) > _max_input_messages:
+        dropped = len(messages) - _max_input_messages
+        previous = attrs.get(trace_types.ATTR_GEN_AI_INPUT_MESSAGES_DROPPED, 0)
+        attrs[trace_types.ATTR_GEN_AI_INPUT_MESSAGES_DROPPED] = dropped + (
+            previous if isinstance(previous, int) else 0
+        )
+        messages = messages[-_max_input_messages:]
+    attrs[trace_types.ATTR_GEN_AI_INPUT_MESSAGES] = _json(messages)
 
 
 # A custom `llm_node` may do the inference itself — returning a plain str, streaming its
@@ -173,8 +365,14 @@ def to_input_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:
     """History in the order it was sent. ``system``/``developer`` messages go to
     ``gen_ai.system_instructions`` instead, and non-conversational items (agent
     handoffs, config updates) are skipped."""
-    messages: list[dict[str, Any]] = []
-    for item in chat_ctx.items:
+    return [message for _, message in _input_messages_with_ids(chat_ctx.items)]
+
+
+def _input_messages_with_ids(
+    items: Iterable[ChatItem],
+) -> list[tuple[list[str], dict[str, Any]]]:
+    messages: list[tuple[list[str], dict[str, Any]]] = []
+    for item in items:
         role: str
         if item.type == "message":
             if item.role in ("system", "developer"):
@@ -194,13 +392,14 @@ def to_input_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:
         # consecutive tool calls from one assistant turn belong to a single message
         if (
             messages
-            and messages[-1]["role"] == role == "assistant"
+            and messages[-1][1]["role"] == role == "assistant"
             and item.type == "function_call"
         ):
-            messages[-1]["parts"].extend(parts)
+            messages[-1][0].append(item.id)
+            messages[-1][1]["parts"].extend(parts)
             continue
 
-        messages.append({"role": role, "parts": parts})
+        messages.append(([item.id], {"role": role, "parts": parts}))
     return messages
 
 
@@ -305,10 +504,10 @@ def set_content_attributes(
         return
 
     attrs: dict[str, AttributeValue] = {}
-    if system_instructions:
+    if system_instructions and _capture_system_instructions:
         attrs[trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS] = _json(system_instructions)
     if input_messages:
-        attrs[trace_types.ATTR_GEN_AI_INPUT_MESSAGES] = _json(input_messages)
+        _set_input_messages(attrs, input_messages)
     if output_messages:
         attrs[trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES] = _json(output_messages)
     if tool_definitions:

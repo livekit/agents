@@ -194,20 +194,21 @@ async def _llm_inference_task(
 
     if current_span.is_recording():
         attrs: dict[str, Any] = {
-            trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(
-                    exclude_audio=True,
-                    exclude_image=True,
-                    exclude_timestamp=True,
-                    exclude_metrics=True,
-                )
-            ),
             trace_types.ATTR_FUNCTION_TOOLS: list(tool_ctx.function_tools.keys()),
             trace_types.ATTR_PROVIDER_TOOLS: [
                 type(tool).__name__ for tool in tool_ctx.provider_tools
             ],
             trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
+        if gen_ai_telemetry.legacy_chat_capture_enabled():
+            attrs[trace_types.ATTR_CHAT_CTX] = json.dumps(
+                chat_ctx.to_dict(
+                    exclude_audio=True,
+                    exclude_image=True,
+                    exclude_timestamp=True,
+                    exclude_metrics=True,
+                )
+            )
         current_span.set_attributes(attrs)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
@@ -384,10 +385,10 @@ def _record_uninstrumented_inference(
         span, finish_reasons=[finish_reason], time_to_first_chunk=data.ttft
     )
     if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
+        gen_ai_telemetry.record_llm_input_messages(span, chat_ctx)
         gen_ai_telemetry.set_content_attributes(
             span,
             system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
             tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
             output_messages=gen_ai_telemetry.to_output_messages(
                 text=data.generated_text,

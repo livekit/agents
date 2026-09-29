@@ -227,6 +227,8 @@ ATTR_GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 
 ATTR_GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
 ATTR_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+ATTR_GEN_AI_INPUT_MESSAGES_DROPPED = "lk.gen_ai.input.messages_dropped"
+ATTR_GEN_AI_INPUT_MESSAGES_MODE = "lk.gen_ai.input.messages_mode"
 ATTR_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 ATTR_GEN_AI_OUTPUT_TYPE = "gen_ai.output.type"
 
