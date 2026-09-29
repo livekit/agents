@@ -128,6 +128,7 @@ class MCPServer(ABC):
         self._client_task: asyncio.Task[None] | None = None
         self._closing_ev = asyncio.Event()
         self._ready_fut: asyncio.Future[None] | None = None
+        self._ready_waiters = 0
 
     @property
     def initialized(self) -> bool:
@@ -137,23 +138,26 @@ class MCPServer(ABC):
         self._cache_dirty = True
 
     async def initialize(self) -> None:
-        if self._client_task and not self._client_task.done():
+        if self._client_task and self._ready_fut and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
-            if self._ready_fut:
-                # shielded, or a waiter that gives up would cancel the connect's own future
-                await asyncio.shield(self._ready_fut)
-            return
+        else:
+            self._ready_fut = asyncio.Future[None]()
+            self._client_task = asyncio.create_task(
+                self._run_client(self._ready_fut), name=f"{type(self).__name__}._run_client"
+            )
 
-        self._ready_fut = ready_fut = asyncio.Future[None]()
-        self._client_task = client_task = asyncio.create_task(
-            self._run_client(ready_fut), name=f"{type(self).__name__}._run_client"
-        )
+        ready_fut, client_task = self._ready_fut, self._client_task
+        self._ready_waiters += 1
         try:
+            # shielded, so a caller that gives up doesn't cancel the future the others wait on
             await asyncio.shield(ready_fut)
         except asyncio.CancelledError:
-            # the connect was started for this caller, and nobody waits for it now
-            client_task.cancel()
+            # stop the connect only once the last caller waiting for it has given up
+            if self._ready_waiters == 1 and not ready_fut.done():
+                client_task.cancel()
             raise
+        finally:
+            self._ready_waiters -= 1
 
     async def _run_client(self, ready_fut: asyncio.Future[None]) -> None:
         try:

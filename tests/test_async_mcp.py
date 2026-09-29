@@ -237,6 +237,60 @@ async def test_a_connect_nobody_waits_for_is_stopped_rather_than_finished(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", ["first", "second"])
+async def test_a_caller_giving_up_leaves_the_connect_to_the_one_still_waiting(
+    monkeypatch: pytest.MonkeyPatch, cancelled: str
+) -> None:
+    """Two callers share one connect, so cancelling either must not fail the other."""
+    import asyncio
+    import contextlib
+
+    from livekit.agents.llm import mcp as mcp_module
+
+    handshaking = asyncio.Event()
+    answer = asyncio.Event()
+
+    class _SlowSession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _SlowSession:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            pass
+
+        async def initialize(self) -> None:
+            handshaking.set()
+            await answer.wait()
+
+    class _Server(MCPServer):
+        def __init__(self) -> None:
+            super().__init__(client_session_timeout_seconds=5)
+
+        @contextlib.asynccontextmanager
+        async def client_streams(self):  # type: ignore[no-untyped-def,override]
+            yield (None, None)
+
+    monkeypatch.setattr(mcp_module, "ClientSession", _SlowSession)
+    server = _Server()
+    first = asyncio.create_task(server.initialize())
+    await asyncio.wait_for(handshaking.wait(), timeout=5)
+    second = asyncio.create_task(server.initialize())
+    await asyncio.sleep(0)
+
+    gives_up, stays = (first, second) if cancelled == "first" else (second, first)
+    gives_up.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await gives_up
+
+    answer.set()
+    await asyncio.wait_for(stays, timeout=5)
+    assert server.initialized
+    await server.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_cancelled_call_tells_the_server_to_cancel_it() -> None:
     """The server's tool keeps running unless the client says the request is cancelled."""
     import asyncio
