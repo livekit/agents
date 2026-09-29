@@ -549,6 +549,21 @@ class TestToolExecution:
         output = await agent.mock_tool_in_agent(*args, **kwargs)
         assert output == {"arg1": "test", "opt_arg2": "test2"}
 
+    async def test_positional_only_tool_argument(self):
+        @function_tool
+        async def lookup_order(order_id: str, /) -> str:
+            """Look up an order by ID."""
+            return order_id
+
+        schema = build_legacy_openai_schema(lookup_order)["function"]["parameters"]
+        assert schema["properties"]["order_id"]["type"] == "string"
+        assert schema["required"] == ["order_id"]
+
+        args, kwargs = prepare_function_arguments(
+            fnc=lookup_order, json_arguments='{"order_id": "order-123"}'
+        )
+        assert await lookup_order(*args, **kwargs) == "order-123"
+
     async def test_raw_function_tool_execution(self):
         agent = DummyAgent()
         args, kwargs = prepare_function_arguments(

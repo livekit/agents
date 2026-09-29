@@ -735,7 +735,16 @@ def _prepare_function_arguments(
                 f"expected {expected_type.__name__}, got {type(call_ctx).__name__}"
             )
 
-    bound = signature.bind(**{**raw_fields, **context_dict})
+    call_arguments = {**raw_fields, **context_dict}
+    positional_args: list[Any] = []
+    for param_name, param in signature.parameters.items():
+        if param.kind is not inspect.Parameter.POSITIONAL_ONLY:
+            break
+        if param_name not in call_arguments:
+            break
+        positional_args.append(call_arguments.pop(param_name))
+
+    bound = signature.bind(*positional_args, **call_arguments)
     bound.apply_defaults()
     return bound.args, bound.kwargs
 
