@@ -8,6 +8,7 @@ nest under it, and it ends with the speech."""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -16,10 +17,11 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm, utils
 from livekit.agents.llm import FunctionToolCall
-from livekit.agents.telemetry import set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
 
+from .fake_realtime import FakeRealtimeModel, fake_capabilities
 from .fake_session import FakeActions, create_session, run_session
 from .trace_schema import assert_trace_well_formed
 
@@ -63,15 +65,20 @@ class _WeatherAgent(Agent):
         return f"sunny in {location}"
 
 
-async def test_tool_call_is_one_agent_turn(span_exporter: InMemorySpanExporter) -> None:
+@pytest.mark.parametrize("preface", ["", "Let me check."])
+async def test_tool_call_is_one_agent_turn(
+    span_exporter: InMemorySpanExporter, preface: str
+) -> None:
     actions = FakeActions()
     actions.add_user_speech(0.5, 2.0, "What's the weather in Tokyo?")
     actions.add_llm(
-        content="",
+        content=preface,
         tool_calls=[
             FunctionToolCall(name="get_weather", arguments='{"location": "Tokyo"}', call_id="1")
         ],
     )
+    if preface:
+        actions.add_tts(0.5)
     actions.add_llm(content="It is sunny in Tokyo.", input="sunny in Tokyo")
     actions.add_tts(1.0)
 
@@ -85,6 +92,13 @@ async def test_tool_call_is_one_agent_turn(span_exporter: InMemorySpanExporter) 
     assert turn.parent is not None and turn.parent.span_id == root.context.span_id
 
     attrs = turn.attributes or {}
+    assert json.loads(attrs["gen_ai.input.messages"]) == [
+        {"role": "user", "parts": [{"type": "text", "content": "What's the weather in Tokyo?"}]}
+    ]
+    assert json.loads(attrs["gen_ai.output.messages"]) == [
+        {"role": "assistant", "parts": [{"type": "text", "content": text}]}
+        for text in ([preface] if preface else []) + ["It is sunny in Tokyo."]
+    ]
     speech_id = attrs[trace_types.ATTR_SPEECH_ID]
     assert attrs[trace_types.ATTR_GENERATION_COUNT] == 2
     assert attrs[trace_types.ATTR_AGENT_TURN_ID] == f"{speech_id}_2"
@@ -101,8 +115,8 @@ async def test_tool_call_is_one_agent_turn(span_exporter: InMemorySpanExporter) 
     # both generations' inference, the tool between them, and the speech all nest under it
     assert len(_children(span_exporter, turn, "llm_node")) == 2
     [tool] = _children(span_exporter, turn, "function_tool")
-    [tts] = _children(span_exporter, turn, "tts_node")
-    [speaking] = _children(span_exporter, turn, "agent_speaking")
+    tts = _children(span_exporter, turn, "tts_node")[-1]
+    speaking = _children(span_exporter, turn, "agent_speaking")[-1]
     assert tool.start_time < tts.start_time
     # and the turn covers everything, ending with the speech rather than with the first step
     for child in (tool, tts, speaking):
@@ -228,3 +242,76 @@ def test_sampled_out_turn_is_still_handed_to_the_successor() -> None:
     assert reply._agent_turn_span is not None
     assert reply._agent_turn_started_at == 1.0
     assert reply._agent_turn_agent_name == "a"
+
+
+@pytest.mark.virtual_time
+@pytest.mark.parametrize("capture", [True, False])
+@pytest.mark.parametrize("add_to_chat_ctx", [True, False])
+async def test_say_greeting_records_output_without_llm(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+    add_to_chat_ctx: bool,
+) -> None:
+    monkeypatch.setattr(gen_ai, "_capture_content", capture)
+    actions = FakeActions()
+    actions.add_tts(0.5, input="Hello there.")
+
+    class GreetingAgent(Agent):
+        async def on_enter(self) -> None:
+            await self.session.say("Hello there.", add_to_chat_ctx=add_to_chat_ctx)
+
+    session = create_session(actions, with_stt=False)
+    await asyncio.wait_for(run_session(session, GreetingAgent(instructions="test")), 60)
+    [turn] = _spans(span_exporter, "agent_turn")
+    assert not _spans(span_exporter, "llm_request")
+    assert "gen_ai.input.messages" not in turn.attributes
+    if capture:
+        assert json.loads(turn.attributes["gen_ai.output.messages"]) == [
+            {"role": "assistant", "parts": [{"type": "text", "content": "Hello there."}]}
+        ]
+    else:
+        assert "gen_ai.output.messages" not in turn.attributes
+
+
+async def test_realtime_turn_records_explicit_input_and_forwarded_output(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        await session.start(Agent(instructions="test"))
+        handle = session.generate_reply(user_input="Hi")
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+        message_ch = utils.aio.Chan[llm.MessageGeneration]()
+        function_ch = utils.aio.Chan[llm.FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan()
+        modalities = asyncio.Future()
+        modalities.set_result(["text"])
+        message_ch.send_nowait(
+            llm.MessageGeneration(
+                message_id="reply",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        text_ch.send_nowait("Hello")
+        text_ch.close()
+        audio_ch.close()
+        message_ch.close()
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=message_ch, function_stream=function_ch, user_initiated=True
+            )
+        )
+        await asyncio.wait_for(handle, 5)
+    [turn] = _spans(span_exporter, "agent_turn")
+    assert json.loads(turn.attributes["gen_ai.input.messages"]) == [
+        {"role": "user", "parts": [{"type": "text", "content": "Hi"}]}
+    ]
+    assert json.loads(turn.attributes["gen_ai.output.messages"]) == [
+        {"role": "assistant", "parts": [{"type": "text", "content": "Hello"}]}
+    ]
