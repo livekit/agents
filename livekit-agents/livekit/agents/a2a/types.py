@@ -8,6 +8,10 @@ from typing import Any, Literal
 from ..llm.chat_context import ChatContext, ChatItem
 from ..voice.served_request import Directive
 
+TaskControl = Literal["prewarm", "interrupt", "close"]
+"""A message that is not a turn: ``prewarm`` starts the context's session, ``interrupt``
+stops task responses, and ``close`` ends the context."""
+
 TaskState = Literal["working", "completed", "failed", "canceled", "input-required"]
 """How far a task has got: ``working`` repeats, and every other state ends it.
 
@@ -17,10 +21,10 @@ TaskState = Literal["working", "completed", "failed", "canceled", "input-require
 
 @dataclass
 class TaskInput:
-    """One message on a context: a person's turn, or an agent asking for work.
+    """One message on a context: a person's turn, an agent asking for work, or a control.
 
-    Exactly one of ``text`` and ``instruction`` is set, and which one is what tells the two
-    apart on the wire.
+    A turn sets exactly one of ``text`` and ``instruction``, and which one is what tells the
+    two apart on the wire; a control sets neither.
     """
 
     text: str | None = None
@@ -31,8 +35,12 @@ class TaskInput:
     """The whole history the sender holds; the receiver takes the delta by item id."""
     metadata: dict[str, Any] = field(default_factory=dict)
     """Application data, handed to the handler untouched. JSON-serializable."""
-    closing: bool = False
-    """The context is over: nothing is being asked, and the receiver may drop it."""
+    control: TaskControl | None = None
+    """Set when the message asks nothing and takes no turn: start the session, interrupt
+    tasks, or end the context."""
+    interrupting: list[str] | None = None
+    """Tasks whose response to interrupt, keeping their background tool calls running; empty
+    for every task of the context."""
     conversation_id: str | None = None
     """The sender's conversation, whose database the receiver persists into."""
     caller_session_id: str | None = None
@@ -41,10 +49,19 @@ class TaskInput:
     """The A2A context the request continues, or None to open a new one."""
 
     def __post_init__(self) -> None:
-        if self.closing and self.text is None and self.instruction is None:
-            self.text = ""  # a goodbye asks for nothing and still has to be one of the two
-        if (self.text is None) == (self.instruction is None):
+        if self.control is not None:
+            if self.text is not None or self.instruction is not None:
+                raise ValueError("a control message carries neither `text` nor `instruction`")
+        elif (self.text is None) == (self.instruction is None):
             raise ValueError("a TaskInput carries exactly one of `text` and `instruction`")
+        if self.control == "interrupt" and self.interrupting is None:
+            raise ValueError("an interrupt carries `interrupting`, the tasks it interrupts")
+        if self.control in ("prewarm", "close") and self.interrupting is not None:
+            raise ValueError(f"a {self.control} message interrupts nothing")
+
+    @property
+    def is_turn(self) -> bool:
+        return self.control is None
 
     @property
     def is_delegation(self) -> bool:

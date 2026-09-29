@@ -28,11 +28,11 @@ except ImportError as e:
 
 
 class TaskStream:
-    """One task: the updates it produces, and the handle to cancel it.
+    """One task: the updates it produces, and the handle to interrupt or cancel it.
 
     Read it under ``async with``, which closes the HTTP stream when the caller stops
-    listening; :attr:`task_id` is empty until the first event, and cancelling before then
-    does nothing.
+    listening; :attr:`task_id` is empty until the first event, and interrupting or
+    cancelling before then does nothing.
     """
 
     def __init__(self, client: A2AClient, task_input: TaskInput) -> None:
@@ -52,8 +52,15 @@ class TaskStream:
     def task_input(self) -> TaskInput:
         return self._input
 
+    async def interrupt(self) -> None:
+        """Stop the response, and leave its running tools to finish: the task keeps
+        streaming, and ends with what they return."""
+        if self._task_id:
+            await self._client.interrupt(self._task_id)
+
     async def cancel(self, reason: str = "") -> None:
-        """Ask the server to stop. Best-effort: work can finish between the two."""
+        """Stop the response and its running tools. Best-effort: work can finish between
+        the two, and the end names what still runs."""
         if self._task_id:
             await self._client.cancel(self._task_id, reason=reason)
 
@@ -87,9 +94,9 @@ class TaskStream:
                 task_input = dataclasses.replace(
                     task_input, conversation_id=None, caller_session_id=None
                 )
-            request = to_a2a_request(
-                task_input, reference_task_ids=self._client._take_open_questions()
-            )
+            # an open question is answered by the next turn, not by a message that asks nothing
+            open_questions = self._client._take_open_questions() if task_input.is_turn else []
+            request = to_a2a_request(task_input, reference_task_ids=open_questions)
             # the SDK under-declares its stream as an AsyncIterator; it is a generator, and
             # until it is closed it holds its HTTP connection
             self._raw = cast(
@@ -198,7 +205,23 @@ class A2AClient:
         one, which this client then keeps, and on this client's otherwise."""
         return TaskStream(self, task_input)
 
+    async def interrupt(self, task_id: str | None = None) -> None:
+        """Stop a task's response, or every task's on this context when none is named, and
+        leave their running tools to finish on the same tasks.
+
+        Sent as a message on the context, since a cancel's metadata does not reach the
+        server's executor; an endpoint that does not offer the extension would take that
+        message as a turn, so there this does nothing.
+        """
+        await self._connect()
+        if not self._extension_active:
+            logger.debug("the endpoint cannot interrupt a task", extra={"task_id": task_id})
+            return
+        targets = [task_id] if task_id is not None else []
+        await self._send_and_drain(TaskInput(control="interrupt", interrupting=targets))
+
     async def cancel(self, task_id: str, *, reason: str = "") -> None:
+        """Stop a task's response and its running tools; the task ends ``canceled``."""
         client = await self._connect()
         request = pb.CancelTaskRequest(id=task_id)
         if reason:
@@ -247,6 +270,23 @@ class A2AClient:
             )
             return self._client
 
+    async def prewarm(
+        self, *, conversation_id: str | None = None, caller_session_id: str | None = None
+    ) -> None:
+        """Have the endpoint start this context's session now, so the first request does
+        not wait for it; pass what that request would carry.
+
+        Best-effort, and only where the endpoint offers the extension: elsewhere the message
+        would be taken as a turn, so this does nothing.
+        """
+        await self._connect()
+        if not self._extension_active:
+            return
+        prewarm = TaskInput(
+            control="prewarm", conversation_id=conversation_id, caller_session_id=caller_session_id
+        )
+        await self._send_and_drain(prewarm)
+
     async def close_context(self) -> None:
         """Tell the endpoint the context is over, so it need not wait for idle.
 
@@ -254,12 +294,16 @@ class A2AClient:
         """
         if self._client is None:
             return  # nothing was ever sent on this context
+        await self._send_and_drain(TaskInput(control="close"))
+
+    async def _send_and_drain(self, task_input: TaskInput) -> None:
+        """Send a message whose task nobody reads, and read it to the end. Best-effort."""
         try:
-            async with self.send(TaskInput(closing=True)) as stream:
+            async with self.send(task_input) as stream:
                 async for _ in stream:
                     pass
         except Exception:
-            logger.debug("the endpoint did not take the goodbye", extra={"url": self._url})
+            logger.debug("the endpoint did not take the message", extra={"url": self._url})
 
     async def aclose(self) -> None:
         await self.close_context()

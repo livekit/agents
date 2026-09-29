@@ -29,7 +29,7 @@ from ..voice.events import (
 )
 from ..voice.served_request import ServedRequest
 from ..voice.speech_handle import SpeechHandle
-from ..voice.tool_executor import cancel_tool_call
+from ..voice.tool_executor import _RunningTasks, cancel_tool_call
 from .types import TaskInput, TaskUpdate
 
 if TYPE_CHECKING:
@@ -47,6 +47,7 @@ class RequestRun:
     """One request in flight: the updates it produces, until it declares a terminal state.
 
     Read it under ``async with``; closing it early stops the work that can be stopped.
+    :meth:`interrupt` stops only the response, and :meth:`cancel` its running tools too.
     """
 
     def __init__(self, runner: SessionRunner, task_input: TaskInput, task_id: str) -> None:
@@ -71,8 +72,10 @@ class RequestRun:
         """speech ids of deferred replies scheduled and not yet done."""
         self.last_word = ""
         self.concluded_at = 0.0
+        self.finished_calls: list[str] = []
         self.cancelled: list[str] = []
         self.cancelled_at = 0.0
+        self._interrupted = False
         self._stopping = False
 
         self._task = asyncio.create_task(self._run(), name="RequestRun._run")
@@ -99,6 +102,9 @@ class RequestRun:
                 for orphan in list(runner._orphans.values()):
                     self.claim(orphan)
                 self.claim(handle)
+                if self._interrupted:
+                    # a stop that came before the turn had a response to stop
+                    self._interrupt_speeches()
         except Exception as exc:
             logger.exception("failed to start a request", extra={"task_id": self._task_id})
             self._push_update(TaskUpdate(state="failed", text=str(exc) or type(exc).__name__))
@@ -106,28 +112,60 @@ class RequestRun:
         await self._finished
 
     async def cancel(self) -> TaskUpdate:
-        """Stop what can be stopped and say how the request ended.
+        """Stop the response and the running tools, and say how the request ended.
 
-        Best-effort: work that finished first is reported as finished, and a tool that does
-        not allow cancellation runs on unheard.
+        Best-effort: the end names what finished first and what still runs, since a tool
+        that does not allow cancellation runs on, and what it returns goes into the
+        session's history rather than to a later request.
         """
         self.cancelled_at = time.monotonic()
         await self._stop()
         self.maybe_finish()
-        return self._terminal or TaskUpdate(state="canceled", text=self.last_word)
+        if self._terminal is not None:
+            return self._terminal
+        # what could not be stopped runs on, and the request does not wait for it
+        ended = TaskUpdate(state="canceled", text=self._cancel_note())
+        self._push_update(ended)
+        return ended
+
+    def interrupt(self) -> None:
+        """Stop the response, and leave the tools it started running.
+
+        The request stays open until they finish and ends with what they return, at once
+        when nothing was running.
+        """
+        self._interrupt_speeches()
+        self.maybe_finish()
+
+    def _interrupt_speeches(self) -> None:
+        """A speech that disallows interruption plays out unheard."""
+        self._interrupted = True
+        for handle in self.speeches.values():
+            if not handle.done() and handle.allow_interruptions:
+                handle.interrupt()
 
     async def _stop(self) -> None:
         """Interrupt this request's speeches and stop the calls that allow it.
 
         Awaited from a caller rather than from inside a cancellation, since stopping a call
-        is itself awaitable. A speech that disallows interruption plays out unheard.
+        is itself awaitable.
         """
         self._stopping = True
-        for handle in self.speeches.values():
-            if not handle.done() and handle.allow_interruptions:
-                handle.interrupt()
+        self._interrupt_speeches()
         for call_id in list(self.open_calls):
             await self._cancel_tool_call(call_id)
+
+    def _cancel_note(self) -> str:
+        notes = [self.last_word] if self.last_word else []
+        if self.finished_calls:
+            notes.append(f"{', '.join(self.finished_calls)} finished.")
+        if self.cancelled:
+            notes.append(f"{', '.join(self.cancelled)} was cancelled before it finished.")
+        if running := list(self.open_calls.values()):
+            notes.append(
+                f"{', '.join(running)} is still running, and its result goes into the conversation."
+            )
+        return " ".join(notes) or "the request was cancelled"
 
     async def _cancel_tool_call(self, call_id: str) -> None:
         with contextlib.suppress(Exception):
@@ -209,12 +247,25 @@ class RequestRun:
         if update.status == "cancelled":
             self.cancelled.append(name)
             self.cancelled_at = time.monotonic()
-        elif update.id.endswith(_RESULT_ENTRY) and update.message is not None:
+            self.maybe_finish()
+            return
+        if name:
+            self.finished_calls.append(name)
+        if update.id.endswith(_RESULT_ENTRY) and update.message is not None:
             # a released tool's return, or its error, goes to the coalescer for a reply; a
             # None return after an update files none
             self.awaiting_reply ^= {update.id}
             output = FunctionCallOutput(
                 call_id=update.id, name=name, output=update.message, is_error=False
+            )
+            self._push_update(TaskUpdate(item=output))
+        elif self._interrupted and update.message is not None:
+            # the response that would have phrased this was stopped, so it travels as it is
+            output = FunctionCallOutput(
+                call_id=update.call_id,
+                name=name,
+                output=update.message,
+                is_error=update.status == "error",
             )
             self._push_update(TaskUpdate(item=output))
         self.maybe_finish()
@@ -251,9 +302,7 @@ class RequestRun:
             return
         if self.cancelled_at and self.concluded_at < self.cancelled_at:
             # work of this turn was stopped and nothing was concluded after it
-            stopped = ", ".join(self.cancelled) or "the work"
-            what = self.last_word or f"{stopped} was cancelled before it finished"
-            self._push_update(TaskUpdate(state="canceled", text=what))
+            self._push_update(TaskUpdate(state="canceled", text=self._cancel_note()))
         else:
             self._push_update(TaskUpdate(state="completed", text=self.last_word))
 
@@ -311,6 +360,9 @@ class SessionRunner:
         """speeches nothing has claimed: a deferred reply before its event, or on_enter."""
         self._speech_sources: dict[str, str] = {}
         """speech id -> what drew it, since say() is what makes a speech's text verbatim."""
+        self._detached: set[str] = set()
+        """calls whose request ended while they ran: what they return and what they say go
+        into the session's history, and to no request."""
         self._live: list[RequestRun] = []
         self._setup = asyncio.Lock()
         self._chores: set[asyncio.Task[None]] = set()
@@ -327,6 +379,11 @@ class SessionRunner:
     @property
     def session(self) -> AgentSession:
         return self._session
+
+    @property
+    def has_running_tools(self) -> bool:
+        """Whether a tool call is running in the session, whichever request started it."""
+        return bool(_RunningTasks.get(self._session))
 
     def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
         """Run cleanup that a synchronous callback discovered it needs."""
@@ -363,6 +420,7 @@ class SessionRunner:
         with contextlib.suppress(ValueError):
             self._live.remove(run)
         self._by_call = {k: v for k, v in self._by_call.items() if v is not run}
+        self._detached.update(run.open_calls)
         for speech_id in run.speeches:
             self._speech_sources.pop(speech_id, None)
 
@@ -383,6 +441,8 @@ class SessionRunner:
             if (owner := self._by_call.get(info.function_call.call_id)) is not None:
                 owner.claim(handle)
                 return
+            if info.function_call.call_id in self._detached:
+                return
         # a deferred reply names its calls in the event that follows; anything else waits for
         # the next request and is that one's
         self._orphans[handle.id] = handle
@@ -400,6 +460,12 @@ class SessionRunner:
         if update.type == "tool_reply_updated":
             owners = [(c, self._by_call[c]) for c in update.call_ids if c in self._by_call]
             if not owners:
+                if update.status == "scheduled" and self._detached.intersection(update.call_ids):
+                    # a reply to a request that has ended is recorded and relayed to nobody,
+                    # rather than handed to whichever request comes next
+                    self._orphans.pop(update.speech_id, None)
+                else:
+                    self._detached.difference_update(update.call_ids)
                 return
             # one reply says one thing about several results, so one request carries it. The
             # newest is the one still live — an earlier request whose work this covers is
@@ -416,6 +482,10 @@ class SessionRunner:
                 newest.on_reply_done(update)
             return
         if (owner := self._by_call.get(update.call_id)) is None:
+            if update.type == "tool_call_ended" and not (
+                update.id.endswith(_RESULT_ENTRY) and update.message is not None
+            ):
+                self._detached.discard(update.call_id)  # no reply is coming for it
             return
         if update.type == "tool_call_updated":
             owner.on_tool_call_updated(update)
