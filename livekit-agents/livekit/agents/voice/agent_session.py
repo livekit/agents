@@ -1343,6 +1343,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.end()
                 otel_context.detach(close_token)
                 if self._session_span:
+                    gen_ai_telemetry.record_session_transcript(self._session_span, self._chat_ctx)
                     self._session_span.end()
                     self._session_span = None
                 self._root_span_context = None
