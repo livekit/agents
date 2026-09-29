@@ -345,6 +345,10 @@ class _ParticipantLegacyTranscriptionOutput:
         self,
         participant: rtc.Participant | str | None,
     ) -> None:
+        # finalize the open segment for the participant it was captured for, before the
+        # identity and track are replaced
+        self.flush()
+
         self._participant_identity = (
             participant.identity if isinstance(participant, rtc.Participant) else participant
         )
@@ -369,7 +373,6 @@ class _ParticipantLegacyTranscriptionOutput:
                     if self._track_id is not None:
                         break
 
-        self.flush()
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -399,7 +402,13 @@ class _ParticipantLegacyTranscriptionOutput:
         # expression is dropped here — the deprecated rtc Transcription API has no
         # attribute channel (the stream-based output carries lk.expression instead).
         clean_text = strip_all_markup(self._pushed_text)
-        await self._publish_transcription(self._current_id, clean_text, final=False)
+        await self._publish_transcription(
+            self._current_id,
+            clean_text,
+            final=False,
+            participant_identity=self._represented_by or self._participant_identity,
+            track_id=self._track_id,
+        )
 
     @utils.log_exceptions(logger=logger)
     def flush(self) -> None:
@@ -407,8 +416,16 @@ class _ParticipantLegacyTranscriptionOutput:
             return
 
         clean_text = strip_all_markup(self._pushed_text)
+        # snapshot the identity and track now: the task runs later, after the participant
+        # may have changed
         self._flush_task = asyncio.create_task(
-            self._publish_transcription(self._current_id, clean_text, final=True)
+            self._publish_transcription(
+                self._current_id,
+                clean_text,
+                final=True,
+                participant_identity=self._represented_by or self._participant_identity,
+                track_id=self._track_id,
+            )
         )
         self._reset_state()
 
@@ -422,13 +439,21 @@ class _ParticipantLegacyTranscriptionOutput:
         if self._flush_task:
             await self._flush_task
 
-    async def _publish_transcription(self, id: str, text: str, final: bool) -> None:
-        if self._participant_identity is None or self._track_id is None:
+    async def _publish_transcription(
+        self,
+        id: str,
+        text: str,
+        final: bool,
+        *,
+        participant_identity: str | None,
+        track_id: str | None,
+    ) -> None:
+        if participant_identity is None or track_id is None:
             return
 
         transcription = rtc.Transcription(
-            participant_identity=self._represented_by or self._participant_identity,
-            track_sid=self._track_id,
+            participant_identity=participant_identity,
+            track_sid=track_id,
             segments=[
                 rtc.TranscriptionSegment(
                     id=id,

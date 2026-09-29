@@ -303,6 +303,37 @@ async def test_legacy_transcription_output_follows_the_new_participants_track() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("new_participant_has_mic", [True, False])
+async def test_legacy_transcription_output_finalizes_the_previous_participants_segment(
+    new_participant_has_mic: bool,
+) -> None:
+    room = _FakeRoom()
+    participant_b = _remote_participant_with_mic("user-b", "TR_b")
+    if not new_participant_has_mic:
+        participant_b.track_publications = {}
+    room.remote_participants = {
+        "user-a": _remote_participant_with_mic("user-a", "TR_a"),
+        "user-b": participant_b,
+    }
+    room.local_participant.publish_transcription = AsyncMock()
+
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant="user-a")
+    await output.capture_text("hello")
+    output.set_participant("user-b")
+    await output.aclose()
+
+    finals = [
+        call.args[0]
+        for call in room.local_participant.publish_transcription.call_args_list
+        if call.args[0].segments[0].final
+    ]
+    assert len(finals) == 1
+    assert finals[0].participant_identity == "user-a"
+    assert finals[0].track_sid == "TR_a"
+    assert finals[0].segments[0].text == "hello"
+
+
+@pytest.mark.asyncio
 async def test_rpc_tracing_is_installed_when_the_room_connects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
