@@ -1050,11 +1050,18 @@ class AudioRecognition:
                 self._last_final_transcript_time is not None
                 and time.time() - self._last_final_transcript_time > 0.5
             )
+            final_covers_speech = (
+                self._last_final_transcript_time is not None
+                and self._last_speaking_time is not None
+                and self._last_final_transcript_time >= self._last_speaking_time
+                and not self._speaking
+            )
             has_complete_manual_final = (
                 self._turn_detection_mode == "manual"
                 and audio_detached
-                and bool(self._audio_transcript)
+                and bool(self._audio_transcript.strip())
                 and not self._audio_interim_transcript
+                and final_covers_speech
             )
             if self._last_final_transcript_time is None or (
                 final_is_stale and not has_complete_manual_final
