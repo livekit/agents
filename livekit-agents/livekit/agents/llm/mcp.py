@@ -145,6 +145,7 @@ class MCPServer(ABC):
             self._client_task = asyncio.create_task(
                 self._run_client(self._ready_fut), name=f"{type(self).__name__}._run_client"
             )
+            self._ready_waiters = 0
 
         ready_fut, client_task = self._ready_fut, self._client_task
         self._ready_waiters += 1
@@ -157,7 +158,9 @@ class MCPServer(ABC):
                 client_task.cancel()
             raise
         finally:
-            self._ready_waiters -= 1
+            # a caller of an earlier attempt must not touch the count of the current one
+            if ready_fut is self._ready_fut:
+                self._ready_waiters -= 1
 
     async def _run_client(self, ready_fut: asyncio.Future[None]) -> None:
         try:
