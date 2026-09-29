@@ -283,7 +283,12 @@ class STT(stt.STT):
                 ),
             ) as res:
                 if res.status >= 400:
-                    err = await res.json(content_type=None)
+                    # gateways can answer with an empty or HTML body, so the error body is
+                    # best-effort and the status is reported either way
+                    try:
+                        err = await res.json(content_type=None)
+                    except (ValueError, aiohttp.ClientError):
+                        err = None
                     message = (
                         err.get("err_msg") if isinstance(err, dict) else None
                     ) or f"deepgram returned HTTP {res.status}"
