@@ -7,11 +7,12 @@ import pytest
 from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents.llm.mcp import (
     MCPServer,
+    MCPServerHTTP,
     MCPToolOptions,
     MCPToolset,
     _resolve_tool_options,
 )
-from livekit.agents.llm.tool_context import ToolFlag, is_raw_function_tool
+from livekit.agents.llm.tool_context import ToolFlag, get_raw_function_info, is_raw_function_tool
 from livekit.agents.llm.utils import is_context_type
 from livekit.agents.voice.tool_executor import has_cancellable_tool
 
@@ -181,3 +182,25 @@ async def test_list_tools_rebuilds_per_options() -> None:
     assert blocking[0] is not cancellable[0]
     assert ToolFlag.CANCELLABLE not in blocking[0].info.flags
     assert ToolFlag.CANCELLABLE in cancellable[0].info.flags
+
+
+class _FakeHTTPServer(MCPServerHTTP):
+    def __init__(self, tool_names: list[str], allowed_tools: list[str] | None) -> None:
+        super().__init__("http://localhost/mcp", allowed_tools=allowed_tools)
+        self._client = _FakeClient(tool_names)  # type: ignore[assignment]
+
+
+@pytest.mark.parametrize(
+    ("allowed_tools", "expected"),
+    [
+        (None, ["a", "b"]),
+        (["a"], ["a"]),
+        ([], []),
+    ],
+)
+async def test_http_server_allowed_tools_filter(
+    allowed_tools: list[str] | None, expected: list[str]
+) -> None:
+    server = _FakeHTTPServer(["a", "b"], allowed_tools)
+    tools = await server.list_tools()
+    assert sorted(get_raw_function_info(t).name for t in tools) == expected

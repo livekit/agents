@@ -329,8 +329,8 @@ class MCPServerHTTP(MCPServer):
             - URLs ending with 'mcp' use streamable HTTP transport
             - For other URLs, defaults to SSE transport for backward compatibility
         allowed_tools: Optional list of tool names to filter. If provided, only
-            tools whose names are in this list will be available. If None, all
-            tools from the server will be available.
+            tools whose names are in this list will be available; an empty list
+            exposes no tools. If None, all tools from the server will be available.
         headers: Optional HTTP headers to include in requests
         timeout: Connection timeout in seconds (default: 5)
         sse_read_timeout: SSE read timeout in seconds (default: 300)
@@ -360,7 +360,7 @@ class MCPServerHTTP(MCPServer):
         self._headers = headers or {}
         self._timeout = timeout
         self._sse_read_timeout = sse_read_timeout
-        self._allowed_tools = set(allowed_tools) if allowed_tools else None
+        self._allowed_tools = set(allowed_tools) if allowed_tools is not None else None
 
         # Determine transport type: explicit > URL-based detection
         if transport_type is not None:
@@ -488,7 +488,11 @@ class MCPServerHTTP(MCPServer):
 
     def __repr__(self) -> str:
         transport_type = "streamable_http" if self._use_streamable_http else "sse"
-        allowed_str = f", allowed_tools={list(self._allowed_tools)}" if self._allowed_tools else ""
+        allowed_str = (
+            f", allowed_tools={list(self._allowed_tools)}"
+            if self._allowed_tools is not None
+            else ""
+        )
         return f"MCPServerHTTP(url={self.url}, transport={transport_type}{allowed_str})"
 
 
