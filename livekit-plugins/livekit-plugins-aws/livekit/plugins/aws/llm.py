@@ -49,6 +49,10 @@ _MODELS_REJECTING_SAMPLING_PARAMS = (
     "claude-opus-5",
     "claude-sonnet-5",
     "claude-fable-5",
+    # OpenAI GPT-5.6/GPT-6: "This model doesn't support the temperature field. Remove
+    # temperature and try again." gpt-oss still accepts both, so it stays off this list.
+    "gpt-5.6",
+    "gpt-6",
 )
 
 # Model IDs that reject a forced ``toolChoice`` (``any``/``tool``) with a
@@ -122,7 +126,7 @@ class LLM(llm.LLM):
             region (str, optional): The region to use for AWS API requests. Defaults value is "us-east-1".
             temperature (float, optional): Sampling temperature for response generation. Defaults to 0.8.
                 Ignored (with a warning) for models that reject sampling parameters, e.g. Claude
-                Opus 4.7/4.8, Opus 5, Sonnet 5 and Fable 5.
+                Opus 4.7/4.8, Opus 5, Sonnet 5, Fable 5 and OpenAI GPT-5.6/GPT-6.
             max_output_tokens (int, optional): Maximum number of tokens to generate in the output. Defaults to None.
             top_p (float, optional): The nucleus sampling probability for response generation. Defaults to None.
             tool_choice (ToolChoice, optional): Specifies whether to use tools during response generation. Defaults to "auto".
