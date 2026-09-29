@@ -668,11 +668,7 @@ class SpeechStream(stt.RecognizeStream):
         # Disconnect the client
         finally:
             # Cancel audio first — stops sending audio to the STT engine
-            audio_task.cancel()
-            try:
-                await audio_task
-            except asyncio.CancelledError:
-                pass
+            await utils.aio.cancel_and_wait(audio_task)
 
             # Close the VAD stream so its task drains and exits
             if self._vad_stream is not None:
@@ -686,11 +682,7 @@ class SpeechStream(stt.RecognizeStream):
             await self._client.disconnect()
 
             # Cancel message task after disconnect — final messages have been processed
-            message_task.cancel()
-            try:
-                await message_task
-            except asyncio.CancelledError:
-                pass
+            await utils.aio.cancel_and_wait(message_task)
 
             # Remove from active streams so stale streams aren't iterated
             if self in self._stt._streams:
