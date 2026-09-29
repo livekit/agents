@@ -282,6 +282,18 @@ class STT(stt.STT):
                     sock_connect=conn_options.timeout,
                 ),
             ) as res:
+                if res.status >= 400:
+                    err = await res.json(content_type=None)
+                    message = (
+                        err.get("err_msg") if isinstance(err, dict) else None
+                    ) or f"deepgram returned HTTP {res.status}"
+                    raise APIStatusError(
+                        message=message,
+                        status_code=res.status,
+                        request_id=res.headers.get("dg-request-id"),
+                        body=None,
+                    )
+
                 return prerecorded_transcription_to_speech_event(
                     config.language,
                     await res.json(),
@@ -297,6 +309,8 @@ class STT(stt.STT):
                 request_id=None,
                 body=None,
             ) from e
+        except APIStatusError:
+            raise
         except Exception as e:
             raise APIConnectionError() from e
 
