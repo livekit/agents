@@ -134,6 +134,8 @@ def _message_parts(item: ChatItem) -> list[dict[str, Any]]:
             {
                 "type": "tool_call_response",
                 "id": item.call_id,
+                # Optional extension: the OTel response-part schema permits extra fields.
+                **({"name": item.name} if item.name else {}),
                 "response": _maybe_json(item.output),
             }
         )
