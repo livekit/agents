@@ -35,6 +35,15 @@ CPU_LOAD_GAUGE = prometheus_client.Gauge(
     ["nodename"],
 )
 
+# Counter, not a gauge: a worker can cross into full capacity for less than one
+# scrape/export interval, so the instantaneous load gauge above can miss the spike
+# entirely. A monotonic counter records every transition regardless of sampling.
+WORKER_FULL_COUNTER = prometheus_client.Counter(
+    "lk_agents_worker_full_total",
+    "Number of times the worker transitioned to full capacity (stopped accepting jobs)",
+    ["nodename"],
+)
+
 
 # Note: set_function() is not supported in multiprocess mode.# We need to update this metric explicitly.
 def _update_child_proc_count() -> None:
@@ -49,6 +58,11 @@ def _update_child_proc_count() -> None:
 
 def _update_worker_load(worker_load: float) -> None:
     CPU_LOAD_GAUGE.labels(nodename=utils.nodename()).set(worker_load)
+
+
+def worker_became_full() -> None:
+    """Record a transition into full capacity. Called once per transition, not per tick."""
+    WORKER_FULL_COUNTER.labels(nodename=utils.nodename()).inc()
 
 
 def job_started() -> None:
