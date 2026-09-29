@@ -18,10 +18,16 @@ Dana Whitfield <dana@example.com> is a Gold member whose Tokyo flight tomorrow i
 245 minutes, which is the interesting case: the delay is our fault, so the fee is waived and
 the seat moves for nothing. Miguel Ortiz <ortiz@example.com> is on a BASIC fare, which
 cannot be changed or refunded at all. Priya Raman <raman@example.com> holds travel credit.
+
+With agent-db configured, the call is saved when it ends. The conversation comes from the
+caller, as the `conversation_id` attribute of the participant that joins; a caller without one
+starts a new conversation, and a caller that joins with that id resumes it, delegations to the
+same desk context included.
 """
 
 import json
 import logging
+import os
 
 from dotenv import load_dotenv
 
@@ -30,15 +36,18 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     DirectiveReceivedEvent,
+    EffectCall,
     JobContext,
     RunContext,
     ToolExecutionUpdatedEvent,
     cli,
+    inference,
+    store,
 )
 from livekit.agents.beta.workflows import GetEmailTask
 from livekit.agents.delegation import DELEGATE_TOOL_NAME, A2ADelegate
-from livekit.agents.llm import function_tool
-from livekit.plugins import openai
+from livekit.agents.llm import ToolFlag, function_tool
+from livekit.plugins import openai  # noqa
 
 logger = logging.getLogger("voice")
 
@@ -46,7 +55,23 @@ load_dotenv()
 
 FARE_DESK_URL = "http://localhost:8321/fare-desk"
 
-server = AgentServer()
+AGENTDB_URL = os.environ.get("LIVEKIT_AGENTDB_URL")
+# devLocal serves its data plane on a port of its own, set as LIVEKIT_AGENTDB_WS_URL
+# todo: devLocal should accept the project key; until then a local agent-db takes its own
+LOCAL_KEY = (
+    {"api_key": "devkey", "api_secret": "secret"}
+    if AGENTDB_URL and "localhost" in AGENTDB_URL
+    else {}
+)
+
+# the server hands its store to each job, as ctx.store
+server = AgentServer(
+    store=(
+        store.AgentDB(ws_url=os.environ.get("LIVEKIT_AGENTDB_WS_URL"), **LOCAL_KEY)
+        if AGENTDB_URL
+        else None
+    )
+)
 
 
 def _short(text: str | None, limit: int = 90) -> str:
@@ -58,6 +83,11 @@ def _short(text: str | None, limit: int = 90) -> str:
 def _trace(call_id: str, arrow: str, text: str | None, limit: int = 90) -> None:
     """One line of the trace: which delegation, which direction, and what was said."""
     logger.info(f"{_short(call_id, 12):<12} {arrow} {_short(text, limit)}")
+
+
+async def identify(email: str, *, call_id: str) -> None:
+    """Stands in for a CRM write."""
+    _trace(call_id, "·", f"caller identified as {email}")
 
 
 class Receptionist(Agent):
@@ -91,24 +121,25 @@ class Receptionist(Agent):
             instructions="greet the caller as Northwind Air and ask how you can help"
         )
 
-    @function_tool
+    @function_tool(flags=ToolFlag.DURABLE)
     async def collect_email(self, ctx: RunContext, change: bool = False) -> str:
         """Ask the caller for their email address, reading it back to confirm it.
 
         This one talks, which is why it lives here and not on the other side: spelling an
-        address out and confirming it is a conversation, and the other half is not on the
+        address out and confirming it is a back-and-forth, and the other half is not on the
         phone. Reach for it only once an answer has asked for an address.
 
         Args:
             change: only when the caller wants a different address from the one already
                 confirmed in this call.
         """
-        async with ctx.foreground():
-            result = await GetEmailTask(chat_ctx=self.chat_ctx)
+        # durable: a call closed mid-address resumes the task where the caller left off.
+        # ctx.foreground() cannot wrap it, since a context manager in the frame does not pickle
+        result = await EffectCall(GetEmailTask(chat_ctx=self.chat_ctx))
 
         email = result.email_address.strip().lower()
-        _trace(ctx.function_call.call_id, "·", f"caller identified as {email}")
-        # said back into the conversation, so the next delegation carries it to the desk
+        await EffectCall(identify(email, call_id=ctx.function_call.call_id))
+        # said back into the history, so the next delegation carries it to the desk
         return f"confirmed with the caller: {email}"
 
 
@@ -117,14 +148,13 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
 
     session = AgentSession(
-        # one delegate per conversation: the session closes it when the call ends, which is
-        # what tells the desk it can drop this conversation rather than wait for it to idle
+        # one delegate per session: the session closes it when the call ends, which is
+        # what tells the desk it can drop this context rather than wait for it to idle
         delegate={"delegate": A2ADelegate(FARE_DESK_URL), "announce": False},
-        llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
-        # llm=inference.LLM("openai/gpt-4.1-mini"),
-        # stt=inference.STT("deepgram/nova-3", language="multi"),
-        # llm=inference.LLM("google/gemma-4-31b-it"),
-        # tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+        # llm=openai.realtime.RealtimeModel(model="gpt-realtime"),
+        stt=inference.STT("deepgram/nova-3", language="multi"),
+        llm=inference.LLM("google/gemma-4-31b-it"),
+        tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
     )
 
     @session.on("directive_received")
@@ -171,7 +201,26 @@ async def entrypoint(ctx: JobContext) -> None:
             delegations.discard(update.call_id)
             _trace(update.call_id, arrow, update.message or update.status, limit=200)
 
-    await session.start(agent=Receptionist(), room=ctx.room)
+    remote_participant = await ctx.wait_for_participant()
+    conversation_id = remote_participant.attributes.get("conversation_id")
+    persisted = None
+    if ctx.store is not None:
+        if not conversation_id:
+            conversation_id = await ctx.store.create_database()
+            logger.info(f"start a new conversation: {conversation_id}")
+        persisted = ctx.store.session(conversation_id)
+
+    await session.start(agent=Receptionist(), room=ctx.room, persist=persisted)
+
+    if session.resumed:
+        logger.info(
+            f"resumed call on {conversation_id}: {len(session.history.messages())} messages back"
+        )
+        # a resumed agent is not entered again, so what a returning caller hears is up to us
+        session.generate_reply(
+            instructions="welcome the caller back to Northwind Air and pick up where the "
+            "conversation left off"
+        )
 
 
 if __name__ == "__main__":

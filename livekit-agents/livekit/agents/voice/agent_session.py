@@ -67,6 +67,7 @@ from ._utils import _set_participant_attributes
 from .agent import Agent, AgentTask
 from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
+from .durable_tool import durable_chain
 from .events import (
     AgentEvent,
     AgentState,
@@ -108,6 +109,7 @@ from .turn import (
 )
 
 if TYPE_CHECKING:
+    from .. import store
     from ..cli.tcp_console import TcpAudioInput, TcpAudioOutput
     from ..delegation import Delegate
     from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
@@ -702,6 +704,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
         self._agent: Agent | None = None
         self._activity: AgentActivity | None = None
+        self._persisted: store.StoredSession | None = None
+        self._resumed = False
         self._next_activity: AgentActivity | None = None
         self._user_state: UserState = "listening"
         self._agent_state: AgentState = "initializing"
@@ -818,6 +822,27 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return self._chat_ctx
 
     @property
+    def persisted(self) -> store.StoredSession | None:
+        """The persisted session, as passed to ``start(persist=...)``; None if none."""
+        return self._persisted
+
+    @property
+    def resumed(self) -> bool:
+        """Whether the start picked the stored session up where it left off.
+
+        A resumed agent is not entered again, so what a returning user hears is the
+        application's to decide, on this flag.
+        """
+        return self._resumed
+
+    async def save(self) -> None:
+        """Save the session now, as closing it does; a no-op without ``persist``."""
+        if self._persisted is not None:
+            from . import persistence
+
+            await persistence.save(self)
+
+    @property
     def keyterms(self) -> list[str]:
         """The effective keyterms (user-defined + auto-detected) currently applied to the STT."""
         return self._keyterm_detector.keyterms
@@ -881,6 +906,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -896,6 +922,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: bool | RecordingOptions = True,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -910,6 +937,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         room_options: NotGivenOr[room_io.RoomOptions] = NOT_GIVEN,
         session_host: NotGivenOr[bool] = NOT_GIVEN,
         record: NotGivenOr[bool | RecordingOptions] = NOT_GIVEN,
+        persist: store.StoredSession | None = None,
         # deprecated
         room_input_options: NotGivenOr[room_io.RoomInputOptions] = NOT_GIVEN,
         room_output_options: NotGivenOr[room_io.RoomOutputOptions] = NOT_GIVEN,
@@ -931,7 +959,58 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             room_input_options: Options for the room input
             room_output_options: Options for the room output
             record: Whether to record the audio, transcripts, traces, or logs
+            persist: The persisted session, from a store's ``session()``: what it stored is
+                restored before the session starts, and the session is saved to it when it
+                closes.
         """
+        if persist is None or self._started:
+            return await self._start(
+                agent,
+                capture_run=capture_run,
+                room=room,
+                room_options=room_options,
+                session_host=session_host,
+                record=record,
+                room_input_options=room_input_options,
+                room_output_options=room_output_options,
+            )
+
+        # imported here: a session that persists nothing never loads the store
+        from . import persistence
+
+        self._persisted = persist
+        try:
+            agent, resumes = await persistence.rehydrate(self, persist, agent)
+            self._resumed = resumes
+            return await self._start(
+                agent,
+                capture_run=capture_run,
+                room=room,
+                room_options=room_options,
+                session_host=session_host,
+                record=record,
+                room_input_options=room_input_options,
+                room_output_options=room_output_options,
+                resumes=resumes,
+            )
+        except BaseException:
+            # a session that never started is never closed, so it lets its rows go here
+            await asyncio.shield(persistence.discard(self, agent))
+            raise
+
+    async def _start(
+        self,
+        agent: Agent,
+        *,
+        capture_run: bool,
+        room: NotGivenOr[rtc.Room],
+        room_options: NotGivenOr[room_io.RoomOptions],
+        session_host: NotGivenOr[bool],
+        record: NotGivenOr[bool | RecordingOptions],
+        room_input_options: NotGivenOr[room_io.RoomInputOptions],
+        room_output_options: NotGivenOr[room_io.RoomOutputOptions],
+        resumes: bool = False,
+    ) -> RunResult | None:
         async with self._lock:
             if self._started:
                 return None
@@ -1139,7 +1218,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             # _update_activity_task also watches on_enter on the run state: without it
             # the run completes as soon as the first speech does, dropping whatever
             # on_enter produces next — and never completes when on_enter says nothing.
-            tasks.append(asyncio.create_task(self._update_activity_task(None, self._agent)))
+            tasks.append(
+                asyncio.create_task(self._update_activity_task(None, self._agent, resumes=resumes))
+            )
 
             try:
                 try:
@@ -1169,6 +1250,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 )
 
             self._started = True
+            # restored durable tools run only against a session that started
+            for member in durable_chain(self._agent):
+                if member._activity is not None:
+                    member._activity._resume_durable_tools()
             self._update_agent_state("listening")
             if self._room_io and self._room_io.subscribed_fut:
 
@@ -1321,7 +1406,32 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.set_attribute(trace_types.ATTR_EXCEPTION_TYPE, error.type)
             close_token = otel_context.attach(trace.set_span_in_context(close_span))
             try:
-                await self._teardown_activity(reason=reason, drain=drain)
+                # durable tools stop at their next boundary, where the save captures them
+                chain = durable_chain(self._agent)
+                try:
+                    async with contextlib.AsyncExitStack() as held:
+                        executors = [e for e in chain.values() if e is not None]
+                        try:
+                            for executor in executors:
+                                await held.enter_async_context(executor.pause_durable())
+                        finally:
+                            # a close cut short while an effect is in flight loses only that tool
+                            for executor in executors:
+                                executor.stop_durable()
+
+                    if self._persisted is not None and isinstance(self._agent, AgentTask):
+                        from . import persistence
+
+                        # tearing down hands each task back to its parent, so the save comes first
+                        await persistence.save(self, chain, release=True)
+
+                    await self._teardown_activity(reason=reason, drain=drain)
+                finally:
+                    if self._persisted is not None:
+                        from . import persistence
+
+                        # after the drain, so the last turn is in it, and also on a close cut short
+                        await asyncio.shield(persistence.save(self, chain, release=True))
 
                 # the agent's own delegate goes with its activity; this one is the session's
                 if self._delegate is not None:
@@ -1849,6 +1959,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         new_activity: Literal["start", "resume"] = "start",
         blocked_tasks: list[asyncio.Task] | None = None,
         wait_on_enter: bool = True,
+        resumes: bool = False,
     ) -> None:
         async with self._activity_lock:
             if self._closing and new_activity == "start":
@@ -1937,22 +2048,28 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 self._activity = self._next_activity
                 self._next_activity = None
 
-                run_state = self._global_run_state
-                handoff_item = AgentHandoff(
-                    old_agent_id=(previous_activity_v.agent.id if previous_activity_v else None),
-                    new_agent_id=self._activity.agent.id,
-                )
-                if run_state:
-                    run_state._agent_handoff(
-                        item=handoff_item,
-                        old_agent=(previous_activity_v.agent if previous_activity_v else None),
-                        new_agent=self._activity.agent,
+                # a start that resumes the agent the history already ends on is no handoff and
+                # runs no on_enter; its configuration update is skipped by content, so a changed
+                # one still lands
+                if not resumes:
+                    run_state = self._global_run_state
+                    handoff_item = AgentHandoff(
+                        old_agent_id=(
+                            previous_activity_v.agent.id if previous_activity_v else None
+                        ),
+                        new_agent_id=self._activity.agent.id,
                     )
-                self._chat_ctx.insert(handoff_item)
-                self.emit(
-                    "conversation_item_added",
-                    ConversationItemAddedEvent(item=handoff_item),
-                )
+                    if run_state:
+                        run_state._agent_handoff(
+                            item=handoff_item,
+                            old_agent=(previous_activity_v.agent if previous_activity_v else None),
+                            new_agent=self._activity.agent,
+                        )
+                    self._chat_ctx.insert(handoff_item)
+                    self.emit(
+                        "conversation_item_added",
+                        ConversationItemAddedEvent(item=handoff_item),
+                    )
 
                 if new_activity == "start":
                     await self._activity.start(
@@ -1960,6 +2077,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                         trace_context=(
                             handoff_ctx if handoff_ctx is not None else self._session_start_context
                         ),
+                        resumes=resumes,
                     )
                 elif new_activity == "resume":
                     await self._activity.resume(
@@ -1982,12 +2100,19 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     @utils.log_exceptions(logger=logger)
     async def _update_activity_task(
-        self, old_task: asyncio.Task[None] | None, agent: Agent
+        self, old_task: asyncio.Task[None] | None, agent: Agent, *, resumes: bool = False
     ) -> None:
         if old_task is not None:
             await old_task
 
-        await self._update_activity(agent, wait_on_enter=False)
+        # an agent resumed with durable tools already has its activity, which resumes
+        rehydrated = agent._activity is not None and self._activity is None
+        await self._update_activity(
+            agent,
+            new_activity="resume" if rehydrated else "start",
+            wait_on_enter=False,
+            resumes=resumes,
+        )
 
         # watch on_enter so the run captures its output without awaiting it
         if (activity := self._activity) is not None and activity._on_enter_task is not None:

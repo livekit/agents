@@ -1,4 +1,4 @@
-"""Where a conversation hands reasoning and tool use."""
+"""Where a session hands reasoning and tool use."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ DELEGATE_TOOL_NAME = "lk_agents_delegate"
 class DelegateStream(Protocol):
     """The updates of one delegation, until it declares a terminal state."""
 
+    @property
+    def task_id(self) -> str:
+        """The far side's id for this delegation, empty until its first event arrives."""
+        ...
+
     async def __anext__(self) -> TaskUpdate: ...
     def __aiter__(self) -> Any: ...
     async def __aenter__(self) -> Any: ...
@@ -39,22 +44,27 @@ class DelegateStream(Protocol):
 
 
 class Delegate(ABC):
-    """An expert the conversation hands work to, here or behind a socket.
+    """An expert the conversation model hands work to, here or behind a socket.
 
     Attached to one ``AgentSession`` or one ``Agent`` and closed by it, so give each
-    conversation its own.
+    session its own.
     """
 
     @abstractmethod
     def submit(self, task_input: TaskInput) -> DelegateStream:
         """Start one delegation and hand back the stream of its updates."""
 
+    @property
+    def endpoint(self) -> str | None:
+        """Where the far side lives, stable across restarts, or None when it has no address."""
+        return None
+
     async def aclose(self) -> None:  # noqa: B027
         """Release what the delegate holds. Called by whatever it is attached to."""
 
 
 class DelegationOptions(TypedDict, total=False):
-    """A delegate and how the conversation reaches it, as a plain dict::
+    """A delegate and how the session reaches it, as a plain dict::
 
     AgentSession(delegate={"delegate": A2ADelegate(url), "metadata": {"customer_id": "c-42"}})
     """

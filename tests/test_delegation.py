@@ -1,9 +1,10 @@
-"""The voice side: a conversation that hands work to an expert over A2A."""
+"""The voice side: a session that hands work to an expert over A2A."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import pathlib
 from typing import Any
 
 import pytest
@@ -20,7 +21,7 @@ from .test_a2a_server import _drain_sse_watcher, _serving
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
 
-def _voice_llm(*, instruction: str = "what is the fare") -> FakeLLM:
+def _voice_llm(*, instruction: str = "what is the fare", call_id: str = "d1") -> FakeLLM:
     return _AnsweringLLM(
         fake_responses=[
             _says(
@@ -31,7 +32,7 @@ def _voice_llm(*, instruction: str = "what is the fare") -> FakeLLM:
                         type="function",
                         name=DELEGATE_TOOL_NAME,
                         arguments=f'{{"task": "{instruction}"}}',
-                        call_id="d1",
+                        call_id=call_id,
                     )
                 ],
             )
@@ -53,6 +54,10 @@ class _Scripted(Delegate):
 class _ScriptedStream:
     def __init__(self, updates: list[TaskUpdate]) -> None:
         self._updates = updates
+
+    @property
+    def task_id(self) -> str:
+        return ""
 
     async def __aenter__(self) -> Any:
         return self
@@ -96,7 +101,7 @@ def _answer(session: AgentSession) -> str | None:
 
 
 @contextlib.asynccontextmanager
-async def _conversation(llm: FakeLLM, **session_kwargs: Any) -> Any:
+async def _voice_session(llm: FakeLLM, **session_kwargs: Any) -> Any:
     async with _serving() as served:
         delegate = A2ADelegate(f"{served.base_url}/fare-desk")
         session = AgentSession(llm=llm, delegate=delegate, **session_kwargs)
@@ -109,7 +114,7 @@ async def _conversation(llm: FakeLLM, **session_kwargs: Any) -> Any:
 
 
 async def test_the_delegate_tool_is_offered_when_a_delegate_is_in_force() -> None:
-    async with _conversation(_voice_llm()) as (session, _):
+    async with _voice_session(_voice_llm()) as (session, _):
         activity = session.current_agent._get_activity_or_raise()
 
         def _delegate_tool() -> Any:
@@ -136,11 +141,11 @@ async def test_a_session_without_a_delegate_offers_no_such_tool() -> None:
 
 
 async def test_progress_is_relayed_and_the_answer_is_the_tools_return() -> None:
-    async with _conversation(_voice_llm()) as (session, _):
+    async with _voice_session(_voice_llm()) as (session, _):
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
 
-        # the expert's report reached the conversation as the tool wrote it
+        # the expert's report reached the history as the tool wrote it
         assert "checking the fare rules" in " ".join(_outputs(session))
         assert _answer(session) == "It is 240 USD."
 
@@ -148,7 +153,7 @@ async def test_progress_is_relayed_and_the_answer_is_the_tools_return() -> None:
 async def test_a_directive_is_raised_on_the_session_after_the_answer() -> None:
     events: list[DirectiveReceivedEvent] = []
 
-    async with _conversation(_voice_llm(instruction="that is all")) as (session, _):
+    async with _voice_session(_voice_llm(instruction="that is all")) as (session, _):
         session.on("directive_received", events.append)
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
@@ -161,9 +166,9 @@ async def test_a_directive_is_raised_on_the_session_after_the_answer() -> None:
         assert session.history.items
 
 
-async def test_the_conversation_is_sent_without_its_calls() -> None:
+async def test_the_history_is_sent_without_its_calls() -> None:
     """The expert gets what was said, not the plumbing that said it."""
-    async with _conversation(_voice_llm()) as (session, served):
+    async with _voice_session(_voice_llm()) as (session, served):
         session.generate_reply(user_input="how much is it")
         await asyncio.sleep(5)
 
@@ -171,7 +176,7 @@ async def test_the_conversation_is_sent_without_its_calls() -> None:
     items = expert.current_agent.chat_ctx.items
     said = [item.text_content or "" for item in items if item.type == "message"]
     assert any("how much is it" in text for text in said), "the caller's turn reached the expert"
-    # the delegate call and its synthetic progress entries are not conversation
+    # the delegate call and its synthetic progress entries are not what was said
     assert not [item for item in items if getattr(item, "name", "") == DELEGATE_TOOL_NAME]
 
 
@@ -181,6 +186,8 @@ async def test_a_failing_expert_raises_a_tool_error() -> None:
             return _FailingStream()
 
     class _FailingStream:
+        task_id = ""
+
         async def __aenter__(self) -> Any:
             return self
 
@@ -271,7 +278,7 @@ async def test_an_agents_delegate_overrides_the_sessions() -> None:
 
 
 async def test_a_delegation_that_ends_without_a_state_is_a_failure() -> None:
-    """Rule 1: a stream that ends without a terminal status failed, and the conversation
+    """Rule 1: a stream that ends without a terminal status failed, and the conversation model
     has to hear that rather than a stray StopAsyncIteration."""
 
     class _Silent(Delegate):
@@ -349,3 +356,98 @@ async def test_an_update_carrying_only_an_item_is_not_relayed() -> None:
         assert len(_outputs(session)) == 2
     finally:
         await asyncio.wait_for(session.aclose(), timeout=10.0)
+
+
+async def test_a_persisted_caller_names_its_expert_tasks_and_resumes_the_context(
+    tmp_path: pathlib.Path,
+) -> None:
+    from livekit.agents import store
+    from livekit.agents.a2a import TASK_ID_KEY, A2ASessionContext
+    from livekit.agents.store.local import SQLiteExecutor
+
+    from .test_a2a_server import _fare_desk_llm, _Served, check_fares
+
+    local = store.LocalStore(tmp_path)
+    conversation_id = await local.create_database()
+    seen: list[tuple[str, str | None, str | None]] = []
+
+    async def persisted(ctx: A2ASessionContext, served: _Served) -> None:
+        seen.append((ctx.context_id, ctx.conversation_id, ctx.caller_session_id))
+        session: AgentSession = AgentSession(llm=_fare_desk_llm())
+        await session.start(
+            agent=Agent(instructions="fare desk", tools=[check_fares]), persist=ctx.persisted
+        )
+        served.sessions.append(session)
+        ctx.attach(session)
+
+    async def call(url: str, call_id: str) -> tuple[A2ADelegate, AgentSession]:
+        delegate = A2ADelegate(url)
+        session: AgentSession = AgentSession(llm=_voice_llm(call_id=call_id), delegate=delegate)
+        # the front session, which every channel of the conversation resumes
+        await session.start(
+            agent=Agent(instructions="voice"), persist=local.session(conversation_id)
+        )
+        session.generate_reply(user_input="how much is it")
+        answers: list[str] = []
+        for _ in range(100):
+            answers = [
+                i.output
+                for i in session.history.items
+                if i.type == "function_call_output" and i.call_id == f"{call_id}_final"
+            ]
+            if answers:
+                break
+            await asyncio.sleep(0.1)
+        assert answers == ["It is 240 USD."]
+        # closing says goodbye to the expert, which drops and persists its side
+        await asyncio.wait_for(session.aclose(), timeout=10.0)
+        return delegate, session
+
+    async with _serving(handler=persisted, store=local) as served:
+        url = f"{served.base_url}/fare-desk"
+        first, _ = await call(url, "d1")
+        second, caller = await call(url, "d2")
+    await _drain_sse_watcher()
+
+    # the restarted caller's request named the stored context, and the expert heard where to write
+    context_id = first.client.context_id
+    assert second.client.context_id == context_id
+    assert seen == [(context_id, conversation_id, conversation_id)] * 2
+    # the answer to each delegate call names the expert task that gave it, and the call, recorded
+    # before the task existed, is left as it was
+    history = caller.history.items
+    answers = [i for i in history if i.type == "function_call_output" and i.call_id == "d2_final"]
+    assert [bool(a.extra.get(TASK_ID_KEY)) for a in answers] == [True]
+    calls = [i for i in history if i.type == "function_call" and i.call_id == "d2"]
+    assert [c.extra.get(TASK_ID_KEY) for c in calls] == [None]
+
+    executor = SQLiteExecutor(str(tmp_path / f"{conversation_id}.sqlite"))
+    tree = [
+        row
+        async for row in executor.query(
+            "SELECT session_id, parent_session_id, endpoint FROM sessions ORDER BY session_id"
+        )
+    ]
+    assert tree == [
+        {"session_id": conversation_id, "parent_session_id": None, "endpoint": None},
+        {
+            "session_id": context_id,
+            "parent_session_id": conversation_id,
+            "endpoint": "fare-desk",
+        },
+    ]
+    tasks = [
+        row
+        async for row in executor.query(
+            "SELECT json_extract(item, '$.call_id') AS call_id, "
+            "json_extract(item, '$.extra.\"lk.task_id\"') AS task_id FROM chat_items "
+            "WHERE session_id = ? AND owner = 'session' "
+            "AND json_extract(item, '$.call_id') IN ('d1_final', 'd2_final') "
+            "AND json_extract(item, '$.type') = 'function_call_output'",
+            conversation_id,
+        )
+    ]
+    assert sorted(row["call_id"] for row in tasks) == ["d1_final", "d2_final"]
+    assert all(row["task_id"] for row in tasks)
+    await executor.aclose()
+    await local.aclose()

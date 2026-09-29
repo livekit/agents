@@ -86,6 +86,7 @@ def _observability_url(livekit_url: str) -> str | None:
 if TYPE_CHECKING:
     from .ipc.inference_executor import InferenceExecutor
     from .simulation import SimulationContext
+    from .store import SessionStore
     from .voice.agent_session import AgentSession, RecordingOptions
     from .voice.report import SessionReport
 
@@ -164,6 +165,8 @@ class RunningJobInfo:
     """The server's assignment (room token) arrived."""
     launched_at: float = 0.0
     """A process was acquired from the pool and handed the job."""
+    store: SessionStore | None = None
+    """Where the agent server persists sessions, pickled as its configuration."""
 
 
 DEFAULT_PARTICIPANT_KINDS: list[rtc.ParticipantKind.ValueType] = [
@@ -495,6 +498,11 @@ class JobContext:
     def job(self) -> agent.Job:
         """Returns the current job that the worker is executing."""
         return self._info.job
+
+    @property
+    def store(self) -> SessionStore | None:
+        """Where the agent server persists sessions, or None when it was given no store."""
+        return self._info.store
 
     @property
     def worker_id(self) -> str:

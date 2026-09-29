@@ -125,6 +125,7 @@ from .voice.amd import (
     AMDPredictionEvent,
 )
 from .voice.background_audio import AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, PlayHandle
+from .voice.durable_tool import EffectCall
 from .voice.keyterm_detection import (
     KeytermDetectionOptions,
     KeytermsOptions,
@@ -244,6 +245,7 @@ __all__ = [
     "AgentEvent",
     "ModelSettings",
     "Agent",
+    "EffectCall",
     "AgentTask",
     "AssignmentTimeoutError",
     "UnexpectedModelBehavior",

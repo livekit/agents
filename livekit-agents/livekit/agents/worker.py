@@ -21,6 +21,7 @@ import inspect
 import math
 import multiprocessing as mp
 import os
+import pickle
 import sys
 import threading
 import time
@@ -60,6 +61,7 @@ from .version import __version__
 
 if TYPE_CHECKING:
     from .a2a.server import A2ASessionHandler, _SessionExecutor
+    from .store import SessionStore
 
 
 ASSIGNMENT_TIMEOUT = 7.5
@@ -340,6 +342,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         prometheus_port: int | None = None,
         prometheus_multiproc_dir: str | None = None,
         log_level: str | ServerEnvOption[str] = _default_log_level,
+        store: SessionStore | None = None,
     ) -> None:
         super().__init__()
         self._ws_url = ws_url or os.environ.get("LIVEKIT_URL") or ""
@@ -372,6 +375,13 @@ class AgentServer(utils.EventEmitter[EventTypes]):
 
         self._http_proxy = http_proxy
         self._log_level = _validate_and_normalize_log_level(log_level)
+        if store is not None:
+            try:
+                pickle.dumps(store)
+            except Exception as e:
+                # each job receives the store pickled, so one that does not pickle fails them all
+                raise TypeError(f"the store {store!r} does not pickle: {e}") from e
+        self._store = store
         # Set by the CLI (--simulation) when the worker runs under an agent
         # simulation: load shedding is disabled so runs can saturate the agent.
         self._simulation = False
@@ -420,6 +430,12 @@ class AgentServer(utils.EventEmitter[EventTypes]):
         """
         return self._http
 
+    @property
+    def store(self) -> SessionStore | None:
+        """Where sessions persist: handed to each job as ``JobContext.store``, and to each A2A
+        context as ``A2ASessionContext.persisted``."""
+        return self._store
+
     def a2a_session(
         self,
         *,
@@ -455,6 +471,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     description=description,
                     name=name,
                     idle_timeout=idle_timeout,
+                    store=self._store,
                 )
             )
             return handler
@@ -1068,6 +1085,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 url=self._ws_url,
                 token=token,
                 fake_job=fake_job,
+                store=self._store,
             )
 
             await self._proc_pool.launch_job(running_info)
@@ -1103,6 +1121,10 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             for a2a_session in self._a2a_sessions:
                 with contextlib.suppress(Exception):
                     await a2a_session.aclose()
+            if self._store is not None:
+                # what the A2A contexts left open; a job's copy closes with its last session
+                with contextlib.suppress(Exception):
+                    await self._store.aclose()
 
             await self._proc_pool.aclose()
 
@@ -1335,6 +1357,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 token=jwt.encode(decoded, self._api_secret, algorithm="HS256"),
                 worker_id=aj.worker_id,
                 fake_job=aj.fake_job,
+                store=self._store,
             )
             await self._proc_pool.launch_job(running_info)
 
@@ -1484,6 +1507,7 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                 received_at=received_at,
                 accepted_at=accepted_at,
                 assigned_at=time.time(),
+                store=self._store,
             )
 
             await self._proc_pool.launch_job(running_info)

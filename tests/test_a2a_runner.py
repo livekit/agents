@@ -9,7 +9,7 @@ import pytest
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool
 from livekit.agents.a2a import TaskInput, TaskUpdate
-from livekit.agents.a2a.runner import REQUEST_ID_KEY, RequestRun, SessionRunner
+from livekit.agents.a2a.runner import TASK_ID_KEY, RequestRun, SessionRunner
 from livekit.agents.llm import ChatContext, FunctionCall, FunctionToolCall, ToolFlag
 from livekit.agents.voice.tool_executor import _RunningTasks
 
@@ -86,7 +86,7 @@ async def test_a_request_is_answered_by_the_turn_it_opened() -> None:
     session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
 
     updates = await _collect(
-        runner.submit(TaskInput(instruction="what is the change fee"), request_id="r1")
+        runner.submit(TaskInput(instruction="what is the change fee"), task_id="r1")
     )
     await _close(session, runner)
 
@@ -108,9 +108,7 @@ async def test_each_item_travels_once() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
 
-    updates = await _collect(
-        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
-    )
+    updates = await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
     await _close(session, runner)
 
     calls = [u.item for u in updates if u.item is not None and u.item.type == "function_call"]
@@ -136,9 +134,7 @@ async def test_a_tools_report_is_relayed_as_written_and_draws_no_reply() -> None
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
 
-    updates = await _collect(
-        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
-    )
+    updates = await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
     await _close(session, runner)
 
     assert finished == ["done"]
@@ -169,7 +165,7 @@ async def test_a_person_s_turn_is_answered_by_the_expert_s_own_words() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
 
-    updates = await _collect(runner.submit(TaskInput(text="what is the fare"), request_id="r1"))
+    updates = await _collect(runner.submit(TaskInput(text="what is the fare"), task_id="r1"))
     await _close(session, runner)
 
     # the tool's own words stay in the item; what is said is the expert's line about them
@@ -194,9 +190,7 @@ async def test_a_report_travels_as_a_call_naming_what_it_reports_for() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
 
-    updates = await _collect(
-        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
-    )
+    updates = await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
     await _close(session, runner)
 
     reports = [u for u in updates if u.text == "checking the fare rules"]
@@ -222,9 +216,7 @@ async def test_a_silent_report_travels_as_an_item_with_no_text() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
 
-    updates = await _collect(
-        runner.submit(TaskInput(instruction="what is the fare"), request_id="r1")
-    )
+    updates = await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
     await _close(session, runner)
 
     reports = [
@@ -250,7 +242,7 @@ async def test_a_line_the_expert_said_outright_is_said_as_written() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[read_back]), llm=llm)
 
-    updates = await _collect(runner.submit(TaskInput(instruction="read the code"), request_id="r1"))
+    updates = await _collect(runner.submit(TaskInput(instruction="read the code"), task_id="r1"))
     await _close(session, runner)
 
     by_text = {u.text: u.verbatim for u in updates if u.text}
@@ -274,7 +266,7 @@ async def test_a_directive_rides_the_answer() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[say_goodbye]), llm=llm)
 
-    updates = await _collect(runner.submit(TaskInput(instruction="that is all"), request_id="r1"))
+    updates = await _collect(runner.submit(TaskInput(instruction="that is all"), task_id="r1"))
     await _close(session, runner)
 
     (answer,) = [u for u in updates if u.state == "completed"]
@@ -304,7 +296,7 @@ async def test_a_tool_sees_the_callers_metadata() -> None:
     await _collect(
         runner.submit(
             TaskInput(instruction="look it up", metadata={"customer_id": "c-42"}),
-            request_id="r1",
+            task_id="r1",
         )
     )
     await _close(session, runner)
@@ -343,11 +335,11 @@ async def test_one_reply_covering_two_requests_is_carried_by_the_newest() -> Non
         Agent(instructions="fare desk", tools=[slow_lookup, quick_lookup]), llm=llm
     )
 
-    first = runner.submit(TaskInput(instruction="first"), request_id="r1")
+    first = runner.submit(TaskInput(instruction="first"), task_id="r1")
     reading_first = asyncio.create_task(_collect(first))
     await asyncio.wait_for(released.wait(), timeout=10.0)
 
-    second = runner.submit(TaskInput(instruction="second"), request_id="r2")
+    second = runner.submit(TaskInput(instruction="second"), task_id="r2")
     reading_second = asyncio.create_task(_collect(second))
     resume.set()
 
@@ -389,13 +381,13 @@ async def test_a_released_tool_still_reads_its_own_request() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[slow_lookup]), llm=llm)
 
-    first = runner.submit(TaskInput(instruction="first", metadata={"n": 1}), request_id="r1")
+    first = runner.submit(TaskInput(instruction="first", metadata={"n": 1}), task_id="r1")
     reading_first = asyncio.create_task(_collect(first))
     await asyncio.wait_for(released.wait(), timeout=10.0)
 
     # the second request starts while the first request's tool is still running, and is held
     # open so it is still the newest when that tool reads
-    second = runner.submit(TaskInput(instruction="second", metadata={"n": 2}), request_id="r2")
+    second = runner.submit(TaskInput(instruction="second", metadata={"n": 2}), task_id="r2")
     await asyncio.wait_for(second.__anext__(), timeout=10.0)
 
     resume.set()
@@ -434,7 +426,7 @@ async def test_an_ordinary_session_has_no_request_to_direct() -> None:
     assert branch == ["close"]
 
 
-async def test_the_conversation_is_merged_once_across_requests() -> None:
+async def test_the_history_is_merged_once_across_requests() -> None:
     """The caller sends what it holds, whole; the receiver takes the delta by item id."""
     llm = _AnsweringLLM(
         fake_responses=[_says("first", "one"), _says("second", "two")],
@@ -444,14 +436,10 @@ async def test_the_conversation_is_merged_once_across_requests() -> None:
 
     chat_ctx = ChatContext.empty()
     chat_ctx.add_message(role="user", content="change my Monday flight", id="m1")
-    await _collect(
-        runner.submit(TaskInput(instruction="first", chat_ctx=chat_ctx), request_id="r1")
-    )
+    await _collect(runner.submit(TaskInput(instruction="first", chat_ctx=chat_ctx), task_id="r1"))
 
     chat_ctx.add_message(role="user", content="and the Tuesday one", id="m2")
-    await _collect(
-        runner.submit(TaskInput(instruction="second", chat_ctx=chat_ctx), request_id="r2")
-    )
+    await _collect(runner.submit(TaskInput(instruction="second", chat_ctx=chat_ctx), task_id="r2"))
 
     items = session.current_agent.chat_ctx.items
     await _close(session, runner)
@@ -464,7 +452,7 @@ async def test_the_conversation_is_merged_once_across_requests() -> None:
     assert len(items) == len({item.id for item in items})
 
 
-async def test_what_the_caller_holds_arrives_as_conversation_not_plumbing() -> None:
+async def test_what_the_caller_holds_arrives_as_history_not_plumbing() -> None:
     """A caller's calls, handoffs and instructions are not what was said."""
     llm = _AnsweringLLM(fake_responses=[_says("first", "one")], fallbacks=[])
     session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
@@ -473,9 +461,7 @@ async def test_what_the_caller_holds_arrives_as_conversation_not_plumbing() -> N
     chat_ctx.add_message(role="user", content="change my Monday flight", id="m1")
     chat_ctx.insert(FunctionCall(id="fc1", call_id="c1", name="lk_agents_delegate", arguments="{}"))
     chat_ctx.add_message(role="system", content="you are a phone agent", id="s1")
-    await _collect(
-        runner.submit(TaskInput(instruction="first", chat_ctx=chat_ctx), request_id="r1")
-    )
+    await _collect(runner.submit(TaskInput(instruction="first", chat_ctx=chat_ctx), task_id="r1"))
 
     ids = {item.id for item in session.current_agent.chat_ctx.items}
     await _close(session, runner)
@@ -502,7 +488,7 @@ async def test_cancelling_ends_the_request_with_what_it_had() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[hold_seat]), llm=llm)
 
-    run = runner.submit(TaskInput(instruction="hold it"), request_id="r1")
+    run = runner.submit(TaskInput(instruction="hold it"), task_id="r1")
     updates: list[TaskUpdate] = []
 
     async def _read() -> None:
@@ -540,7 +526,7 @@ async def test_a_stop_reaches_a_call_the_executor_does_not_have_yet() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[hold_seat]), llm=llm)
 
-    run = runner.submit(TaskInput(instruction="hold it"), request_id="r1")
+    run = runner.submit(TaskInput(instruction="hold it"), task_id="r1")
     seen = run.on_item
 
     def stop_in_the_window(item: Any, handle: Any) -> None:
@@ -590,7 +576,7 @@ async def test_closing_the_run_cancels_the_work_it_can_stop() -> None:
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[hold_seat]), llm=llm)
 
-    run = runner.submit(TaskInput(instruction="hold it"), request_id="r1")
+    run = runner.submit(TaskInput(instruction="hold it"), task_id="r1")
 
     async def _until_holding() -> None:
         # the turn records the call before the executor dispatches it, so waiting for the
@@ -619,14 +605,37 @@ async def test_what_a_request_produced_is_stamped_with_it() -> None:
         fallbacks=["It is 240 USD."],
     )
     session, runner = await _serve(Agent(instructions="fare desk", tools=[check_fares]), llm=llm)
+    heard: list[str | None] = []
+    session.on(
+        "conversation_item_added",
+        lambda ev: ev.item.role == "assistant" and heard.append(ev.item.extra.get(TASK_ID_KEY)),
+    )
 
-    await _collect(runner.submit(TaskInput(instruction="what is the fare"), request_id="r1"))
+    await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
     stamped = [
         item
         for item in session.current_agent.chat_ctx.items
-        if getattr(item, "extra", {}).get(REQUEST_ID_KEY) == "r1"
+        if getattr(item, "extra", {}).get(TASK_ID_KEY) == "r1"
     ]
     await _close(session, runner)
 
     assert stamped, "the request's own items carry its id"
     assert any(item.type == "function_call" for item in stamped)
+    # an item is stamped before anyone hears it was added
+    assert heard == ["r1"]
+
+
+async def test_what_was_said_before_a_request_is_relayed_stamped_and_stored_as_it_was() -> None:
+    llm = _AnsweringLLM(fake_responses=[_says("hello", "Welcome to the fare desk.")], fallbacks=[])
+    session, runner = await _serve(Agent(instructions="fare desk"), llm=llm)
+
+    await session.generate_reply(user_input="hello")
+    (greeting,) = [
+        i for i in session.history.items if i.type == "message" and i.role == "assistant"
+    ]
+    updates = await _collect(runner.submit(TaskInput(instruction="what is the fare"), task_id="r1"))
+    await _close(session, runner)
+
+    relayed = [u.item for u in updates if u.item is not None and u.item.id == greeting.id]
+    assert [item.extra.get(TASK_ID_KEY) for item in relayed] == ["r1"]
+    assert TASK_ID_KEY not in greeting.extra

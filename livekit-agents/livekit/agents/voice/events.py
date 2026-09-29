@@ -72,19 +72,44 @@ class RunContext(Generic[Userdata_T]):
 
         # synthesized progress-update pairs, populated whether or not an executor is attached
         self._updates: list[tuple[FunctionCall, FunctionCallOutput]] = []
+        # merged into each output made for this call from now on, since a recorded item is
+        # never edited
+        self._output_extra: dict[str, Any] = {}
 
         # set/cleared by the executor around the tool's lifetime
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
-        # set by the first update(): whether anything voices its output, and what the step
-        # that answers it may call
+        # set by the first update(): that the tool no longer holds its speech, whether anything
+        # voices its output, and what the step that answers it may call
+        self._released = False
         self._suppress_reply = False
         self._reply_tool_choice: ToolChoice | None = None
 
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state
+
+        # set while the tool runs as a durable function, whose frame cannot release the floor
+        self._durable = False
+
+    def __getstate__(self) -> dict[str, Any]:
+        # only the durable scheduler pickles a RunContext, as part of the tool's frame
+        return {"function_call": self._function_call, "initial_step_idx": self._initial_step_idx}
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        from .agent_activity import _AgentActivityContextVar, _SpeechHandleContextVar
+        from .durable_tool import _REHYDRATING
+
+        session, _ = _REHYDRATING.get()
+        self.__init__(  # type: ignore[misc]
+            session=session,
+            speech_handle=_SpeechHandleContextVar.get(),
+            function_call=state["function_call"],
+            activity=_AgentActivityContextVar.get(None),
+        )
+        self._initial_step_idx = state["initial_step_idx"]
+        self._durable = True
 
     @property
     def session(self) -> AgentSession[Userdata_T]:
@@ -227,6 +252,10 @@ class RunContext(Generic[Userdata_T]):
                 and without that it can answer a report by calling the same tool again. Set
                 it where the report is genuinely something to act on.
         """
+        if self._durable:
+            # releasing the floor mid-tool is not something a resumed frame can repeat
+            raise RuntimeError("ctx.update() is not supported inside a durable tool")
+
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
         for s in self._filler_schedulers:
@@ -286,7 +315,7 @@ class RunContext(Generic[Userdata_T]):
             self._suppress_reply = not reply
             self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
-            self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
+            self._released = True
             return
 
         await self._executor._enqueue_reply(
@@ -336,6 +365,7 @@ class RunContext(Generic[Userdata_T]):
             update_of=self.function_call.call_id if call_id_suffix else None,
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
+        tool_output.fnc_call_out.extra.update(self._output_extra)
         return (fnc_call, tool_output.fnc_call_out)
 
 

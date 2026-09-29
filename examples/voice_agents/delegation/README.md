@@ -47,7 +47,7 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
 ## What to look at
 
 - **`@server.a2a_session(endpoint="fare-desk")`** serves an `AgentSession` over A2A on the
-  agent server's own HTTP app. The handler runs once per conversation, builds its session and
+  agent server's own HTTP app. The handler runs once per context, builds its session and
   hands it over; every later request on that `contextId` is a turn of the same session, so
   the desk remembers who it is talking to.
 - **`ctx.update()`** in `rebook` and `book_flight` reports while the seat is being held and
@@ -57,10 +57,91 @@ voice.py     ◀ answered: moved to NW812, the delay waived the fee
   answer. When one is, it sets a directive that rides back with the answer; in an ordinary
   session there is nobody to advise.
 - **`collect_email` lives on the voice side**, because spelling an address back is a
-  conversation and the desk is not on the phone. The desk asks for one in its answer.
+  back-and-forth and the desk is not on the phone. The desk asks for one in its answer.
 - **`delegate=A2ADelegate(url)`** is the whole of the voice side's delegation code. The
   session closes the delegate when the call ends, which is what tells the desk to drop the
-  conversation.
+  context.
+
+## Persistence
+
+Persistence lets a session be loaded again after it closed. A text session cannot stay alive for days between messages, and a voice session ends with the call. A session that ends with a defined error (an LLM, STT or TTS failure) still closes gracefully, so it still saves. Persistence is not designed to survive a server crash: nothing written since the last save is recovered, and no mechanism in the framework exists for that case.
+
+A session given `persist=` is saved once, when it closes: the items its history and its agents' contexts gained, changed or lost since the last save, then its current agent, the agents that current agent returns to, its userdata (the mock airline included) and any durable tool's frame, in one batch. One conversation is one agent-db database, so its id is the database id. The front session, the phone agent's, takes the conversation id as its own, so every call on the conversation resumes it; each desk context it talked to is a row in the same database, under the caller's, with the context id as its id.
+
+The store belongs to the agent server, which hands it to each job as `ctx.store` and to each desk context as `ctx.persisted`:
+
+```python
+server = AgentServer(store=store.AgentDB())   # LIVEKIT_AGENTDB_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+
+@server.rtc_session()
+async def entrypoint(ctx: JobContext) -> None:
+    await session.start(agent=Receptionist(), room=ctx.room, persist=ctx.store.session(conversation_id))
+
+@server.a2a_session(endpoint="fare-desk", description="Answers fare questions.")
+async def fare_desk(ctx: A2ASessionContext) -> None:
+    await session.start(agent=FareDesk(), persist=ctx.persisted)   # None when the caller named no conversation
+```
+
+Start agent-db locally, from `agents-private/agent-db`, and leave it running:
+
+```bash
+mage build && mage devLocal   # management :7780, data plane ws://localhost:7781/db
+```
+
+Point the processes at it. devLocal serves its data plane on a port of its own, and takes its own key, which the example passes when the URL is on localhost:
+
+```bash
+export LIVEKIT_AGENTDB_URL=http://localhost:7780
+export LIVEKIT_AGENTDB_WS_URL=ws://localhost:7781/db
+```
+
+### The desk drill, with no microphone
+
+`chat.py` is a text client over A2A. The desk is the only agent in this conversation, so its session is the conversation's front session and the conversation id is the A2A context id: `chat.py` mints one id, prints it, and sends each line as a person's turn. Ending its input sends the goodbye (`lk/kind = close`), which closes the desk's context, and so saves it.
+
+```bash
+python expert.py dev   # terminal 1
+python chat.py         # terminal 2: prints conversation DB_...
+```
+
+1. Ask two things that build on each other: _"Hi, I'm dana@example.com. What's the status of my flight to Tokyo tomorrow?"_, then _"What other flights could you put me on that day, and what would the change cost me?"_ The desk quotes the change and keeps the quote on the booking.
+2. End the input with Ctrl-D. The desk closes the context and saves it.
+3. Open it again from a fresh client: `python chat.py --conversation DB_...`, and ask a follow-up that only makes sense with what came before: _"OK, go ahead and move me onto that evening flight you just quoted."_ The desk logs `↺ rehydrated DB_...: N messages back` and rebooks from the quote it made in the first session.
+
+`--delegate` sends lines as instructions, the way the phone agent asks. One conversation has one front program: a conversation the desk served directly is not one a phone agent should later open, since the front row would hand the phone agent the desk as its agent.
+
+### The phone agent drill: a durable tool
+
+`collect_email` on the phone agent is a durable tool: it awaits `EffectCall(GetEmailTask(...))`, so a session closed while the email task runs saves the tool's frame, and the next session resumes the task where the caller left off. `voice.py` runs on a pipeline model, which is what a durable tool needs to resume.
+
+The phone agent reads the conversation from the caller: the `conversation_id` attribute of the participant that joins. A caller without one gets a new conversation, which the agent creates and logs as `start a new conversation: DB_...`; a caller that joins with that id resumes it. So the drill runs in `dev` mode with a client whose participant carries the attribute, the playground or any client whose token sets `attributes={"conversation_id": "DB_..."}`.
+
+```bash
+python expert.py dev   # terminal 1
+python voice.py dev    # terminal 2, then join from a client
+```
+
+1. Join with no `conversation_id` attribute, and ask for something that needs an address: _"Hi, my flight to Tokyo tomorrow is delayed. Can you move me onto the evening flight?"_ The desk asks for the caller's email, and the phone agent hands over to the email task, which asks for it. The log names the new conversation.
+2. Hang up while the task is waiting. The session saves with the email task current.
+3. Join again with that id as the `conversation_id` attribute. `session.resumed` is set, so the agent logs `resumed call on DB_...`, welcomes you back instead of running `on_enter`, and the email task is the current agent again, without asking twice.
+4. Give the address. The task hands back to the restored `collect_email`, which records the caller and returns, and the phone agent delegates the change to the same desk context it used before, which the desk loads again.
+
+### Reading the rows
+
+`agentdb-console` in `agents-private/agent-db` reads the database directly; the tables are the contract a dashboard reads:
+
+```bash
+alias adb='./bin/agentdb-console -database DB_...'
+adb -q "SELECT session_id, parent_session_id, endpoint, current_agent_id, closed_at FROM sessions"
+adb -q "SELECT json_extract(item,'$.role') AS role, substr(json_extract(item,'$.content[0]'),1,80) AS text
+        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.type') = 'message' ORDER BY created_at"
+adb -q "SELECT agent_id, parent_agent_id, length(durable_state) AS frame_bytes FROM agents"
+adb -q "SELECT json_extract(item,'$.call_id') AS call_id, json_extract(item,'$.extra.\"lk.task_id\"') AS task_id
+        FROM chat_items WHERE owner = 'session' AND json_extract(item,'$.name') = 'lk_agents_delegate'
+        AND json_extract(item,'$.type') = 'function_call_output'"
+```
+
+A desk session names its caller in `parent_session_id`. `lk.task_id` is the A2A task on both sides: the output of each delegate call names the desk task that answered it, and each call and reply of the desk names the task that produced it, so a dashboard joins the two sides through `chat_items`. `durable_state` is pickled Python, the one column only this framework reads.
 
 ## Talking to the desk without a voice agent
 

@@ -20,6 +20,7 @@ from ..llm import (
     StopResponse,
     ToolContext,
     ToolError,
+    ToolFlag,
     utils as llm_utils,
 )
 from ..llm.chat_context import Instructions
@@ -962,7 +963,12 @@ async def _execute_tools_task(
                     },
                 )
 
-                executor = executor_by_name.get(fnc_call.name, activity._tool_executor)
+                executor = (
+                    # a durable tool's frame belongs to its agent, which a save walks to find it
+                    activity._tool_executor
+                    if ToolFlag.DURABLE in function_tool.info.flags
+                    else executor_by_name.get(fnc_call.name, activity._tool_executor)
+                )
                 function_callable = functools.partial(
                     executor.execute,
                     tool=function_tool,
@@ -1007,6 +1013,9 @@ async def _execute_tools_task(
                         # answers a report is bound by what the report asked for
                         output.reply_tool_choice = run_ctx._reply_tool_choice
                     except BaseException as e:
+                        if isinstance(e, asyncio.CancelledError) and run_ctx._durable:
+                            # a durable tool stopped at a boundary is answered when it resumes
+                            return
                         if isinstance(e, ToolError):
                             logger.warning(
                                 "ToolError while executing tool: %s",
@@ -1016,7 +1025,7 @@ async def _execute_tools_task(
                                     "speech_id": speech_handle.id,
                                 },
                             )
-                        elif not isinstance(e, StopResponse):
+                        elif not isinstance(e, StopResponse | asyncio.CancelledError):
                             logger.exception(
                                 "exception occurred while executing tool",
                                 extra={"function": fnc_call.name, "speech_id": speech_handle.id},
@@ -1024,6 +1033,7 @@ async def _execute_tools_task(
 
                         output = make_tool_output(fnc_call=fnc_call, output=None, exception=e)
 
+                    output.fnc_call_out.extra.update(run_ctx._output_extra)
                     current_span.set_attribute(
                         trace_types.ATTR_FUNCTION_TOOL_OUTPUT, output.fnc_call_out.output
                     )
@@ -1055,7 +1065,11 @@ async def _execute_tools_task(
                     name=f"func_exec_{fnc_call.name}",  # task name is used for logging when the task is cancelled
                 )
                 _set_activity_task_info(
-                    task, speech_handle=speech_handle, function_call=fnc_call, inline_task=True
+                    task,
+                    speech_handle=speech_handle,
+                    function_call=fnc_call,
+                    run_ctx=run_ctx,
+                    inline_task=True,
                 )
                 tasks.append(task)
                 task.add_done_callback(lambda task: tasks.remove(task))

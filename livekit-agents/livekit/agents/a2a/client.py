@@ -1,8 +1,9 @@
-"""Talking to an A2A endpoint: one conversation, one task at a time."""
+"""Talking to an A2A endpoint: one context, one task at a time."""
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import AsyncGenerator, AsyncIterator
 from types import TracebackType
 from typing import Any, cast
@@ -75,10 +76,19 @@ class TaskStream:
         await self._client._turn.acquire()
         self._holds_turn = True
         try:
+            task_input = self._input
+            if task_input.context_id:
+                # a later request on this client continues the context without naming it
+                self._client._context_id = task_input.context_id
+            else:
+                task_input = dataclasses.replace(task_input, context_id=self._client.context_id)
+            if not self._client.extension_active:
+                # the conversation id is ours to share only with an endpoint that joins it
+                task_input = dataclasses.replace(
+                    task_input, conversation_id=None, caller_session_id=None
+                )
             request = to_a2a_request(
-                self._input,
-                context_id=self._client.context_id,
-                reference_task_ids=self._client._take_open_questions(),
+                task_input, reference_task_ids=self._client._take_open_questions()
             )
             # the SDK under-declares its stream as an AsyncIterator; it is a generator, and
             # until it is closed it holds its HTTP connection
@@ -105,6 +115,8 @@ class TaskStream:
                     task_id = getattr(payload, "id", "") or getattr(payload, "task_id", "")
                     if task_id:
                         self._task_id = task_id
+                        if context_id := getattr(payload, "context_id", ""):
+                            self._client._context_id = context_id
                         self._release_turn()
                 yield event
         finally:
@@ -140,10 +152,10 @@ class TaskStream:
 
 
 class A2AClient:
-    """An A2A endpoint, as one conversation.
+    """An A2A endpoint, as one context.
 
     The card is read once on the first send, and the extension is activated only where that
-    card offers it; one instance is one ``context_id``, so give each conversation its own.
+    card offers it; one instance is one ``context_id``, so give each session its own.
     """
 
     def __init__(
@@ -173,7 +185,7 @@ class A2AClient:
 
     @property
     def context_id(self) -> str:
-        """The conversation. The server finds or creates its side by this."""
+        """The context. The server finds or creates its side by this."""
         return self._context_id
 
     @property
@@ -182,7 +194,8 @@ class A2AClient:
         return self._extension_active
 
     def send(self, task_input: TaskInput) -> TaskStream:
-        """Send one message on this context and read the task it opens."""
+        """Send one message and read the task it opens, on the request's context when it names
+        one, which this client then keeps, and on this client's otherwise."""
         return TaskStream(self, task_input)
 
     async def cancel(self, task_id: str, *, reason: str = "") -> None:
@@ -235,7 +248,7 @@ class A2AClient:
             return self._client
 
     async def close_context(self) -> None:
-        """Tell the endpoint the conversation is over, so it need not wait for idle.
+        """Tell the endpoint the context is over, so it need not wait for idle.
 
         Best-effort: a server keeps its own idle policy, and this only saves it the wait.
         """

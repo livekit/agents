@@ -306,12 +306,27 @@ async def test_a_supplied_http_client_keeps_its_own_headers() -> None:
 async def test_the_request_carries_the_context_and_the_delegation_tag() -> None:
     agent = ForeignAgent(ANSWERED, offers_extension=True)
     async with _client(agent) as client:
-        await _collect(client, a2a.TaskInput(instruction="find it"))
         context_id = client.context_id
+        await _collect(client, a2a.TaskInput(instruction="find it"))
+        # the endpoint answered under its own context, which the client now continues
+        assert client.context_id == "c1"
 
     (sent,) = _asks(agent)
     assert sent["message"]["contextId"] == context_id
     assert sent["message"]["metadata"][KIND] == "delegation"
+
+
+async def test_a_request_that_names_a_context_moves_the_client_onto_it() -> None:
+    agent = ForeignAgent(
+        json.loads(json.dumps(ANSWERED).replace('"c1"', '"ctx-9"')), offers_extension=True
+    )
+    async with _client(agent) as client:
+        await _collect(client, a2a.TaskInput(instruction="find it", context_id="ctx-9"))
+        # a later request continues the same context without naming it
+        await _collect(client, a2a.TaskInput(instruction="and the fee"))
+        assert client.context_id == "ctx-9"
+
+    assert [sent["message"]["contextId"] for sent in _asks(agent)] == ["ctx-9", "ctx-9"]
 
 
 async def test_the_task_id_is_taken_from_the_first_event() -> None:
@@ -452,7 +467,7 @@ async def test_a_vanilla_reply_without_a_task_is_the_answer() -> None:
     assert [(u.state, u.text) for u in updates] == [("completed", "the fee is $75")]
 
 
-async def test_the_conversation_rides_along_and_comes_back_intact() -> None:
+async def test_the_history_rides_along_and_comes_back_intact() -> None:
     agent = ForeignAgent(ANSWERED, offers_extension=True)
     chat_ctx = a2a.TaskInput(text="x").chat_ctx
     chat_ctx.add_message(role="user", content="change my Monday flight", id="m1")

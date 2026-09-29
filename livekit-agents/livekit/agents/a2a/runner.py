@@ -1,6 +1,6 @@
 """Answering requests with one ``AgentSession``, and knowing which answer belongs to which.
 
-One session holds the whole conversation, and each request is one turn of it. What goes back
+One session holds the whole context, and each request is one turn of it. What goes back
 is attributed by lineage rather than guessed: a request owns the speech its turn produced,
 the tool calls that speech made, the deferred replies to those calls, and anything said from
 inside one of its tools.
@@ -35,8 +35,9 @@ from .types import TaskInput, TaskUpdate
 if TYPE_CHECKING:
     from ..voice.agent_session import AgentSession
 
-REQUEST_ID_KEY = "lk.request_id"
-"""``extra`` key on the items a request produced, so a stored history says which."""
+TASK_ID_KEY = "lk.task_id"
+"""``extra`` key naming the A2A task an item belongs to: on the expert's side the task whose
+request produced it, on the caller's the task that answered its delegate call."""
 
 _RESULT_ENTRY = "_final"
 """What the executor suffixes a released tool's return entry with, to tell it from a report."""
@@ -48,10 +49,10 @@ class RequestRun:
     Read it under ``async with``; closing it early stops the work that can be stopped.
     """
 
-    def __init__(self, runner: SessionRunner, task_input: TaskInput, request_id: str) -> None:
+    def __init__(self, runner: SessionRunner, task_input: TaskInput, task_id: str) -> None:
         self._runner = runner
         self._input = task_input
-        self._request_id = request_id
+        self._task_id = task_id
         self._served = ServedRequest(
             metadata=dict(task_input.metadata), is_delegation=task_input.is_delegation
         )
@@ -78,8 +79,8 @@ class RequestRun:
         self._task.add_done_callback(lambda _: self._event_ch.close())
 
     @property
-    def request_id(self) -> str:
-        return self._request_id
+    def task_id(self) -> str:
+        return self._task_id
 
     @property
     def served(self) -> ServedRequest:
@@ -99,7 +100,7 @@ class RequestRun:
                     self.claim(orphan)
                 self.claim(handle)
         except Exception as exc:
-            logger.exception("failed to start a request", extra={"request_id": self._request_id})
+            logger.exception("failed to start a request", extra={"task_id": self._task_id})
             self._push_update(TaskUpdate(state="failed", text=str(exc) or type(exc).__name__))
             return
         await self._finished
@@ -153,13 +154,17 @@ class RequestRun:
         handle.request = self._served
         self._runner._orphans.pop(handle.id, None)
         for item in handle.chat_items:
+            # the request is one A2A task, whose id each item it produced carries; an item
+            # recorded before the request existed is relayed stamped and stored as it was
+            if item.type in ("function_call", "message"):
+                item = item.model_copy(update={"extra": {TASK_ID_KEY: self._task_id, **item.extra}})
             self.on_item(item, handle)
         handle._add_item_added_callback(lambda item: self.on_item(item, handle))
         handle.add_done_callback(lambda _: self.maybe_finish())
 
     def on_item(self, item: ChatItem, handle: SpeechHandle) -> None:
         if item.type == "function_call":
-            item.extra.setdefault(REQUEST_ID_KEY, self._request_id)
+            item.extra.setdefault(TASK_ID_KEY, self._task_id)
             self._runner._by_call[item.call_id] = self
             self.open_calls[item.call_id] = item.name
             # a call is structure with nothing to say, so it travels without relayed text
@@ -172,7 +177,7 @@ class RequestRun:
         if item.type != "message" or item.role != "assistant":
             return
 
-        item.extra.setdefault(REQUEST_ID_KEY, self._request_id)
+        item.extra.setdefault(TASK_ID_KEY, self._task_id)
         text = item.text_content or ""
         said = self._runner._speech_sources.get(handle.id) == "say"
         if said or not item.extra.get(TURN_ENDED_KEY):
@@ -194,7 +199,7 @@ class RequestRun:
         # the pair is rebuilt here in the shape the protocol names
         name = self.open_calls.get(update.call_id, "")
         call = FunctionCall(call_id=update.id, name=name, arguments="", update_of=update.call_id)
-        call.extra[REQUEST_ID_KEY] = self._request_id
+        call.extra[TASK_ID_KEY] = self._task_id
         # a line of this session's own is about to carry the report, or nobody is to hear it
         text = "" if update.reply_pending or update.silent else update.message
         self._push_update(TaskUpdate(text=text, item=call))
@@ -292,7 +297,7 @@ class RequestRun:
 
 
 class SessionRunner:
-    """One conversation's session, and the requests fed through it as turns.
+    """One context's session, and the requests fed through it as turns.
 
     The activity's scheduler serializes generation and playout, so requests are taken in
     arrival order with no queue here. Listening starts here, before the first request.
@@ -329,17 +334,17 @@ class SessionRunner:
         self._chores.add(task)
         task.add_done_callback(self._chores.discard)
 
-    def submit(self, task_input: TaskInput, *, request_id: str) -> RequestRun:
-        run = RequestRun(self, task_input, request_id)
+    def submit(self, task_input: TaskInput, *, task_id: str) -> RequestRun:
+        run = RequestRun(self, task_input, task_id)
         self._live.append(run)
         return run
 
     async def _sync_chat_ctx(self, run: RequestRun) -> None:
         """Take into this session whatever the caller said that it has not seen.
 
-        The caller sends the conversation whole and the merge takes the delta by item id,
+        The caller sends its history whole and the merge takes the delta by item id,
         so what this session did itself stays as it recorded it. The caller's plumbing —
-        its calls, its handoffs, its instructions — is not conversation and does not travel.
+        its calls, its handoffs, its instructions — is not what was said and does not travel.
         """
         if not run._input.chat_ctx.items:
             return
@@ -441,4 +446,4 @@ class SessionRunner:
             await asyncio.gather(*self._chores, return_exceptions=True)
 
 
-__all__ = ["REQUEST_ID_KEY", "RequestRun", "SessionRunner"]
+__all__ = ["TASK_ID_KEY", "RequestRun", "SessionRunner"]

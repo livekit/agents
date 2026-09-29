@@ -2,7 +2,7 @@
 
 The conversation model keeps the user talking and gains one tool, ``lk_agents_delegate``.
 Everything needing reasoning, lookups or actions goes to the expert, which returns facts the
-conversation phrases. The expert is reached over A2A, and the endpoint need not be ours.
+conversation model phrases. The expert is reached over A2A, and the endpoint need not be ours.
 
 Needs the ``a2a`` extra: ``pip install 'livekit-agents[a2a]'``.
 """

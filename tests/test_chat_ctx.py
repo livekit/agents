@@ -1015,3 +1015,41 @@ def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
     ctx.insert(FunctionCallOutput(call_id="c1", output="ok", is_error=False))
 
     assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_the_append_only_diff_matches_the_general_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    import random
+
+    def general(old: ChatContext, new: ChatContext) -> utils.DiffOps:
+        # the diff as the LCS alone gives it
+        lcs = set(utils._compute_lcs([i.id for i in old.items], [i.id for i in new.items]))
+        by_id = {i.id: i for i in old.items}
+        to_create: list[tuple[str | None, str]] = []
+        to_update: list[tuple[str | None, str]] = []
+        prev: str | None = None
+        for item in new.items:
+            if item.id not in lcs:
+                to_create.append((prev, item.id))
+            elif (
+                item.type == "message" and item.raw_text_content != by_id[item.id].raw_text_content
+            ):  # type: ignore[union-attr]
+                to_update.append((prev, item.id))
+            prev = item.id
+        return utils.DiffOps([i.id for i in old.items if i.id not in lcs], to_create, to_update)
+
+    rng = random.Random(7)
+    items = [ChatMessage(role="user", content=[f"line {n}"]) for n in range(30)]
+    old = ChatContext(items[:20])
+    edited = items[5].model_copy(update={"content": ["line 5, corrected"]})
+    appended = ChatContext(items[:5] + [edited] + items[6:])
+    shuffled_items = items[:25]
+    rng.shuffle(shuffled_items)
+    shuffled = ChatContext(shuffled_items)
+
+    assert utils.compute_chat_ctx_diff(old, shuffled) == general(old, shuffled)
+    expected = general(old, appended)
+    assert expected.to_create == [(items[n - 1].id, items[n].id) for n in range(20, 30)]
+    assert expected.to_update == [(items[4].id, items[5].id)]
+    # an append-only change never reaches the LCS
+    monkeypatch.setattr(utils, "_compute_lcs", lambda *_: pytest.fail("the LCS ran"))
+    assert utils.compute_chat_ctx_diff(old, appended) == expected

@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from multiprocessing.context import BaseContext
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import psutil
 import pytest
@@ -123,6 +123,41 @@ def _generate_fake_job() -> job.RunningJobInfo:
         worker_id="fake_id",
         fake_job=True,
     )
+
+
+def test_a_job_carries_the_servers_store_as_its_configuration(tmp_path) -> None:
+    from livekit.agents import store
+
+    start = ipc.proto.StartJobRequest()
+    start.running_job = _generate_fake_job()
+    start.running_job.store = store.LocalStore(tmp_path)
+    buffer = io.BytesIO()
+    start.write(buffer)
+    buffer.seek(0)
+    read = ipc.proto.StartJobRequest()
+    read.read(buffer)
+    assert isinstance(read.running_job.store, store.LocalStore)
+    assert read.running_job.store._directory == tmp_path
+
+    # a server without a store hands its jobs none
+    start.running_job.store = None
+    buffer = io.BytesIO()
+    start.write(buffer)
+    buffer.seek(0)
+    read.read(buffer)
+    assert read.running_job.store is None
+
+
+def test_a_store_that_does_not_pickle_is_refused_by_the_server(tmp_path) -> None:
+    from livekit.agents import AgentServer, store
+
+    class Holding(store.LocalStore):
+        def __reduce__(self) -> Any:
+            return (Holding, (self._directory,), {"on_save": lambda: None})
+
+    # every job would fail to launch, so the server refuses it when it is built
+    with pytest.raises(TypeError, match="does not pickle"):
+        AgentServer(store=Holding(tmp_path))
 
 
 @dataclass
