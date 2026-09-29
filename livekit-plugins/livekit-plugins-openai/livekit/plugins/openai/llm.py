@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -57,6 +59,7 @@ from .models import (
 )
 from .utils import AsyncAzureADTokenProvider
 
+logger = logging.getLogger(__name__)
 lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
 
 Verbosity = Literal["low", "medium", "high"]
@@ -155,13 +158,22 @@ class LLM(llm.LLM):
                 " OPENAI_API_KEY environment variable"
             )
 
+        if is_given(max_retries) and max_retries > 0:
+            warnings.warn(
+                "max_retries is deprecated for openai.LLM and will be ignored. "
+                "Retries are handled by the framework via APIConnectOptions.max_retry. "
+                "Setting max_retries on the SDK client causes compounding retries.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         self._provider_fmt = _provider_fmt or "openai"
         self._strict_tool_schema = _strict_tool_schema
         self._owns_client = client is None
         self._client = client or openai.AsyncClient(
             api_key=api_key if is_given(api_key) else None,
             base_url=base_url if is_given(base_url) else None,
-            max_retries=max_retries if is_given(max_retries) else 0,
+            max_retries=0,
             http_client=httpx.AsyncClient(
                 timeout=timeout
                 if timeout
