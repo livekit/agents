@@ -435,7 +435,11 @@ def perform_tts_inference(
     )
 
     def _inference_done(_: asyncio.Task[bool]) -> None:
-        if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
+        if not timed_texts_fut.done():
+            # the task ended before the node produced a stream (it raised, or the transforms were
+            # invalid): release whoever awaits the timed texts instead of leaving them hanging
+            timed_texts_fut.set_result(None)
+        elif timed_text_ch := timed_texts_fut.result():
             timed_text_ch.close()
 
         audio_ch.close()
