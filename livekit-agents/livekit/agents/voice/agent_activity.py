@@ -286,6 +286,9 @@ def _agent_turn(
         speech_handle._agent_turn_context = trace.set_span_in_context(span)
         speech_handle._agent_turn_started_at = time.perf_counter()
         speech_handle._agent_turn_agent_name = agent_label
+        speech_handle._agent_turn_record_content = (
+            span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+        )
 
     generation_attrs: dict[str, Any] = {
         trace_types.ATTR_AGENT_TURN_ID: speech_handle._generation_id
@@ -3321,6 +3324,7 @@ class AgentActivity(RecognitionHooks):
             else:
                 forwarded_text = ""
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TEXT, forwarded_text)
+        speech_handle._record_agent_turn_output(forwarded_text)
 
         assistant_metrics: llm.MetricsReport = {}
 
@@ -3446,6 +3450,13 @@ class AgentActivity(RecognitionHooks):
             current_span.set_attribute(
                 trace_types.ATTR_USER_INPUT, new_message.raw_text_content or ""
             )
+            if speech_handle._agent_turn_record_content:
+                gen_ai_telemetry.set_content_attributes(
+                    current_span,
+                    input_messages=gen_ai_telemetry.to_input_messages(
+                        llm.ChatContext([new_message])
+                    ),
+                )
 
         if (room_io := self._session._room_io) and room_io.room.isconnected():
             _set_participant_attributes(current_span, room_io.room.local_participant)
@@ -3840,6 +3851,7 @@ class AgentActivity(RecognitionHooks):
             )
 
         forwarded_text = "".join(out.forwarded_text for out in segment_outputs)
+        speech_handle._record_agent_turn_output(forwarded_text)
         if speech_handle.interrupted:
             # forward_generation already cleared the buffer and waited for playout
             await utils.aio.cancel_and_wait(*tasks)
@@ -4157,6 +4169,7 @@ class AgentActivity(RecognitionHooks):
                 generation_ev=generation_ev,
                 model_settings=model_settings,
                 instructions=instructions,
+                user_input=user_input,
             )
         finally:
             # reset tool_choice and tools
@@ -4180,12 +4193,20 @@ class AgentActivity(RecognitionHooks):
         generation_ev: llm.GenerationCreatedEvent,
         model_settings: ModelSettings,
         instructions: str | None = None,
+        user_input: str | None = None,
     ) -> None:
         with _agent_turn(
             speech_handle,
             root_context=self._session._root_span_context,
             agent_label=self._agent.label,
-        ):
+        ) as turn_span:
+            if user_input is not None and speech_handle._agent_turn_record_content:
+                gen_ai_telemetry.set_content_attributes(
+                    turn_span,
+                    input_messages=gen_ai_telemetry.to_input_messages(
+                        llm.ChatContext([llm.ChatMessage(role="user", content=[user_input])])
+                    ),
+                )
             inference_span = tracer.start_span("realtime_inference")
             try:
                 await self._realtime_generation_task_impl(
@@ -4555,6 +4576,7 @@ class AgentActivity(RecognitionHooks):
                 continue
 
             trace_text_parts.append(forwarded_text)
+            speech_handle._record_agent_turn_output(forwarded_text)
             chat_msg = _create_assistant_message(
                 message_id=entry.msg.message_id,
                 forwarded_text=forwarded_text,

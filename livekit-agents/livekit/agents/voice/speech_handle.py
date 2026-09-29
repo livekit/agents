@@ -11,7 +11,7 @@ from opentelemetry import context as otel_context, trace
 
 from .. import llm, utils
 from ..log import logger
-from ..telemetry import trace_types
+from ..telemetry import gen_ai, trace_types
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
 
@@ -64,6 +64,8 @@ class SpeechHandle:
         self._agent_turn_context: otel_context.Context | None = None
         self._agent_turn_started_at: float | None = None
         self._agent_turn_agent_name: str | None = None
+        self._agent_turn_record_content = False
+        self._agent_turn_output: list[str] = []
         self._scheduled_at: float | None = None
         self._authorized_at: float | None = None
         self._interrupt_source: InterruptionSource | None = None  # first interrupt's cause
@@ -395,6 +397,15 @@ class SpeechHandle:
         self._agent_turn_context = trace.set_span_in_context(span)
         self._agent_turn_started_at = started_at
         self._agent_turn_agent_name = agent_name
+        self._agent_turn_record_content = discarded._agent_turn_record_content
+        self._agent_turn_output = discarded._agent_turn_output
+        discarded._agent_turn_output = []
+
+    def _record_agent_turn_output(self, text: str) -> None:
+        if not gen_ai.capture_content_enabled():
+            self._agent_turn_record_content = False
+        if self._agent_turn_record_content and text:
+            self._agent_turn_output.append(text)
 
     def _end_agent_turn(self, error: BaseException | None) -> None:
         """Close the speech's ``agent_turn`` span: the speech is done, whatever step it was on."""
@@ -413,6 +424,16 @@ class SpeechHandle:
             return
         if isinstance(error, Exception):
             trace_utils.record_exception(span, error)
+        if self._agent_turn_record_content and gen_ai.capture_content_enabled():
+            gen_ai.set_content_attributes(
+                span,
+                output_messages=[
+                    message
+                    for text in self._agent_turn_output
+                    for message in gen_ai.to_output_messages(text=text)
+                ],
+            )
+        self._agent_turn_output.clear()
         span.end()
 
     def _mark_scheduled(self) -> None:
