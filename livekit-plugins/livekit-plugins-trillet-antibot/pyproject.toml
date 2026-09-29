@@ -1,0 +1,143 @@
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-trillet-antibot"
+dynamic = ["version"]
+description = "Real-time AI voice detection plugin for LiveKit that identifies synthetic/fake voices during voice calls"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9.0"
+authors = [
+    {name = "Trillet", email = "support@trillet.io"},
+]
+maintainers = [
+    {name = "Trillet", email = "support@trillet.io"},
+]
+keywords = [
+    "webrtc",
+    "realtime", 
+    "audio",
+    "video",
+    "livekit",
+    "voice-detection", 
+    "ai", 
+    "synthetic-voice", 
+    "fake-voice", 
+    "audio-processing", 
+    "websocket",
+    "antibot",
+    "voice-security"
+]
+classifiers = [
+    # Development status
+    "Development Status :: 4 - Beta",
+    
+    # Intended audience
+    "Intended Audience :: Developers",
+    "Intended Audience :: Telecommunications Industry",
+    
+    # Topic
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Communications :: Conferencing",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    
+    # License
+    "License :: OSI Approved :: Apache Software License",
+    
+    # Programming language support
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    
+    # Operating systems
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "livekit-agents >= 0.12.16, < 1.0.0",
+    "websockets >= 11.0",
+    "numpy >= 1.20.0",
+    "aiohttp >= 3.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest >= 7.0",
+    "pytest-asyncio >= 0.21.0",
+    "pytest-cov >= 4.0",
+    "black >= 23.0",
+    "isort >= 5.12",
+    "flake8 >= 6.0",
+    "mypy >= 1.0",
+    "pre-commit >= 3.0",
+]
+test = [
+    "pytest >= 7.0",
+    "pytest-asyncio >= 0.21.0",
+    "pytest-cov >= 4.0",
+    "pytest-mock >= 3.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/trillet/livekit-plugins-trillet-antibot"
+Documentation = "https://docs.trillet.io/antibot-plugin"
+Repository = "https://github.com/trillet/livekit-plugins-trillet-antibot.git"
+Issues = "https://github.com/trillet/livekit-plugins-trillet-antibot/issues"
+"Bug Tracker" = "https://github.com/trillet/livekit-plugins-trillet-antibot/issues"
+"Source Code" = "https://github.com/trillet/livekit-plugins-trillet-antibot"
+
+# Hatchling configuration for version management
+[tool.hatch.version]
+path = "livekit/plugins/trillet_antibot/version.py"
+
+# Hatchling build configuration
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/README.md",
+    "/pyproject.toml",
+    "/livekit",
+]
+
+# Development tool configurations
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["livekit"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "livekit.*",
+    "websockets.*",
+    "numpy.*",
+    "aiohttp.*",
+]
+ignore_missing_imports = true
