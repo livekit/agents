@@ -1,0 +1,26 @@
+livekit-agents/livekit/agents/telemetry/gen_ai.py
+  s_069eea97a36d42::t_b814d1cd672a33 85-86
+  s_069eea97a36d42::t_fc98f9b2c1e21c 80-84
+tests/test_telemetry_session_transcript.py
+  s_069eea97a36d42::t_daba22995370bf 101-108
+  s_069eea97a36d42::t_7baeb232e9b372 1-82,87-100
+  s_069eea97a36d42::t_19d3ca60b6d68b 83-86
+livekit-agents/livekit/agents/voice/agent_session.py
+  s_069eea97a36d42::t_fc98f9b2c1e21c 1344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c49d775303415a51570dd4ea4bfa74921018c64",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": null
+    }
+  }
+}
