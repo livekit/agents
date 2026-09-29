@@ -12,6 +12,7 @@ from opentelemetry import context as otel_context, trace
 from .. import llm, utils
 from ..log import logger
 from ..telemetry import trace_types
+from .served_request import ServedRequest
 
 INTERRUPTION_TIMEOUT = 5.0  # seconds
 
@@ -69,6 +70,8 @@ class SpeechHandle:
         self._interrupt_source: InterruptionSource | None = None  # first interrupt's cause
 
         self._interrupt_timeout_handle: asyncio.TimerHandle | None = None
+
+        self._request: ServedRequest | None = None
 
         self._item_added_callbacks: set[Callable[[llm.ChatItem], None]] = set()
         self._done_callbacks: set[Callable[[SpeechHandle], None]] = set()
@@ -302,6 +305,19 @@ class SpeechHandle:
             )
 
         return self
+
+    @property
+    def request(self) -> ServedRequest | None:
+        """The caller's request this speech answers, or None when nobody asked for it.
+
+        Set once by whatever feeds the session, so a tool this speech called keeps reading
+        the same one however far the conversation has moved on since.
+        """
+        return self._request
+
+    @request.setter
+    def request(self, value: ServedRequest | None) -> None:
+        self._request = value
 
     def _add_item_added_callback(self, callback: Callable[[llm.ChatItem], Any]) -> None:
         self._item_added_callbacks.add(callback)

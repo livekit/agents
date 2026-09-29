@@ -10,12 +10,14 @@ from .agent_session import (
 )
 from .audio_recognition import AudioRecognition
 from .events import (
+    TURN_ENDED_KEY,
     AgentEvent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
     ConversationItemAddedEvent,
+    DirectiveReceivedEvent,
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
@@ -44,6 +46,7 @@ from .room_io import (
     _ParticipantTranscriptionOutput,
 )
 from .run_result import RunOutputOptions
+from .served_request import Directive, DirectiveKind, ServedRequest
 from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
@@ -59,7 +62,12 @@ __all__ = [
     "ModelSettings",
     "AgentTask",
     "SpeechHandle",
+    "TURN_ENDED_KEY",
+    "DirectiveReceivedEvent",
+    "Directive",
+    "DirectiveKind",
     "RunContext",
+    "ServedRequest",
     "UserInputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",

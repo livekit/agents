@@ -25,12 +25,14 @@ from ..llm import (
     LLMError,
     RealtimeModel,
     RealtimeModelError,
+    ToolChoice,
 )
 from ..log import logger
 from ..metrics import AgentMetrics, AgentSessionUsage
 from ..stt import STT, STTError
 from ..tts import TTS, TTSError
 from .filler_scheduler import _FillerScheduler, _FillerSource
+from .served_request import DirectiveKind, ServedRequest
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -40,6 +42,14 @@ if TYPE_CHECKING:
 
 
 Userdata_T = TypeVar("Userdata_T")
+
+TURN_ENDED_KEY = "lk.turn_ended"
+"""``ChatMessage.extra`` key, ``True`` on an assistant message nothing follows on its speech.
+
+A model turn that called nothing, or a line handed to :meth:`AgentSession.say`; absent on
+one that ended in tool calls, which is said on the way rather than as a conclusion. Which of
+the two said it is on the speech, as :attr:`SpeechCreatedEvent.source`.
+"""
 
 
 class RunContext(Generic[Userdata_T]):
@@ -67,6 +77,11 @@ class RunContext(Generic[Userdata_T]):
         self._executor: _ToolExecutor | None = None
         self._first_update_fut: asyncio.Future[Any] | None = None
 
+        # set by the first update(): whether anything voices its output, and what the step
+        # that answers it may call
+        self._suppress_reply = False
+        self._reply_tool_choice: ToolChoice | None = None
+
         # the run this call belongs to; background work that outlives it must not hold a
         # later run open
         self._run_state = session._global_run_state
@@ -82,6 +97,20 @@ class RunContext(Generic[Userdata_T]):
     @property
     def function_call(self) -> FunctionCall:
         return self._function_call
+
+    @property
+    def request(self) -> ServedRequest | None:
+        """The caller's request this tool call belongs to, or None when nobody asked.
+
+        Read from the speech that issued the call, so a tool that released the floor keeps
+        reading its own request even after a later one has started::
+
+            if (request := ctx.request) is not None:
+                request.set_directive("end_session", reason="user_request")
+            else:
+                await ctx.session.aclose()
+        """
+        return self._speech_handle.request
 
     @property
     def userdata(self) -> Userdata_T:
@@ -175,6 +204,8 @@ class RunContext(Generic[Userdata_T]):
         message: str | Any,
         *,
         template: str | Callable[[UpdatePromptArgs], str] | None = None,
+        silent: bool = False,
+        tool_choice: ToolChoice = "none",
     ) -> None:
         """Push a progress update into the conversation.
 
@@ -188,6 +219,13 @@ class RunContext(Generic[Userdata_T]):
             template: Per-call override — either a ``str.format()`` template or a
                 callable receiving ``UpdatePromptArgs``. Defaults to the executor's
                 resolved ``update`` template (or the module default when standalone).
+            silent: Whether the user hears anything about this update. The message is
+                recorded for the model either way; True keeps it to the model alone, and
+                on the first update releases control without speaking.
+            tool_choice: What the reply to this update may call. ``"none"`` by default: a
+                report is not a result, so the model speaks to it rather than acting on it,
+                and without that it can answer a report by calling the same tool again. Set
+                it where the report is genuinely something to act on.
         """
         # update() is a deliberate agent action — reset any active filler dwell so a
         # pending filler doesn't race the real update to the speech queue
@@ -226,23 +264,34 @@ class RunContext(Generic[Userdata_T]):
         if self._executor is None:
             return  # standalone — no executor, so no tool lifecycle to report
 
+        # an agent relays what a tool reports in its own words, so answering it here would
+        # only restate a fact the report already carries, with the caller waiting through it
+        serving_delegation = self.request is not None and self.request.is_delegation
+        reply = not silent and not serving_delegation
+
         self._session._tool_execution_updated(
             ToolExecutionUpdatedEvent(
                 update=ToolCallUpdated(
                     id=pair[0].call_id,
                     call_id=self.function_call.call_id,
                     message=raw_message,
+                    silent=silent,
+                    reply_pending=reply,
                 )
             ),
         )
 
         assert self._first_update_fut is not None
         if not self._first_update_fut.done():
+            self._suppress_reply = not reply
+            self._reply_tool_choice = tool_choice
             self._first_update_fut.set_result(message)
             self._function_call.extra["__livekit_agents_tool_non_blocking"] = True
             return
 
-        await self._executor._enqueue_reply(self, [pair[0], pair[1]])
+        await self._executor._enqueue_reply(
+            self, [pair[0], pair[1]], silent=not reply, tool_choice=tool_choice
+        )
 
     def _attach_executor(
         self, executor: _ToolExecutor, first_update_fut: asyncio.Future[Any]
@@ -273,8 +322,9 @@ class RunContext(Generic[Userdata_T]):
     ) -> tuple[FunctionCall, FunctionCallOutput]:
         """Synthesize a (FunctionCall, FunctionCallOutput) pair for a progress update.
 
-        The new FunctionCall carries ``{call_id}{call_id_suffix}``; name/arguments/extra
-        are copied. ``make_tool_output`` is reused so error handling matches dispatch.
+        The new FunctionCall carries ``{call_id}{call_id_suffix}`` and names the real call
+        in ``update_of``; name/arguments/extra are copied. ``make_tool_output`` is reused so
+        error handling matches dispatch.
         """
         from .generation import make_tool_output
 
@@ -283,6 +333,7 @@ class RunContext(Generic[Userdata_T]):
             name=self.function_call.name,
             arguments=self.function_call.arguments,
             extra=dict(self.function_call.extra),
+            update_of=self.function_call.call_id if call_id_suffix else None,
         )
         tool_output = make_tool_output(fnc_call=fnc_call, output=message, exception=None)
         return (fnc_call, tool_output.fnc_call_out)
@@ -301,6 +352,7 @@ EventTypes = Literal[
     "session_usage_updated",
     "speech_created",
     "tool_execution_updated",
+    "directive_received",
     "error",
     "close",
     "debug_message",
@@ -490,6 +542,10 @@ class ToolCallUpdated(BaseModel):
     """Entry id: ``call_id`` inline, ``{call_id}_update_N`` when deferred."""
     call_id: str
     message: str
+    silent: bool = False
+    """Kept to the model: the user hears nothing about it and nothing relays it."""
+    reply_pending: bool = False
+    """This session's model is answering it, and its line is what gets voiced."""
 
 
 class ToolCallEnded(BaseModel):
@@ -506,15 +562,31 @@ class ToolCallEnded(BaseModel):
 
 class ToolReplyUpdated(BaseModel):
     """Lifecycle of the deferred reply that voices buffered tool updates: ``scheduled``
-    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply may cover
-    several calls; an inline first update never gets one."""
+    when queued, then ``completed`` / ``interrupted`` / ``skipped``. One reply covers the
+    buffered calls of one turn; an inline first update never gets one."""
 
     type: Literal["tool_reply_updated"] = "tool_reply_updated"
     update_ids: list[str]
     """``ToolCallUpdated.id`` values this reply covers."""
+    call_ids: list[str]
+    """The calls those entries belong to, so the reply can be tied back to what issued them."""
     status: Literal["scheduled", "completed", "interrupted", "skipped"]
     speech_id: str
     """Id of the reply speech; ``speech_created`` carries its handle."""
+
+
+class DirectiveReceivedEvent(BaseModel):
+    """Something this conversation asked of was done, and asks it to act after answering.
+
+    Advice, not an action: what to do about the kind is the application's decision.
+    """
+
+    type: Literal["directive_received"] = "directive_received"
+    kind: DirectiveKind
+    reason: str = ""
+    call_id: str | None = None
+    """The call it came back from, where one did, so several in flight stay apart."""
+    created_at: float = Field(default_factory=time.time)
 
 
 class ToolExecutionUpdatedEvent(BaseModel):
@@ -595,6 +667,7 @@ AgentEvent = Annotated[
     | FunctionToolsExecutedEvent
     | SpeechCreatedEvent
     | ToolExecutionUpdatedEvent
+    | DirectiveReceivedEvent
     | ErrorEvent
     | CloseEvent
     | OverlappingSpeechEvent,
