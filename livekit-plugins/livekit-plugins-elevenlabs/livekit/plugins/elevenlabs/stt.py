@@ -31,6 +31,7 @@ from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     LanguageCode,
@@ -624,6 +625,10 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     parsed = json.loads(msg.data)
                     self._process_stream_event(parsed)
+                except APIError:
+                    # server error frames (auth, quota, ...) must fail the connection so
+                    # the stream retries and then emits an error event
+                    raise
                 except Exception:
                     logger.exception("failed to process ElevenLabs STT message")
 
