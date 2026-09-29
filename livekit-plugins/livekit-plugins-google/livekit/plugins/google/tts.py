@@ -18,7 +18,6 @@ import asyncio
 import weakref
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
-from typing import Any
 
 import google.auth
 import google.auth.credentials
@@ -231,19 +230,25 @@ class TTS(tts.TTS):
             speaking_rate (float, optional): Speed of speech.
             volume_gain_db (float, optional): Volume gain in decibels.
         """
-        params: dict[str, Any] = {}
+        # start from the current voice so options that are not passed keep their value
+        voice = texttospeech.VoiceSelectionParams.deserialize(
+            texttospeech.VoiceSelectionParams.serialize(self._opts.voice)
+        )
         if is_given(language):
-            params["language_code"] = LanguageCode(language)
+            voice.language_code = LanguageCode(language)
         if is_given(gender):
-            params["ssml_gender"] = _gender_from_str(str(gender))
+            voice.ssml_gender = _gender_from_str(str(gender))
         if is_given(voice_name):
-            params["name"] = voice_name
+            voice.name = voice_name
+            # a named voice replaces a cloned one, as in the constructor
+            texttospeech.VoiceSelectionParams.pb(voice).ClearField("voice_clone")
         if is_given(model_name):
-            params["model_name"] = model_name
             self._opts.model_name = model_name
-
-        if params:
-            self._opts.voice = texttospeech.VoiceSelectionParams(**params)
+            if model_name != "chirp_3":  # voice.model_name must not be set for Chirp 3
+                voice.model_name = model_name
+            else:
+                voice.model_name = ""
+        self._opts.voice = voice
 
         if is_given(speaking_rate):
             self._opts.speaking_rate = speaking_rate
