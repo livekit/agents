@@ -349,6 +349,8 @@ class _ParticipantLegacyTranscriptionOutput:
             participant.identity if isinstance(participant, rtc.Participant) else participant
         )
         self._represented_by = self._participant_identity
+        # the track belongs to the previous participant, so it cannot carry over
+        self._track_id = None
         if self._participant_identity is None:
             return
 

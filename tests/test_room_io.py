@@ -17,6 +17,7 @@ from livekit.agents.voice.room_io._input import (
 )
 from livekit.agents.voice.room_io._output import (
     _ParticipantAudioOutput,
+    _ParticipantLegacyTranscriptionOutput,
     _ParticipantStreamTranscriptionOutput,
     _ParticipantTranscriptionOutput,
 )
@@ -273,6 +274,32 @@ async def test_transcription_output_strips_markup_but_keeps_links() -> None:
     # markup is removed; a markdown link is prose and must reach the user intact
     assert "<expr" not in published
     assert "[the docs](https://docs.livekit.io)" in published
+
+
+def _remote_participant_with_mic(identity: str, track_sid: str) -> SimpleNamespace:
+    publication = SimpleNamespace(sid=track_sid, source=rtc.TrackSource.SOURCE_MICROPHONE)
+    return SimpleNamespace(
+        identity=identity, attributes={}, track_publications={track_sid: publication}
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_transcription_output_follows_the_new_participants_track() -> None:
+    room = _FakeRoom()
+    room.remote_participants = {
+        "user-a": _remote_participant_with_mic("user-a", "TR_a"),
+        "user-b": _remote_participant_with_mic("user-b", "TR_b"),
+    }
+    room.local_participant.publish_transcription = AsyncMock()
+
+    output = _ParticipantLegacyTranscriptionOutput(room=room, participant="user-a")
+    output.set_participant("user-b")
+
+    await output.capture_text("hello")
+
+    transcription = room.local_participant.publish_transcription.call_args.args[0]
+    assert transcription.participant_identity == "user-b"
+    assert transcription.track_sid == "TR_b"
 
 
 @pytest.mark.asyncio
