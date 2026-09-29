@@ -1,0 +1,21 @@
+tests/test_tts_telemetry.py
+  s_069eea97a36d42::t_f3daa4e43d459f 1-95
+livekit-agents/livekit/agents/voice/generation.py
+  s_069eea97a36d42::t_bff0f0bccf12c3 460-466,474-485,495,531-537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e27d47bf5ee186f45d33823facc199a735f19e8c",
+  "prompts": {},
+  "sessions": {
+    "s_069eea97a36d42": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ecbe-c8b1-77c2-958b-09e716f1786b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
