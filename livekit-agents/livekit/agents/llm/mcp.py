@@ -26,6 +26,7 @@ try:
     from mcp.client.stdio import StdioServerParameters
     from mcp.client.streamable_http import GetSessionIdCallback, streamable_http_client
     from mcp.shared.message import SessionMessage
+    from mcp.shared.session import ProgressFnT
 except ImportError as e:
     raise ImportError(
         "The 'mcp' package is required to run the MCP server integration but is not installed.\n"
@@ -139,14 +140,20 @@ class MCPServer(ABC):
         if self._client_task and not self._client_task.done():
             logger.warning("MCPServer is already initializing")
             if self._ready_fut:
-                await self._ready_fut
+                # shielded, or a waiter that gives up would cancel the connect's own future
+                await asyncio.shield(self._ready_fut)
             return
 
         self._ready_fut = ready_fut = asyncio.Future[None]()
-        self._client_task = asyncio.create_task(
+        self._client_task = client_task = asyncio.create_task(
             self._run_client(ready_fut), name=f"{type(self).__name__}._run_client"
         )
-        await ready_fut
+        try:
+            await asyncio.shield(ready_fut)
+        except asyncio.CancelledError:
+            # the connect was started for this caller, and nobody waits for it now
+            client_task.cancel()
+            raise
 
     async def _run_client(self, ready_fut: asyncio.Future[None]) -> None:
         try:
@@ -161,12 +168,16 @@ class MCPServer(ABC):
                 ) as client:
                     await client.initialize()
                     self._client = client
-                    ready_fut.set_result(None)
+                    if not ready_fut.done():
+                        ready_fut.set_result(None)
 
                     await self._closing_ev.wait()
         except BaseException as e:
             if not ready_fut.done():
-                ready_fut.set_exception(e)  # raising from `await initialize()`
+                if isinstance(e, asyncio.CancelledError):
+                    ready_fut.cancel()  # nobody is waiting for it any more
+                else:
+                    ready_fut.set_exception(e)  # raising from `await initialize()`
             else:
                 if isinstance(e, Exception):
                     logger.exception("MCP client connection failed with unexpected error")
@@ -255,7 +266,7 @@ class MCPServer(ABC):
                     )
                     await ctx.update(message)
 
-                tool_result = await self._client.call_tool(
+                tool_result = await self._call_tool(
                     name, raw_arguments, progress_callback=_on_progress
                 )
                 return await _resolve(tool_result, raw_arguments)
@@ -271,7 +282,7 @@ class MCPServer(ABC):
                         "Please check that the MCPServer is still running."
                     )
 
-                tool_result = await self._client.call_tool(name, raw_arguments)
+                tool_result = await self._call_tool(name, raw_arguments)
                 return await _resolve(tool_result, raw_arguments)
 
             impl = _tool_called
@@ -291,6 +302,35 @@ class MCPServer(ABC):
             on_duplicate=options["on_duplicate"],
             duplicate_scope=options["duplicate_scope"],
         )
+
+    async def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        progress_callback: ProgressFnT | None = None,
+    ) -> mcp.types.CallToolResult:
+        """Call a tool, and tell the server when the call is cancelled so its tool stops too."""
+        client = self._client
+        assert client is not None
+        # the SDK numbers requests from this counter, and reads it before its first await
+        request_id = client._request_id
+        try:
+            return await client.call_tool(name, arguments, progress_callback=progress_callback)
+        except asyncio.CancelledError:
+            notification = mcp.types.ClientNotification(
+                mcp.types.CancelledNotification(
+                    params=mcp.types.CancelledNotificationParams(
+                        requestId=request_id, reason="the tool call was cancelled"
+                    )
+                )
+            )
+            try:
+                # bounded: a cancel must not hang on a connection that stopped reading
+                await asyncio.wait_for(client.send_notification(notification), timeout=1.0)
+            except Exception:
+                logger.debug("could not tell the MCP server a call was cancelled")
+            raise
 
     async def aclose(self) -> None:
         self._closing_ev.set()
