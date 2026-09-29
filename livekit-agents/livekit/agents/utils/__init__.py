@@ -10,6 +10,7 @@ from .log import log_exceptions
 from .misc import is_dev_mode, is_given, is_hosted, nodename, shortuuid, time_ms
 from .moving_average import MovingAverage
 from .participant import wait_for_agent, wait_for_participant, wait_for_track_publication
+from .robust_microphone import RobustMicrophone
 
 EventEmitter = rtc.EventEmitter
 
@@ -41,6 +42,7 @@ __all__ = [
     "wait_for_participant",
     "wait_for_track_publication",
     "resolve_env_var",
+    "RobustMicrophone",
 ]
 
 # Cleanup docs of unexported modules
