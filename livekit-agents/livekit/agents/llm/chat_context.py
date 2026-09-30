@@ -574,7 +574,13 @@ class ChatContext:
         Removes leading function calls to avoid partial function outputs.
         Preserves the first instruction message (system/developer) by adding it back
         to the beginning.
+
+        A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
+        items, so none are kept. A negative value is a programming error and raises ValueError.
         """
+
+        if max_items < 0:
+            raise ValueError("max_items must be non-negative")
 
         if len(self._items) <= max_items:
             return self
@@ -588,7 +594,9 @@ class ChatContext:
             None,
         )
 
-        new_items = self._items[-max_items:]
+        # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
+        # keep every item.
+        new_items = self._items[-max_items:] if max_items else []
 
         # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
