@@ -1051,7 +1051,8 @@ class AudioRecognition:
                 and time.time() - self._last_final_transcript_time > 0.5
             )
             final_covers_speech = (
-                self._last_final_transcript_time is not None
+                self._vad is not None
+                and self._last_final_transcript_time is not None
                 and self._last_speaking_time is not None
                 and self._last_final_transcript_time >= self._last_speaking_time
                 and not self._speaking
