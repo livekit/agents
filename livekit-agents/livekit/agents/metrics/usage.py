@@ -183,9 +183,7 @@ class ModelUsageCollector:
             model = metrics.metadata.model_name or ""
         return usage_source, provider, model
 
-    def _get_llm_usage(
-        self, usage_source: str | None, provider: str, model: str
-    ) -> LLMModelUsage:
+    def _get_llm_usage(self, usage_source: str | None, provider: str, model: str) -> LLMModelUsage:
         """Get or create an LLMModelUsage for the given source/provider/model combination."""
         key = (usage_source, provider, model)
         if key not in self._llm_usage:
@@ -194,9 +192,7 @@ class ModelUsageCollector:
             )
         return self._llm_usage[key]
 
-    def _get_tts_usage(
-        self, usage_source: str | None, provider: str, model: str
-    ) -> TTSModelUsage:
+    def _get_tts_usage(self, usage_source: str | None, provider: str, model: str) -> TTSModelUsage:
         """Get or create a TTSModelUsage for the given source/provider/model combination."""
         key = (usage_source, provider, model)
         if key not in self._tts_usage:
@@ -205,9 +201,7 @@ class ModelUsageCollector:
             )
         return self._tts_usage[key]
 
-    def _get_stt_usage(
-        self, usage_source: str | None, provider: str, model: str
-    ) -> STTModelUsage:
+    def _get_stt_usage(self, usage_source: str | None, provider: str, model: str) -> STTModelUsage:
         """Get or create an STTModelUsage for the given source/provider/model combination."""
         key = (usage_source, provider, model)
         if key not in self._stt_usage:
@@ -227,9 +221,7 @@ class ModelUsageCollector:
             )
         return self._interruption_usage[key]
 
-    def _get_eot_usage(
-        self, usage_source: str | None, provider: str, model: str
-    ) -> EOTModelUsage:
+    def _get_eot_usage(self, usage_source: str | None, provider: str, model: str) -> EOTModelUsage:
         """Get or create EOT usage for the source/provider/model combination."""
         key = (usage_source, provider, model)
         if key not in self._eot_usage:
