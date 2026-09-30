@@ -28,7 +28,9 @@ if TYPE_CHECKING:
 
 ACTIONS_ATTRIBUTE = "lk.actions"
 ACTION_METHOD_PREFIX = "action:"
+DESCRIBE_METHOD = "lk.actions.describe"
 ACTION_DECLINED_CODE = 1710
+DESCRIBE_TOOL_NAME = "describe_actions"
 
 
 @dataclass(frozen=True)
@@ -39,7 +41,8 @@ class ClientAction:
     consent: Literal["none", "confirm"] = "none"
 
 
-def _parse_actions(raw: str, *, identity: str) -> list[ClientAction]:
+def _parse_catalog(raw: str, *, identity: str) -> dict[str, str]:
+    """Parse an ``lk.actions`` attribute into ``{name: summary}``."""
     try:
         entries = json.loads(raw)
     except ValueError:
@@ -47,6 +50,34 @@ def _parse_actions(raw: str, *, identity: str) -> list[ClientAction]:
     if not isinstance(entries, list):
         logger.warning(
             "ClientActionSet: ignoring malformed lk.actions attribute",
+            extra={"participant": identity},
+        )
+        return {}
+
+    catalog: dict[str, str] = {}
+    for entry in entries:
+        fields = entry if isinstance(entry, dict) else {}
+        name = fields.get("name")
+        if not (isinstance(name, str) and name):
+            logger.warning(
+                "ClientActionSet: skipping malformed catalog entry",
+                extra={"participant": identity, "entry": entry},
+            )
+            continue
+        summary = fields.get("summary")
+        catalog[name] = summary if isinstance(summary, str) else ""
+    return catalog
+
+
+def _parse_described(raw: str, *, identity: str) -> list[ClientAction]:
+    """Parse a ``lk.actions.describe`` response into full actions."""
+    try:
+        entries = json.loads(raw).get("actions")
+    except (ValueError, AttributeError):
+        entries = None
+    if not isinstance(entries, list):
+        logger.warning(
+            "ClientActionSet: ignoring malformed describe response",
             extra={"participant": identity},
         )
         return []
@@ -77,12 +108,14 @@ def _parse_actions(raw: str, *, identity: str) -> list[ClientAction]:
 class ClientActionSet(AsyncToolset):
     """Exposes the actions remote participants advertise as tools the LLM can call.
 
-    A participant publishes its catalog in the ``lk.actions`` attribute. Each action
-    name becomes one tool that calls the advertising participant over RPC
-    (``action:<name>``); when several participants advertise the same name, the tool
-    takes a ``participant`` argument. Names that collide with the agent's own tools
-    are skipped. The tool list follows participants joining, leaving, and changing
-    their catalog.
+    A participant publishes action names and summaries in the ``lk.actions``
+    attribute. The LLM initially sees a single ``describe_actions`` tool listing
+    them; describing an action fetches its full entry over the
+    ``lk.actions.describe`` RPC and adds it as a tool that calls the participant
+    (``action:<name>``), usable from the next step of the same turn. When several
+    participants advertise the same name, the tool takes a ``participant``
+    argument. Names that collide with the agent's own tools are skipped. The tool
+    list follows participants joining, leaving, and changing their catalog.
 
     Example::
 
@@ -102,6 +135,8 @@ class ClientActionSet(AsyncToolset):
         self._response_timeout = response_timeout
         self._session: AgentSession | None = None
         self._catalogs: dict[str, str] = {}
+        self._providers: dict[str, dict[str, str]] = {}  # name -> {identity: summary}
+        self._described: dict[str, dict[str, ClientAction]] = {}  # name -> {identity: action}
         self._changed = asyncio.Event()
         self._rebind_atask: asyncio.Task[None] | None = None
 
@@ -139,6 +174,8 @@ class ClientActionSet(AsyncToolset):
             self._rebind_atask = None
         self._tools = []
         self._catalogs = {}
+        self._providers = {}
+        self._described = {}
         await super().aclose()
 
     def _on_attributes_changed(self, changed: dict[str, str], participant: rtc.Participant) -> None:
@@ -171,10 +208,10 @@ class ClientActionSet(AsyncToolset):
             return False
         self._catalogs = catalogs
 
-        providers: dict[str, list[tuple[str, ClientAction]]] = {}
+        providers: dict[str, dict[str, str]] = {}
         for identity, raw in catalogs.items():
-            for action in _parse_actions(raw, identity=identity):
-                providers.setdefault(action.name, []).append((identity, action))
+            for name, summary in _parse_catalog(raw, identity=identity).items():
+                providers.setdefault(name, {})[identity] = summary
 
         others: list[Tool | Toolset] = []
         if self._session is not None:
@@ -184,17 +221,116 @@ class ClientActionSet(AsyncToolset):
         # ToolContext rejects duplicate names, so the agent's own tools win
         taken = set(get_fnc_tool_names([t for t in others if t is not self]))
 
-        tools: list[Tool] = []
-        for name, entries in sorted(providers.items()):
-            if name in taken:
+        for name in sorted(providers):
+            if name in taken or name == DESCRIBE_TOOL_NAME:
                 logger.warning(
                     "ClientActionSet: action name collides with an agent tool, skipping",
-                    extra={"action": name, "participants": [i for i, _ in entries]},
+                    extra={"action": name, "participants": list(providers[name])},
                 )
-                continue
-            tools.append(self._bind(room, name, entries))
-        self._tools = tools
+                del providers[name]
+        self._providers = providers
+
+        # keep descriptions only for providers still advertising the action
+        self._described = {
+            name: kept
+            for name, by_identity in self._described.items()
+            if (kept := {i: a for i, a in by_identity.items() if i in providers.get(name, {})})
+        }
+        self._rebuild_tools(room)
         return True
+
+    def _rebuild_tools(self, room: rtc.Room) -> None:
+        if not self._providers:
+            self._tools = []
+            return
+        tools: list[Tool] = [self._describe_tool(room)]
+        for name, by_identity in sorted(self._described.items()):
+            tools.append(self._bind(room, name, list(by_identity.items())))
+        self._tools = tools
+
+    def _describe_tool(self, room: rtc.Room) -> RawFunctionTool:
+        lines = []
+        for name, by_identity in sorted(self._providers.items()):
+            summary = next((s for s in by_identity.values() if s), "")
+            line = f"- {name}: {summary}" if summary else f"- {name}"
+            if len(by_identity) > 1:
+                line += f" (offered by: {', '.join(by_identity)})"
+            lines.append(line)
+        description = (
+            "Participants in the room offer the actions below. Describe the ones you need "
+            "to make them available as tools, then call them.\n" + "\n".join(lines)
+        )
+        parameters = {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": sorted(self._providers)},
+                    "description": "Names of the actions to describe.",
+                }
+            },
+            "required": ["names"],
+        }
+
+        async def _tool_called(raw_arguments: dict[str, Any]) -> str:
+            return await self._describe(room, list(raw_arguments.get("names") or []))
+
+        return function_tool(
+            _tool_called,
+            raw_schema={
+                "name": DESCRIBE_TOOL_NAME,
+                "description": description,
+                "parameters": parameters,
+            },
+        )
+
+    async def _describe(self, room: rtc.Room, names: list[str]) -> str:
+        unknown = [n for n in names if n not in self._providers]
+        by_identity: dict[str, list[str]] = {}
+        for name in dict.fromkeys(names):
+            for identity in self._providers.get(name, {}):
+                by_identity.setdefault(identity, []).append(name)
+
+        async def _one(identity: str, wanted: list[str]) -> list[ClientAction]:
+            resp = await room.local_participant.perform_rpc(
+                destination_identity=identity,
+                method=DESCRIBE_METHOD,
+                payload=json.dumps({"names": wanted}),
+                response_timeout=self._response_timeout,
+            )
+            return [a for a in _parse_described(resp, identity=identity) if a.name in wanted]
+
+        identities = list(by_identity)
+        results = await asyncio.gather(
+            *(_one(i, by_identity[i]) for i in identities), return_exceptions=True
+        )
+
+        loaded: list[str] = []
+        failures: list[str] = []
+        for identity, result in zip(identities, results, strict=True):
+            if isinstance(result, BaseException):
+                message = result.message if isinstance(result, rtc.RpcError) else str(result)
+                failures.append(f"{identity}: {message}")
+                continue
+            for action in result:
+                self._described.setdefault(action.name, {})[identity] = action
+                loaded.append(action.name)
+
+        if loaded:
+            self._rebuild_tools(room)
+            if (agent := self._current_agent()) is not None:
+                await agent.update_tools(agent.tools)
+
+        parts = []
+        if loaded:
+            parts.append(f"Now available as tools: {', '.join(dict.fromkeys(loaded))}.")
+        if unknown:
+            parts.append(f"Not offered by anyone in the room: {', '.join(unknown)}.")
+        if failures:
+            parts.append(f"Could not describe from {'; '.join(failures)}.")
+        if not loaded:
+            raise ToolError(" ".join(parts) or "No actions were described.")
+        return " ".join(parts)
 
     def _bind(
         self, room: rtc.Room, name: str, entries: list[tuple[str, ClientAction]]
