@@ -316,6 +316,8 @@ def test_replace_words():
     [
         ("مرحبا، كيف حالك؟", {"مرحبا": "أهلاً", "حالك": "أحوالك"}, "أهلاً، كيف أحوالك؟"),
         ("नमस्ते। आप कैसे हैं", {"नमस्ते": "नमस्कार"}, "नमस्कार। आप कैसे हैं"),
+        # a key that ends in punctuation still matches as a whole word
+        ("ג׳ שלום", {"ג׳": "ד׳"}, "ד׳ שלום"),
     ],
 )
 def test_replace_words_non_ascii_punctuation(
