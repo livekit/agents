@@ -30,7 +30,6 @@ ACTIONS_ATTRIBUTE = "lk.actions"
 ACTION_METHOD_PREFIX = "action:"
 DESCRIBE_METHOD = "lk.actions.describe"
 ACTION_DECLINED_CODE = 1710
-DESCRIBE_TOOL_NAME = "describe_actions"
 
 
 @dataclass(frozen=True)
@@ -109,13 +108,14 @@ class ClientActionSet(AsyncToolset):
     """Exposes the actions remote participants advertise as tools the LLM can call.
 
     A participant publishes action names and summaries in the ``lk.actions``
-    attribute. The LLM initially sees a single ``describe_actions`` tool listing
-    them; describing an action fetches its full entry over the
-    ``lk.actions.describe`` RPC and adds it as a tool that calls the participant
-    (``action:<name>``), usable from the next step of the same turn. When several
-    participants advertise the same name, the tool takes a ``participant``
-    argument. Names that collide with the agent's own tools are skipped. The tool
-    list follows participants joining, leaving, and changing their catalog.
+    attribute. Every action becomes a tool right away, first with its summary and an
+    open parameter schema; the full entries are then fetched in the background over
+    the ``lk.actions.describe`` RPC (one batch per participant) and cached until the
+    participant stops advertising the action or changes its summary. Calling a tool
+    calls the participant (``action:<name>``). When several participants advertise
+    the same name, the tool takes a ``participant`` argument. Names that collide with
+    the agent's own tools are skipped. The tool list follows participants joining,
+    leaving, and changing their catalog.
 
     Example::
 
@@ -136,7 +136,8 @@ class ClientActionSet(AsyncToolset):
         self._session: AgentSession | None = None
         self._catalogs: dict[str, str] = {}
         self._providers: dict[str, dict[str, str]] = {}  # name -> {identity: summary}
-        self._described: dict[str, dict[str, ClientAction]] = {}  # name -> {identity: action}
+        # (identity, name) -> (summary it was described under, full entry)
+        self._cache: dict[tuple[str, str], tuple[str, ClientAction]] = {}
         self._changed = asyncio.Event()
         self._rebind_atask: asyncio.Task[None] | None = None
 
@@ -162,6 +163,7 @@ class ClientActionSet(AsyncToolset):
         room.on("participant_disconnected", self._on_participant_changed)
         self._sync_tools(room)
         self._rebind_atask = asyncio.create_task(self._rebind_loop(room))
+        self._changed.set()  # describe the initial catalogs
         return self
 
     async def aclose(self) -> None:
@@ -175,7 +177,7 @@ class ClientActionSet(AsyncToolset):
         self._tools = []
         self._catalogs = {}
         self._providers = {}
-        self._described = {}
+        self._cache = {}
         await super().aclose()
 
     def _on_attributes_changed(self, changed: dict[str, str], participant: rtc.Participant) -> None:
@@ -190,7 +192,11 @@ class ClientActionSet(AsyncToolset):
             await self._changed.wait()
             self._changed.clear()
             try:
-                if self._sync_tools(room) and (agent := self._current_agent()) is not None:
+                changed = self._sync_tools(room)
+                if await self._describe_missing(room):
+                    self._rebuild_tools(room)
+                    changed = True
+                if changed and (agent := self._current_agent()) is not None:
                     await agent.update_tools(agent.tools)
             except Exception:
                 logger.exception("ClientActionSet: failed to rebind client actions")
@@ -222,7 +228,7 @@ class ClientActionSet(AsyncToolset):
         taken = set(get_fnc_tool_names([t for t in others if t is not self]))
 
         for name in sorted(providers):
-            if name in taken or name == DESCRIBE_TOOL_NAME:
+            if name in taken:
                 logger.warning(
                     "ClientActionSet: action name collides with an agent tool, skipping",
                     extra={"action": name, "participants": list(providers[name])},
@@ -230,107 +236,84 @@ class ClientActionSet(AsyncToolset):
                 del providers[name]
         self._providers = providers
 
-        # keep descriptions only for providers still advertising the action
-        self._described = {
-            name: kept
-            for name, by_identity in self._described.items()
-            if (kept := {i: a for i, a in by_identity.items() if i in providers.get(name, {})})
+        # a changed summary means the participant changed the action, so describe it again
+        self._cache = {
+            key: cached
+            for key, cached in self._cache.items()
+            if providers.get(key[1], {}).get(key[0]) == cached[0]
         }
         self._rebuild_tools(room)
         return True
 
     def _rebuild_tools(self, room: rtc.Room) -> None:
-        if not self._providers:
-            self._tools = []
-            return
-        tools: list[Tool] = [self._describe_tool(room)]
-        for name, by_identity in sorted(self._described.items()):
-            tools.append(self._bind(room, name, list(by_identity.items())))
+        tools: list[Tool] = []
+        for name, by_identity in sorted(self._providers.items()):
+            entries = [
+                (identity, cached[1] if (cached := self._cache.get((identity, name))) else None)
+                for identity in by_identity
+            ]
+            # the first entry supplies the schema, so prefer a described one
+            entries.sort(key=lambda e: e[1] is None)
+            tools.append(
+                self._bind(
+                    room,
+                    name,
+                    [
+                        (identity, action or self._placeholder(name, by_identity[identity]))
+                        for identity, action in entries
+                    ],
+                )
+            )
         self._tools = tools
 
-    def _describe_tool(self, room: rtc.Room) -> RawFunctionTool:
-        lines = []
-        for name, by_identity in sorted(self._providers.items()):
-            summary = next((s for s in by_identity.values() if s), "")
-            line = f"- {name}: {summary}" if summary else f"- {name}"
-            if len(by_identity) > 1:
-                line += f" (offered by: {', '.join(by_identity)})"
-            lines.append(line)
-        description = (
-            "Participants in the room offer the actions below. Describe the ones you need "
-            "to make them available as tools, then call them.\n" + "\n".join(lines)
-        )
-        parameters = {
-            "type": "object",
-            "properties": {
-                "names": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": sorted(self._providers)},
-                    "description": "Names of the actions to describe.",
-                }
-            },
-            "required": ["names"],
-        }
-
-        async def _tool_called(raw_arguments: dict[str, Any]) -> str:
-            return await self._describe(room, list(raw_arguments.get("names") or []))
-
-        return function_tool(
-            _tool_called,
-            raw_schema={
-                "name": DESCRIBE_TOOL_NAME,
-                "description": description,
-                "parameters": parameters,
-            },
+    @staticmethod
+    def _placeholder(name: str, summary: str) -> ClientAction:
+        return ClientAction(
+            name=name,
+            description=summary,
+            parameters={"type": "object", "additionalProperties": True},
         )
 
-    async def _describe(self, room: rtc.Room, names: list[str]) -> str:
-        unknown = [n for n in names if n not in self._providers]
-        by_identity: dict[str, list[str]] = {}
-        for name in dict.fromkeys(names):
-            for identity in self._providers.get(name, {}):
-                by_identity.setdefault(identity, []).append(name)
+    async def _describe_missing(self, room: rtc.Room) -> bool:
+        wanted: dict[str, list[str]] = {}
+        for name, by_identity in self._providers.items():
+            for identity in by_identity:
+                if (identity, name) not in self._cache:
+                    wanted.setdefault(identity, []).append(name)
+        if not wanted:
+            return False
 
-        async def _one(identity: str, wanted: list[str]) -> list[ClientAction]:
-            resp = await room.local_participant.perform_rpc(
-                destination_identity=identity,
-                method=DESCRIBE_METHOD,
-                payload=json.dumps({"names": wanted}),
-                response_timeout=self._response_timeout,
-            )
-            return [a for a in _parse_described(resp, identity=identity) if a.name in wanted]
-
-        identities = list(by_identity)
+        identities = list(wanted)
         results = await asyncio.gather(
-            *(_one(i, by_identity[i]) for i in identities), return_exceptions=True
+            *(self._describe(room, i, wanted[i]) for i in identities), return_exceptions=True
         )
 
-        loaded: list[str] = []
-        failures: list[str] = []
+        loaded = False
         for identity, result in zip(identities, results, strict=True):
             if isinstance(result, BaseException):
-                message = result.message if isinstance(result, rtc.RpcError) else str(result)
-                failures.append(f"{identity}: {message}")
+                logger.warning(
+                    "ClientActionSet: failed to describe actions",
+                    extra={"participant": identity, "error": str(result)},
+                )
                 continue
             for action in result:
-                self._described.setdefault(action.name, {})[identity] = action
-                loaded.append(action.name)
+                # the catalog may have changed while the request was in flight
+                summary = self._providers.get(action.name, {}).get(identity)
+                if summary is not None:
+                    self._cache[(identity, action.name)] = (summary, action)
+                    loaded = True
+        return loaded
 
-        if loaded:
-            self._rebuild_tools(room)
-            if (agent := self._current_agent()) is not None:
-                await agent.update_tools(agent.tools)
-
-        parts = []
-        if loaded:
-            parts.append(f"Now available as tools: {', '.join(dict.fromkeys(loaded))}.")
-        if unknown:
-            parts.append(f"Not offered by anyone in the room: {', '.join(unknown)}.")
-        if failures:
-            parts.append(f"Could not describe from {'; '.join(failures)}.")
-        if not loaded:
-            raise ToolError(" ".join(parts) or "No actions were described.")
-        return " ".join(parts)
+    async def _describe(
+        self, room: rtc.Room, identity: str, names: list[str]
+    ) -> list[ClientAction]:
+        resp = await room.local_participant.perform_rpc(
+            destination_identity=identity,
+            method=DESCRIBE_METHOD,
+            payload=json.dumps({"names": names}),
+            response_timeout=self._response_timeout,
+        )
+        return [a for a in _parse_described(resp, identity=identity) if a.name in names]
 
     def _bind(
         self, room: rtc.Room, name: str, entries: list[tuple[str, ClientAction]]

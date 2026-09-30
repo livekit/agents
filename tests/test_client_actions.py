@@ -17,7 +17,6 @@ from livekit.agents.voice.client_actions import (
     ACTION_DECLINED_CODE,
     ACTIONS_ATTRIBUTE,
     DESCRIBE_METHOD,
-    DESCRIBE_TOOL_NAME,
 )
 from livekit.rtc.event_emitter import EventEmitter
 
@@ -39,6 +38,7 @@ DIM_LIGHTS = {
     "name": "dim_lights",
     "parameters": {"type": "object", "properties": {}},
 }
+PLACEHOLDER = {"type": "object", "additionalProperties": True}
 
 
 @function_tool
@@ -101,6 +101,13 @@ class _FakeLocalParticipant:
             raise self.error
         return self.response
 
+    def described(self) -> dict[str, list[str]]:
+        """Names requested per participant, in request order."""
+        out: dict[str, list[str]] = {}
+        for d in self.describes:
+            out.setdefault(d["destination_identity"], []).extend(json.loads(d["payload"])["names"])
+        return out
+
 
 class _FakeRoom(EventEmitter[str]):
     def __init__(self, *participants: _FakeParticipant) -> None:
@@ -127,13 +134,8 @@ def _by_name(toolset: ClientActionSet) -> dict[str, Any]:
     return {t.info.name: t for t in toolset.tools}
 
 
-def _offered(toolset: ClientActionSet) -> list[str]:
-    schema = _by_name(toolset)[DESCRIBE_TOOL_NAME].info.raw_schema
-    return schema["parameters"]["properties"]["names"]["items"]["enum"]
-
-
-async def _describe(toolset: ClientActionSet, *names: str) -> str:
-    return await _by_name(toolset)[DESCRIBE_TOOL_NAME](raw_arguments={"names": list(names)})
+def _params(toolset: ClientActionSet, name: str) -> dict[str, Any]:
+    return _by_name(toolset)[name].info.raw_schema["parameters"]
 
 
 async def _wait_for(predicate: Callable[[], bool]) -> None:
@@ -144,35 +146,28 @@ async def _wait_for(predicate: Callable[[], bool]) -> None:
     pytest.fail("condition not met within 2s")
 
 
-async def test_catalog_exposes_only_the_describe_tool() -> None:
-    room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]), _FakeParticipant("b", [DIM_LIGHTS]))
-    toolset, _, _ = await _start(room)
-    try:
-        tools = _by_name(toolset)
-        assert list(tools) == [DESCRIBE_TOOL_NAME]
-        description = tools[DESCRIBE_TOOL_NAME].info.raw_schema["description"]
-        assert description.endswith("\n- dim_lights\n- open_door: Open a door.")
-        assert _offered(toolset) == ["dim_lights", "open_door"]
-        assert room.local_participant.describes == []
-    finally:
-        await toolset.aclose()
+async def _wait_described(toolset: ClientActionSet, *names: str) -> None:
+    await _wait_for(
+        lambda: all(n in _by_name(toolset) and _params(toolset, n) != PLACEHOLDER for n in names)
+    )
 
 
-async def test_describe_promotes_actions_that_call_the_participant() -> None:
+async def test_actions_register_at_once_then_fill_in_schemas() -> None:
     room = _FakeRoom(
         _FakeParticipant("a", [{**OPEN_DOOR, "consent": "confirm"}]),
         _FakeParticipant("b", [DIM_LIGHTS]),
     )
     toolset, _, _ = await _start(room)
     try:
-        assert await _describe(toolset, "open_door") == "Now available as tools: open_door."
-        (describe,) = room.local_participant.describes
-        assert describe["destination_identity"] == "a"
-        assert json.loads(describe["payload"]) == {"names": ["open_door"]}
-
+        # registered synchronously in setup, before any describe completes
         tools = _by_name(toolset)
-        assert list(tools) == [DESCRIBE_TOOL_NAME, "open_door"]
-        schema = tools["open_door"].info.raw_schema
+        assert list(tools) == ["dim_lights", "open_door"]
+        assert tools["open_door"].info.raw_schema["description"] == "Open a door."
+        assert tools["open_door"].info.raw_schema["parameters"] == PLACEHOLDER
+
+        await _wait_described(toolset, "dim_lights", "open_door")
+        assert room.local_participant.described() == {"a": ["open_door"], "b": ["dim_lights"]}
+        schema = _by_name(toolset)["open_door"].info.raw_schema
         assert schema["parameters"] == OPEN_DOOR["parameters"]
         assert schema["description"] == (
             "Open a door. Doors are named front or back."
@@ -180,13 +175,13 @@ async def test_describe_promotes_actions_that_call_the_participant() -> None:
         )
 
         room.local_participant.response = json.dumps({"opened": True})
-        assert await tools["open_door"](raw_arguments={"door": "front"}) == {"opened": True}
+        result = await _by_name(toolset)["open_door"](raw_arguments={"door": "front"})
+        assert result == {"opened": True}
         (call,) = room.local_participant.calls
         assert call["destination_identity"] == "a"
         assert call["method"] == "action:open_door"
         assert json.loads(call["payload"]) == {"door": "front"}
 
-        await _describe(toolset, "dim_lights")
         tool = _by_name(toolset)["dim_lights"]
         room.local_participant.response = "plain text"
         assert await tool(raw_arguments={}) == "plain text"
@@ -196,31 +191,49 @@ async def test_describe_promotes_actions_that_call_the_participant() -> None:
         await toolset.aclose()
 
 
-async def test_describe_batches_per_participant_and_reports_misses() -> None:
-    room = _FakeRoom(
-        _FakeParticipant("a", [OPEN_DOOR, DIM_LIGHTS]), _FakeParticipant("b", [DIM_LIGHTS])
-    )
+async def test_descriptions_are_batched_per_participant_and_cached() -> None:
+    room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR, DIM_LIGHTS]))
     toolset, _, _ = await _start(room)
     try:
-        result = await _describe(toolset, "open_door", "dim_lights", "fly")
-        assert result == (
-            "Now available as tools: open_door, dim_lights. Not offered by anyone in the room: fly."
+        await _wait_described(toolset, "open_door", "dim_lights")
+        assert len(room.local_participant.describes) == 1
+        assert room.local_participant.described() == {"a": ["open_door", "dim_lights"]}
+
+        # a new action is described on its own; cached ones are not requested again
+        a = room.remote_participants["a"]
+        changed = a.advertise([OPEN_DOOR, DIM_LIGHTS, {**DIM_LIGHTS, "name": "x"}])
+        room.emit("participant_attributes_changed", changed, a)
+        await _wait_described(toolset, "x")
+        assert room.local_participant.described() == {"a": ["open_door", "dim_lights", "x"]}
+
+        # a changed summary invalidates that action's cached entry
+        updated = {**OPEN_DOOR, "summary": "Open any door.", "description": "Open any door."}
+        changed = a.advertise([updated, DIM_LIGHTS, {**DIM_LIGHTS, "name": "x"}])
+        room.emit("participant_attributes_changed", changed, a)
+        await _wait_for(
+            lambda: (
+                _by_name(toolset)["open_door"].info.raw_schema["description"] == "Open any door."
+            )
         )
-        payloads = {
-            d["destination_identity"]: json.loads(d["payload"])
-            for d in room.local_participant.describes
-        }
-        assert payloads == {
-            "a": {"names": ["open_door", "dim_lights"]},
-            "b": {"names": ["dim_lights"]},
-        }
+        assert room.local_participant.described()["a"][-1:] == ["open_door"]
+        assert len(room.local_participant.describes) == 3
+    finally:
+        await toolset.aclose()
 
-        with pytest.raises(ToolError, match="Not offered by anyone in the room: fly"):
-            await _describe(toolset, "fly")
 
-        room.local_participant.describe_error = rtc.RpcError(1500, "boom")
-        with pytest.raises(ToolError, match="Could not describe from a: boom"):
-            await _describe(toolset, "open_door")
+async def test_failed_describe_keeps_the_placeholder_callable() -> None:
+    room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]))
+    room.local_participant.describe_error = rtc.RpcError(1500, "boom")
+    toolset, _, _ = await _start(room)
+    try:
+        await _wait_for(lambda: len(room.local_participant.describes) == 1)
+        await asyncio.sleep(0.05)
+        assert _params(toolset, "open_door") == PLACEHOLDER
+
+        room.local_participant.response = json.dumps("ok")
+        assert await _by_name(toolset)["open_door"](raw_arguments={"door": "back"}) == "ok"
+        (call,) = room.local_participant.calls
+        assert json.loads(call["payload"]) == {"door": "back"}
     finally:
         await toolset.aclose()
 
@@ -229,10 +242,10 @@ async def test_shared_name_routes_by_participant() -> None:
     room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]), _FakeParticipant("b", [OPEN_DOOR]))
     toolset, _, _ = await _start(room)
     try:
-        description = _by_name(toolset)[DESCRIBE_TOOL_NAME].info.raw_schema["description"]
-        assert description.endswith("- open_door: Open a door. (offered by: a, b)")
+        await _wait_for(lambda: len(room.local_participant.describes) == 2)
+        await _wait_described(toolset, "open_door")
+        assert room.local_participant.described() == {"a": ["open_door"], "b": ["open_door"]}
 
-        await _describe(toolset, "open_door")
         tool = _by_name(toolset)["open_door"]
         schema = tool.info.raw_schema["parameters"]
         assert schema["properties"]["participant"]["enum"] == ["a", "b"]
@@ -255,7 +268,7 @@ async def test_decline_is_relayed_and_other_rpc_errors_raise() -> None:
     room = _FakeRoom(_FakeParticipant("a", [DIM_LIGHTS]))
     toolset, _, _ = await _start(room)
     try:
-        await _describe(toolset, "dim_lights")
+        await _wait_described(toolset, "dim_lights")
         tool = _by_name(toolset)["dim_lights"]
 
         room.local_participant.error = rtc.RpcError(ACTION_DECLINED_CODE, "not now")
@@ -277,32 +290,26 @@ async def test_rebinds_as_participants_come_and_go(scope: str) -> None:
     room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]))
     toolset, agent, _ = await _start(room, scope=scope, agent_tools=[agent_tool])
     try:
-        await _describe(toolset, "open_door")
+        await _wait_described(toolset, "open_door")
 
         newcomer = _FakeParticipant("b", [DIM_LIGHTS])
         room.remote_participants["b"] = newcomer
         room.emit("participant_connected", newcomer)
-        await _wait_for(lambda: "dim_lights" in _offered(toolset))
-        await _describe(toolset, "dim_lights")
-        assert list(_by_name(toolset)) == [DESCRIBE_TOOL_NAME, "dim_lights", "open_door"]
+        await _wait_described(toolset, "dim_lights")
         assert "agent_tool" in get_fnc_tool_names(agent.tools)
-
-        changed = room.remote_participants["a"].advertise([OPEN_DOOR, {**DIM_LIGHTS, "name": "x"}])
-        room.emit("participant_attributes_changed", changed, room.remote_participants["a"])
-        await _wait_for(lambda: "x" in _offered(toolset))
-        assert "open_door" in _by_name(toolset)
 
         del room.remote_participants["b"]
         room.emit("participant_disconnected", newcomer)
         await _wait_for(lambda: "dim_lights" not in _by_name(toolset))
-        assert _offered(toolset) == ["open_door", "x"]
-        assert list(_by_name(toolset)) == [DESCRIBE_TOOL_NAME, "open_door"]
+        assert list(_by_name(toolset)) == ["open_door"]
         assert "agent_tool" in get_fnc_tool_names(agent.tools)
         assert (toolset in agent.tools) == (scope == "agent")
 
-        leaving = room.remote_participants.pop("a")
-        room.emit("participant_disconnected", leaving)
-        await _wait_for(lambda: toolset.tools == [])
+        # rejoining describes again: the cache does not outlive the catalog
+        room.remote_participants["b"] = newcomer
+        room.emit("participant_connected", newcomer)
+        await _wait_described(toolset, "dim_lights")
+        assert room.local_participant.described()["b"] == ["dim_lights", "dim_lights"]
     finally:
         await toolset.aclose()
 
@@ -311,6 +318,7 @@ async def test_attribute_changes_only_wake_for_remote_catalog_updates() -> None:
     room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]))
     toolset, _, _ = await _start(room)
     try:
+        await _wait_described(toolset, "open_door")
         room.emit("participant_attributes_changed", {"other": "1"}, room.remote_participants["a"])
         assert not toolset._changed.is_set()
 
@@ -320,7 +328,7 @@ async def test_attribute_changes_only_wake_for_remote_catalog_updates() -> None:
 
         changed = room.remote_participants["a"].advertise([DIM_LIGHTS])
         room.emit("participant_attributes_changed", changed, room.remote_participants["a"])
-        await _wait_for(lambda: _offered(toolset) == ["dim_lights"])
+        await _wait_for(lambda: list(_by_name(toolset)) == ["dim_lights"])
     finally:
         await toolset.aclose()
 
@@ -329,16 +337,17 @@ async def test_action_named_like_an_agent_tool_is_skipped() -> None:
     room = _FakeRoom(_FakeParticipant("a", [{**DIM_LIGHTS, "name": "agent_tool"}, OPEN_DOOR]))
     toolset, agent, session = await _start(room, agent_tools=[agent_tool])
     try:
-        assert _offered(toolset) == ["open_door"]
-        await _describe(toolset, "open_door")
+        await _wait_described(toolset, "open_door")
+        assert list(_by_name(toolset)) == ["open_door"]
+        assert room.local_participant.described() == {"a": ["open_door"]}
         assert get_fnc_tool_names(agent.tools) == ["agent_tool"]
         ctx = ToolContext([*session.tools, *agent.tools])
-        assert set(ctx.function_tools) == {"agent_tool", DESCRIBE_TOOL_NAME, "open_door"}
+        assert set(ctx.function_tools) == {"agent_tool", "open_door"}
     finally:
         await toolset.aclose()
 
 
-async def test_malformed_catalogs_and_descriptions_yield_no_tools() -> None:
+async def test_malformed_catalogs_and_descriptions() -> None:
     room = _FakeRoom(
         _FakeParticipant("a", "not json"),
         _FakeParticipant("b", '{"name": "obj"}'),
@@ -347,16 +356,18 @@ async def test_malformed_catalogs_and_descriptions_yield_no_tools() -> None:
     )
     toolset, _, _ = await _start(room)
     try:
+        await asyncio.sleep(0.05)
         assert toolset.tools == []
+        assert room.local_participant.describes == []
     finally:
         await toolset.aclose()
 
     room = _FakeRoom(_FakeParticipant("a", [{"name": "bad_params", "parameters": "nope"}]))
     toolset, _, _ = await _start(room)
     try:
-        with pytest.raises(ToolError, match="No actions were described"):
-            await _describe(toolset, "bad_params")
-        assert list(_by_name(toolset)) == [DESCRIBE_TOOL_NAME]
+        await _wait_for(lambda: len(room.local_participant.describes) == 1)
+        await asyncio.sleep(0.05)
+        assert _params(toolset, "bad_params") == PLACEHOLDER
     finally:
         await toolset.aclose()
 
@@ -364,7 +375,7 @@ async def test_malformed_catalogs_and_descriptions_yield_no_tools() -> None:
 async def test_aclose_unsubscribes_and_is_safe_to_repeat() -> None:
     room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]))
     toolset, _, _ = await _start(room)
-    assert list(_by_name(toolset)) == [DESCRIBE_TOOL_NAME]
+    assert list(_by_name(toolset)) == ["open_door"]
 
     await toolset.aclose()
     assert toolset.tools == []
@@ -392,10 +403,10 @@ async def test_aclose_unsubscribes_and_is_safe_to_repeat() -> None:
 class _RecordingLLM(FakeLLM):
     def __init__(self, fake_responses: list[FakeLLMResponse]) -> None:
         super().__init__(fake_responses=fake_responses)
-        self.offered: list[list[str]] = []
+        self.offered: list[dict[str, Any]] = []
 
     def chat(self, *, chat_ctx: Any, tools: Any = None, **kwargs: Any) -> FakeLLMStream:
-        self.offered.append(sorted(t.info.name for t in tools or []))
+        self.offered.append({t.info.name: t.info.raw_schema["parameters"] for t in tools or []})
         return super().chat(chat_ctx=chat_ctx, tools=tools, **kwargs)  # type: ignore[return-value]
 
 
@@ -403,17 +414,13 @@ def _step(input: str, content: str = "", *calls: FunctionToolCall) -> FakeLLMRes
     return FakeLLMResponse(input=input, content=content, ttft=0, duration=0, tool_calls=list(calls))
 
 
-async def test_described_action_is_callable_in_the_same_turn() -> None:
-    room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR]))
+async def test_every_action_is_callable_on_the_first_turn() -> None:
+    room = _FakeRoom(_FakeParticipant("a", [OPEN_DOOR, DIM_LIGHTS]))
     room.local_participant.response = json.dumps("opened")
-    describe = FunctionToolCall(
-        name=DESCRIBE_TOOL_NAME, arguments='{"names": ["open_door"]}', call_id="d"
-    )
     open_door = FunctionToolCall(name="open_door", arguments='{"door": "front"}', call_id="o")
     llm = _RecordingLLM(
         [
-            _step("open the front door", "", describe),
-            _step("Now available as tools: open_door.", "", open_door),
+            _step("open the front door", "", open_door),
             _step("opened", "The front door is open."),
         ]
     )
@@ -421,9 +428,13 @@ async def test_described_action_is_callable_in_the_same_turn() -> None:
     session = AgentSession(llm=llm)
     async with session:
         await session.start(Agent(instructions="x", tools=[toolset]))
+        await _wait_described(toolset, "open_door", "dim_lights")
         result = await asyncio.wait_for(session.run(user_input="open the front door"), 5)
 
-    assert llm.offered[:2] == [[DESCRIBE_TOOL_NAME], [DESCRIBE_TOOL_NAME, "open_door"]]
+    assert llm.offered[0] == {
+        "dim_lights": DIM_LIGHTS["parameters"],
+        "open_door": OPEN_DOOR["parameters"],
+    }
     (call,) = room.local_participant.calls
     assert call["method"] == "action:open_door"
     assert json.loads(call["payload"]) == {"door": "front"}
