@@ -4636,6 +4636,7 @@ class AgentActivity(RecognitionHooks):
 
         tool_reply_expected = False
         if len(tool_output.output) > 0:
+            max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
             speech_handle._num_steps += 1
 
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
@@ -4738,6 +4739,13 @@ class AgentActivity(RecognitionHooks):
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
+                if max_steps_reached:
+                    logger.warning(
+                        "maximum number of function calls steps reached, "
+                        "generating final response with tool_choice='none'",
+                        extra={"speech_id": speech_handle.id},
+                    )
+
                 self._create_speech_task(
                     self._realtime_reply_task(
                         speech_handle=speech_handle,
@@ -4745,7 +4753,7 @@ class AgentActivity(RecognitionHooks):
                             # Avoid setting tool_choice to "required" or a specific function when
                             # passing tool response back to the LLM
                             tool_choice="none"
-                            if draining or model_settings.tool_choice == "none"
+                            if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
                         tool_reply=True,
