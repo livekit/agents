@@ -311,6 +311,19 @@ def test_replace_words():
     assert replaced == REPLACE_EXPECTED
 
 
+@pytest.mark.parametrize(
+    "text, replacements, expected",
+    [
+        ("مرحبا، كيف حالك؟", {"مرحبا": "أهلاً", "حالك": "أحوالك"}, "أهلاً، كيف أحوالك؟"),
+        ("नमस्ते। आप कैसे हैं", {"नमस्ते": "नमस्कार"}, "नमस्कार। आप कैसे हैं"),
+    ],
+)
+def test_replace_words_non_ascii_punctuation(
+    text: str, replacements: dict[str, str], expected: str
+):
+    assert tokenize.utils.replace_words(text=text, replacements=replacements) == expected
+
+
 async def test_replace_words_async():
     pattern = [1, 2, 4]
     text = REPLACE_TEXT
