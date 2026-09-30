@@ -34,6 +34,7 @@ from ..types import (
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
+from .events import AgentOutputTranscribedEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
@@ -520,6 +521,34 @@ async def _tts_inference_task(
 class _TextOutput:
     text: str
     first_text_fut: asyncio.Future[None]
+
+
+class _AgentOutputTranscriptionForwarder(io.TextOutput):
+    """Emit session transcription events while forwarding text to configured outputs."""
+
+    def __init__(
+        self,
+        *,
+        emit: Callable[[AgentOutputTranscribedEvent], None],
+        next_in_chain: io.TextOutput | None,
+    ) -> None:
+        super().__init__(label="AgentOutputTranscriptionForwarder", next_in_chain=next_in_chain)
+        self._emit = emit
+        self._transcript = ""
+
+    async def capture_text(self, text: str) -> None:
+        if text:
+            self._transcript += text
+            self._emit(AgentOutputTranscribedEvent(transcript=self._transcript, is_final=False))
+        if self.next_in_chain:
+            await self.next_in_chain.capture_text(text)
+
+    def flush(self) -> None:
+        if self._transcript:
+            self._emit(AgentOutputTranscribedEvent(transcript=self._transcript, is_final=True))
+            self._transcript = ""
+        if self.next_in_chain:
+            self.next_in_chain.flush()
 
 
 def perform_text_forwarding(

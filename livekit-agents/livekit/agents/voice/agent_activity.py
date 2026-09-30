@@ -77,6 +77,7 @@ from .events import (
 )
 from .generation import (
     ToolExecutionOutput,
+    _AgentOutputTranscriptionForwarder,
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
@@ -3147,6 +3148,10 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
+        tr_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=tr_output,
+        )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
         # See discussion in https://github.com/livekit/agents/issues/4432
@@ -3455,6 +3460,10 @@ class AgentActivity(RecognitionHooks):
             self._session.output.transcription
             if self._session.output.transcription_enabled
             else None
+        )
+        text_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=text_output,
         )
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
@@ -4222,6 +4231,10 @@ class AgentActivity(RecognitionHooks):
             self._session.output.transcription
             if self._session.output.transcription_enabled
             else None
+        )
+        text_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=text_output,
         )
 
         gen_ai_telemetry.set_request_attributes(
