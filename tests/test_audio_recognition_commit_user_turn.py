@@ -28,6 +28,7 @@ def _make_recognition() -> tuple[AudioRecognition, _TrackingEvent]:
 
     recognition._stt = object()
     recognition._closing = asyncio.Event()
+    recognition._vad = object()
     recognition._turn_detection_mode = "manual"
     recognition._last_final_transcript_time = time.time() - 1.0
     recognition._last_speaking_time = recognition._last_final_transcript_time
@@ -63,6 +64,29 @@ async def test_commit_user_turn_flushes_when_speech_follows_cached_final() -> No
     recognition, final_received = _make_recognition()
     assert recognition._last_final_transcript_time is not None
     recognition._last_speaking_time = recognition._last_final_transcript_time + 0.1
+
+    future = recognition._commit_user_turn(
+        audio_detached=True,
+        transcript_timeout=1.0,
+        stt_flush_duration=0.2,
+    )
+    for _ in range(3):
+        if final_received.wait_calls:
+            break
+        await asyncio.sleep(0)
+
+    assert not future.done()
+    assert final_received.wait_calls == 1
+    recognition._audio_transcript = "cached transcript with tail"
+    final_received.set()
+
+    assert await future == "cached transcript with tail"
+    recognition._push_audio.assert_called_once()
+
+
+async def test_commit_user_turn_flushes_without_vad_to_confirm_cached_final() -> None:
+    recognition, final_received = _make_recognition()
+    recognition._vad = None
 
     future = recognition._commit_user_turn(
         audio_detached=True,
