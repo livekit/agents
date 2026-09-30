@@ -122,9 +122,18 @@ class RealtimeModel:
         return "unknown"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Whether usage is routed through LiveKit Inference or a provider plugin."""
+        return "provider_plugin"
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata used to label turn metrics emitted for this realtime model."""
-        return {"model_name": self.model, "model_provider": self.provider}
+        return {
+            "model_name": self.model,
+            "model_provider": self.provider,
+            "usage_source": self.usage_source,
+        }
 
     @property
     def capabilities(self) -> RealtimeCapabilities:
@@ -221,6 +230,7 @@ class RealtimeSession(ABC, rtc.EventEmitter[EventTypes | TEvent], Generic[TEvent
                 metadata=Metadata(
                     model_name=self._realtime_model.model,
                     model_provider=self._realtime_model.provider,
+                    usage_source=self._realtime_model.usage_source,
                 ),
             ),
         )

@@ -716,6 +716,10 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "livekit"
 
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return "livekit_inference"
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

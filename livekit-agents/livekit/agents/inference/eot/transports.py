@@ -240,6 +240,7 @@ class _CloudTransport:
                             metadata=Metadata(
                                 model_name=detector.model,
                                 model_provider=detector.provider,
+                                usage_source="livekit_inference",
                             ),
                         ),
                     )

@@ -88,6 +88,11 @@ class DuplexModel(ABC):
         return "unknown"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Whether usage is routed through LiveKit Inference or a provider plugin."""
+        return "provider_plugin"
+
+    @property
     def capabilities(self) -> DuplexCapabilities:
         return self._capabilities
 
@@ -224,6 +229,7 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
                 metadata=Metadata(
                     model_name=self._duplex_model.model,
                     model_provider=self._duplex_model.provider,
+                    usage_source=self._duplex_model.usage_source,
                 ),
             ),
         )

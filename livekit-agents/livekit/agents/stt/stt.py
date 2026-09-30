@@ -196,9 +196,18 @@ class STT(
         return "unknown"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Whether usage is routed through LiveKit Inference or a provider plugin."""
+        return "provider_plugin"
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata used to label turn metrics emitted for this STT instance."""
-        return {"model_name": self.model, "model_provider": self.provider}
+        return {
+            "model_name": self.model,
+            "model_provider": self.provider,
+            "usage_source": self.usage_source,
+        }
 
     @property
     def capabilities(self) -> STTCapabilities:
@@ -238,6 +247,7 @@ class STT(
                         metadata=Metadata(
                             model_name=self.model,
                             model_provider=self.provider,
+                            usage_source=self.usage_source,
                         ),
                     )
                     self.emit("metrics_collected", stt_metrics)
@@ -455,7 +465,11 @@ class RecognizeStream(ABC):
                 streamed=True,
                 acquire_time=acquire_time,
                 connection_reused=connection_reused,
-                metadata=Metadata(model_name=self._stt.model, model_provider=self._stt.provider),
+                metadata=Metadata(
+                    model_name=self._stt.model,
+                    model_provider=self._stt.provider,
+                    usage_source=self._stt.usage_source,
+                ),
             ),
         )
 
@@ -538,7 +552,9 @@ class RecognizeStream(ABC):
                     output_tokens=ev.recognition_usage.output_tokens,
                     streamed=True,
                     metadata=Metadata(
-                        model_name=self._stt.model, model_provider=self._stt.provider
+                        model_name=self._stt.model,
+                        model_provider=self._stt.provider,
+                        usage_source=self._stt.usage_source,
                     ),
                 )
 
