@@ -9,6 +9,7 @@ from .agent_session import (
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
+from .client_actions import ClientAction, ClientActionSet
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -58,6 +59,8 @@ __all__ = [
     "Agent",
     "ModelSettings",
     "AgentTask",
+    "ClientAction",
+    "ClientActionSet",
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
