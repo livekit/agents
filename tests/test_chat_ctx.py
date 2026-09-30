@@ -13,6 +13,7 @@ from livekit.agents.llm import (
     FunctionCallOutput,
     utils,
 )
+from livekit.agents.llm.chat_context import _ReadOnlyChatContext
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -1015,3 +1016,45 @@ def test_copy_drops_a_name_less_tool_output_whose_call_is_not_in_the_context():
     ctx.insert(FunctionCallOutput(call_id="c1", output="ok", is_error=False))
 
     assert ctx.copy(tools=["get_weather"]).items == []
+
+
+def test_readonly_chat_ctx_blocks_every_mutation_path():
+    """`Agent.chat_ctx` returns a `_ReadOnlyChatContext`; every mutation must raise.
+
+    `insert()` — and `add_message(created_at=...)`/`merge()`, which route through
+    `list.insert()` — must not silently write into the view's detached copy, and the
+    `items` setter must not swap the immutable list for a plain mutable one.
+    """
+    ctx = ChatContext.empty()
+    ctx.add_message(role="system", content="sys")
+
+    ro = _ReadOnlyChatContext(ctx.items)  # what Agent.chat_ctx returns
+    assert ro.readonly is True
+
+    with pytest.raises(RuntimeError):
+        ro.items.append(ChatMessage(role="user", content=["x"]))
+
+    with pytest.raises(RuntimeError):
+        ro.insert(ChatMessage(role="user", content=["via insert()"]))
+
+    with pytest.raises(RuntimeError):
+        ro.add_message(role="user", content="x", created_at=1.0)
+
+    other = ChatContext.empty()
+    other.add_message(role="user", content="other")
+    with pytest.raises(RuntimeError):
+        ro.merge(other)
+
+    with pytest.raises(RuntimeError):
+        ro.items = [ChatMessage(role="user", content=["replaced"])]
+
+    # a blocked setter must not have swapped the immutable list for a mutable one
+    with pytest.raises(RuntimeError):
+        ro.items.append(ChatMessage(role="user", content=["x"]))
+
+    with pytest.raises(RuntimeError):
+        ro.items.pop()
+
+    # nothing above may reach the context the read-only view was built from
+    assert len(ro.items) == 1
+    assert len(ctx.items) == 1
