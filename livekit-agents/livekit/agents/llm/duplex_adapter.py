@@ -296,6 +296,10 @@ class DuplexRealtimeAdapter(RealtimeModel):
     def provider(self) -> str:
         return self._duplex_model.provider
 
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return self._duplex_model.usage_source
+
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # turn detection is inherent to a duplex model, so it is never asked to be off
         gate = (

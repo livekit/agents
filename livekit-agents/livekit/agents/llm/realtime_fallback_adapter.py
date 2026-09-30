@@ -134,6 +134,11 @@ class RealtimeModelFallbackAdapter(
         return "livekit"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Usage source of the model currently serving sessions."""
+        return self._active_instance.usage_source
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata of the model currently serving sessions (the primary until a swap)."""
         return self._active_instance.metrics_metadata

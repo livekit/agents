@@ -180,6 +180,7 @@ class RealtimeSession(openai.realtime.RealtimeSession):
                     metadata=Metadata(
                         model_name=self._xai_model.model,
                         model_provider=self._xai_model.provider,
+                        usage_source=self._xai_model.usage_source,
                     ),
                 ),
             )
