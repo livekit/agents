@@ -41,13 +41,18 @@ def replace_words(
         offset = 0
         processed_index = 0
         for word, start_index, end_index in words:
+            # a key may itself end in punctuation (e.g. Hebrew "ג׳"), so strip trailing
+            # punctuation one character at a time and use the longest matching key
             no_punctuation = word
-            # a key may itself end in punctuation (e.g. Hebrew "ג׳"), so try the whole word first
-            if word.lower() not in replacements:
-                while no_punctuation and tokenizer.is_punctuation(no_punctuation[-1]):
-                    no_punctuation = no_punctuation[:-1]
-            punctuation_off = len(word) - len(no_punctuation)
             replacement = replacements.get(no_punctuation.lower())
+            while (
+                replacement is None
+                and no_punctuation
+                and tokenizer.is_punctuation(no_punctuation[-1])
+            ):
+                no_punctuation = no_punctuation[:-1]
+                replacement = replacements.get(no_punctuation.lower())
+            punctuation_off = len(word) - len(no_punctuation)
             if replacement is not None:
                 text = (
                     text[: start_index + offset]
