@@ -155,6 +155,7 @@ class _VADStream(vad.VADStream):
 
         self._input_sample_rate = 0
         self._speech_buffer: np.ndarray | None = None
+        self._speech_buffer_index = 0
         self._speech_buffer_max_reached = False
         self._prefix_padding_samples = 0  # (input_sample_rate)
 
@@ -202,12 +203,14 @@ class _VADStream(vad.VADStream):
                 + self._prefix_padding_samples
             )
 
+            # Resizing may discard samples that the write cursor still counted.
+            self._speech_buffer_index = min(self._speech_buffer_index, len(self._speech_buffer))
+
             if self._opts.max_buffered_speech > old_max_buffered_speech:
                 self._speech_buffer_max_reached = False
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        speech_buffer_index: int = 0
 
         # "pub_" means public, these values are exposed to the users through events
         pub_speaking = False
@@ -229,7 +232,6 @@ class _VADStream(vad.VADStream):
         extra_inference_time = 0.0
 
         def _reset_state() -> None:
-            nonlocal speech_buffer_index
             nonlocal pub_speaking, pub_speech_duration, pub_silence_duration
             nonlocal pub_current_sample, pub_timestamp
             nonlocal speech_threshold_duration, silence_threshold_duration
@@ -238,7 +240,7 @@ class _VADStream(vad.VADStream):
 
             self._native_vad.reset()
 
-            speech_buffer_index = 0
+            self._speech_buffer_index = 0
             self._speech_buffer_max_reached = False
             if self._speech_buffer is not None:
                 self._speech_buffer.fill(0)
@@ -343,13 +345,13 @@ class _VADStream(vad.VADStream):
                 input_copy_remaining_fract = to_copy - to_copy_int
 
                 # copy the inference window to the speech buffer
-                available_space = len(self._speech_buffer) - speech_buffer_index
+                available_space = len(self._speech_buffer) - self._speech_buffer_index
                 to_copy_buffer = min(to_copy_int, available_space)
                 if to_copy_buffer > 0:
                     self._speech_buffer[
-                        speech_buffer_index : speech_buffer_index + to_copy_buffer
+                        self._speech_buffer_index : self._speech_buffer_index + to_copy_buffer
                     ] = input_frame.data[:to_copy_buffer]
-                    speech_buffer_index += to_copy_buffer
+                    self._speech_buffer_index += to_copy_buffer
                 elif not self._speech_buffer_max_reached:
                     # reached self._opts.max_buffered_speech (padding is included)
                     self._speech_buffer_max_reached = True
@@ -369,29 +371,29 @@ class _VADStream(vad.VADStream):
                     )
 
                 def _reset_write_cursor() -> None:
-                    nonlocal speech_buffer_index
                     assert self._speech_buffer is not None
 
-                    if speech_buffer_index <= self._prefix_padding_samples:
+                    if self._speech_buffer_index <= self._prefix_padding_samples:
                         return
 
                     padding_data = self._speech_buffer[
-                        speech_buffer_index - self._prefix_padding_samples : speech_buffer_index
+                        self._speech_buffer_index
+                        - self._prefix_padding_samples : self._speech_buffer_index
                     ]
 
                     self._speech_buffer_max_reached = False
                     self._speech_buffer[: self._prefix_padding_samples] = padding_data
-                    speech_buffer_index = self._prefix_padding_samples
+                    self._speech_buffer_index = self._prefix_padding_samples
 
                 def _copy_speech_buffer() -> rtc.AudioFrame:
                     # copy the data from speech_buffer
                     assert self._speech_buffer is not None
-                    speech_data = self._speech_buffer[:speech_buffer_index].tobytes()  # noqa: B023
+                    speech_data = self._speech_buffer[: self._speech_buffer_index].tobytes()
 
                     return rtc.AudioFrame(
                         sample_rate=self._input_sample_rate,
                         num_channels=1,
-                        samples_per_channel=speech_buffer_index,  # noqa: B023
+                        samples_per_channel=self._speech_buffer_index,
                         data=speech_data,
                     )
 
