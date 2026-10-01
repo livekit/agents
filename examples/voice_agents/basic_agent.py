@@ -112,6 +112,11 @@ async def entrypoint(ctx: JobContext) -> None:
         },
     )
 
+    @session.on("agent_output_transcribed")
+    def _on_agent_output_transcribed(ev):
+        if ev.is_final:
+            logger.info("Agent transcript: %s", ev.transcript)
+
     @session.on("metrics_collected")
     def _on_metrics_collected(ev: MetricsCollectedEvent) -> None:
         if ev.metrics.type == "stt_metrics":
