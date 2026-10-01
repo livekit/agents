@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import numpy as np
@@ -8,7 +11,9 @@ import pytest
 from livekit import rtc
 from livekit.agents import vad
 from livekit.agents.inference import vad as inference_vad
-from livekit.plugins.silero import vad as silero_vad
+
+if TYPE_CHECKING:
+    from livekit.plugins.silero import vad as silero_vad
 
 pytestmark = pytest.mark.unit
 
@@ -43,6 +48,7 @@ def vad_impl(request: pytest.FixtureRequest) -> Iterator[inference_vad.VAD | sil
         with patch.object(inference_vad, "_NativeVAD", _Model):
             yield inference_vad.VAD(**options)
     else:
+        silero_vad = pytest.importorskip("livekit.plugins.silero.vad", exc_type=ModuleNotFoundError)
         with (
             patch.object(silero_vad.onnx_model, "new_inference_session"),
             patch.object(silero_vad.onnx_model, "OnnxModel", side_effect=lambda **_: _Model()),
