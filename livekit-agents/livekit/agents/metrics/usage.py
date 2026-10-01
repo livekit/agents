@@ -201,7 +201,13 @@ class ModelUsageCollector:
             self._eot_usage[key] = EOTModelUsage(provider=provider, model=model)
         return self._eot_usage[key]
 
-    def collect(self, metrics: AgentMetrics) -> None:
+    def collect(self, metrics: AgentMetrics) -> bool:
+        """Add the usage carried by ``metrics`` to the running totals.
+
+        Returns:
+            True if ``metrics`` is a kind that carries usage and was added, False if it
+            was ignored (VAD, end-of-utterance and avatar metrics report timings only).
+        """
         if isinstance(metrics, LLMMetrics):
             provider, model = self._extract_provider_model(metrics)
             usage = self._get_llm_usage(provider, model)
@@ -264,6 +270,10 @@ class ModelUsageCollector:
             provider, model = self._extract_provider_model(metrics)
             eot_usage = self._get_eot_usage(provider, model)
             eot_usage.total_requests += metrics.num_requests
+        else:
+            return False
+
+        return True
 
     def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""
