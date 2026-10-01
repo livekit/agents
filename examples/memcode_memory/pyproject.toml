@@ -1,0 +1,8 @@
+[project]
+name = "livekit-example-memcode-memory"
+version = "0"
+requires-python = ">=3.10"
+dependencies = ["livekit-agents>=1.8.3", "memcode-sdk>=2.4.0,<3"]
+
+[tool.uv]
+package = false
