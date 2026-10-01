@@ -996,7 +996,6 @@ class RealtimeSession(
             # mirror that is replayed below
             self._reset_input_turn_state()
             chat_ctx = self.chat_ctx.copy(
-                exclude_function_call=True,
                 exclude_instructions=True,
                 exclude_empty_message=True,
                 exclude_handoff=True,

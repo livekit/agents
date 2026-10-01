@@ -671,3 +671,78 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
             "output_tokens": 2,
         }
     ]
+
+
+# --------------------------------------------------------------------------- #
+# a reconnection replays the conversation the server held, tool calls included
+# --------------------------------------------------------------------------- #
+
+
+async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
+    # a tool still running across the reconnection sends its output for a call id the
+    # new conversation must know, or the server rejects it with invalid_tool_call_id
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        created: list[dict] = []
+        connections.append((ws, created))
+        await ws.send_json({"type": "session.created", "event_id": "ev_session", "session": {}})
+        previous_item_id = None
+        async for msg in ws:
+            if msg.type is not WSMsgType.TEXT:
+                continue
+            event = msg.json()
+            if event["type"] != "conversation.item.create":
+                continue
+            item = event["item"]
+            created.append(item)
+            await ws.send_json(
+                {
+                    "type": "conversation.item.added",
+                    "event_id": f"ev_{item['id']}",
+                    "previous_item_id": previous_item_id,
+                    "item": item,
+                }
+            )
+            previous_item_id = item["id"]
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/realtime", realtime)
+    server = TestServer(app)
+    await server.start_server()
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = llm.ChatContext.empty()
+        chat_ctx.add_message(role="user", content="what's the weather?", id="item_user")
+        chat_ctx.items.append(
+            llm.FunctionCall(id="item_call", call_id="call_1", name="weather", arguments="{}")
+        )
+        chat_ctx.items.append(
+            llm.FunctionCallOutput(
+                id="item_output", call_id="call_1", name="weather", output="sunny", is_error=False
+            )
+        )
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+        await connections[0][0].close()
+        for _ in range(100):
+            if len(connections) == 2 and len(connections[1][1]) == 3:
+                break
+            await asyncio.sleep(0.05)
+
+        assert [(item["type"], item.get("call_id")) for item in connections[1][1]] == [
+            ("message", None),
+            ("function_call", "call_1"),
+            ("function_call_output", "call_1"),
+        ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
