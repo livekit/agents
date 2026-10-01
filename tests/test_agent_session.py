@@ -220,6 +220,12 @@ async def test_events_and_metrics() -> None:
     assert any(not event.is_final for event in agent_transcription_events)
     assert agent_transcription_events[-1].transcript == "I'm doing well, thank you!"
     assert agent_transcription_events[-1].is_final is True
+    recorded_agent_transcription_events = [
+        event
+        for event in session._recorded_events
+        if isinstance(event, AgentOutputTranscribedEvent)
+    ]
+    assert recorded_agent_transcription_events == [agent_transcription_events[-1]]
 
     # user_state_changed
     assert len(user_state_events) == 2

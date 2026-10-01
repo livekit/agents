@@ -68,6 +68,7 @@ from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
 from .events import (
     AgentEvent,
+    AgentOutputTranscribedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -763,7 +764,11 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return super().on(event, callback)
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
-        self._recorded_events.append(arg)
+        # Partial agent transcripts are cumulative snapshots. Deliver them to live
+        # listeners, but retain only the finalized snapshot to keep reports linear in
+        # the size of the reply rather than quadratic in its streamed prefixes.
+        if not isinstance(arg, AgentOutputTranscribedEvent) or arg.is_final:
+            self._recorded_events.append(arg)
         super().emit(event, arg)
 
     @property

@@ -3285,6 +3285,11 @@ class AgentActivity(RecognitionHooks):
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
             )
 
+        if isinstance(tr_output, _AgentOutputTranscriptionForwarder):
+            tr_output.finalize(
+                text_out.text if not speech_handle.interrupted and text_out is not None else None
+            )
+
         stopped_speaking_at = time.time()
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         _record_interruption(speech_handle)
