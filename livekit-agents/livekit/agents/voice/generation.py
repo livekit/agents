@@ -36,6 +36,7 @@ from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
 from .tool_executor import _build_executor_map
+from .transcription.synchronizer import _SyncedTextOutput
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -691,6 +692,20 @@ class _ForwardOutput:
         return self.text_out.text if self.text_out else ""
 
 
+def _transcript_was_released(text_output: io.TextOutput | None) -> bool:
+    """Whether text forwarded to ``text_output`` reaches the user without any audio.
+
+    A transcript synchronizer releases text in step with the playback and drops a segment
+    that never got audio; any other output passes the text on as it is generated.
+    """
+    out = text_output
+    while out is not None:
+        if isinstance(out, _SyncedTextOutput) and out._synchronizer.enabled:
+            return False
+        out = out.next_in_chain
+    return text_output is not None
+
+
 async def forward_generation(
     *,
     speech_handle: SpeechHandle,
@@ -711,7 +726,8 @@ async def forward_generation(
 
     Args:
         tts: The TTS generation behind ``audio_source``, when the caller wants a TTS
-            that failed before its first frame reported as a segment that never started.
+            that failed before its first frame reported as a segment that never started
+            (unless its transcript was released without waiting for the audio).
     """
     out = _ForwardOutput()
     forward_tasks: list[asyncio.Task[Any]] = []
@@ -779,10 +795,11 @@ async def forward_generation(
                 and tts.error is not None
                 and audio_out is not None
                 and not audio_out.has_captured_own_frame
+                and not _transcript_was_released(text_output)
             ):
-                # the TTS failed before its first frame: nothing was played, the
-                # transcript synchronizer releases no text without audio, and the event
-                # wait_for_playout returned belongs to an earlier segment. stays "skipped"
+                # the TTS failed before its first frame: nothing was played, no transcript
+                # was released, and the event wait_for_playout returned belongs to an
+                # earlier segment. stays "skipped"
                 return out
             playback_ev = playout_fut.result()
             out.played = "full"

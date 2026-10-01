@@ -244,12 +244,26 @@ async def test_events_and_metrics() -> None:
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
 
 
-@pytest.mark.parametrize("audio_before_failure", [False, True])
-async def test_reply_is_stored_only_if_tts_produced_audio(audio_before_failure: bool) -> None:
+@pytest.mark.parametrize(
+    ("audio_before_failure", "synchronized", "stored"),
+    [
+        # nothing was played, and the synchronizer released no transcript
+        (False, True, False),
+        # nothing was played, but the transcript was forwarded as it was generated
+        (False, False, True),
+        # the TTS failed after its audio
+        (True, True, True),
+    ],
+)
+async def test_reply_is_stored_only_if_it_reached_the_user(
+    audio_before_failure: bool, synchronized: bool, stored: bool
+) -> None:
     from livekit.agents.types import APIConnectOptions
     from livekit.agents.voice.agent_session import SessionConnectOptions
     from livekit.agents.voice.events import ErrorEvent
+    from livekit.agents.voice.transcription.synchronizer import _SyncedAudioOutput
 
+    from .fake_io import FakeAudioOutput, FakeTextOutput
     from .fake_tts import FakeTTS
 
     actions = FakeActions()
@@ -269,6 +283,13 @@ async def test_reply_is_stored_only_if_tts_produced_audio(audio_before_failure: 
     # response, and without a single frame when it has none
     session.tts.update_options(fake_exception=APIConnectionError("tts unavailable"))
 
+    transcript = FakeTextOutput()
+    if not synchronized:
+        assert isinstance(session.output.audio, _SyncedAudioOutput)
+        await session.output.audio._synchronizer.aclose()
+        session.output.audio = FakeAudioOutput()
+        session.output.transcription = transcript
+
     conversation_events: list[ConversationItemAddedEvent] = []
     error_events: list[ErrorEvent] = []
     session.on("conversation_item_added", conversation_events.append)
@@ -278,6 +299,8 @@ async def test_reply_is_stored_only_if_tts_produced_audio(audio_before_failure: 
 
     assert [ev.error.type for ev in error_events] == ["tts_error"]
     assert error_events[0].error.recoverable is False
+    if not synchronized:
+        assert transcript._messages == ["I'm doing well, thank you!"]
 
     assistant_messages = [
         item.text_content
@@ -285,12 +308,11 @@ async def test_reply_is_stored_only_if_tts_produced_audio(audio_before_failure: 
         if item.type == "message" and item.role == "assistant"
     ]
     added = [ev.item.role for ev in conversation_events if ev.item.type == "message"]
-    if audio_before_failure:
+    if stored:
         assert assistant_messages == ["I'm doing well, thank you!"]
         assert added == ["user", "assistant"]
     else:
-        # nothing was played and no transcript was released: the reply never reached
-        # the user, so the history must not say the agent gave it
+        # the reply never reached the user, so the history must not say the agent gave it
         assert assistant_messages == []
         assert added == ["user"]
 
