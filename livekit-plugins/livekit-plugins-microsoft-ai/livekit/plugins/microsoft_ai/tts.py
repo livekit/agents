@@ -185,7 +185,9 @@ class TTS(tts.TTS):
             if not voice_name or not voice_model:
                 raise ValueError("voice must be a voice name or a full voice ID such as name:model")
             if model is None:
-                model = config.get("MICROSOFT_AI_TTS_MODEL") or voice_model
+                model = config.get("MICROSOFT_AI_TTS_MODEL")
+                if model is None:
+                    model = voice_model
             model = config.required(model, "MICROSOFT_AI_TTS_MODEL")
             if voice_model.casefold() != model.casefold():
                 raise ValueError("full voice ID must end in the configured model name")
