@@ -764,9 +764,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return super().on(event, callback)
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
-        # Partial agent transcripts are cumulative snapshots. Deliver them to live
-        # listeners, but retain only the finalized snapshot to keep reports linear in
-        # the size of the reply rather than quadratic in its streamed prefixes.
+        # Emit partial snapshots to listeners, but retain only the final one so
+        # session reports don't grow quadratically with streamed replies.
         if not isinstance(arg, AgentOutputTranscribedEvent) or arg.is_final:
             self._recorded_events.append(arg)
         super().emit(event, arg)
