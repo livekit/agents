@@ -118,10 +118,11 @@ class TTS(tts.TTS):
             are used exactly as supplied and take precedence over region.
         region: Public-cloud Azure Speech region, or MICROSOFT_AI_TTS_REGION.
             Used only when the URL is unset, not when it is empty or whitespace.
-        model: Model metadata/validation, or MICROSOFT_AI_TTS_MODEL. It must match
-            the full voice ID's model suffix (case-insensitively), not an alias.
-        voice: Full Azure Speech voice ID, or MICROSOFT_AI_TTS_VOICE. This selects
-            the model and voice in SSML.
+        model: Voice model, or MICROSOFT_AI_TTS_MODEL, e.g. MAI-Voice-2-Flash. Appended
+            to a short voice name; optional when voice is a full ID, which it must
+            then match (case-insensitively), not an alias.
+        voice: Voice name such as en-US-Harper, or a full Azure Speech voice ID such
+            as en-US-Harper:MAI-Voice-2-Flash, or MICROSOFT_AI_TTS_VOICE.
         language: SSML language, default en-US.
         sample_rate: Expected WAV sample rate, or MICROSOFT_AI_TTS_SAMPLE_RATE.
         api_key: Azure Speech subscription key, or MICROSOFT_AI_TTS_API_KEY.
@@ -178,11 +179,19 @@ class TTS(tts.TTS):
             sample_rate=sample_rate,
             num_channels=1,
         )
-        model = config.required(model, "MICROSOFT_AI_TTS_MODEL")
         voice = config.required(voice, "MICROSOFT_AI_TTS_VOICE")
         voice_name, separator, voice_model = voice.rpartition(":")
-        if not voice_name or not separator or voice_model.casefold() != model.casefold():
-            raise ValueError("voice must be a full voice ID ending in the configured model name")
+        if separator:
+            if not voice_name or not voice_model:
+                raise ValueError("voice must be a voice name or a full voice ID such as name:model")
+            if model is None:
+                model = config.get("MICROSOFT_AI_TTS_MODEL") or voice_model
+            model = config.required(model, "MICROSOFT_AI_TTS_MODEL")
+            if voice_model.casefold() != model.casefold():
+                raise ValueError("full voice ID must end in the configured model name")
+        else:
+            model = config.required(model, "MICROSOFT_AI_TTS_MODEL")
+            voice = f"{voice}:{model}"
         if re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", language) is None:
             raise ValueError("language must be a language tag such as en-US")
         self._opts = _TTSOptions(
