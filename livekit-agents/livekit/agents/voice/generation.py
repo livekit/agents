@@ -696,14 +696,13 @@ def _transcript_was_released(text_output: io.TextOutput | None) -> bool:
     """Whether text forwarded to ``text_output`` reaches the user without any audio.
 
     A transcript synchronizer releases text in step with the playback and drops a segment
-    that never got audio; any other output passes the text on as it is generated.
+    that never got audio. Any other output may publish the text as it is generated, also
+    one that wraps a synchronizer, so only a synchronizer at the head of the chain holds
+    the text back.
     """
-    out = text_output
-    while out is not None:
-        if isinstance(out, _SyncedTextOutput) and out._synchronizer.enabled:
-            return False
-        out = out.next_in_chain
-    return text_output is not None
+    if text_output is None:
+        return False
+    return not (isinstance(text_output, _SyncedTextOutput) and text_output._synchronizer.enabled)
 
 
 async def forward_generation(

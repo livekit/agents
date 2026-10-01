@@ -245,18 +245,20 @@ async def test_events_and_metrics() -> None:
 
 
 @pytest.mark.parametrize(
-    ("audio_before_failure", "synchronized", "stored"),
+    ("audio_before_failure", "transcript", "stored"),
     [
         # nothing was played, and the synchronizer released no transcript
-        (False, True, False),
+        (False, "synchronized", False),
         # nothing was played, but the transcript was forwarded as it was generated
-        (False, False, True),
+        (False, "direct", True),
+        # the same, by an output that publishes the text before a synchronizer sees it
+        (False, "published before the synchronizer", True),
         # the TTS failed after its audio
-        (True, True, True),
+        (True, "synchronized", True),
     ],
 )
 async def test_reply_is_stored_only_if_it_reached_the_user(
-    audio_before_failure: bool, synchronized: bool, stored: bool
+    audio_before_failure: bool, transcript: str, stored: bool
 ) -> None:
     from livekit.agents.types import APIConnectOptions
     from livekit.agents.voice.agent_session import SessionConnectOptions
@@ -283,12 +285,15 @@ async def test_reply_is_stored_only_if_it_reached_the_user(
     # response, and without a single frame when it has none
     session.tts.update_options(fake_exception=APIConnectionError("tts unavailable"))
 
-    transcript = FakeTextOutput()
-    if not synchronized:
-        assert isinstance(session.output.audio, _SyncedAudioOutput)
+    assert isinstance(session.output.audio, _SyncedAudioOutput)
+    published = FakeTextOutput()
+    if transcript == "direct":
         await session.output.audio._synchronizer.aclose()
         session.output.audio = FakeAudioOutput()
-        session.output.transcription = transcript
+        session.output.transcription = published
+    elif transcript == "published before the synchronizer":
+        published = FakeTextOutput(next_in_chain=session.output.transcription)
+        session.output.transcription = published
 
     conversation_events: list[ConversationItemAddedEvent] = []
     error_events: list[ErrorEvent] = []
@@ -299,8 +304,8 @@ async def test_reply_is_stored_only_if_it_reached_the_user(
 
     assert [ev.error.type for ev in error_events] == ["tts_error"]
     assert error_events[0].error.recoverable is False
-    if not synchronized:
-        assert transcript._messages == ["I'm doing well, thank you!"]
+    if transcript != "synchronized":
+        assert published._messages == ["I'm doing well, thank you!"]
 
     assistant_messages = [
         item.text_content
