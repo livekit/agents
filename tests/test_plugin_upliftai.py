@@ -18,6 +18,7 @@ import pytest
 
 from livekit.agents import APIError
 from livekit.plugins import upliftai
+from livekit.plugins.upliftai.tts import _has_speakable_content
 
 pytestmark = pytest.mark.plugin("upliftai")
 
@@ -27,11 +28,18 @@ SAMPLE_RATE = 22050
 class FakeClient:
     """Duck-typed WebSocketClient serving synthetic PCM audio."""
 
-    def __init__(self, *, fail_on_request: int | None = None, delay: float = 0.15):
+    def __init__(
+        self,
+        *,
+        fail_on_request: int | None = None,
+        delay: float = 0.15,
+        empty_requests: set[int] | None = None,
+    ):
         self.requests: list[tuple[str, float, str | None]] = []  # (text, submit_time, request_id)
         self.cancels: list[str] = []
         self.fail_on_request = fail_on_request
         self.delay = delay
+        self.empty_requests = empty_requests or set()
         self._feed_tasks: list[asyncio.Task] = []
 
     async def drain(self) -> None:
@@ -52,6 +60,9 @@ class FakeClient:
             await asyncio.sleep(self.delay)  # simulated synthesis latency
             if self.fail_on_request == idx:
                 await q.put(APIError("boom from server"))
+                return
+            if idx in self.empty_requests:
+                await q.put(None)  # audio_end with no audio at all
                 return
             for _ in range(3):
                 await q.put(b"\x00\x01" * 2205)  # 0.1s of 22050Hz mono s16
@@ -412,3 +423,50 @@ async def test_undecodable_chunk_raises() -> None:
             pass
     await stream.aclose()
     await client.drain()
+
+
+async def test_chunk_with_no_audio_raises() -> None:
+    """A request that ends without audio must not silently drop its sentence.
+
+    The base class only checks that the whole segment produced audio, so a
+    neighbouring chunk would otherwise mask the missing speech.
+    """
+    # every attempt comes back empty, so the SDK retry loop exhausts and raises
+    fake = FakeClient(delay=0.01, empty_requests=set(range(20)))
+    tts = _make_tts(fake)
+
+    stream = tts.stream()
+    stream.push_text("This sentence should produce audio.")
+    stream.end_input()
+
+    with pytest.raises(APIError):
+        async for _ in stream:
+            pass
+    await stream.aclose()
+    await fake.drain()
+
+
+async def test_punctuation_only_chunk_may_be_silent() -> None:
+    """A chunk with nothing speakable in it is allowed to return no audio.
+
+    An LLM reply trailing off in "..." legitimately synthesizes to nothing;
+    failing the turn over it would be worse than the silence.
+    """
+    fake = FakeClient(delay=0.01, empty_requests={1})
+    tts = _make_tts(fake)
+
+    stream = tts.stream()
+    stream.push_text("Hello there friend. ...")
+    stream.end_input()
+
+    frames = []
+    async for ev in stream:
+        frames.append(ev)
+    await stream.aclose()
+    await fake.drain()
+
+    assert len(fake.requests) == 2, (
+        f"expected a speech chunk + a punctuation chunk: {fake.requests}"
+    )
+    assert not _has_speakable_content(fake.requests[1][0])
+    assert frames and frames[-1].is_final
