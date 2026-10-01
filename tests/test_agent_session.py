@@ -263,9 +263,12 @@ async def test_session_usage_updated_only_when_usage_changes() -> None:
     # so it must not announce the same totals again
     metrics_types = [ev.metrics.type for ev in metrics_events]
     assert "vad_metrics" in metrics_types
-    with_usage = [t for t in metrics_types if t not in ("vad_metrics", "eou_metrics")]
-    assert "llm_metrics" in with_usage and "tts_metrics" in with_usage
-    assert len(usage_events) == len(with_usage)
+    assert "llm_metrics" in metrics_types and "tts_metrics" in metrics_types
+
+    snapshots = [ev.usage for ev in usage_events]
+    assert snapshots and snapshots[0].model_usage
+    assert all(prev != cur for prev, cur in zip(snapshots, snapshots[1:], strict=False))
+    assert snapshots[-1] == session.usage
 
 
 async def test_tts_node_ttfb_excludes_upstream_latency() -> None:

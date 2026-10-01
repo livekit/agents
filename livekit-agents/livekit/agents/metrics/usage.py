@@ -205,9 +205,11 @@ class ModelUsageCollector:
         """Add the usage carried by ``metrics`` to the running totals.
 
         Returns:
-            True if ``metrics`` is a kind that carries usage and was added, False if it
-            was ignored (VAD, end-of-utterance and avatar metrics report timings only).
+            True if the totals changed: a model was seen for the first time, or one of its
+            counters moved. False for metrics that carry no usage (VAD, end-of-utterance,
+            avatar) and for reports with zero usage, such as connection timing.
         """
+        before = self.flatten()
         if isinstance(metrics, LLMMetrics):
             provider, model = self._extract_provider_model(metrics)
             usage = self._get_llm_usage(provider, model)
@@ -273,7 +275,7 @@ class ModelUsageCollector:
         else:
             return False
 
-        return True
+        return self.flatten() != before
 
     def flatten(self) -> list[ModelUsage]:
         """Returns a list of usage summaries, one per model/provider combination."""

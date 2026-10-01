@@ -121,7 +121,7 @@ def test_collector_aggregates_streaming_stt_token_usage() -> None:
     assert stt_usage.audio_duration == 2.0
 
 
-def test_collector_reports_whether_the_metrics_carried_usage() -> None:
+def test_collector_reports_whether_the_totals_changed() -> None:
     collector = ModelUsageCollector()
     assert collector.collect(_llm_metrics()) is True
     assert collector.collect(_stt_metrics()) is True
@@ -136,4 +136,13 @@ def test_collector_reports_whether_the_metrics_carried_usage() -> None:
         inference_count=32,
     )
     assert collector.collect(vad_metrics) is False
+
+    # a streaming STT reports each connection as a metric with zero usage
+    connection = _stt_metrics(audio_duration=0.0, acquire_time=0.2)
+    assert collector.collect(connection) is False
     assert collector.flatten() == before
+
+    # the same report for a model not seen before adds its entry to the totals
+    other_model = Metadata(model_provider="deepgram", model_name="nova-3")
+    assert collector.collect(_stt_metrics(audio_duration=0.0, metadata=other_model)) is True
+    assert len(collector.flatten()) == len(before) + 1

@@ -2151,9 +2151,10 @@ class AgentActivity(RecognitionHooks):
         usage_updated = self._session._usage_collector.collect(ev)
         otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-        # a VAD stream reports its inference time every second for as long as it runs;
-        # that is not usage, and announcing it would repeat the same totals to every
-        # listener (and, through the session host, to the room) once a second
+        # a VAD stream reports its inference time every second for as long as it runs,
+        # and connection timing arrives as a metric with zero usage; announcing those
+        # would repeat the same totals to every listener (and, through the session
+        # host, to the room)
         if usage_updated:
             self._session.emit(
                 "session_usage_updated",
