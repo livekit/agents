@@ -2204,6 +2204,17 @@ class RealtimeSession(
         assert self._current_generation is not None, "current_generation is None"
 
     def _handle_response_output_item_done(self, event: ResponseOutputItemDoneEvent) -> None:
+        # conversation.item.added carries a function call before its arguments are generated;
+        # the mirror needs the completed arguments, since a reconnection replays it
+        if (
+            isinstance(event.item, RealtimeConversationItemFunctionCall)
+            and event.item.id
+            and event.item.arguments is not None
+            and (remote_item := self._remote_chat_ctx.get(event.item.id))
+            and isinstance(remote_item.item, llm.FunctionCall)
+        ):
+            remote_item.item.arguments = event.item.arguments
+
         if isinstance(self._current_generation, _DiscardedGeneration):
             return
         assert self._current_generation is not None, "current_generation is None"
