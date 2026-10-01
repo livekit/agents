@@ -88,6 +88,15 @@ def _ends_sentence(token: str) -> bool:
     return bool(stripped) and stripped[-1] in SENTENCE_END_CHARS
 
 
+def _has_speakable_content(text: str) -> bool:
+    """Whether a chunk should be expected to produce audio.
+
+    A chunk of only punctuation or symbols (an LLM reply trailing off in
+    "..." for instance) can legitimately synthesize to nothing.
+    """
+    return any(ch.isalnum() for ch in text)
+
+
 def _validate_speed(speed: float) -> None:
     if not MIN_SPEED <= speed <= MAX_SPEED:
         raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}, got {speed}")
@@ -665,9 +674,9 @@ class SynthesizeStream(tts.SynthesizeStream):
         # audio queues of in-flight requests, in submission order. the bound caps
         # look-ahead at MAX_PIPELINED_REQUESTS queued, plus one being emitted and
         # one blocked in _submit_buffer
-        inflight_ch: asyncio.Queue[tuple[str, asyncio.Queue[bytes | Exception | None]] | None] = (
-            asyncio.Queue(maxsize=MAX_PIPELINED_REQUESTS)
-        )
+        inflight_ch: asyncio.Queue[
+            tuple[str, str, asyncio.Queue[bytes | Exception | None]] | None
+        ] = asyncio.Queue(maxsize=MAX_PIPELINED_REQUESTS)
         # requests submitted but not fully drained; cancelled server-side on teardown
         pending_request_ids: set[str] = set()
 
@@ -695,7 +704,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # request may already be on the wire and must still get cancelled
                 pending_request_ids.add(chunk_request_id)
                 audio_queue = await client.synthesize(chunk_text, chunk_request_id)
-                await inflight_ch.put((chunk_request_id, audio_queue))
+                await inflight_ch.put((chunk_request_id, chunk_text, audio_queue))
 
             async for token_data in token_stream:
                 token = token_data.token
@@ -729,14 +738,26 @@ class SynthesizeStream(tts.SynthesizeStream):
 
                 yield audio_data
 
-        async def _emit_chunk(audio_queue: asyncio.Queue[bytes | Exception | None]) -> None:
+        async def _emit_chunk(
+            chunk_text: str, audio_queue: asyncio.Queue[bytes | Exception | None]
+        ) -> None:
+            def _check_not_empty(received_bytes: int) -> None:
+                # a request that ends without audio drops its sentence silently:
+                # the base class only checks that the *segment* produced audio, so
+                # neighbouring chunks would mask the hole
+                if received_bytes == 0 and _has_speakable_content(chunk_text):
+                    raise APIError("TTS returned no audio for synthesized text")
+
             # each request returns a complete audio file. a single decoder cannot
             # span multiple files (a mid-stream MP3/RIFF header corrupts or
             # truncates decoding), so every chunk is decoded independently and
             # the emitter only ever sees raw PCM
             if opts.voice_settings.output_format == "PCM_22050_16":
+                pcm_bytes = 0
                 async for audio_data in _iter_audio(audio_queue):
+                    pcm_bytes += len(audio_data)
                     output_emitter.push(audio_data)
+                _check_not_empty(pcm_bytes)
                 return
 
             decoder = codecs.AudioStreamDecoder(
@@ -766,6 +787,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await utils.aio.gracefully_cancel(feed_task)
                 await decoder.aclose()
 
+            _check_not_empty(fed_bytes)
             # the SDK decoder is fail-open: a decode error only logs and closes the
             # stream. surface it as a retryable error instead of a silent gap in speech
             if fed_bytes > 0 and decoded_frames == 0:
@@ -773,10 +795,10 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async def _emit_audio() -> None:
             while (inflight := await inflight_ch.get()) is not None:
-                chunk_request_id, audio_queue = inflight
+                chunk_request_id, chunk_text, audio_queue = inflight
                 # on failure the id stays in pending_request_ids so teardown sends
                 # a cancel — required for timeouts, harmless for dead requests
-                await _emit_chunk(audio_queue)
+                await _emit_chunk(chunk_text, audio_queue)
                 pending_request_ids.discard(chunk_request_id)
                 # release the held-back tail frame so a chunk's final audio isn't
                 # delayed until the next chunk's audio arrives
