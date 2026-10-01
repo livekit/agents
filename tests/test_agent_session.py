@@ -244,6 +244,57 @@ async def test_events_and_metrics() -> None:
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
 
 
+@pytest.mark.parametrize("audio_before_failure", [False, True])
+async def test_reply_is_stored_only_if_tts_produced_audio(audio_before_failure: bool) -> None:
+    from livekit.agents.types import APIConnectOptions
+    from livekit.agents.voice.agent_session import SessionConnectOptions
+    from livekit.agents.voice.events import ErrorEvent
+
+    from .fake_tts import FakeTTS
+
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
+    if audio_before_failure:
+        actions.add_tts(2.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(
+        actions,
+        extra_kwargs={
+            "conn_options": SessionConnectOptions(tts_conn_options=APIConnectOptions(max_retry=0))
+        },
+    )
+    assert isinstance(session.tts, FakeTTS)
+    # the fake raises at the end of the stream: after the audio when the text has a
+    # response, and without a single frame when it has none
+    session.tts.update_options(fake_exception=APIConnectionError("tts unavailable"))
+
+    conversation_events: list[ConversationItemAddedEvent] = []
+    error_events: list[ErrorEvent] = []
+    session.on("conversation_item_added", conversation_events.append)
+    session.on("error", error_events.append)
+
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    assert [ev.error.type for ev in error_events] == ["tts_error"]
+    assert error_events[0].error.recoverable is False
+
+    assistant_messages = [
+        item.text_content
+        for item in session.history.items
+        if item.type == "message" and item.role == "assistant"
+    ]
+    added = [ev.item.role for ev in conversation_events if ev.item.type == "message"]
+    if audio_before_failure:
+        assert assistant_messages == ["I'm doing well, thank you!"]
+        assert added == ["user", "assistant"]
+    else:
+        # nothing was played and no transcript was released: the reply never reached
+        # the user, so the history must not say the agent gave it
+        assert assistant_messages == []
+        assert added == ["user"]
+
+
 async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
     # the LLM stream stays open for its full duration and the fake TTS only starts
     # synthesizing once its input is flushed. tts_node_ttfb must anchor on the text

@@ -3788,6 +3788,7 @@ class AgentActivity(RecognitionHooks):
                 text_output=text_output,
                 audio_source=audio_source,
                 text_source=text_source,
+                tts=segment.tts,
                 on_first_frame=_on_first_frame,
                 reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
             )
