@@ -67,7 +67,7 @@ Obtain these values and the exact contract from your deployment owner.
 | `MICROSOFT_AI_TTS_URL` | `TTS(url=...)` |
 | `MICROSOFT_AI_TTS_REGION` | `TTS(region=...)` (when no URL is configured) |
 | `MICROSOFT_AI_TTS_API_KEY` | `TTS(api_key=...)` |
-| `MICROSOFT_AI_TTS_MODEL` | `TTS(model=...)` |
+| `MICROSOFT_AI_TTS_MODEL` | `TTS(model=...)` (optional with a full voice ID) |
 | `MICROSOFT_AI_TTS_VOICE` | `TTS(voice=...)` |
 | `MICROSOFT_AI_TTS_SAMPLE_RATE` | `TTS(sample_rate=...)` |
 | `MICROSOFT_AI_ENV_FILE` | `STT(env_file=...)`, `TTS(env_file=...)` |
@@ -244,10 +244,11 @@ region-availability catalog or access guarantee. Sovereign clouds and
 custom/private deployments require an explicit full URL. There is no automatic
 region detection, failover or redirection to a different region.
 
-The full `voice` ID selects the voice and model in SSML. `model` is required
-metadata and is checked against the voice ID's suffix, case-insensitively.
-For example, the public documentation pairs `mai-voice-2-flash` with
-`en-US-Harper:MAI-Voice-2-Flash`; availability still depends on the resource and
+The SSML voice ID is `name:model`, such as `en-US-Harper:MAI-Voice-2-Flash`.
+Set `voice` to the name (`en-US-Harper`) and `model` to the model
+(`MAI-Voice-2-Flash`), and the plugin joins them. A full ID in `voice` is also
+accepted; `model` is then optional, and when set it is checked against the ID's
+suffix, case-insensitively. Availability still depends on the resource and
 region. **Voice-2.1-Flash and Voice-2-Flash are not treated as aliases.**
 SSML language defaults to `en-US`; override the `language` constructor argument
 for other locales.

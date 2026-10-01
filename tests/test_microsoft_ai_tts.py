@@ -139,10 +139,10 @@ def test_model_voice_rate_and_credentials_have_no_guessed_defaults(
     monkeypatch.setenv("OPENAI_API_KEY", "not-for-microsoft-ai")
     with pytest.raises(ValueError, match="SAMPLE_RATE"):
         microsoft_ai.TTS()
-    with pytest.raises(ValueError, match="TTS_MODEL"):
-        microsoft_ai.TTS(sample_rate=24000)
     with pytest.raises(ValueError, match="TTS_VOICE"):
-        microsoft_ai.TTS(sample_rate=24000, model="test")
+        microsoft_ai.TTS(sample_rate=24000)
+    with pytest.raises(ValueError, match="TTS_MODEL"):
+        microsoft_ai.TTS(sample_rate=24000, voice="en-US-Dummy")
     with pytest.raises(ValueError, match="TTS_API_KEY"):
         microsoft_ai.TTS(sample_rate=24000, model="test", voice="en-US-Dummy:test", url=TTS_URL)
     assert not hasattr(microsoft_ai.TTS, "with_azure")
@@ -436,12 +436,42 @@ async def test_documented_wav_output_formats(rate: int, format: str) -> None:
 
 
 @pytest.mark.usefixtures("no_http_session")
-@pytest.mark.parametrize("voice", ["short-name", "en-US-Dummy:wrong-model", ":file-synthesizer"])
-def test_voice_must_include_the_configured_model(tmp_path: Path, voice: str) -> None:
+@pytest.mark.parametrize("voice", ["en-US-Dummy:wrong-model", ":file-synthesizer", "en-US-Dummy:"])
+def test_full_voice_id_must_match_the_configured_model(tmp_path: Path, voice: str) -> None:
     path = tmp_path / "endpoints.env"
     path.write_text(DUMMY_CONFIG, encoding="utf-8")
     with pytest.raises(ValueError, match="full voice ID"):
         microsoft_ai.TTS(env_file=path, voice=voice)
+
+
+@pytest.mark.usefixtures("no_http_session")
+def test_voice_name_is_combined_with_the_configured_model(tmp_path: Path) -> None:
+    path = tmp_path / "endpoints.env"
+    path.write_text(DUMMY_CONFIG, encoding="utf-8")
+    instance = microsoft_ai.TTS(env_file=path, voice="en-US-Dummy")
+    assert instance.model == "file-synthesizer"
+    assert instance._opts.voice == "en-US-Dummy:file-synthesizer"
+    instance = microsoft_ai.TTS(env_file=path, model="other-synthesizer", voice="en-US-Dummy")
+    assert instance._opts.voice == "en-US-Dummy:other-synthesizer"
+
+
+@pytest.mark.usefixtures("no_http_session")
+def test_full_voice_id_supplies_the_model_when_none_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MICROSOFT_AI_TTS_SAMPLE_RATE", "24000")
+    instance = microsoft_ai.TTS(
+        url="https://tts.example.invalid/cognitiveservices/v1",
+        api_key="dummy",
+        voice="en-US-Dummy:MAI-Test-Flash",
+    )
+    assert instance.model == "MAI-Test-Flash"
+    with pytest.raises(ValueError, match="TTS_MODEL"):
+        microsoft_ai.TTS(
+            url="https://tts.example.invalid/cognitiveservices/v1",
+            api_key="dummy",
+            voice="en-US-Dummy",
+        )
 
 
 @pytest.mark.usefixtures("no_http_session")
