@@ -862,3 +862,34 @@ def test_explicit_tool_behavior_wins_over_the_model_default(
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
     model = RealtimeModel(model="gemini-3.8-live", tool_behavior=types.Behavior.BLOCKING)
     assert model._opts.tool_behavior == types.Behavior.BLOCKING
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.8-live",
+        "gemini-3.8-live-extended-thinking",
+        "gemini-live-2.5-flash-native-audio",
+        "some-unreleased-model",
+    ],
+)
+def test_any_model_accepted_on_vertex(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    realtime_model = RealtimeModel(model=model, vertexai=True, project="p", location="eu")
+    assert realtime_model._opts.model == model
+    assert realtime_model._opts.vertexai
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.8-live",
+        "gemini-live-2.5-flash-native-audio",
+        "some-unreleased-model",
+    ],
+)
+def test_any_model_accepted_on_gemini_api(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    realtime_model = RealtimeModel(model=model, vertexai=False)
+    assert realtime_model._opts.model == model
+    assert not realtime_model._opts.vertexai

@@ -62,26 +62,6 @@ class _ChatCtxToolResponse(types.LiveClientToolResponse):
 # stop rejecting tool calls after this many in a row to avoid a loop (tool_choice="none")
 MAX_TOOL_CALL_REJECTIONS = 3
 
-# Known VertexAI models for the Live API
-# See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
-KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
-    {
-        "gemini-live-2.5-flash-native-audio",
-    }
-)
-
-# Known Gemini API models for the Live API
-# See: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
-KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
-    {
-        "gemini-3.8-live",
-        "gemini-3.8-live-extended-thinking",
-        "gemini-3.1-flash-live-preview",
-        "gemini-2.5-flash-native-audio-preview-12-2025",
-    }
-)
-
-
 # generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
 # answer that placeholder with an empty turn instead, so they must not get it.
 MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
@@ -100,31 +80,6 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     if any(tag in model for tag in MODELS_DEFAULT_NON_BLOCKING):
         return types.Behavior.NON_BLOCKING
     return NOT_GIVEN
-
-
-def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
-    """
-    Validate that the model name matches the API being used.
-
-    Raises ValueError if a known model is used with the wrong API configuration.
-
-    Args:
-        model: The model name being used
-        use_vertexai: Whether VertexAI is enabled
-    """
-    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a Gemini API model, but vertexai=True. "
-            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
-            f"or set vertexai=False."
-        )
-
-    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a VertexAI model, but vertexai=False. "
-            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
-            f"or set vertexai=True."
-        )
 
 
 def _warn_vertex_scheduling_unsupported() -> None:
@@ -394,9 +349,6 @@ class RealtimeModel(llm.RealtimeModel):
                 raise ValueError(
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
-
-        # Validate model/API compatibility for known models
-        _validate_model_api_match(model, use_vertexai)
 
         self._opts = _RealtimeOptions(
             model=model,
