@@ -16,6 +16,7 @@ from livekit.plugins.openai.responses.llm import (
     _WS_HEARTBEAT,
     LLM as ResponsesLLM,
     LLMStream,
+    _http_request_kwargs,
     _ResponsesWebsocket,
 )
 
@@ -103,6 +104,38 @@ async def test_reasoning_object_serialized_without_null_fields() -> None:
     assert sent["reasoning"] == {"effort": "none"}
     # No serialized request model may carry an explicit null-valued key.
     assert None not in sent["reasoning"].values()
+
+
+async def test_access_programs_are_forwarded() -> None:
+    llm_model = ResponsesLLM(
+        model="gpt-5.6-cyber",
+        api_key="test-key",
+        access_programs={"cyber": "daybreak_blue"},
+    )
+    chat_ctx = agents_llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="hi")
+
+    stream = llm_model.chat(chat_ctx=chat_ctx)
+
+    assert stream._extra_kwargs["access_programs"] == {"cyber": "daybreak_blue"}
+    await stream.aclose()
+    await llm_model.aclose()
+
+
+def test_access_programs_use_extra_body_for_http_sdk() -> None:
+    kwargs = _http_request_kwargs(
+        {
+            "access_programs": {"cyber": "daybreak_red"},
+            "extra_body": {"prompt_cache_options": {"ttl": "24h"}},
+        }
+    )
+
+    assert kwargs == {
+        "extra_body": {
+            "access_programs": {"cyber": "daybreak_red"},
+            "prompt_cache_options": {"ttl": "24h"},
+        }
+    }
 
 
 async def test_incomplete_response_is_a_terminal_websocket_event() -> None:

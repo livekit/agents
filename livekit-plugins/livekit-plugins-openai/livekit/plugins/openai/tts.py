@@ -32,6 +32,7 @@ from livekit.agents import (
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
+from openai.types.audio.speech_create_params import VoiceID
 
 from .models import TTSModels, TTSVoices
 from .utils import AsyncAzureADTokenProvider
@@ -43,6 +44,7 @@ DEFAULT_MODEL = "gpt-4o-mini-tts"
 DEFAULT_VOICE = "ash"
 
 RESPONSE_FORMATS = Literal["mp3", "opus", "aac", "flac", "wav", "pcm"] | str
+TTSVoice = TTSVoices | str | VoiceID
 
 # Models that use audio stream format (character-based billing)
 AUDIO_STREAM_MODELS = {"tts-1", "tts-1-hd"}
@@ -74,7 +76,7 @@ DECODABLE_CONTENT_TYPES = frozenset(
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
-    voice: TTSVoices | str
+    voice: TTSVoice
     speed: float
     instructions: str | None
     response_format: RESPONSE_FORMATS
@@ -85,7 +87,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: TTSModels | str = DEFAULT_MODEL,
-        voice: TTSVoices | str = DEFAULT_VOICE,
+        voice: TTSVoice = DEFAULT_VOICE,
         speed: float = 1.0,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
@@ -146,7 +148,7 @@ class TTS(tts.TTS):
         self,
         *,
         model: NotGivenOr[TTSModels | str] = NOT_GIVEN,
-        voice: NotGivenOr[TTSVoices | str] = NOT_GIVEN,
+        voice: NotGivenOr[TTSVoice] = NOT_GIVEN,
         speed: NotGivenOr[float] = NOT_GIVEN,
         instructions: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
@@ -163,7 +165,7 @@ class TTS(tts.TTS):
     def with_azure(
         *,
         model: TTSModels | str = DEFAULT_MODEL,
-        voice: TTSVoices | str = DEFAULT_VOICE,
+        voice: TTSVoice = DEFAULT_VOICE,
         speed: float = 1.0,
         instructions: NotGivenOr[str] = NOT_GIVEN,
         azure_endpoint: str | None = None,

@@ -5,7 +5,7 @@ import json
 import os
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, cast
 
 import aiohttp
 import httpx
@@ -41,14 +41,27 @@ from openai.types.responses import (
     response_create_params,
 )
 from openai.types.responses.response_stream_event import ResponseStreamEvent
-from openai.types.shared_params import ResponsesModel
 
 from ..log import logger
-from ..models import _supports_reasoning_effort
+from ..models import ResponsesModels, _supports_reasoning_effort
 from ..tools import OpenAITool
 
-ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "fast", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
+
+
+class AccessPrograms(TypedDict, total=False):
+    cyber: Literal["standard", "daybreak_blue", "daybreak_red"]
+
+
+def _http_request_kwargs(extra_kwargs: dict[str, Any]) -> dict[str, Any]:
+    kwargs = extra_kwargs.copy()
+    access_programs = kwargs.pop("access_programs", None)
+    if access_programs is not None:
+        extra_body = kwargs.get("extra_body") or {}
+        kwargs["extra_body"] = {**extra_body, "access_programs": access_programs}
+    return kwargs
+
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
 
@@ -194,7 +207,7 @@ class _ResponsesWebsocket:
 
 @dataclass
 class _LLMOptions:
-    model: str | ResponsesModel
+    model: str | ResponsesModels
     user: NotGivenOr[str]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
@@ -205,6 +218,7 @@ class _LLMOptions:
     service_tier: NotGivenOr[ServiceTier]
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
+    access_programs: NotGivenOr[AccessPrograms]
     use_websocket: bool
 
 
@@ -216,7 +230,7 @@ class LLM(llm.LLM):
     def __init__(
         self,
         *,
-        model: str | ResponsesModel = "gpt-4.1",
+        model: str | ResponsesModels = "gpt-4.1",
         api_key: NotGivenOr[str] = NOT_GIVEN,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         client: openai.AsyncClient | None = None,
@@ -231,6 +245,7 @@ class LLM(llm.LLM):
         service_tier: NotGivenOr[ServiceTier] = NOT_GIVEN,
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
+        access_programs: NotGivenOr[AccessPrograms] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
     ) -> None:
         """
@@ -263,6 +278,7 @@ class LLM(llm.LLM):
             service_tier=service_tier,
             verbosity=verbosity,
             max_output_tokens=max_output_tokens,
+            access_programs=access_programs,
             use_websocket=use_websocket,
         )
         self._client = client
@@ -367,6 +383,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
 
+        if is_given(self._opts.access_programs):
+            extra["access_programs"] = self._opts.access_programs
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -428,7 +447,7 @@ class LLMStream(llm.LLMStream):
         self,
         llm: LLM,
         *,
-        model: str | ResponsesModel,
+        model: str | ResponsesModels,
         strict_tool_schema: bool,
         client: openai.AsyncClient | None,
         chat_ctx: llm.ChatContext,
@@ -505,6 +524,7 @@ class LLMStream(llm.LLMStream):
             self._oai_stream: openai.AsyncStream[ResponseStreamEvent] | None = None
             retryable = True
             try:
+                request_kwargs = _http_request_kwargs(self._extra_kwargs)
                 self._oai_stream = stream = cast(
                     openai.AsyncStream[ResponseStreamEvent],
                     await self._client.responses.create(  # type: ignore
@@ -513,7 +533,7 @@ class LLMStream(llm.LLMStream):
                         input=cast(str | ResponseInputParam | openai.Omit, chat_ctx),
                         stream=True,
                         timeout=httpx.Timeout(self._conn_options.timeout),
-                        **self._extra_kwargs,
+                        **request_kwargs,
                     ),
                 )
 
