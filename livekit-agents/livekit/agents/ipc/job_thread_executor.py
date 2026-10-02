@@ -77,11 +77,6 @@ class ThreadJobExecutor:
         self._thread: threading.Thread | None = None
         self._inference_executor = inference_executor
         self._inference_tasks: set[asyncio.Task[None]] = set()
-        self._id = utils.shortuuid("THEXEC_")
-
-    @property
-    def id(self) -> str:
-        return self._id
 
     @property
     def status(self) -> JobStatus:
