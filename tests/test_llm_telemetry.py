@@ -228,7 +228,9 @@ async def test_llm_stream_capture_requires_enablement_at_start_and_completion(
     assert response.text == "hello"
     spans = [span for span in span_exporter.get_finished_spans() if span.name == "llm_request"]
     assert len(spans) == 1
-    assert (trace_types.ATTR_GEN_AI_INPUT_MESSAGES in spans[0].attributes) is capture_at_start
+    assert (trace_types.ATTR_GEN_AI_INPUT_MESSAGES in spans[0].attributes) is (
+        capture_at_start and capture_during_run
+    )
     assert (trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES in spans[0].attributes) is (
         capture_at_start and capture_during_run
     )
@@ -510,7 +512,7 @@ async def test_llm_node_preserves_noncontent_attributes_when_capture_is_disabled
 
     spans = [span for span in span_exporter.get_finished_spans() if span.name == "llm_node"]
     assert len(spans) == 1
-    assert trace_types.ATTR_CHAT_CTX in spans[0].attributes
+    assert trace_types.ATTR_CHAT_CTX not in spans[0].attributes
     assert spans[0].attributes[trace_types.ATTR_GEN_AI_OPERATION_NAME] == "chat"
     assert trace_types.ATTR_GEN_AI_INPUT_MESSAGES not in spans[0].attributes
     assert trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES not in spans[0].attributes

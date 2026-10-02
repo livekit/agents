@@ -977,7 +977,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             if self._session_ctx_token is not None:
                 otel_context.detach(self._session_ctx_token)
                 self._session_ctx_token = None
-            ctx = trace.set_span_in_context(current_span)
+            ctx = gen_ai_telemetry._with_input_messages_state(
+                trace.set_span_in_context(current_span)
+            )
             self._session_ctx_token = otel_context.attach(ctx)
 
             self._recorded_events = []

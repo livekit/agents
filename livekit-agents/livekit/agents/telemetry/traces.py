@@ -666,6 +666,7 @@ def _install_pii_redaction(
         # useful to a backend that can render the conversation
         pii._PIIFilteringSpanProcessor(allow_pii=allow_pii if allow_pii is not None else True),
     )
+    _prepend_span_processor(tracer_provider, gen_ai._ContentFilteringSpanProcessor())
 
 
 def set_tracer_provider(

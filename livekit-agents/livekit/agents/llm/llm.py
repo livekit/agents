@@ -292,10 +292,12 @@ class LLMStream(ABC):
             output_type=trace_types.GenAIOutputType.TEXT,
         )
         if self._record_content:
+            gen_ai_telemetry.record_llm_input_messages(
+                span, self._chat_ctx, is_delegating=self._genai_operation_name is None
+            )
             gen_ai_telemetry.set_content_attributes(
                 span,
                 system_instructions=gen_ai_telemetry.to_system_instructions(self._chat_ctx),
-                input_messages=gen_ai_telemetry.to_input_messages(self._chat_ctx),
                 tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
             )
 
