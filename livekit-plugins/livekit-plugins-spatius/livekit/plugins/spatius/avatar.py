@@ -279,7 +279,7 @@ class AvatarSession(BaseAvatarSession):
             )
             agent_session.on("close", self._on_session_close)
 
-            agent_session.output.replace_audio_tail(self._audio)
+            self._replace_audio_tail(self._audio)
             self._forward_atask = asyncio.create_task(
                 self._forward_audio(), name="spatius_avatar_audio_forwarder"
             )

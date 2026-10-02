@@ -14,6 +14,7 @@ from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
 from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
+from ..io import AudioOutput
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -72,6 +73,7 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         self._wait_avatar_join_task: asyncio.Task[None] | None = None
         self._room: rtc.Room | None = None
         self._agent_session: AgentSession | None = None
+        self._previous_audio_output: AudioOutput | None = None
 
     @property
     @abstractmethod
@@ -119,6 +121,13 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         await asyncio.wait_for(asyncio.shield(self._wait_avatar_join_task), timeout=timeout)
 
     async def aclose(self) -> None:
+        if self._agent_session and self._previous_audio_output is not None:
+            try:
+                self._agent_session.output.replace_audio_tail(self._previous_audio_output)
+            except Exception:
+                logger.warning("failed to restore previous audio output", exc_info=True)
+            self._previous_audio_output = None
+
         if self._room is not None and self._room.isconnected():
             job_ctx = get_job_context(required=False)
             if job_ctx is not None:
@@ -155,6 +164,12 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
         if self._wait_avatar_join_task:
             await utils.aio.cancel_and_wait(self._wait_avatar_join_task)
             self._wait_avatar_join_task = None
+
+    def _replace_audio_tail(self, sink: AudioOutput) -> None:
+        assert self._agent_session is not None
+        if self._previous_audio_output is None:
+            self._previous_audio_output = self._agent_session.output.audio
+        self._agent_session.output.replace_audio_tail(sink)
 
     async def _wait_avatar_join(self) -> None:
         assert self._room is not None
