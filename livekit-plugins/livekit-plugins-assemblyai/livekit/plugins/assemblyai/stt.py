@@ -293,6 +293,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=True,
                 interim_results=True,
                 aligned_transcript="word",
                 offline_recognize=False,
@@ -542,6 +543,7 @@ class STT(stt.STT):
 class SpeechStream(stt.SpeechStream):
     # Used to close websocket
     _CLOSE_MSG: str = json.dumps({"type": "Terminate"})
+    _FLUSH_MSG: str = json.dumps({"type": "ForceEndpoint"})
 
     def __init__(
         self,
@@ -705,6 +707,9 @@ class SpeechStream(stt.SpeechStream):
                         self._speech_duration += frame.duration
                         await ws.send_bytes(frame.data.tobytes())
                         self._last_frame_sent_at = time.time()
+
+                    if isinstance(data, self._FlushSentinel):
+                        await ws.send_str(SpeechStream._FLUSH_MSG)
 
                 closing_ws = True
                 logger.debug("AssemblyAI sending close message session=%s", self._session_id)

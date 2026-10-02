@@ -184,6 +184,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=True,
                 interim_results=True,
                 aligned_transcript="chunk",
                 offline_recognize=False,
@@ -437,6 +438,8 @@ class SpeechStream(stt.SpeechStream):
                 # Get the raw bytes from the audio frame.
                 pcm_data = data.data.tobytes()
                 self.audio_queue.put_nowait(pcm_data)
+            elif isinstance(data, self._FlushSentinel):
+                self.audio_queue.put_nowait(json.dumps({"type": "finalize"}))
 
     async def _send_audio_task(self) -> None:
         """Take queued audio data and transmit it over the WebSocket."""

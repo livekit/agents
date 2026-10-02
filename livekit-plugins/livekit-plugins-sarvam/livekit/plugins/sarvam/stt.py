@@ -493,6 +493,7 @@ class STT(stt.STT):
         super().__init__(
             capabilities=stt.STTCapabilities(
                 streaming=True,
+                manual_flush=flush_signal is True,
                 interim_results=True,
                 # chunk timestamps don't seem to work despite the docs saying they do
                 aligned_transcript=False,
@@ -1373,13 +1374,22 @@ class SpeechStream(stt.SpeechStream):
                         raise
 
                 elif isinstance(frame, self._FlushSentinel):
-                    # LiveKit VAD FlushSentinel - handles stream termination
-                    self._logger.debug(
-                        "Received FlushSentinel, sending end of stream",
-                        extra=self._build_log_context(),
-                    )
-                    await ws.send_str(self._end_of_stream_msg)
-                    break
+                    if audio_buffer:
+                        tail = np.array(audio_buffer, dtype=np.int16).tobytes()
+                        await ws.send_str(
+                            json.dumps(
+                                {
+                                    "audio": {
+                                        "data": base64.b64encode(tail).decode("utf-8"),
+                                        "encoding": self._audio_encoding,
+                                        "sample_rate": self._opts.sample_rate,
+                                    }
+                                }
+                            )
+                        )
+                        audio_buffer.clear()
+                    if self._opts.flush_signal:
+                        await ws.send_str(json.dumps({"type": "flush"}))
 
                 # Check if Sarvam VAD triggered flush
                 if self._should_flush:
@@ -1390,6 +1400,8 @@ class SpeechStream(stt.SpeechStream):
                     flush_message = {"type": "flush"}
                     await ws.send_str(json.dumps(flush_message))
                     self._should_flush = False  # Reset flag
+
+            await ws.send_str(self._end_of_stream_msg)
 
         except Exception as e:
             self._logger.error(
