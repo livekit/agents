@@ -142,24 +142,36 @@ class TTS(tts.TTS):
             )
         return self._gen_config
 
-    def _resolve_voice(self, voice: str) -> Any:
-        """Turn a voice spec into a ``vui.engine.Segment`` (transcript + codec codes)."""
+    def _resolve_voice(self, voice: str) -> tuple[Any, Any, Any]:
+        """Turn a voice spec into ``(Segment, speaker token, conditioning bias)``.
+
+        Shipped voices and baked prompts carry the speaker token and bias baked
+        for the checkpoint; a ``.wav`` reference has neither (``None``).
+        """
         from safetensors.torch import load_file
 
         from vui.engine import Segment
-        from vui.prompt_files import hub_prompt, hub_prompt_transcript, prompt_transcript
+        from vui.prompt_files import load_official_prompt, prompt_transcript
 
         path = Path(voice)
         if voice in BUILTIN_VOICES and not path.exists():
-            st = hub_prompt(voice, self._engine.checkpoint)
-            return Segment(hub_prompt_transcript(voice, st), load_file(st)["codes"].long())
+            text, codes, spk_token, cond_bias = load_official_prompt(
+                voice, checkpoint=self._engine.checkpoint
+            )
+            return Segment(text, codes), spk_token, cond_bias
         if path.suffix == ".safetensors":
             text = prompt_transcript(path)
             if not text:
                 raise ValueError(f"{path}: no transcript in metadata or sibling .txt")
-            return Segment(text, load_file(str(path))["codes"].long())
+            st = load_file(str(path))
+            spk_token, cond_bias = st.get("spk_token_emb"), st.get("cond_bias")
+            return (
+                Segment(text, st["codes"].long()),
+                spk_token.float() if spk_token is not None else None,
+                cond_bias.float() if cond_bias is not None else None,
+            )
         if path.suffix.lower() == ".wav":
-            return self._encode_wav(path)
+            return self._encode_wav(path), None, None
         raise ValueError(
             f"unknown Vui voice {voice!r}: expected one of {BUILTIN_VOICES}, "
             "a prompt .safetensors, or a .wav"
@@ -206,10 +218,14 @@ class TTS(tts.TTS):
         self._ensure_engine()
         if self._voice_loaded == self._opts.voice:
             return
-        segment = self._resolve_voice(self._opts.voice)
+        segment, spk_token, cond_bias = self._resolve_voice(self._opts.voice)
         with torch.inference_mode():
             self._row.reset()
-            self._row.prefill([segment])
+            if cond_bias is None:
+                # The bias is engine-wide and a prefill without one keeps it:
+                # a cloned voice must not inherit the previous voice's.
+                self._engine.set_conditioning()
+            self._row.prefill([segment], spk_emb=spk_token, cond_bias=cond_bias)
         self._voice_loaded = self._opts.voice
 
     def _render_blocking(
