@@ -59,6 +59,7 @@ The comparison is the point of the demo. Run it once with `expressive=True` and
 once with `expressive=False`, and say the same thing to each. The words come out
 much the same; the delivery does not.
 
-Expressive mode requires a `livekit.agents.inference.TTS` model that declares a
-markup dialect. Fish Audio, Inworld TTS 2, Cartesia Sonic 3, and xAI qualify;
-providers without a dialect synthesize normally and the flag stays inert.
+Expressive mode requires a TTS that declares a markup dialect and that the
+framework can lower the markers for. Fish Audio, Inworld TTS 2, Cartesia
+Sonic 3, and xAI qualify; providers without a dialect synthesize normally
+and the flag stays inert.
