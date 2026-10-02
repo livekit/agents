@@ -218,6 +218,7 @@ class TTS(tts.TTS):
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
         self._prewarm_task: asyncio.Task[None] | None = None
+        self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
 
     @property
@@ -317,9 +318,11 @@ class TTS(tts.TTS):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
-        if changed and self.__current_connection:
-            self.__current_connection.mark_non_current()
-            self.__current_connection = None
+        if changed:
+            self._opts_revision += 1
+            if self.__current_connection:
+                self.__current_connection.mark_non_current()
+                self.__current_connection = None
 
     async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
         """Get the current connection, creating one if needed.
@@ -328,24 +331,32 @@ class TTS(tts.TTS):
             Tuple of (connection, acquire_time, connection_reused)
         """
         async with self._connection_lock:
-            if (
-                self.__current_connection
-                and self.__current_connection.is_current
-                and not self.__current_connection._closed
-            ):
-                return self.__current_connection, 0.0, True
-
             session = self._ensure_session()
-            conn: _Connection | _DialogueConnection = (
-                _DialogueConnection(self._opts, session)
-                if is_dialogue_model(self._opts.model)
-                else _Connection(self._opts, session)
-            )
             t0 = time.perf_counter()
-            await conn.connect()
-            acquire_time = time.perf_counter() - t0
-            self.__current_connection = conn
-            return conn, acquire_time, False
+            while True:
+                if (
+                    self.__current_connection
+                    and self.__current_connection.is_current
+                    and not self.__current_connection._closed
+                ):
+                    return self.__current_connection, 0.0, True
+
+                opts_revision = self._opts_revision
+                opts = replace(self._opts)
+                conn: _Connection | _DialogueConnection = (
+                    _DialogueConnection(opts, session)
+                    if is_dialogue_model(opts.model)
+                    else _Connection(opts, session)
+                )
+                await conn.connect()
+
+                if opts_revision != self._opts_revision:
+                    await conn.aclose()
+                    continue
+
+                acquire_time = time.perf_counter() - t0
+                self.__current_connection = conn
+                return conn, acquire_time, False
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -373,7 +384,8 @@ class TTS(tts.TTS):
 
                 # Text-to-dialogue sockets are closed by the server after an idle period.
                 # Wait for that closure and reconnect immediately so the next turn remains warm.
-                await asyncio.shield(conn._recv_task)
+                # asyncio.wait() does not propagate cancellation from the receive task.
+                await asyncio.wait({conn._recv_task})
         except Exception:
             # Prewarming is best-effort; synthesis will retry through _current_connection().
             pass
