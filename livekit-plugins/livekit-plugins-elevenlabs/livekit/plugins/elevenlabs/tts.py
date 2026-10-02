@@ -217,6 +217,7 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._prewarm_task: asyncio.Task[None] | None = None
         self._warn_if_dialogue_model_ignores_options()
 
     @property
@@ -358,7 +359,30 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    def prewarm(self) -> None:
+        """Open the websocket connection before the first synthesis request."""
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(self._run_prewarm())
+
+    async def _run_prewarm(self) -> None:
+        try:
+            while True:
+                conn, _, _ = await self._current_connection()
+                if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
+                    return
+
+                # Text-to-dialogue sockets are closed by the server after an idle period.
+                # Wait for that closure and reconnect immediately so the next turn remains warm.
+                await asyncio.shield(conn._recv_task)
+        except Exception:
+            # Prewarming is best-effort; synthesis will retry through _current_connection().
+            pass
+
     async def aclose(self) -> None:
+        if self._prewarm_task:
+            await utils.aio.gracefully_cancel(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
