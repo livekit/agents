@@ -934,6 +934,9 @@ class RealtimeSession(
 
         # future per in-flight chat ctx event, so a rejection settles the one it answers
         self._chat_ctx_event_futures: dict[str, asyncio.Future] = {}
+        # the in-flight chat ctx events already sent, by event id, so a reconnection can send
+        # again the ones the lost connection never confirmed
+        self._sent_chat_ctx_events: dict[str, dict[str, Any]] = {}
 
         # generate_reply event_ids cancelled or timed out before response.created arrived; the
         # response is cancelled by id and discarded when it finally arrives
@@ -1004,6 +1007,13 @@ class RealtimeSession(
             old_chat_ctx = self._remote_chat_ctx
             self._remote_chat_ctx = llm.remote_chat_context.RemoteChatContext()
             events.extend(self._create_update_chat_ctx_events(chat_ctx))
+            # the replay holds only the confirmed items, so an item event the lost connection
+            # never confirmed goes again after it, and its confirmation settles the waiter
+            events.extend(
+                ev
+                for event_id, ev in self._sent_chat_ctx_events.items()
+                if (fut := self._chat_ctx_event_futures.get(event_id)) and not fut.done()
+            )
 
             try:
                 for ev in events:
@@ -1148,6 +1158,8 @@ class RealtimeSession(
 
                     self.emit("openai_client_event_queued", msg)
                     await ws_conn.send_str(json.dumps(msg))
+                    if (event_id := msg.get("event_id")) in self._chat_ctx_event_futures:
+                        self._sent_chat_ctx_events[event_id] = msg
 
                     if lk_oai_debug and msg["type"] != "input_audio_buffer.append":
                         logger.debug(">>>", extra={"lk.pii.event": msg})
@@ -1492,6 +1504,7 @@ class RealtimeSession(
             events = self._create_update_chat_ctx_events(chat_ctx)
             futs: list[asyncio.Future[None]] = []
             self._chat_ctx_event_futures = {}
+            self._sent_chat_ctx_events = {}
 
             for ev in events:
                 futs.append(f := asyncio.Future[None]())
@@ -1517,6 +1530,7 @@ class RealtimeSession(
                 raise llm.RealtimeError("update_chat_ctx timed out.") from None
             finally:
                 self._chat_ctx_event_futures = {}
+                self._sent_chat_ctx_events = {}
                 for ev in events:
                     if isinstance(ev, ConversationItemDeleteEvent):
                         self._item_delete_future.pop(ev.item_id, None)

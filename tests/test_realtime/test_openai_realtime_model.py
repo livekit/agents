@@ -4,7 +4,7 @@ import asyncio
 import logging
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai.types.beta.realtime.session import TurnDetection as BetaTurnDetection
@@ -678,13 +678,17 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
 # --------------------------------------------------------------------------- #
 
 
-async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
-    # a tool still running across the reconnection sends its output for a call id the
-    # new conversation must know, or the server rejects it with invalid_tool_call_id
+async def _start_function_call_server(
+    arguments: str, *, drop_on_output: bool = False
+) -> tuple[Any, list[tuple[Any, list[dict]]]]:
+    """A realtime server whose response calls `weather`, recording each connection's creates.
+
+    With `drop_on_output`, the first connection closes on the function call output before it
+    confirms it.
+    """
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
 
-    arguments = '{"city": "Tokyo"}'
     connections: list[tuple[web.WebSocketResponse, list[dict]]] = []
 
     async def realtime(request: web.Request) -> web.WebSocketResponse:
@@ -701,6 +705,13 @@ async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
             if event["type"] == "conversation.item.create":
                 item = event["item"]
                 created.append(item)
+                if (
+                    drop_on_output
+                    and len(connections) == 1
+                    and item["type"] == "function_call_output"
+                ):
+                    await ws.close()
+                    break
                 await ws.send_json(
                     {
                         "type": "conversation.item.added",
@@ -762,23 +773,44 @@ async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
     app.router.add_get("/realtime", realtime)
     server = TestServer(app)
     await server.start_server()
+    return server, connections
+
+
+async def _call_weather(session: RealtimeSession, arguments: str) -> llm.ChatContext:
+    """Run one response that calls `weather`, returning the context with its output added."""
+    chat_ctx = llm.ChatContext.empty()
+    chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
+    await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
+
+    generation = await asyncio.wait_for(session.generate_reply(), 5)
+    calls = [call async for call in generation.function_stream]
+    assert [call.arguments for call in calls] == [arguments]
+
+    chat_ctx = session.chat_ctx.copy()
+    chat_ctx.items.append(
+        llm.FunctionCallOutput(
+            id="item_output", call_id="call_1", name="weather", output="sunny", is_error=False
+        )
+    )
+    return chat_ctx
+
+
+_REPLAYED_CALL = [
+    ("message", None),
+    ("function_call", "call_1"),
+    ("function_call_output", "call_1"),
+]
+
+
+async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
+    # a tool still running across the reconnection sends its output for a call id the
+    # new conversation must know, or the server rejects it with invalid_tool_call_id
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments)
     model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
     session = model.session()
     try:
-        chat_ctx = llm.ChatContext.empty()
-        chat_ctx.add_message(role="user", content="what's the weather in Tokyo?", id="item_user")
-        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
-
-        generation = await asyncio.wait_for(session.generate_reply(), 5)
-        calls = [call async for call in generation.function_stream]
-        assert [call.arguments for call in calls] == [arguments]
-
-        chat_ctx = session.chat_ctx.copy()
-        chat_ctx.items.append(
-            llm.FunctionCallOutput(
-                id="item_output", call_id="call_1", name="weather", output="sunny", is_error=False
-            )
-        )
+        chat_ctx = await _call_weather(session, arguments)
         await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 5)
 
         await connections[0][0].close()
@@ -788,12 +820,29 @@ async def test_reconnect_replays_function_calls_with_their_outputs() -> None:
             await asyncio.sleep(0.05)
 
         replayed = connections[1][1]
-        assert [(item["type"], item.get("call_id")) for item in replayed] == [
-            ("message", None),
-            ("function_call", "call_1"),
-            ("function_call_output", "call_1"),
-        ]
+        assert [(item["type"], item.get("call_id")) for item in replayed] == _REPLAYED_CALL
         assert replayed[1]["arguments"] == arguments
+    finally:
+        await session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+async def test_reconnect_creates_an_item_the_lost_connection_never_confirmed() -> None:
+    # the connection drops after the output is sent and before the server confirms it, so
+    # the replay of the confirmed items does not carry it
+    arguments = '{"city": "Tokyo"}'
+    server, connections = await _start_function_call_server(arguments, drop_on_output=True)
+    model = RealtimeModel(api_key="fake", base_url=str(server.make_url("")), modalities=["text"])
+    session = model.session()
+    try:
+        chat_ctx = await _call_weather(session, arguments)
+        await asyncio.wait_for(session.update_chat_ctx(chat_ctx), 10)
+
+        assert len(connections) == 2
+        recreated = connections[1][1]
+        assert [(item["type"], item.get("call_id")) for item in recreated] == _REPLAYED_CALL
+        assert session.chat_ctx.get_by_id("item_output") is not None
     finally:
         await session.aclose()
         await model.aclose()
