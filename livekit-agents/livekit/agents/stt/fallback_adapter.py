@@ -95,6 +95,7 @@ class FallbackAdapter(
                 aligned_transcript=aligned_transcript,
                 keyterms=any(t.capabilities.keyterms for t in stt),
                 chat_context=any(t.capabilities.chat_context for t in stt),
+                manual_flush=all(t.capabilities.manual_flush for t in stt),
             )
         )
 
@@ -129,6 +130,14 @@ class FallbackAdapter(
             if status.available:
                 return instance
         return self._stt_instances[0]
+
+    @property
+    def capabilities(self) -> STTCapabilities:
+        # update manual_flush as instance might be updated
+        self._capabilities.manual_flush = all(
+            instance.capabilities.manual_flush for instance in self._stt_instances
+        )
+        return self._capabilities
 
     @property
     def model(self) -> str:
