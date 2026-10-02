@@ -121,8 +121,22 @@ def test_a_refused_sample_rate_is_kept_with_a_warning(caplog) -> None:
     assert "takes audio only at 24000 Hz" in caplog.text
 
 
-def test_switching_to_openai_warns_that_the_rate_is_refused(caplog) -> None:
+def test_switching_to_openai_re_resolves_the_default_rate() -> None:
+    """A default rate follows the model, so streams created after the switch work."""
     stt = _make_stt(model="deepgram/nova-3")
+    stt.update_options(model="openai/gpt-live-transcribe")
+    assert stt._opts.sample_rate == 24000
+
+
+def test_switching_back_re_resolves_the_default_rate() -> None:
+    stt = _make_stt(model="openai/gpt-live-transcribe")
+    stt.update_options(model="deepgram/nova-3")
+    assert stt._opts.sample_rate == 16000
+    assert stt._vad is None
+
+
+def test_switching_with_an_explicit_rate_keeps_it_and_warns(caplog) -> None:
+    stt = _make_stt(model="deepgram/nova-3", sample_rate=16000)
     with caplog.at_level(logging.WARNING):
         stt.update_options(model="openai/gpt-live-transcribe")
 
@@ -210,3 +224,163 @@ async def test_end_of_speech_finalizes_the_turn_while_input_is_open() -> None:
     assert created["model"] == "openai/gpt-live-transcribe"
     assert created["settings"]["sample_rate"] == "24000"
     assert 0 < audio_bytes <= 24000 * 2 // 10, "more than 100 ms of 24 kHz PCM was sent"
+
+
+async def _wait_until_stream_is_live(
+    stream: RecognizeStream, *, vad: bool = False, timeout: float = 5.0
+) -> None:
+    """Block until the stream's session is connected (and its VAD wired when asked)."""
+
+    async def live() -> bool:
+        return (
+            stream._ws is not None
+            and not stream._ws.closed
+            and (stream._vad_stream is not None if vad else True)
+        )
+
+    for _ in range(int(timeout / 0.02)):
+        if await live():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("stream did not connect in time")
+
+
+async def test_live_switch_to_openai_wires_the_vad_and_finals_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream created for a server-endpointing model has no VAD; the in-band switch
+    to OpenAI must wire one so session.finalize still reaches the gateway."""
+    created: dict[str, Any] = {}
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.create":
+                created.update(event)
+            elif event["type"] == "session.update":
+                updates.append(event)
+            elif event["type"] == "session.finalize":
+                await ws.send_json(
+                    {"type": "final_transcript", "transcript": "hello", "language": "en"}
+                )
+                await ws.send_json({"type": "session.finalized"})
+        return ws
+
+    class _SpeechyVAD(FakeVAD):
+        """The default VAD inference.STT builds when none is passed, made to detect."""
+
+        def __init__(self) -> None:
+            super().__init__(
+                fake_user_speeches=[
+                    FakeUserSpeech(start_time=0.0, end_time=0.05, transcript="hello", stt_delay=0.0)
+                ],
+                min_speech_duration=0.01,
+                min_silence_duration=0.05,
+            )
+
+    monkeypatch.setattr(inference_vad, "VAD", _SpeechyVAD)
+
+    async with _gateway(handler) as (base_url, session):
+        # 24 kHz so the live session can take the OpenAI model; Deepgram accepts it too
+        stt = _make_stt(
+            model="deepgram/nova-3",
+            sample_rate=24000,
+            base_url=base_url,
+            http_session=session,
+        )
+        stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+
+        async def feed() -> None:
+            while True:
+                stream.push_frame(_silence(48000, 0.1))
+                await asyncio.sleep(0.02)
+
+        feeder = asyncio.create_task(feed())
+        vad_stream_before_close = None
+        try:
+            await _wait_until_stream_is_live(stream)
+            stt.update_options(model="openai/gpt-live-transcribe")
+            final = await asyncio.wait_for(_first_final(stream), timeout=5.0)
+            vad_stream_before_close = stream._vad_stream
+        finally:
+            feeder.cancel()
+            await stream.aclose()
+
+    assert final.alternatives[0].text == "hello"
+    assert created["model"] == "deepgram/nova-3", "the session started on Deepgram"
+    assert [u["settings"]["model"] for u in updates] == ["openai/gpt-live-transcribe"]
+    assert isinstance(stream._vad, _SpeechyVAD)
+    assert vad_stream_before_close is not None
+
+
+async def test_live_switch_to_openai_at_the_wrong_rate_keeps_the_current_model(
+    caplog,
+) -> None:
+    """The stream's audio rate is fixed at creation; a 16 kHz session must not be
+    switched in-band to a model the gateway refuses at that rate."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = _make_stt(model="deepgram/nova-3", base_url=base_url, http_session=session)
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream)
+                stream.push_frame(_silence(16000, 0.1))
+                stt.update_options(model="openai/gpt-live-transcribe")
+                await asyncio.sleep(0.1)  # let any (wrong) update flush
+            finally:
+                await stream.aclose()
+
+    # the parent re-resolves its default, so streams created from now on work
+    assert stt._opts.model == "openai/gpt-live-transcribe"
+    assert stt._opts.sample_rate == 24000
+    # the live session keeps the model (and rate) it was created with
+    assert stream._opts.model == "deepgram/nova-3"
+    assert stream._vad is None
+    assert not updates, "no session.update may be sent for a refused model"
+    assert "live stream stays on" in caplog.text
+
+
+async def test_live_switch_off_openai_unwires_the_vad(caplog) -> None:
+    """Switching a live OpenAI session to a server-endpointing model drops the VAD."""
+    updates: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            event = json.loads(msg.data)
+            if event["type"] == "session.update":
+                updates.append(event)
+        return ws
+
+    with caplog.at_level(logging.WARNING):
+        async with _gateway(handler) as (base_url, session):
+            stt = _make_stt(base_url=base_url, http_session=session)
+            stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=1.0))
+            try:
+                await _wait_until_stream_is_live(stream, vad=True)
+                assert stream._vad_stream is not None
+
+                stt.update_options(model="deepgram/nova-3")
+                await asyncio.sleep(0.05)
+            finally:
+                await stream.aclose()
+
+    assert stream._vad is None
+    assert stream._vad_stream is None
+    assert [u["settings"]["model"] for u in updates] == ["deepgram/nova-3"]
+    assert "`vad` will be ignored" in caplog.text
