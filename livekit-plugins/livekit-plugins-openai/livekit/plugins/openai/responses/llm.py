@@ -316,7 +316,14 @@ class LLM(llm.LLM):
                 ),
             )
 
+    async def _prewarm_impl(self) -> None:
+        if self._ws is not None:
+            self._ws._pool.prewarm()
+        elif self._client is not None:
+            await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         if self._ws:
             await self._ws.aclose()
         if self._owns_client and self._client:
