@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -26,7 +25,7 @@ from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
-from ..utils import is_given
+from ..utils import is_given, resolve_env_int
 from ._realtime_models import is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
@@ -38,7 +37,7 @@ from ._utils import (
     resolve_credentials,
 )
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 # Reasoning models don't support sampling parameters.
 # See: https://platform.openai.com/docs/guides/reasoning

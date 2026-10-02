@@ -35,7 +35,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from openai.types import ReasoningEffort
 from openai.types.chat import ChatCompletionToolChoiceOptionParam, completion_create_params
 
@@ -57,7 +57,7 @@ from .models import (
 )
 from .utils import AsyncAzureADTokenProvider
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 Verbosity = Literal["low", "medium", "high"]
 PromptCacheRetention = Literal["in_memory", "24h"]

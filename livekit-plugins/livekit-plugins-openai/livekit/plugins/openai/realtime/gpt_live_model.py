@@ -23,7 +23,7 @@ from livekit.agents.types import (
     APIConnectOptions,
     NotGivenOr,
 )
-from livekit.agents.utils import is_given
+from livekit.agents.utils import is_given, resolve_env_int
 from openai.types.responses import ResponseTextConfigParam
 from openai.types.responses.response_input_item import FunctionCallOutput
 from openai.types.shared_params import Reasoning
@@ -73,7 +73,7 @@ _FATAL_ERROR_CODES = frozenset(
 Role = Literal["user", "assistant"]
 GPTLiveVoices = Literal["aster", "beacon", "cinder", "marin", "stone", "vesper"]
 
-lk_oai_debug = int(os.getenv("LK_OPENAI_DEBUG", 0))
+lk_oai_debug = resolve_env_int("LK_OPENAI_DEBUG")
 
 
 class ResponsesDelegationOptions(TypedDict, total=False):
