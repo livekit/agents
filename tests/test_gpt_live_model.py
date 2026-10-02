@@ -1066,6 +1066,118 @@ async def test_a_continuation_waits_for_every_open_call_in_the_conversation(
         await model.aclose()
 
 
+async def test_a_result_for_a_call_from_an_earlier_connection_continues_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call made before the connection changed is answered paired with its call, so the backend
+    continues from it rather than the voice model hearing it as context."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        history = llm.ChatContext.empty()
+        history.insert(
+            llm.FunctionCall(call_id="call_prev", name="_get_weather", arguments='{"city":"Paris"}')
+        )
+        await session._update_session(chat_ctx=history, tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        sent_before = len(ws.sent)
+
+        await session._append_items(
+            [llm.FunctionCallOutput(call_id="call_prev", output="rainy", is_error=False)]
+        )
+        await asyncio.sleep(0.05)
+        new = ws.sent[sent_before:]
+        assert [e["type"] for e in new] == [
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert new[0]["item"] == {
+            "type": "function_call",
+            "call_id": "call_prev",
+            "name": "_get_weather",
+            "arguments": '{"city":"Paris"}',
+        }
+        assert new[1]["item"] == {
+            "type": "function_call_output",
+            "call_id": "call_prev",
+            "output": "rainy",
+        }
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_result_in_startup_history_that_nothing_answered_continues_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed agent starts a new connection with its tool's result already in the history; only
+    a result the conversation has not moved past goes to the backend, paired with its call."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        history = llm.ChatContext.empty()
+        history.insert(
+            [
+                llm.FunctionCall(call_id="call_old", name="_get_weather", arguments="{}"),
+                llm.FunctionCallOutput(call_id="call_old", output="sunny", is_error=False),
+                llm.ChatMessage(role="assistant", content=["It's sunny."]),
+                llm.FunctionCall(call_id="call_new", name="_get_weather", arguments="{}"),
+                llm.FunctionCallOutput(call_id="call_new", output="rainy", is_error=False),
+            ]
+        )
+        await session._update_session(chat_ctx=history, tools=[_get_weather])
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == [
+            "session.start",
+            "response.item.create",
+            "response.item.create",
+            "response.create",
+        ]
+        assert ws.sent[1]["item"]["type"] == "function_call"
+        assert ws.sent[1]["item"]["call_id"] == "call_new"
+        assert ws.sent[2]["item"] == {
+            "type": "function_call_output",
+            "call_id": "call_new",
+            "output": "rainy",
+        }
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_result_the_model_acted_on_is_not_replayed_at_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call made after a result, still waiting on its own, means the model already moved past
+    that result: a task started from that call must not hand the backend the old result again."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        history = llm.ChatContext.empty()
+        history.insert(
+            [
+                llm.FunctionCall(call_id="call_done", name="_get_weather", arguments="{}"),
+                llm.FunctionCallOutput(call_id="call_done", output="rainy", is_error=False),
+                llm.FunctionCall(call_id="call_waiting", name="_get_weather", arguments="{}"),
+            ]
+        )
+        await session._update_session(chat_ctx=history, tools=[_get_weather])
+        await asyncio.sleep(0.05)
+
+        assert [e["type"] for e in ws.sent] == ["session.start"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_a_failed_response_releases_the_continuation_it_held_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
