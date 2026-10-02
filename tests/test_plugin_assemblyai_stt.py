@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import pytest
 
+from livekit.agents import APIConnectionError
 from livekit.agents.stt import SpeechEventType
 from livekit.agents.types import NOT_GIVEN
 
@@ -1757,3 +1761,97 @@ async def test_language_confidence_coexists_with_end_of_turn_confidence():
         "end_of_turn_confidence": 1.0,
         "language_confidence": 0.92,
     }
+
+
+# ---------------------------------------------------------------------------
+# Half-open socket detection. aiohttp only probes a websocket when it is given
+# a `heartbeat`, and the probe's failure arrives as WSMsgType.ERROR rather than
+# as a close frame, so the recv loop has to act on it.
+# ---------------------------------------------------------------------------
+
+
+class _FakeWSMessage:
+    def __init__(self, type: Any, data: Any = None, extra: Any = None) -> None:
+        self.type = type
+        self.data = data
+        self.extra = extra
+
+
+async def test_socket_is_opened_with_a_heartbeat():
+    """aiohttp defaults `heartbeat` to None, so nothing pings the connection and
+    a half-open socket is never noticed: the recv loop keeps waiting on a socket
+    that will never speak again."""
+    stream = _make_stream_for_unit_test()
+
+    class RecordingSession:
+        kwargs: dict[str, Any] | None = None
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> Any:
+            self.kwargs = kwargs
+            ws = MagicMock()
+            ws._response = None
+            return ws
+
+    session = RecordingSession()
+    stream._session = session
+
+    await stream._connect_ws()
+
+    assert session.kwargs is not None
+    assert session.kwargs.get("heartbeat") == 30.0
+
+
+async def test_error_frame_surfaces_the_transport_cause():
+    """aiohttp feeds exactly one WSMsgType.ERROR and then reports CLOSED, so the
+    stream did end -- but the ERROR fell through to the `!= TEXT` branch, which
+    logs and continues, and the close that followed was raised as a generic
+    "closed unexpectedly" carrying only close code 1006. The reason the socket
+    went, on `ws.exception()`, was dropped. Same gap as #7206 for Deepgram v1."""
+    stream = _make_stream_for_unit_test()
+
+    timeout = aiohttp.ServerTimeoutError("No PONG received after 15.0 seconds")
+
+    class HeartbeatTimeoutWebSocket:
+        """Mirrors aiohttp: one ERROR frame, then CLOSED for every later read."""
+
+        close_code = 1006
+        _response = None
+
+        def __init__(self) -> None:
+            self.receives = 0
+
+        async def receive(self) -> _FakeWSMessage:
+            self.receives += 1
+            await asyncio.sleep(0)
+            if self.receives == 1:
+                return _FakeWSMessage(aiohttp.WSMsgType.ERROR, timeout)
+            return _FakeWSMessage(aiohttp.WSMsgType.CLOSED)
+
+        def exception(self) -> BaseException:
+            return timeout
+
+        async def send_bytes(self, data: bytes) -> None: ...
+
+        async def send_str(self, data: str) -> None: ...
+
+        async def close(self) -> None: ...
+
+    ws = HeartbeatTimeoutWebSocket()
+
+    class FakeSession:
+        closed = False
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> HeartbeatTimeoutWebSocket:
+            return ws
+
+    stream._session = FakeSession()
+
+    with pytest.raises(APIConnectionError) as excinfo:
+        await asyncio.wait_for(stream._run(), timeout=5)
+
+    # The transport error is the cause, so why the socket went is reachable from
+    # the raised error instead of being replaced by a bare 1006.
+    assert excinfo.value.__cause__ is timeout
+    # The ERROR frame itself ends the read loop; it no longer takes a following
+    # CLOSED to stop, which is what discarded the reason.
+    assert ws.receives == 1
