@@ -102,6 +102,10 @@ class TTS(tts.TTS):
         # before the engine is released.
         self._streams: weakref.WeakSet[Any] = weakref.WeakSet()
         self._close_lock = asyncio.Lock()
+        # _closing is set the moment aclose() is called and never cleared, so no
+        # request can start (or rebuild the engine) once shutdown has begun;
+        # _closed only once every cleanup step has completed.
+        self._closing = False
         self._closed = False
 
     @property
@@ -127,6 +131,7 @@ class TTS(tts.TTS):
     def _ensure_engine(self) -> None:
         if self._engine is not None:
             return
+        self._check_open()
         from vui.engine import Engine
 
         logger.info("loading Vui checkpoint %s", self._opts.checkpoint)
@@ -294,13 +299,19 @@ class TTS(tts.TTS):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._row.rewind)
 
+    def _check_open(self) -> None:
+        if self._closing:
+            raise RuntimeError("Vui TTS is closed")
+
     def prewarm(self) -> None:
         """Load the checkpoint and the voice prompt ahead of the first request."""
+        self._check_open()
         self._executor.submit(self._ensure_voice).result()
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
+        self._check_open()
         stream = ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -308,6 +319,7 @@ class TTS(tts.TTS):
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
+        self._check_open()
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
@@ -315,6 +327,8 @@ class TTS(tts.TTS):
     async def aclose(self) -> None:
         """Cancel live streams, wait for the worker, and release the engine.
 
+        New requests are refused from the moment this is called, so the
+        streams cancelled below are the only ones that can touch the engine.
         Idempotent, and safe to retry after a cancellation: every step is
         idempotent and `_closed` is only set once all of them have completed,
         so a call cancelled part-way leaves the next call to finish the job.
@@ -323,6 +337,7 @@ class TTS(tts.TTS):
         model/codec allocations are dropped; the executor shutdown waits for
         the thread off the event loop.
         """
+        self._closing = True
         async with self._close_lock:
             if self._closed:
                 return
