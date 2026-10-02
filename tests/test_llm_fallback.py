@@ -547,6 +547,50 @@ async def test_sticky_older_success_preserves_newer_successful_failover(
         await _close_retry_adapter(adapter)
 
 
+@pytest.mark.parametrize("newer_recovers", [False, True])
+async def test_sticky_older_success_replaces_failed_newer_selection(newer_recovers: bool) -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError()] * 3 + ["recovery"])
+    middle = _ScriptedLLM("middle", ["middle", "middle"] + [APITimeoutError()] * 3)
+    last = _ScriptedLLM(
+        "last", ["last", APITimeoutError(), "recovery" if newer_recovers else APITimeoutError()]
+    )
+    adapter = FallbackAdapter([primary, middle, last], sticky=True)
+    finish = asyncio.Event()
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "middle"
+        await _wait_for_recovery(adapter)
+
+        middle.finish = finish
+        async with adapter.chat(chat_ctx=ChatContext.empty()) as older_stream:
+            chunk = await asyncio.wait_for(anext(older_stream), timeout=5)
+            assert chunk.delta is not None and chunk.delta.content == "middle"
+            middle.finish = None
+
+            response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+            assert response.text == "last"
+            await _wait_for_recovery(adapter)
+
+            with pytest.raises(APIConnectionError):
+                await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+            await _wait_for_recovery(adapter)
+            assert [status.available for status in adapter._status] == [
+                True,
+                False,
+                newer_recovers,
+            ]
+
+            finish.set()
+            await older_stream.collect()
+
+        assert adapter.model == "middle"
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "middle"
+    finally:
+        finish.set()
+        await _close_retry_adapter(adapter)
+
+
 @pytest.mark.parametrize("empty_response", [False, True])
 async def test_sticky_model_survives_stream_close(empty_response: bool) -> None:
     primary = _ScriptedLLM("primary", [APITimeoutError()])

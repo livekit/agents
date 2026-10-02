@@ -26,6 +26,7 @@ DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
 class _LLMStatus:
     available: bool
     recovering_task: asyncio.Task[None] | None
+    selection_id: int = 0
 
 
 @dataclass
@@ -80,9 +81,7 @@ class FallbackAdapter(
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
         self._sticky = sticky
-        self._current_index = 0
         self._attempt_id = 0
-        self._last_successful_attempt_id = 0
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -96,9 +95,13 @@ class FallbackAdapter(
 
     def _llm_order(self) -> list[int]:
         order = list(range(len(self._llm_instances)))
-        if self._sticky and self._status[self._current_index].available:
-            order.remove(self._current_index)
-            order.insert(0, self._current_index)
+        if self._sticky:
+            selected = max(
+                order,
+                key=lambda i: self._status[i].selection_id if self._status[i].available else 0,
+            )
+            order.remove(selected)
+            order.insert(0, selected)
         return order
 
     def _next_instance(self) -> LLM:
@@ -328,7 +331,7 @@ class FallbackLLMStream(LLMStream):
             if llm_status.available or all_failed:
                 self._fallback_adapter._attempt_id += 1
                 attempt_id = self._fallback_adapter._attempt_id
-                self._fallback_adapter._current_index = i
+                llm_status.selection_id = attempt_id
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
@@ -341,10 +344,9 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
-                    # An older completion must not override a newer successful selection.
-                    if attempt_id > self._fallback_adapter._last_successful_attempt_id:
-                        self._fallback_adapter._current_index = i
-                        self._fallback_adapter._last_successful_attempt_id = attempt_id
+                    # Restore this selection after concurrent failures without outranking
+                    # a newer selection that has not failed.
+                    llm_status.selection_id = max(llm_status.selection_id, attempt_id)
                     if self._fallback_adapter._sticky and not llm_status.available:
                         llm_status.available = True
                         self._fallback_adapter.emit(
@@ -366,6 +368,7 @@ class FallbackLLMStream(LLMStream):
                     self._caller_span.set_attributes(response_attrs)
                     return
                 except Exception:  # exceptions already logged inside _try_generate
+                    llm_status.selection_id = 0
                     if llm_status.available:
                         llm_status.available = False
                         self._fallback_adapter.emit(
