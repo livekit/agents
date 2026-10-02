@@ -5,8 +5,10 @@ import base64
 import io
 import os
 import sys
-from collections.abc import AsyncGenerator, AsyncIterator
-from typing import TYPE_CHECKING, Literal
+import time
+from collections import deque
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
@@ -323,6 +325,8 @@ class AvatarSession(BaseAvatarSession):
             audio_recv=audio_buffer,
             options=avatar_options,
         )
+        runner = self._avatar_runner
+        video_generator.follow_audio(lambda: runner.audio_queued_duration)
         await self._avatar_runner.start()
 
         agent_session.output.replace_audio_tail(audio_buffer)
@@ -674,9 +678,29 @@ class AvatarSession(BaseAvatarSession):
             self._runtime.cleanup()
 
 
+# A picture goes out through the synchronizer's video pacer, which can hold it for up
+# to one frame interval; releasing it this much before its audio starts playing
+# lands its capture on the audio's playout on average (measured on Essence 2 at
+# 25 fps and Expression 2 at 20 fps).
+_PICTURE_LEAD_S = 0.025
+
+
 class BithumanGenerator(VideoGenerator):
     def __init__(self, runtime: AsyncBithuman):
         self._runtime = runtime
+        self._audio_queued: Callable[[], float] | None = None
+        self._pending: deque[tuple[float, rtc.VideoFrame]] = deque()
+
+    def follow_audio(self, audio_queued: Callable[[], float] | None) -> None:
+        """Release each picture when the audio pushed with it starts playing out.
+
+        ``audio_queued`` returns the seconds of audio already pushed to the room
+        and not yet played (``AvatarRunner.audio_queued_duration``). Without it a
+        picture is published as soon as it is rendered while its audio waits
+        behind everything the audio source still holds, so the mouth leads the
+        voice by that queue (~100 ms once the source has filled).
+        """
+        self._audio_queued = audio_queued
 
     @property
     def video_resolution(self) -> tuple[int, int]:
@@ -701,6 +725,8 @@ class BithumanGenerator(VideoGenerator):
         await self._runtime.push_audio(bytes(frame.data), frame.sample_rate, last_chunk=False)
 
     def clear_buffer(self) -> None:
+        # the audio these pictures belong to is being cleared too
+        self._pending.clear()
         self._runtime.interrupt()
 
     def __aiter__(self) -> AsyncIterator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd]:
@@ -718,23 +744,73 @@ class BithumanGenerator(VideoGenerator):
                 data=image.tobytes(),
             )
 
-        async for frame in self._runtime.run():
-            if frame.bgr_image is not None:
-                video_frame = create_video_frame(frame.bgr_image)
-                yield video_frame
+        def create_audio_frame(audio_chunk: Any) -> rtc.AudioFrame:
+            return rtc.AudioFrame(
+                data=audio_chunk.bytes,
+                sample_rate=audio_chunk.sample_rate,
+                num_channels=1,
+                samples_per_channel=len(audio_chunk.array),
+            )
 
-            audio_chunk = frame.audio_chunk
-            if audio_chunk is not None:
-                audio_frame = rtc.AudioFrame(
-                    data=audio_chunk.bytes,
-                    sample_rate=audio_chunk.sample_rate,
-                    num_channels=1,
-                    samples_per_channel=len(audio_chunk.array),
-                )
-                yield audio_frame
+        frames = self._runtime.run().__aiter__()
+        next_frame: asyncio.Future[Any] | None = None
+        try:
+            while True:
+                if self._audio_queued is None and not self._pending:
+                    try:
+                        frame = await frames.__anext__()
+                    except StopAsyncIteration:
+                        return
+                else:
+                    # wait for the next frame or the next picture's release, whichever
+                    # comes first, so a picture is never held back until a frame arrives
+                    if next_frame is None:
+                        next_frame = asyncio.ensure_future(frames.__anext__())
+                    timeout = (
+                        max(0.0, self._pending[0][0] - time.monotonic()) if self._pending else None
+                    )
+                    done, _ = await asyncio.wait({next_frame}, timeout=timeout)
+                    while self._pending and self._pending[0][0] <= time.monotonic():
+                        yield self._pending.popleft()[1]
+                    if not done:
+                        continue
+                    try:
+                        frame = next_frame.result()
+                    except StopAsyncIteration:
+                        while self._pending:  # the last pictures, each still on time
+                            release, picture = self._pending.popleft()
+                            await asyncio.sleep(max(0.0, release - time.monotonic()))
+                            yield picture
+                        return
+                    finally:
+                        next_frame = None
 
-            if frame.end_of_speech:
-                yield AudioSegmentEnd()
+                audio_chunk = frame.audio_chunk
+                if (
+                    self._audio_queued is not None
+                    and frame.bgr_image is not None
+                    and audio_chunk is not None
+                ):
+                    # the audio first; its picture when that audio starts playing out
+                    yield create_audio_frame(audio_chunk)
+                    try:
+                        queued = max(0.0, float(self._audio_queued()))
+                    except Exception:
+                        queued = 0.0
+                    duration = len(audio_chunk.array) / audio_chunk.sample_rate
+                    release = time.monotonic() + max(0.0, queued - duration) - _PICTURE_LEAD_S
+                    self._pending.append((release, create_video_frame(frame.bgr_image)))
+                else:
+                    if frame.bgr_image is not None:
+                        yield create_video_frame(frame.bgr_image)
+                    if audio_chunk is not None:
+                        yield create_audio_frame(audio_chunk)
+
+                if frame.end_of_speech:
+                    yield AudioSegmentEnd()
+        finally:
+            if next_frame is not None:
+                next_frame.cancel()
 
     async def stop(self) -> None:
         await self._runtime.stop()
