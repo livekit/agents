@@ -73,7 +73,7 @@ from ..types import (
     recording_enabled,
 )
 from ..utils import is_given
-from . import pii, trace_types, utils as telemetry_utils
+from . import gen_ai, pii, trace_types, utils as telemetry_utils
 
 if TYPE_CHECKING:
     from ..llm import ChatItem
@@ -165,7 +165,16 @@ def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
 
 
 _USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
+_START_SPAN_SIGNATURE = inspect.signature(Tracer.start_span)
 _START_AS_CURRENT_SPAN_SIGNATURE = inspect.signature(Tracer.start_as_current_span)
+
+
+def _with_conversation_id(
+    attributes: Mapping[str, AttributeValue] | None,
+) -> Mapping[str, AttributeValue] | None:
+    if (conversation_id := gen_ai._conversation_id()) is None:
+        return attributes
+    return {trace_types.ATTR_GEN_AI_CONVERSATION_ID: conversation_id, **(attributes or {})}
 
 
 class _DynamicTracer(Tracer):
@@ -182,7 +191,9 @@ class _DynamicTracer(Tracer):
         )
 
     def start_span(self, *args: Any, **kwargs: Any) -> Span:
-        return self._tracer.start_span(*args, **kwargs)
+        bound = _START_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
+        return self._tracer.start_span(*bound.args[1:], **bound.kwargs)
 
     @_agnosticcontextmanager
     def use_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
@@ -214,7 +225,7 @@ class _DynamicTracer(Tracer):
         it and becomes the accidental parent of unrelated spans those tasks emit for the rest
         of the session. The parent is ``context`` when given, else the ambient context; the
         exception, if any, is recorded redaction-aware and the span is ended."""
-        span = self._tracer.start_span(name, context=context, attributes=attributes)
+        span = self.start_span(name, context=context, attributes=attributes)
         try:
             yield span
         except Exception as e:
@@ -226,6 +237,7 @@ class _DynamicTracer(Tracer):
     @_agnosticcontextmanager
     def start_as_current_span(self, *args: Any, **kwargs: Any) -> Iterator[Span]:
         bound = _START_AS_CURRENT_SPAN_SIGNATURE.bind(self._tracer, *args, **kwargs)
+        bound.arguments["attributes"] = _with_conversation_id(bound.arguments.get("attributes"))
         record_exception = bound.arguments.get("record_exception", True)
         set_status_on_exception = bound.arguments.get("set_status_on_exception", True)
         bound.arguments.update(record_exception=False, set_status_on_exception=False)
