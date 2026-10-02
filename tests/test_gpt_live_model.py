@@ -1733,3 +1733,119 @@ def test_with_azure_does_not_accept_the_openai_key(monkeypatch: pytest.MonkeyPat
         "Missing Azure credentials. Pass api_key or entra_token, "
         "or set the AZURE_OPENAI_API_KEY environment variable"
     )
+
+
+# idle handoff
+
+
+def _idle_handoffs(ws: _FakeWS) -> list[str]:
+    return [
+        e["item"]["content"][0]["text"]
+        for e in ws.sent
+        if e["type"] == "response.item.create" and e["item"].get("type") == "message"
+    ]
+
+
+def _delegation_created(delegation_id: str) -> dict[str, Any]:
+    return {
+        "type": "session.delegation.created",
+        "delegation": {"id": delegation_id, "type": "delegation", "target": "responses"},
+    }
+
+
+@pytest.fixture
+def fast_idle_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gpt_live_model, "_IDLE_HANDOFF_S", 0.2)
+
+
+async def test_an_undelegated_caller_turn_goes_to_the_backend_once_the_call_is_idle(
+    monkeypatch: pytest.MonkeyPatch, fast_idle_handoff: None
+) -> None:
+    """The voice model can acknowledge a caller's answer without delegating it; once nobody
+    speaks, the backend gets the caller's words and a response request of its own."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", "Yes, that's right", 0))
+        session._handle_event(_transcript("assistant", "Thanks, I've got it.", 400))
+        await asyncio.sleep(0.5)
+
+        assert _idle_handoffs(ws) == ["Yes, that's right"]
+        handoff = next(i for i, e in enumerate(ws.sent) if e["type"] == "response.item.create")
+        assert ws.sent[handoff + 1]["type"] == "response.create"
+
+        # handed off once: the same words are not sent again while the call stays idle
+        await asyncio.sleep(0.5)
+        assert _idle_handoffs(ws) == ["Yes, that's right"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_a_delegation_leaves_nothing_to_hand_off(
+    monkeypatch: pytest.MonkeyPatch, fast_idle_handoff: None
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", "What's the weather in Paris?", 0))
+        session._handle_event(_delegation_created("item_d1"))
+        await asyncio.sleep(0.5)
+        assert _idle_handoffs(ws) == []
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_no_idle_handoff_while_anyone_is_speaking(
+    monkeypatch: pytest.MonkeyPatch, fast_idle_handoff: None
+) -> None:
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(_transcript("user", "Yes, that's right", 0))
+        for i in range(6):
+            session._handle_event(_transcript("assistant", " still talking", 400 + i * 100))
+            await asyncio.sleep(0.1)
+        assert _idle_handoffs(ws) == []
+
+        await asyncio.sleep(0.5)
+        assert _idle_handoffs(ws) == ["Yes, that's right"]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_no_idle_handoff_while_a_backend_response_is_running(
+    monkeypatch: pytest.MonkeyPatch, fast_idle_handoff: None
+) -> None:
+    """The backend refuses a response.create while another response runs, so the handoff
+    waits for it to complete."""
+    ws = _connect_hook(monkeypatch)
+    model = GPTLiveModel(api_key="sk-test")
+    session = model.session()
+    try:
+        await session._update_session(tools=[_get_weather])
+        await asyncio.sleep(0.05)
+        session._handle_event(
+            _response_event(None, {"type": "response.created", "response": {"id": "resp_1"}})
+        )
+        session._handle_event(_transcript("user", "Yes, that's right", 0))
+        await asyncio.sleep(0.5)
+        assert _idle_handoffs(ws) == []
+
+        session._handle_event(_response_event(None, _completed("resp_1")))
+        await asyncio.sleep(0.2)
+        assert _idle_handoffs(ws) == ["Yes, that's right"]
+    finally:
+        await session.aclose()
+        await model.aclose()
