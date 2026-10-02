@@ -134,9 +134,9 @@ class TTS(tts.TTS):
             voice_id (str): Voice ID. Defaults to `DEFAULT_VOICE_ID`.
             voice_settings (NotGivenOr[VoiceSettings]): Voice settings.
             model (TTSModels | str): TTS model to use. Defaults to "eleven_turbo_v2_5".
-                "eleven_v3" and "eleven_v3_conversational" go through ElevenLabs'
-                text-to-dialogue API instead (single voice per instance, same as
-                other models).
+                "eleven_v3", "eleven_v3_conversational", "eleven_v4" and "eleven_v4_turbo"
+                go through ElevenLabs' text-to-dialogue API instead (single voice per
+                instance, same as other models).
             api_key (NotGivenOr[str]): ElevenLabs API key. Can be set via argument or `ELEVEN_API_KEY` environment variable.
             base_url (NotGivenOr[str]): Custom base URL for the API. Optional.
             streaming_latency (NotGivenOr[int]): Optimize for streaming latency, defaults to 0 - disabled. 4 for max latency optimizations. deprecated

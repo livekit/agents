@@ -18,7 +18,7 @@ from livekit.agents.stt import (
     StreamAdapter,
     STTCapabilities,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 from livekit.agents.utils.audio import AudioBuffer, silence_frame
 
 from .fake_stt import FakeSTT, FakeUserSpeech
@@ -143,6 +143,66 @@ async def test_non_retryable_error_is_not_retried() -> None:
     assert stream.run_count == 1
 
     await stream.aclose()
+
+
+class _AlwaysFailingSTT(STT):
+    """A batch STT whose `_recognize_impl` always raises, counting its attempts."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(capabilities=STTCapabilities(streaming=False, interim_results=False))
+        self._error = error
+        self.attempts = 0
+
+    async def _recognize_impl(self, buffer: AudioBuffer, *, language, conn_options) -> SpeechEvent:
+        self.attempts += 1
+        raise self._error
+
+
+def _retry_friendly_options() -> APIConnectOptions:
+    # the default 2s retry_interval would make the retryable case take 6s of real time
+    return dataclasses.replace(DEFAULT_API_CONNECT_OPTIONS, retry_interval=0.0)
+
+
+async def test_recognize_does_not_retry_a_non_retryable_error() -> None:
+    """`recognize()` must honour `APIError.retryable`, like TTS, the LLM and the streaming
+    path in this same module already do.
+
+    Before this, `max_retry` alone gated the retry loop, so a permanent failure such as a
+    401 was issued `max_retry + 1` times -- burning quota and delaying a failure that could
+    never succeed.
+    """
+    stt = _AlwaysFailingSTT(APIStatusError("Unauthorized", status_code=401))
+    with pytest.raises(APIStatusError) as exc_info:
+        await stt.recognize(
+            silence_frame(duration=0.1, sample_rate=16_000),
+            conn_options=_retry_friendly_options(),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert stt.attempts == 1
+
+
+async def test_recognize_still_retries_a_retryable_error() -> None:
+    """The retryable path is unchanged: the full budget is still spent."""
+    stt = _AlwaysFailingSTT(APIConnectionError("socket closed"))
+    with pytest.raises(APIConnectionError):
+        await stt.recognize(
+            silence_frame(duration=0.1, sample_rate=16_000),
+            conn_options=_retry_friendly_options(),
+        )
+
+    assert stt.attempts == DEFAULT_API_CONNECT_OPTIONS.max_retry + 1
+
+
+async def test_recognize_returns_the_first_success_without_retrying() -> None:
+    """Guard against the fix swallowing successful calls."""
+    stt = FakeSTT(fake_transcript="hello")
+    event = await stt.recognize(
+        silence_frame(duration=0.1, sample_rate=16_000),
+        conn_options=_retry_friendly_options(),
+    )
+
+    assert event.alternatives[0].text == "hello"
 
 
 async def test_stream_adapter_keeps_vad_speech_end_on_delayed_final(
