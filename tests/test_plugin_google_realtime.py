@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
 from livekit.agents import llm, utils
@@ -16,6 +17,139 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", False),
+        ("gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", False),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("future-live-model", False),
+        ("future-live-model", True),
+    ],
+)
+def test_model_api_compatibility(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live-extended-thinking", True),
+        ("gemini-3.1-flash-live-preview", True),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", True),
+        ("gemini-live-2.5-flash-native-audio", False),
+    ],
+)
+def test_model_api_mismatch_warns(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert len(caplog.records) == 1
+    warning = caplog.records[0]
+    assert warning.name == "livekit.plugins.google"
+    assert warning.levelno == logging.WARNING
+    assert f"Model '{model}' may not be available" in warning.message
+    assert f"vertexai={vertexai}" in warning.message
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vertexai: bool) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", str(vertexai))
+    model = RealtimeModel(
+        model="gemini-3.8-live", api_key="fake-key", project="test-project", location="eu"
+    )
+    assert model.provider == ("Vertex AI" if vertexai else "Gemini")
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
+def test_gemini_3_8_live_rejects_thinking_level(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    with pytest.raises(ValueError, match="does not support thinking_level on the Gemini API"):
+        RealtimeModel(
+            model=model,
+            vertexai=False,
+            api_key="fake-key",
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("models/gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+    ],
+)
+async def test_thinking_level_reaches_connect_config(
+    monkeypatch: pytest.MonkeyPatch, model: str, vertexai: bool
+) -> None:
+    thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
+    async with _make_configured_session(
+        monkeypatch,
+        model=model,
+        vertexai=vertexai,
+        project="test-project",
+        location="eu",
+        credentials=AnonymousCredentials() if vertexai else None,
+        thinking_config=thinking_config,
+    ) as session:
+        config = session._build_connect_config()
+        assert config.generation_config is not None
+        assert config.generation_config.thinking_config == thinking_config
+
+
+def test_gemini_3_8_live_allows_empty_thinking_config() -> None:
+    RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=False,
+        api_key="fake-key",
+        thinking_config=types.ThinkingConfig(),
+    )
+
+
+def test_gemini_3_8_live_thinking_with_vertex_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        project="test-project",
+        location="eu",
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    )
+    assert model.provider == "Vertex AI"
 
 
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
