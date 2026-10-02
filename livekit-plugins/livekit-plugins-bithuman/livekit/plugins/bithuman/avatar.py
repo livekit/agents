@@ -101,7 +101,7 @@ class BitHumanException(Exception):
 
 
 class AvatarSession(BaseAvatarSession):
-    """A Beyond Presence avatar session"""
+    """A bitHuman avatar session"""
 
     def __init__(
         self,
@@ -119,60 +119,77 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
-        Initialize a BitHuman avatar session.
+        Initialize a bitHuman avatar session.
 
         Args:
-            api_url: The BitHuman API URL.
-            api_secret: The BitHuman API secret.
-            api_token: The BitHuman API token.
-            model: The BitHuman model to use.
-            model_path: The path to the BitHuman model.
-            runtime: The BitHuman runtime to use.
-            avatar_image: The avatar image to use.
-            avatar_id: The avatar ID to use.
-            conn_options: The connection options to use.
+            api_url: The bitHuman API URL. Defaults to ``BITHUMAN_API_URL``, then to
+                ``https://auth.api.bithuman.ai/v1/runtime-tokens/request``.
+            api_secret: The bitHuman API secret. Defaults to ``BITHUMAN_API_SECRET``.
+                In cloud mode this value is sent to the avatar in the avatar
+                participant's attributes, which every participant in the room can
+                read: pass a one-hour token minted with
+                ``POST https://api.bithuman.ai/v1/runtime-tokens/mint``
+                (``"scope": "livekit-cloud"``) instead of your account secret.
+            api_token: A bitHuman runtime token. Defaults to ``BITHUMAN_API_TOKEN``.
+                Local mode accepts it in place of ``api_secret``; the default cloud
+                endpoint does not use it.
+            model: The model to pin a cloud session to (see Model Types). Not used in
+                local mode, where the ``.imx`` file determines the model.
+            model_path: Path to a bitHuman ``.imx`` model file, for local mode.
+                Defaults to ``BITHUMAN_MODEL_PATH``.
+            runtime: An existing ``AsyncBithuman`` runtime to reuse in local mode.
+            avatar_image: A portrait for a cloud photo session (Expression 1 only): a
+                PIL image, a local file path, an ``http(s)`` URL or base64-encoded
+                image data.
+            avatar_id: The code of a bitHuman agent to render in cloud mode.
+            conn_options: Retry and timeout options for the cloud session request.
             avatar_participant_identity: The avatar participant identity to use.
             avatar_participant_name: The avatar participant name to use.
 
         Model Types:
-            BitHuman has two model families, each in two generations. The name is sent to
-            BitHuman with the session, so the model you name is the model that renders:
+            bitHuman has two model families, Essence and Expression, each in two
+            generations. In cloud mode the name is sent to bitHuman with the session, so
+            the model you name is the model that renders:
 
-            - **expression** / **expression-2**: dynamic real-time facial expressions and
-              emotional responses, generated live from the content and context.
+            - **essence-2** (Essence 2): a photoreal person, created from one portrait.
 
-            - **essence** / **essence-2**: predefined actions and expressions — consistent,
-              predictable avatar behavior with pre-configured gestures.
+            - **expression-2** (Expression 2): any character, including people, animals
+              and cartoons, created from one portrait.
 
-            The unsuffixed names are the first generation and keep working unchanged.
-            ``expression-2`` and ``essence-2`` are the current generation.
+            - **essence** / **expression**: the first generation, Essence 1 and
+              Expression 1. They keep working unchanged; Expression 1 runs in the
+              bitHuman cloud only.
 
             Naming a model is OPTIONAL and it is a pin, not a hint: an avatar has to have
-            been prepared for the model you ask for, and BitHuman refuses the session
+            been prepared for the model you ask for, and bitHuman refuses the session
             (naming the models that avatar can be served as) if it has not. Leave ``model``
-            unset and nothing is sent, so BitHuman resolves the avatar exactly as it did
+            unset and nothing is sent, so bitHuman resolves the avatar exactly as it did
             before this parameter existed — which is why adding it changes nothing for
             sessions that do not use it.
 
         Parameter Combinations:
             The following parameter combinations determine the avatar mode and behavior:
 
-            1. **Local Mode (model_path provided)**:
-               - `model_path`: Loads the BitHuman SDK locally for processing
-               - Works with both expression and essence models
+            1. **Local Mode (neither avatar_image nor avatar_id provided)**:
+               - `model_path`: an Essence 2, Expression 2 or Essence 1 ``.imx`` file,
+                 rendered inside this process by the bitHuman SDK, with no GPU
+                 required. Expression 2 files need ``pip install "bithuman[expression-2]"``.
+               - `model` is not used: the file determines the model
                - Requires BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN
 
             2. **Cloud Mode with avatar_image**:
-               - `avatar_image`: Custom avatar image for personalization
-               - `model`: name an expression model for dynamic emotional expressions
-               - Provides real-time expression generation based on the custom image
+               - `avatar_image`: a portrait animated with no agent, on Expression 1 only;
+                 bitHuman refuses a photo session on any other model. To use Essence 2
+                 or Expression 2, create an agent from the photo and pass `avatar_id`.
 
             3. **Cloud Mode with avatar_id**:
-               - `avatar_id`: Pre-configured avatar identifier
+               - `avatar_id`: the code of an existing bitHuman agent
                - `model`: optional. Name any of the four models above to pin the
-                 session to it; leave it unset and BitHuman picks the model the
+                 session to it; leave it unset and bitHuman picks the model the
                  avatar is prepared for, exactly as before this parameter existed.
-               - Allows flexibility in choosing the interaction style
+
+            Cloud mode also needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (or
+            the matching ``start()`` arguments) to create the avatar's room token.
         """
         super().__init__()
         self._api_url = (
