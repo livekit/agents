@@ -3,7 +3,7 @@
 Complete AWS AI integration for LiveKit Agents, including Bedrock, Polly, Transcribe, and realtime speech-to-speech support for Amazon Nova Sonic
 
 **What's included:**
-- **RealtimeModel** - Amazon Nova 2 Sonic and Nova Sonic 1.0 for speech-to-speech
+- **RealtimeModel** - Amazon Nova 2.5 Sonic, Nova 2 Sonic, and Nova Sonic 1.0 for speech-to-speech
 - **LLM** - Powered by Amazon Bedrock, defaults to Nova 2 Lite
 - **STT** - Powered by Amazon Transcribe
 - **TTS** - Powered by Amazon Polly
@@ -92,7 +92,10 @@ Amazon Nova 2 Sonic is a unified speech-to-speech foundation model that delivers
 ```python
 from livekit.plugins import aws
 
-# Nova 2 Sonic (audio + text input, latest)
+# Nova 2.5 Sonic (audio + text input, latest)
+model = aws.realtime.RealtimeModel.with_nova_sonic_2_5()
+
+# Nova 2 Sonic (audio + text input, default)
 model = aws.realtime.RealtimeModel.with_nova_sonic_2()
 
 # Nova Sonic 1.0 (audio-only, original model)
