@@ -318,10 +318,11 @@ class RealtimeModel(llm.RealtimeModel):
             tool_response_scheduling (FunctionResponseScheduling, optional): The scheduling for tool response. Default scheduling is WHEN_IDLE.
             session_resumption (SessionResumptionConfig, optional): The configuration for session resumption. Defaults to None.
             thinking_config (ThinkingConfig, optional): Native audio thinking configuration.
+                thinking_level is not supported by gemini-3.8-live on the Gemini API.
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
-            ValueError: If the API key is required but not found.
+            ValueError: If the API key is required but not found, or the model configuration is incompatible with the selected API.
         """  # noqa: E501
         if not is_given(input_audio_transcription):
             input_audio_transcription = types.AudioTranscriptionConfig()
@@ -398,6 +399,17 @@ class RealtimeModel(llm.RealtimeModel):
 
         # Validate model/API compatibility for known models
         _validate_model_api_match(model, use_vertexai)
+
+        if (
+            not use_vertexai
+            and model.removeprefix("models/") == "gemini-3.8-live"
+            and is_given(thinking_config)
+            and thinking_config.thinking_level is not None
+        ):
+            raise ValueError(
+                f"Model '{model}' does not support thinking_level on the Gemini API. "
+                "Omit thinking_level or use 'gemini-3.8-live-extended-thinking'."
+            )
 
         self._opts = _RealtimeOptions(
             model=model,

@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
 from livekit.agents import llm, utils
@@ -67,6 +68,70 @@ def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vert
         model="gemini-3.8-live", api_key="fake-key", project="test-project", location="eu"
     )
     assert model.provider == ("Vertex AI" if vertexai else "Gemini")
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
+def test_gemini_3_8_live_rejects_thinking_level(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    with pytest.raises(ValueError, match="does not support thinking_level on the Gemini API"):
+        RealtimeModel(
+            model=model,
+            vertexai=False,
+            api_key="fake-key",
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("models/gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+    ],
+)
+async def test_thinking_level_reaches_connect_config(
+    monkeypatch: pytest.MonkeyPatch, model: str, vertexai: bool
+) -> None:
+    thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
+    async with _make_configured_session(
+        monkeypatch,
+        model=model,
+        vertexai=vertexai,
+        project="test-project",
+        location="eu",
+        credentials=AnonymousCredentials() if vertexai else None,
+        thinking_config=thinking_config,
+    ) as session:
+        config = session._build_connect_config()
+        assert config.generation_config is not None
+        assert config.generation_config.thinking_config == thinking_config
+
+
+def test_gemini_3_8_live_allows_empty_thinking_config() -> None:
+    RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=False,
+        api_key="fake-key",
+        thinking_config=types.ThinkingConfig(),
+    )
+
+
+def test_gemini_3_8_live_thinking_with_vertex_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        project="test-project",
+        location="eu",
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    )
+    assert model.provider == "Vertex AI"
 
 
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:

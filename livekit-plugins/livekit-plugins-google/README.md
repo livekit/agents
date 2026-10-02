@@ -31,6 +31,8 @@ The following models are supported by Gemini Developer API:
 - gemini-2.5-flash-native-audio-preview-09-2025
 - gemini-2.5-flash-native-audio-preview-12-2025
 
+On the Gemini Developer API, `gemini-3.8-live` does not support `thinking_config.thinking_level`. Use `gemini-3.8-live-extended-thinking` for configurable thinking.
+
 And these on Vertex AI:
 
 - gemini-3.8-live
@@ -39,4 +41,5 @@ And these on Vertex AI:
 References:
 
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
+- [Gemini Live API thinking](https://ai.google.dev/gemini-api/docs/live-api/thinking)
 - [Vertex Live API](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)
