@@ -473,6 +473,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 msg_trace_id = data.get("trace_id") or data.get("base_resp", {}).get("trace_id")
                 if msg_trace_id and msg_trace_id != current_trace_id:
                     current_trace_id = msg_trace_id
+                    output_emitter.note_provider_trace_id(msg_trace_id)
                     logger.debug(f"MiniMax WebSocket trace_id updated: {msg_trace_id}")
 
                 base_resp = data.get("base_resp", {})
@@ -499,6 +500,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 elif data.get("event") == "task_started":
                     task_started.set_result(None)
                     session_id = data.get("session_id", "")
+                    output_emitter.note_provider_request_id(session_id)
                     logger.debug(
                         f"MiniMax WebSocket task_started, session_id={session_id}, trace_id={current_trace_id}"
                     )

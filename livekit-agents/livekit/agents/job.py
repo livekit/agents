@@ -464,6 +464,11 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            provider_request_attempts=(
+                session.provider_request_ledger.snapshot()
+                if session.provider_request_ledger is not None
+                else ()
+            ),
         )
 
         if recorder_io:

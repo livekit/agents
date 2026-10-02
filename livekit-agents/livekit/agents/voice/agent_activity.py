@@ -29,11 +29,13 @@ from ..log import logger
 from ..metrics import (
     EOUMetrics,
     LLMMetrics,
+    ProviderRequestAttempt,
     RealtimeModelMetrics,
     STTMetrics,
     TTSMetrics,
     VADMetrics,
 )
+from ..metrics.provider_request import _ProviderRequestTracker
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
     otel_metrics,
@@ -332,6 +334,13 @@ class AgentActivity(RecognitionHooks):
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
+        self._realtime_request_trackers = utils.BoundedDict[str, _ProviderRequestTracker](
+            maxsize=100
+        )
+        self._realtime_pending_errors = utils.BoundedDict[
+            str, tuple[_ProviderRequestTracker, ProviderRequestAttempt]
+        ](maxsize=100)
+        self._realtime_completed_request_ids = utils.BoundedDict[str, None](maxsize=100)
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         # one awaited inline AgentTask may pause this activity at a time
@@ -1189,14 +1198,20 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             self.llm.on("metrics_collected", self._on_metrics_collected)
             self.llm.on("error", self._on_error)
+            if self._session.provider_request_ledger is not None:
+                self.llm.on("provider_request_completed", self._on_provider_request_completed)
 
         if isinstance(self.stt, stt.STT):
             self.stt.on("metrics_collected", self._on_metrics_collected)
             self.stt.on("error", self._on_error)
+            if self._session.provider_request_ledger is not None:
+                self.stt.on("provider_request_completed", self._on_provider_request_completed)
 
         if isinstance(self.tts, tts.TTS):
             self.tts.on("metrics_collected", self._on_metrics_collected)
             self.tts.on("error", self._on_error)
+            if self._session.provider_request_ledger is not None:
+                self.tts.on("provider_request_completed", self._on_provider_request_completed)
 
         if isinstance(self.vad, vad.VAD):
             self.vad.on("metrics_collected", self._on_metrics_collected)
@@ -1210,6 +1225,10 @@ class AgentActivity(RecognitionHooks):
 
         # keyterm detection runs its own LLM, surface its usage
         self._session._keyterm_detector.on("metrics_collected", self._on_metrics_collected)
+        if self._session.provider_request_ledger is not None:
+            self._session._keyterm_detector.on(
+                "provider_request_completed", self._on_keyterm_provider_request_completed
+            )
 
         if isinstance(self.llm, llm.RealtimeModel):
             rt_reused = reuse_resources is not None and reuse_resources.rt_session is not None
@@ -1558,6 +1577,8 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
             self.llm.off("error", self._on_error)
+            if self._session.provider_request_ledger is not None:
+                self.llm.off("provider_request_completed", self._on_provider_request_completed)
 
         if isinstance(self.llm, llm.RealtimeModel) and self._rt_session is not None:
             self._rt_session.off("generation_created", self._on_generation_created)
@@ -1580,6 +1601,8 @@ class AgentActivity(RecognitionHooks):
         if isinstance(self.tts, tts.TTS):
             self.tts.off("metrics_collected", self._on_metrics_collected)
             self.tts.off("error", self._on_error)
+            if self._session.provider_request_ledger is not None:
+                self.tts.off("provider_request_completed", self._on_provider_request_completed)
 
         if isinstance(self.vad, vad.VAD):
             self.vad.off("metrics_collected", self._on_metrics_collected)
@@ -1592,6 +1615,10 @@ class AgentActivity(RecognitionHooks):
             self._turn_detection.off("metrics_collected", self._on_metrics_collected)
 
         self._session._keyterm_detector.off("metrics_collected", self._on_metrics_collected)
+        if self._session.provider_request_ledger is not None:
+            self._session._keyterm_detector.off(
+                "provider_request_completed", self._on_keyterm_provider_request_completed
+            )
 
         if self._rt_session is not None:
             await self._rt_session.aclose()
@@ -1600,9 +1627,14 @@ class AgentActivity(RecognitionHooks):
 
         if self._realtime_spans is not None:
             self._realtime_spans.clear()
+        self._flush_realtime_pending_errors()
+        self._realtime_request_trackers.clear()
+        self._realtime_completed_request_ids.clear()
 
         if self._audio_recognition is not None:
             await self._audio_recognition._aclose()
+        if isinstance(self.stt, stt.STT) and self._session.provider_request_ledger is not None:
+            self.stt.off("provider_request_completed", self._on_provider_request_completed)
 
         await self._cancel_speech_pause(
             old_task=self._cancel_speech_pause_task,
@@ -2148,6 +2180,8 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
+        if isinstance(ev, RealtimeModelMetrics):
+            self._record_realtime_metrics_attempt(ev)
         self._session._usage_collector.collect(ev)
         otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
@@ -2155,6 +2189,137 @@ class AgentActivity(RecognitionHooks):
             "session_usage_updated",
             SessionUsageUpdatedEvent(usage=self._session.usage),
         )
+
+    def _on_provider_request_completed(self, attempt: ProviderRequestAttempt) -> None:
+        ledger = self._session.provider_request_ledger
+        if ledger is None:
+            return
+        if attempt.speech_id is None and attempt.component in ("llm", "tts"):
+            if speech_handle := _SpeechHandleContextVar.get(None):
+                attempt = attempt.model_copy(update={"speech_id": speech_handle.id})
+        ledger.record(attempt)
+
+    def _on_keyterm_provider_request_completed(self, attempt: ProviderRequestAttempt) -> None:
+        # The conversational LLM already has a direct listener. Avoid double-recording when
+        # keyterm detection is explicitly configured with that same object.
+        if self._session._keyterm_detector.llm is self.llm:
+            return
+        self._on_provider_request_completed(attempt)
+
+    def _record_realtime_metrics_attempt(self, ev: RealtimeModelMetrics) -> None:
+        ledger = self._session.provider_request_ledger
+        if ledger is None:
+            return
+
+        # Connection acquisition uses the same metrics type, but is not a generation request.
+        has_tracked_generation = bool(
+            ev.request_id
+            and (
+                ev.request_id in self._realtime_request_trackers
+                or ev.request_id in self._realtime_pending_errors
+            )
+        )
+        is_generation = has_tracked_generation or bool(
+            ev.duration > 0
+            or ev.cancelled
+            or ev.ttft >= 0
+            or ev.input_tokens
+            or ev.output_tokens
+            or ev.total_tokens
+        )
+        if not is_generation:
+            return
+
+        if ev.request_id and ev.request_id in self._realtime_completed_request_ids:
+            # An unrecoverable error already terminated this request, or terminal metrics were
+            # already processed. A late/duplicate metric must not create a second attempt.
+            self._realtime_request_trackers.pop(ev.request_id, None)
+            self._realtime_pending_errors.pop(ev.request_id, None)
+            return
+
+        # Metrics timestamps are specified as Unix wall-clock seconds. Do not copy an
+        # accidental monotonic/uptime value into the session ledger.
+        wall_clock_started_at = ev.timestamp if ev.timestamp >= 946_684_800 else time.time()
+
+        trackers = self._realtime_request_trackers
+        tracker = trackers.pop(ev.request_id, None) if ev.request_id else None
+        pending_error = (
+            self._realtime_pending_errors.pop(ev.request_id, None) if ev.request_id else None
+        )
+        if pending_error is not None:
+            # Recoverable errors do not necessarily terminate a generation. When terminal
+            # metrics arrive, their success/cancellation state is authoritative.
+            tracker = pending_error[0]
+        if tracker is None:
+            tracker = _ProviderRequestTracker(
+                component="realtime",
+                provider=ev.metadata.model_provider if ev.metadata else None,
+                model=ev.metadata.model_name if ev.metadata else None,
+            )
+            tracker.start(0, sdk_request_id=ev.request_id or None, started_at=wall_clock_started_at)
+        else:
+            # Realtime metrics define timestamp as response creation time.
+            tracker.started_at = wall_clock_started_at
+            if ev.metadata is not None:
+                if ev.metadata.model_provider not in (None, "unknown"):
+                    tracker.provider = ev.metadata.model_provider
+                if ev.metadata.model_name not in (None, "unknown"):
+                    tracker.model = ev.metadata.model_name
+
+        attempt = tracker.complete(
+            "cancelled" if ev.cancelled else "success",
+            completed_at=wall_clock_started_at + ev.duration,
+        )
+        if attempt.speech_id is None and (speech_handle := _SpeechHandleContextVar.get(None)):
+            attempt = attempt.model_copy(update={"speech_id": speech_handle.id})
+        ledger.record(attempt)
+        if ev.request_id:
+            self._realtime_completed_request_ids[ev.request_id] = None
+
+    def _record_realtime_error_attempt(self, error: llm.RealtimeModelError) -> None:
+        ledger = self._session.provider_request_ledger
+        if ledger is None:
+            return
+
+        if error.request_id and error.request_id in self._realtime_completed_request_ids:
+            return
+
+        tracker = (
+            self._realtime_request_trackers.get(error.request_id) if error.request_id else None
+        )
+        if tracker is None:
+            realtime_model = self.llm
+            assert isinstance(realtime_model, llm.RealtimeModel)
+            tracker = _ProviderRequestTracker(
+                component="realtime",
+                provider=realtime_model.provider,
+                model=realtime_model.model,
+            )
+            tracker.start(0, sdk_request_id=error.request_id)
+
+        failure = tracker.complete("error", error=error.error)
+        if error.request_id and error.recoverable:
+            pending = self._realtime_pending_errors
+            if error.request_id not in pending and len(pending) >= 100:
+                stale_id, (_, stale_failure) = pending.popitem(last=False)
+                self._realtime_request_trackers.pop(stale_id, None)
+                ledger.record(stale_failure)
+                self._realtime_completed_request_ids[stale_id] = None
+            pending[error.request_id] = (tracker, failure)
+            return
+
+        ledger.record(failure)
+        if error.request_id:
+            self._realtime_request_trackers.pop(error.request_id, None)
+            self._realtime_pending_errors.pop(error.request_id, None)
+            self._realtime_completed_request_ids[error.request_id] = None
+
+    def _flush_realtime_pending_errors(self) -> None:
+        ledger = self._session.provider_request_ledger
+        if ledger is not None:
+            for _, failure in self._realtime_pending_errors.values():
+                ledger.record(failure)
+        self._realtime_pending_errors.clear()
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder
@@ -2182,6 +2347,7 @@ class AgentActivity(RecognitionHooks):
             error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)
         elif isinstance(error, llm.RealtimeModelError):
+            self._record_realtime_error_attempt(error)
             error_event = ErrorEvent(error=error, source=self.llm)
             self._session.emit("error", error_event)
         elif isinstance(error, stt.STTError):
@@ -2271,6 +2437,23 @@ class AgentActivity(RecognitionHooks):
             self._session._conversation_item_added(msg)
 
     def _on_generation_created(self, ev: llm.GenerationCreatedEvent) -> None:
+        if self._session.provider_request_ledger is not None and ev.response_id:
+            assert isinstance(self.llm, llm.RealtimeModel)
+            self._realtime_completed_request_ids.pop(ev.response_id, None)
+            if pending := self._realtime_pending_errors.pop(ev.response_id, None):
+                # Response IDs are expected to be unique. If one is reused, retain the old
+                # failure rather than silently replacing its unresolved lifecycle.
+                self._session.provider_request_ledger.record(pending[1])
+            tracker = _ProviderRequestTracker(
+                component="realtime",
+                provider=self.llm.metrics_metadata.get("model_provider"),
+                model=self.llm.metrics_metadata.get("model_name"),
+            )
+            # response_id is useful for framework correlation, but is not assumed to be a
+            # provider server ID. Keep it in the SDK/local identifier namespace.
+            tracker.start(0, sdk_request_id=ev.response_id)
+            self._realtime_request_trackers[ev.response_id] = tracker
+
         if ev.user_initiated:
             # user_initiated generations are directly handled inside _realtime_reply_task
             return

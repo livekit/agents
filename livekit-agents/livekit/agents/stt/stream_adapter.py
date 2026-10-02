@@ -6,6 +6,7 @@ from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Any
 
 from .. import utils
+from ..metrics.provider_request import _provider_request_context
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
@@ -35,6 +36,10 @@ class StreamAdapter(STT):
 
         # TODO(theomonnom): The segment_id needs to be populated!
         self._stt.on("metrics_collected", self._on_metrics_collected)
+        self._stt.on("provider_request_completed", self._on_provider_request_completed)
+        # The wrapped batch STT owns the real provider calls. Do not emit one synthetic
+        # attempt for the adapter's long-lived VAD stream as well.
+        self._emit_provider_request_attempts = False
 
     @property
     def wrapped_stt(self) -> STT:
@@ -85,8 +90,12 @@ class StreamAdapter(STT):
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
+    def _on_provider_request_completed(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("provider_request_completed", *args, **kwargs)
+
     async def aclose(self) -> None:
         self._stt.off("metrics_collected", self._on_metrics_collected)
+        self._stt.off("provider_request_completed", self._on_provider_request_completed)
 
 
 class StreamAdapterWrapper(RecognizeStream):
@@ -139,11 +148,16 @@ class StreamAdapterWrapper(RecognizeStream):
                     )
 
                     merged_frames = utils.merge_frames(event.frames)
-                    t_event = await self._wrapped_stt.recognize(
-                        buffer=merged_frames,
-                        language=self._language,
-                        conn_options=self._wrapped_stt_conn_options,
-                    )
+                    with _provider_request_context(
+                        self._provider_request_tracker.operation_id,
+                        self._provider_request_tracker.fallback_index,
+                        self._provider_request_tracker.purpose,
+                    ):
+                        t_event = await self._wrapped_stt.recognize(
+                            buffer=merged_frames,
+                            language=self._language,
+                            conn_options=self._wrapped_stt_conn_options,
+                        )
 
                     if len(t_event.alternatives) == 0:
                         continue

@@ -726,6 +726,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 session_id = data.get("session_id")
                 if current_session_id is None and session_id is not None:
                     current_session_id = session_id
+                    output_emitter.note_provider_request_id(session_id)
                     output_emitter.start_segment(segment_id=session_id)
 
                 if data.get("type") == "session.created":

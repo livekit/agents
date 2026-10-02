@@ -18,6 +18,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
+from ..metrics.provider_request import _ProviderRequestTracker
 from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -109,7 +110,7 @@ TEvent = TypeVar("TEvent")
 
 class LLM(
     ABC,
-    rtc.EventEmitter[Literal["metrics_collected", "error"] | TEvent],
+    rtc.EventEmitter[Literal["metrics_collected", "error", "provider_request_completed"] | TEvent],
     Generic[TEvent],
 ):
     def __init__(self) -> None:
@@ -234,6 +235,7 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
 class LLMStream(ABC):
     _llm_request_span_name: ClassVar[str] = "llm_request"
     _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
+    _emit_provider_request_attempts: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -254,6 +256,9 @@ class LLMStream(ABC):
         self._event_aiter, monitor_aiter = self._tee_aiter
         self._current_attempt_has_error = False
         self._provider_request_ids: list[str] = []
+        self._provider_request_tracker = _ProviderRequestTracker(
+            component="llm", provider=llm.provider, model=llm.model
+        )
         self._llm_request_span: trace.Span | None = None
         self._record_content = False
         self._metrics_task = asyncio.create_task(
@@ -303,6 +308,7 @@ class LLMStream(ABC):
         self._llm_request_span = trace.get_current_span()
 
         for i in range(self._conn_options.max_retry + 1):
+            self._provider_request_tracker.start(i)
             try:
                 with tracer.start_as_current_span("llm_request_run") as attempt_span:
                     attempt_span.set_attribute(trace_types.ATTR_RETRY_COUNT, i)
@@ -316,14 +322,21 @@ class LLMStream(ABC):
                             attempt_span.set_attribute(
                                 trace_types.ATTR_PROVIDER_REQUEST_IDS, self._provider_request_ids
                             )
+                    self._emit_provider_request_completed("success")
                     return
+            except asyncio.CancelledError as e:
+                self._emit_provider_request_completed("cancelled", error=e)
+                raise
             except APIError as e:
                 # 499 (Client Closed Request) - close gracefully without raising
                 if isinstance(e, APIStatusError) and e.status_code == 499:
+                    self._emit_provider_request_completed("cancelled", error=e)
                     return
 
                 if not self._retry_on_chunk_sent and self._event_ch.output_sent:
                     e.retryable = False
+
+                self._emit_provider_request_completed("error", error=e)
 
                 retry_interval = self._conn_options._interval_for_retry(i)
 
@@ -353,8 +366,35 @@ class LLMStream(ABC):
                 self._current_attempt_has_error = False
 
             except Exception as e:
+                self._emit_provider_request_completed("error", error=e)
                 self._emit_error(e, recoverable=False)
                 raise
+
+    def _emit_provider_request_completed(
+        self,
+        outcome: Literal["success", "error", "cancelled"],
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        if self._emit_provider_request_attempts:
+            self._llm.emit(
+                "provider_request_completed",
+                self._provider_request_tracker.complete(outcome, error=error),
+            )
+
+    def note_provider_request_id(self, request_id: str | None) -> None:
+        """Record an explicitly provider-known request ID for the current attempt."""
+        self._provider_request_tracker.note_provider_request_id(request_id)
+        if request_id and request_id not in self._provider_request_ids:
+            self._provider_request_ids.append(request_id)
+
+    def note_provider_trace_id(self, trace_id: str | None) -> None:
+        """Record an explicitly provider-known trace/context ID for the current attempt."""
+        self._provider_request_tracker.note_provider_trace_id(trace_id)
+
+    # Kept for plugins that adopted the initial protected hook.
+    _note_provider_request_id = note_provider_request_id
+    _note_provider_trace_id = note_provider_trace_id
 
     def _emit_error(self, api_error: Exception, recoverable: bool) -> None:
         self._current_attempt_has_error = True
@@ -383,6 +423,8 @@ class LLMStream(ABC):
         async for ev in event_aiter:
             received_chunk = True
             request_id = ev.id
+            # Preserve the established OpenTelemetry behavior. Ledger IDs are stricter and
+            # are populated only through the explicit provider-ID hook above.
             if request_id and request_id not in self._provider_request_ids:
                 self._provider_request_ids.append(request_id)
             # measured against generation, not the first chunk: a retry that follows a

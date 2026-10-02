@@ -471,8 +471,9 @@ class _InworldConnection:
 
                 result = data.get("result", {})
                 context_id = result.get("contextId")
-
                 ctx = self._contexts.get(context_id) if context_id else None
+                if context_id and ctx and ctx.emitter:
+                    ctx.emitter.note_provider_request_id(context_id)
 
                 # Check for errors in status
                 status = result.get("status", {})

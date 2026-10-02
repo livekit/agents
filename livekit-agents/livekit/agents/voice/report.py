@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..llm import ChatContext
-from ..metrics import ModelUsage
+from ..metrics import ModelUsage, ProviderRequestAttempt
 from ..version import __version__
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent
@@ -31,6 +31,8 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+    provider_request_attempts: tuple[ProviderRequestAttempt, ...] = ()
+    """Bounded provider attempt metadata captured when explicitly enabled."""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
@@ -41,7 +43,7 @@ class SessionReport:
 
             events_dict.append(event.model_dump())
 
-        return {
+        report = {
             "job_id": self.job_id,
             "room_id": self.room_id,
             "room": self.room,
@@ -70,6 +72,11 @@ class SessionReport:
             "usage": self._usage_to_dict() if self.model_usage else None,
             "sdk_version": self.sdk_version,
         }
+        if self.provider_request_attempts:
+            report["provider_request_attempts"] = [
+                attempt.model_dump() for attempt in self.provider_request_attempts
+            ]
+        return report
 
     def _usage_to_dict(self) -> list[dict] | None:
         if self.model_usage is None:
