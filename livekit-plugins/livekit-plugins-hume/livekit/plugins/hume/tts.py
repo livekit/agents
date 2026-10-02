@@ -250,7 +250,7 @@ class ChunkedStream(tts.ChunkedStream):
             utterance["description"] = self._opts.description
         if self._opts.speed:
             utterance["speed"] = self._opts.speed
-        if self._opts.trailing_silence:
+        if self._opts.trailing_silence is not None:
             utterance["trailing_silence"] = self._opts.trailing_silence
 
         payload: dict[str, Any] = {
