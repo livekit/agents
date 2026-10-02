@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 COMMON_INSTRUCTIONS = (
     # Outcome — what a great interaction looks like.
-    "You are Mac, a quick and friendly McDonald’s drive-thru attendant, and a customer has just "
+    "You are Riley, a quick and friendly Relay Burger drive-thru attendant, and a customer has just "
     "pulled up to the speaker. A great interaction ends with their complete, correct order in the "
     "ordering system — every item they asked for, at the right size, with nothing they didn’t ask "
     "for — reached in as few, as natural exchanges as possible. \n"
@@ -18,7 +18,7 @@ COMMON_INSTRUCTIONS = (
     'rather than "Absolutely" or "Certainly", and let mid-sentence fillers (like, you know, I '
     "mean) fall where they naturally would. Use informal phrasing: yeah, gonna, kinda, gotcha, "
     "lemme. Keep replies short, upbeat, and snappy, and ask about one thing at a time so you never "
-    "overwhelm the customer. Confirm choices warmly ('Alright, one Big Mac Combo!'), and when "
+    "overwhelm the customer. Confirm choices warmly ('Alright, one Big Stack Combo!'), and when "
     "something’s missing or unavailable, say so with empathy and offer the closest option ('Ah, "
     "we’re out of Sweet Tea right now — can I get you a Coke instead?'). \n"
     "\n\n"
@@ -206,78 +206,78 @@ class FakeDB:
     async def list_combo_meals(self) -> list[MenuItem]:
         raw_meals = [
             {
-                "id": "combo_big_mac",
-                "name": "Big Mac® Combo",
+                "id": "combo_big_stack",
+                "name": "Big Stack Combo",
                 "alias": "1",
                 "calories": 970,
                 "price": 9.49,
             },
             {
-                "id": "combo_quarter_pounder_2a",
-                "name": "Quarter Pounder® with Cheese Combo",
+                "id": "combo_quarter_stacker_cheese",
+                "name": "Quarter Stacker with Cheese Combo",
                 "alias": "2a",
                 "calories": 840,
                 "price": 9.89,
             },
             {
-                "id": "combo_quarter_pounder_2b",
-                "name": "Quarter Pounder® with Cheese & Bacon Combo",
+                "id": "combo_quarter_stacker_bacon",
+                "name": "Quarter Stacker with Cheese & Bacon Combo",
                 "alias": "2b",
                 "calories": 950,
                 "price": 10.39,
             },
             {
-                "id": "combo_quarter_pounder_2c",
-                "name": "Quarter Pounder® Deluxe Combo",
+                "id": "combo_quarter_stacker_deluxe",
+                "name": "Quarter Stacker Deluxe Combo",
                 "alias": "2c",
                 "calories": 950,
                 "price": 10.39,
             },
             {
-                "id": "combo_double_quarter",
-                "name": "Double Quarter Pounder® with Cheese Combo",
+                "id": "combo_double_quarter_stacker",
+                "name": "Double Quarter Stacker with Cheese Combo",
                 "alias": "3",
                 "calories": 1060,
                 "price": 10.29,
             },
             {
-                "id": "combo_mccrispy_4a",
-                "name": "McCrispy™ Original Combo",
+                "id": "combo_crispy_original",
+                "name": "Crispy Original Combo",
                 "alias": "4a",
                 "calories": 790,
                 "price": 8.99,
             },
             {
-                "id": "combo_mccrispy_4b",
-                "name": "McCrispy™ Spicy Combo",
+                "id": "combo_crispy_spicy",
+                "name": "Crispy Spicy Combo",
                 "alias": "4b",
                 "calories": 850,
                 "price": 8.99,
             },
             {
-                "id": "combo_mccrispy_4c",
-                "name": "McCrispy™ Deluxe Combo",
+                "id": "combo_crispy_deluxe",
+                "name": "Crispy Deluxe Combo",
                 "alias": "4c",
                 "calories": 880,
                 "price": 9.89,
             },
             {
-                "id": "combo_mccrispy_4d",
-                "name": "McCrispy™ Spicy Deluxe Combo",
+                "id": "combo_crispy_spicy_deluxe",
+                "name": "Crispy Spicy Deluxe Combo",
                 "alias": "4d",
                 "calories": 860,
                 "price": 9.99,
             },
             {
-                "id": "combo_chicken_mcnuggets_10pc",
-                "name": "10 pc. Chicken McNuggets® Combo",
+                "id": "combo_chicken_bites_10pc",
+                "name": "10 pc. Chicken Bites Combo",
                 "alias": "5",
                 "calories": 740,
                 "price": 9.49,
             },
             {
-                "id": "combo_filet_o_fish",
-                "name": "Filet-O-Fish® Combo",
+                "id": "combo_ocean_fillet",
+                "name": "Ocean Fillet Combo",
                 "alias": "6",
                 "calories": 700,
                 "price": 7.89,
@@ -311,20 +311,20 @@ class FakeDB:
     async def list_happy_meals(self) -> list[MenuItem]:
         raw_happy_meals = [
             {
-                "id": "happy_meal_4pc_mcnuggets",
-                "name": "4 pc. Chicken McNuggets® Happy Meal",
+                "id": "fun_meal_4pc_chicken_bites",
+                "name": "4 pc. Chicken Bites Fun Meal",
                 "calories": 430,
                 "price": 5.99,
             },
             {
-                "id": "happy_meal_6pc_mcnuggets",
-                "name": "6 pc. Chicken McNuggets® Happy Meal",
+                "id": "fun_meal_6pc_chicken_bites",
+                "name": "6 pc. Chicken Bites Fun Meal",
                 "calories": 530,
                 "price": 6.99,
             },
             {
-                "id": "happy_meal_hamburger",
-                "name": "Hamburger Happy Meal",
+                "id": "fun_meal_hamburger",
+                "name": "Hamburger Fun Meal",
                 "calories": 510,
                 "price": 5.59,
             },
@@ -349,68 +349,68 @@ class FakeDB:
     async def list_regulars(self) -> list[MenuItem]:
         raw_items = [
             {
-                "id": "big_mac",
-                "name": "Big Mac®",
+                "id": "big_stack",
+                "name": "Big Stack",
                 "calories": 590,
                 "price": 5.89,
             },
             {
-                "id": "quarter_pounder_cheese",
-                "name": "Quarter Pounder® with Cheese",
+                "id": "quarter_stacker_cheese",
+                "name": "Quarter Stacker with Cheese",
                 "calories": 520,
                 "price": 6.29,
             },
             {
-                "id": "quarter_pounder_bacon",
-                "name": "Quarter Pounder® with Cheese & Bacon",
+                "id": "quarter_stacker_bacon",
+                "name": "Quarter Stacker with Cheese & Bacon",
                 "calories": 590,
                 "price": 6.79,
             },
             {
-                "id": "quarter_pounder_deluxe",
-                "name": "Quarter Pounder® Deluxe",
+                "id": "quarter_stacker_deluxe",
+                "name": "Quarter Stacker Deluxe",
                 "calories": 530,
                 "price": 6.39,
             },
             {
-                "id": "double_quarter_pounder",
-                "name": "Double Quarter Pounder® with Cheese",
+                "id": "double_quarter_stacker",
+                "name": "Double Quarter Stacker with Cheese",
                 "calories": 740,
                 "price": 7.49,
             },
             {
-                "id": "mccrispy_original",
-                "name": "McCrispy™ Original",
+                "id": "crispy_original",
+                "name": "Crispy Original",
                 "calories": 470,
                 "price": 5.69,
             },
             {
-                "id": "mccrispy_spicy",
-                "name": "McCrispy™ Spicy",
+                "id": "crispy_spicy",
+                "name": "Crispy Spicy",
                 "calories": 500,
                 "price": 5.69,
             },
             {
-                "id": "mccrispy_deluxe",
-                "name": "McCrispy™ Deluxe",
+                "id": "crispy_deluxe",
+                "name": "Crispy Deluxe",
                 "calories": 530,
                 "price": 6.39,
             },
             {
-                "id": "mccrispy_spicy_deluxe",
-                "name": "McCrispy™ Spicy Deluxe",
+                "id": "crispy_spicy_deluxe",
+                "name": "Crispy Spicy Deluxe",
                 "calories": 530,
                 "price": 6.59,
             },
             {
-                "id": "mcnuggets_10pc",
-                "name": "10 pc. Chicken McNuggets®",
+                "id": "chicken_bites_10pc",
+                "name": "10 pc. Chicken Bites",
                 "calories": 410,
                 "price": 6.79,
             },
             {
-                "id": "filet_o_fish",
-                "name": "Filet-O-Fish®",
+                "id": "ocean_fillet",
+                "name": "Ocean Fillet",
                 "calories": 390,
                 "price": 5.89,
             },
@@ -442,8 +442,8 @@ class FakeDB:
                 "price": 3.69,
             },
             {
-                "id": "sweet_mcflurry_oreo",
-                "name": "McFlurry® (Oreo)",
+                "id": "swirl_freeze_cookie",
+                "name": "Swirl Freeze (Cookie Crumble)",
                 "calories": 480,
                 "price": 4.89,
             },
@@ -666,7 +666,7 @@ def _happy_menu_instructions(items: list[MenuItem]) -> str:
         menu_lines.append(line)
 
     return (
-        "# Happy Meals:\n" + "\n".join(menu_lines) + "\n\nRecommended drinks with the Happy Meal:\n"
+        "# Fun Meals:\n" + "\n".join(menu_lines) + "\n\nRecommended drinks with the Fun Meal:\n"
         "  - Milk chocolate/white\n"
         "  - DASANI Water\n"
         "  - Or any other small drink."
