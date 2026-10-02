@@ -457,10 +457,13 @@ async def _tts_inference_task(
     provider: str | None = None,
 ) -> bool:
     current_span = trace.get_current_span()
-    if model:
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-    if provider:
-        current_span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, provider)
+    gen_ai_telemetry.set_request_attributes(
+        current_span,
+        operation=None,
+        model=model,
+        provider=provider,
+        output_type=trace_types.GenAIOutputType.SPEECH,
+    )
 
     audio_ch, timed_texts_fut = data.audio_ch, data.timed_texts_fut
     if text_transforms:
@@ -468,6 +471,18 @@ async def _tts_inference_task(
 
     start_time: float | None = None
     input_tee = itertools.tee(input, 2)
+    record_content = current_span.is_recording() and gen_ai_telemetry.capture_content_enabled()
+    input_text: list[str] = []
+
+    async def _capture_input() -> AsyncIterable[str]:
+        nonlocal record_content
+        async for chunk in input_tee[1]:
+            record_content = record_content and gen_ai_telemetry.capture_content_enabled()
+            if record_content:
+                input_text.append(chunk)
+            yield chunk
+
+    observed_input = _capture_input()
 
     async def _get_start_time() -> None:
         nonlocal start_time
@@ -477,7 +492,7 @@ async def _tts_inference_task(
 
     _start_time_task = asyncio.create_task(_get_start_time())
     try:
-        tts_node = node(input_tee[1], model_settings)
+        tts_node = node(observed_input, model_settings)
         if asyncio.iscoroutine(tts_node):
             tts_node = await tts_node
 
@@ -513,6 +528,13 @@ async def _tts_inference_task(
         return audio_duration > 0
     finally:
         await aio.gracefully_cancel(_start_time_task)
+        if record_content and gen_ai_telemetry.capture_content_enabled():
+            gen_ai_telemetry.set_content_attributes(
+                current_span,
+                input_messages=gen_ai_telemetry.to_speech_messages(
+                    "".join(input_text), role="assistant"
+                ),
+            )
         await input_tee.aclose()
 
 
