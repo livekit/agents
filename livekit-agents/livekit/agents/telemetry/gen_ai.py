@@ -165,6 +165,13 @@ def record_llm_input_messages(
     span.set_attributes(attrs)
 
 
+def record_session_transcript(span: trace.Span, chat_ctx: ChatContext) -> None:
+    """Export the session's chronological conversation as the workflow result."""
+    if not _capture_content or not span.is_recording():
+        return
+    set_content_attributes(span, output_messages=to_input_messages(chat_ctx))
+
+
 class _ContentFilteringSpanProcessor(SpanProcessor):
     """Apply capture controls before PII filtering can stash content for Cloud export."""
 
