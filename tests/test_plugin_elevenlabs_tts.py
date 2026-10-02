@@ -1,52 +1,3 @@
-@pytest.mark.asyncio
-async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None:
-    opened = asyncio.Event()
-
-    async def _current_connection(
-        self: object,
-    ) -> tuple[SimpleNamespace, float, bool]:
-        opened.set()
-        return SimpleNamespace(_recv_task=None), 0.0, False
-
-    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-
-    tts = elevenlabs_tts.TTS(api_key="test-key")
-    tts.prewarm()
-    await asyncio.wait_for(opened.wait(), timeout=1)
-    await tts.aclose()
-
-
-@pytest.mark.asyncio
-async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    connections: list[asyncio.Future[None]] = []
-    reconnected = asyncio.Event()
-
-    async def _current_connection(
-        self: object,
-    ) -> tuple[SimpleNamespace, float, bool]:
-        recv_task = asyncio.get_running_loop().create_future()
-        connections.append(recv_task)
-        if len(connections) == 2:
-            reconnected.set()
-        return SimpleNamespace(_recv_task=recv_task), 0.0, False
-
-    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
-
-    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4")
-    tts.prewarm()
-    while not connections:
-        await asyncio.sleep(0)
-
-    connections[0].set_result(None)
-    await asyncio.wait_for(reconnected.wait(), timeout=1)
-    await tts.aclose()
-
-    assert len(connections) == 2
-    assert not connections[1].cancelled()
-
-
 """Unit tests for ElevenLabs TTS plugin configuration and websocket behavior."""
 
 import asyncio
@@ -147,6 +98,55 @@ def test_auto_mode_respects_explicit_value_with_chunk_length_schedule() -> None:
         auto_mode=True,
     )
     assert tts._opts.auto_mode is True
+
+
+@pytest.mark.asyncio
+async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    opened = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        opened.set()
+        return SimpleNamespace(_recv_task=None), 0.0, False
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.wait_for(opened.wait(), timeout=1)
+    await tts.aclose()
+
+
+@pytest.mark.asyncio
+async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections: list[asyncio.Future[None]] = []
+    reconnected = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        recv_task = asyncio.get_running_loop().create_future()
+        connections.append(recv_task)
+        if len(connections) == 2:
+            reconnected.set()
+        return SimpleNamespace(_recv_task=recv_task), 0.0, False
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key", model="eleven_v4")
+    tts.prewarm()
+    while not connections:
+        await asyncio.sleep(0)
+
+    connections[0].set_result(None)
+    await asyncio.wait_for(reconnected.wait(), timeout=1)
+    await tts.aclose()
+
+    assert len(connections) == 2
+    assert not connections[1].cancelled()
 
 
 def test_build_context_init_packet_includes_generation_config() -> None:
