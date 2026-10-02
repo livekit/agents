@@ -2148,13 +2148,18 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
-        self._session._usage_collector.collect(ev)
+        usage_updated = self._session._usage_collector.collect(ev)
         otel_metrics.collect_usage(ev)
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-        self._session.emit(
-            "session_usage_updated",
-            SessionUsageUpdatedEvent(usage=self._session.usage),
-        )
+        # a VAD stream reports its inference time every second for as long as it runs,
+        # and connection timing arrives as a metric with zero usage; announcing those
+        # would repeat the same totals to every listener (and, through the session
+        # host, to the room)
+        if usage_updated:
+            self._session.emit(
+                "session_usage_updated",
+                SessionUsageUpdatedEvent(usage=self._session.usage),
+            )
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder

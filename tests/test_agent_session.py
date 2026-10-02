@@ -24,6 +24,7 @@ from livekit.agents import (
     ModelSettings,
     NotGivenOr,
     RunContext,
+    SessionUsageUpdatedEvent,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
@@ -242,6 +243,32 @@ async def test_events_and_metrics() -> None:
     assert metrics_events[2].metrics.type == "tts_metrics"
     check_timestamp(metrics_events[2].metrics.ttfb, 0.2, speed_factor=speed)
     check_timestamp(metrics_events[2].metrics.audio_duration, 2.0, speed_factor=speed)
+
+
+async def test_session_usage_updated_only_when_usage_changes() -> None:
+    actions = FakeActions()
+    actions.add_user_speech(0.5, 2.5, "Hello, how are you?", stt_delay=0.2)
+    actions.add_llm("I'm doing well, thank you!", ttft=0.1, duration=0.3)
+    actions.add_tts(2.0, ttfb=0.2, duration=0.3)
+
+    session = create_session(actions)
+    metrics_events: list[MetricsCollectedEvent] = []
+    usage_events: list[SessionUsageUpdatedEvent] = []
+    session.on("metrics_collected", metrics_events.append)
+    session.on("session_usage_updated", usage_events.append)
+
+    await asyncio.wait_for(run_session(session, MyAgent()), timeout=SESSION_TIMEOUT)
+
+    # the VAD reports its inference time for as long as it runs; that carries no usage,
+    # so it must not announce the same totals again
+    metrics_types = [ev.metrics.type for ev in metrics_events]
+    assert "vad_metrics" in metrics_types
+    assert "llm_metrics" in metrics_types and "tts_metrics" in metrics_types
+
+    snapshots = [ev.usage for ev in usage_events]
+    assert snapshots and snapshots[0].model_usage
+    assert all(prev != cur for prev, cur in zip(snapshots, snapshots[1:], strict=False))
+    assert snapshots[-1] == session.usage
 
 
 async def test_tts_node_ttfb_excludes_upstream_latency() -> None:
