@@ -206,9 +206,18 @@ class TTS(
         return "unknown"
 
     @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        """Whether usage is routed through LiveKit Inference or a provider plugin."""
+        return "provider_plugin"
+
+    @property
     def metrics_metadata(self) -> MetricsMetadata:
         """Metadata used to label turn metrics emitted for this TTS instance."""
-        return {"model_name": self.model, "model_provider": self.provider}
+        return {
+            "model_name": self.model,
+            "model_provider": self.provider,
+            "usage_source": self.usage_source,
+        }
 
     @property
     def capabilities(self) -> TTSCapabilities:
@@ -358,7 +367,11 @@ class ChunkedStream(ABC):
             streamed=False,
             acquire_time=self._acquire_time,
             connection_reused=self._connection_reused,
-            metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+            metadata=Metadata(
+                model_name=self._tts.model,
+                model_provider=self._tts.provider,
+                usage_source=self._tts.usage_source,
+            ),
         )
         if self._tts_request_span:
             self._tts_request_span.set_attribute(
@@ -709,7 +722,11 @@ class SynthesizeStream(ABC):
                 streamed=True,
                 acquire_time=self._acquire_time,
                 connection_reused=self._connection_reused,
-                metadata=Metadata(model_name=self._tts.model, model_provider=self._tts.provider),
+                metadata=Metadata(
+                    model_name=self._tts.model,
+                    model_provider=self._tts.provider,
+                    usage_source=self._tts.usage_source,
+                ),
             )
             if self._tts_request_span:
                 self._tts_request_span.set_attribute(

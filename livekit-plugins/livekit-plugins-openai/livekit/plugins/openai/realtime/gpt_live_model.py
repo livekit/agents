@@ -917,6 +917,7 @@ class GPTLiveSession(
                             model_name=response.model
                             or self._opts.responses.get("model", DEFAULT_BACKEND_MODEL),
                             model_provider=self._live_model.provider,
+                            usage_source=self._live_model.usage_source,
                         ),
                     ),
                 )
@@ -990,7 +991,9 @@ class GPTLiveSession(
                 input_token_details=RealtimeModelMetrics.InputTokenDetails(),
                 output_token_details=RealtimeModelMetrics.OutputTokenDetails(),
                 metadata=Metadata(
-                    model_name=self._live_model.model, model_provider=self._live_model.provider
+                    model_name=self._live_model.model,
+                    model_provider=self._live_model.provider,
+                    usage_source=self._live_model.usage_source,
                 ),
             ),
         )

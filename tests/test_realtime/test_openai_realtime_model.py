@@ -666,6 +666,7 @@ def test_transcription_audio_tokens_reach_session_usage_and_report() -> None:
         {
             "provider": "api.openai.com",
             "model": "whisper-1",
+            "usage_source": "provider_plugin",
             "input_tokens": 10,
             "input_audio_tokens": 8,
             "output_tokens": 2,

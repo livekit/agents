@@ -9,6 +9,7 @@ from typing_extensions import Self
 class Metadata(BaseModel):
     model_name: str | None = None
     model_provider: str | None = None
+    usage_source: Literal["livekit_inference", "provider_plugin"] | None = None
 
 
 class _BaseMetrics(BaseModel):

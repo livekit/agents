@@ -1536,7 +1536,9 @@ class RealtimeSession(  # noqa: F811
                 image_tokens=0,
             ),
             metadata=Metadata(
-                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+                model_name=self._realtime_model.model,
+                model_provider=self._realtime_model.provider,
+                usage_source=self._realtime_model.usage_source,
             ),
         )
         self.emit("metrics_collected", metrics)

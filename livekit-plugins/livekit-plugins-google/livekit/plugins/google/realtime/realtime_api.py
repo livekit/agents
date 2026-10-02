@@ -1654,7 +1654,9 @@ class RealtimeSession(llm.RealtimeSession):
                 **_token_details_map(usage_metadata.response_tokens_details),
             ),
             metadata=Metadata(
-                model_name=self._realtime_model.model, model_provider=self._realtime_model.provider
+                model_name=self._realtime_model.model,
+                model_provider=self._realtime_model.provider,
+                usage_source=self._realtime_model.usage_source,
             ),
         )
         self.emit("metrics_collected", metrics)

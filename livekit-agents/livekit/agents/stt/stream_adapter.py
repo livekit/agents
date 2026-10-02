@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .. import utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -47,6 +47,10 @@ class StreamAdapter(STT):
     @property
     def provider(self) -> str:
         return self._stt.provider
+
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return self._stt.usage_source
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)

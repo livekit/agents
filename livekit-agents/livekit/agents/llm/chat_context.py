@@ -227,6 +227,7 @@ ChatRole: TypeAlias = Literal["developer", "system", "user", "assistant"]
 class MetricsMetadata(TypedDict, total=False):
     model_name: str
     model_provider: str
+    usage_source: Literal["livekit_inference", "provider_plugin"]
 
 
 class MetricsReport(TypedDict, total=False):

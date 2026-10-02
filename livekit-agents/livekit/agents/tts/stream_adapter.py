@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from .. import tokenize, utils
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -87,6 +87,10 @@ class StreamAdapter(TTS):
     @property
     def provider(self) -> str:
         return self._wrapped_tts.provider
+
+    @property
+    def usage_source(self) -> Literal["livekit_inference", "provider_plugin"]:
+        return self._wrapped_tts.usage_source
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
