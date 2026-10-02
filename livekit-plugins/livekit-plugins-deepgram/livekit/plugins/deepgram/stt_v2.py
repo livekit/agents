@@ -94,7 +94,7 @@ class STTv2(stt.STT):
             model: The Deepgram model to use for speech recognition. Defaults to "flux-general-en".
             sample_rate: The sample rate of the audio in Hz. Defaults to 16000.
             eager_eot_threshold: The threshold for eager end of turn to enable preemptive generation. Disabled by default. Set to 0.3-0.9 to enable preemptive generation.
-            eot_threshold: The threshold for end of speech detection, ranges 0.5-0.9. Defaults to 0.7. If using eager_eot_threshold, set this higher to allow a higher eager value.
+            eot_threshold: The threshold for end of speech detection, ranges 0.5-0.9. Defaults to 0.7. If using eager_eot_threshold, set this higher to allow a higher eager value. Set to 1.0 to suppress Flux's own detection and end every turn by flushing the stream.
             eot_timeout_ms: The timeout for end of speech detection. Defaults to 3000.
             keyterm: str or list of str of key terms to improve recognition accuracy. Defaults to None.
             tags: List of tags to add to the requests for usage reporting. Defaults to NOT_GIVEN.
@@ -314,6 +314,7 @@ class STTv2(stt.STT):
 
 class SpeechStreamv2(stt.SpeechStream):
     _CLOSE_MSG: str = json.dumps({"type": "CloseStream"})
+    _FORCE_END_TURN_MSG: str = json.dumps({"type": "ForceEndTurn"})
 
     def __init__(
         self,
@@ -486,6 +487,15 @@ class SpeechStreamv2(stt.SpeechStream):
 
                     if has_ended:
                         self._audio_duration_collector.flush()
+                        # Flux's Finalize: end the turn now rather than waiting for
+                        # eot_threshold to be met or eot_timeout_ms to elapse. the reply
+                        # is a normal EndOfTurn carrying trigger="manual".
+                        # https://developers.deepgram.com/docs/flux/force-end-turn
+                        if self._speaking:
+                            # forcing a turn that never started only earns a
+                            # FORCE_END_TURN_NO_ACTIVE_TURN warning, and end_input()
+                            # flushes on every close
+                            await ws.send_str(SpeechStreamv2._FORCE_END_TURN_MSG)
                         has_ended = False
 
                 # tell deepgram we are done sending audio/inputs
@@ -724,6 +734,10 @@ class SpeechStreamv2(stt.SpeechStream):
 
         elif data["type"] == "ConfigureFailure":
             logger.warning("deepgram rejected Configure update", extra={"lk.pii.data": data})
+
+        elif data["type"] == "Warning":
+            # e.g. FORCE_END_TURN_NO_ACTIVE_TURN. recoverable, the stream stays open
+            logger.warning("deepgram sent a warning", extra={"lk.pii.data": data})
 
         elif data["type"] == "Error":
             logger.warning("deepgram sent an error", extra={"lk.pii.data": data})
