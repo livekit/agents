@@ -1,0 +1,24 @@
+livekit-plugins/livekit-plugins-google/livekit/plugins/google/realtime/realtime_api.py
+  s_eb34213dbe3a30::t_3e6efedf2c3cf7 106-107,109-112,116-119,317,392
+tests/test_plugin_google_realtime.py
+  s_eb34213dbe3a30::t_9d5e0c016b2667 41-45
+  s_eb34213dbe3a30::t_3e6efedf2c3cf7 36-40,46,49,61-65,72-79
+livekit-plugins/livekit-plugins-google/README.md
+  s_eb34213dbe3a30::t_3e6efedf2c3cf7 26-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39d72dddcf40be7667a87fadaf4748d245155293",
+  "prompts": {},
+  "sessions": {
+    "s_eb34213dbe3a30": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd53-e845-7cc0-a055-44a76b509a6a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
