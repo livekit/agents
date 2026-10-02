@@ -783,7 +783,22 @@ class AgentOutput:
             else:
                 self._audio_sink.on_detached()
 
-    def replace_audio_tail(self, sink: AudioOutput) -> None:
+    @property
+    def audio_tail(self) -> AudioOutput | None:
+        """The sink at the bottom of the audio chain, below any wrappers.
+
+        This is the sink :meth:`replace_audio_tail` would swap out: the
+        downstream of the :class:`_AudioSinkProxy` when wrappers are present,
+        the whole chain otherwise.
+        """
+        cur = self._audio_sink
+        while cur is not None:
+            if isinstance(cur, _AudioSinkProxy):
+                return cur.next_in_chain
+            cur = cur.next_in_chain
+        return self._audio_sink
+
+    def replace_audio_tail(self, sink: AudioOutput) -> AudioOutput | None:
         """Switch the tail sink at the bottom of the chain, keeping wrappers attached.
 
         Walks the chain looking for a :class:`_AudioSinkProxy` and swaps its
@@ -792,14 +807,21 @@ class AgentOutput:
         when no proxy is present (no wrappers, or the chain hasn't been set up yet).
 
         Use ``self.audio = sink`` instead to replace the entire chain.
+
+        Returns:
+            The sink that was replaced, so the caller can restore it later
+            (see ``AvatarSession.aclose``), or None when there was none.
         """
         cur = self._audio_sink
         while cur is not None:
             if isinstance(cur, _AudioSinkProxy):
+                previous: AudioOutput | None = cur.next_in_chain
                 cur.set_next_in_chain(sink)
-                return
+                return previous
             cur = cur.next_in_chain
+        previous = self._audio_sink
         self.audio = sink
+        return previous
 
     @property
     def transcription(self) -> TextOutput | None:

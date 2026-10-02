@@ -206,7 +206,7 @@ class AvatarSession(BaseAvatarSession):
                 )
                 # replace_audio_tail keeps any wrapper AgentSession.start() adds
                 # later (TranscriptSynchronizer, RecorderAudioOutput) attached.
-                agent_session.output.replace_audio_tail(audio_output)
+                self._attach_audio_output(audio_output)
                 self._audio_output = audio_output
 
                 await self.wait_for_join(timeout=self._config.join_timeout)
