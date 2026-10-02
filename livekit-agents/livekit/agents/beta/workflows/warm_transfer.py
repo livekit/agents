@@ -575,7 +575,19 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 if not dest_in_caller:
                     room_api = getattr(getattr(job_ctx, "api", None), "room", None)
                     if room_api is not None and hasattr(room_api, "get_participant"):
-                        for attempt in range(2):
+                        max_attempts = 2
+                        for attempt in range(max_attempts):
+                            # Also check caller room client events which may have arrived during wait
+                            caller_remote = getattr(self._caller_room, "remote_participants", None)
+                            if caller_remote is not None:
+                                if self._human_agent_identity in caller_remote or any(
+                                    getattr(p, "identity", None) == self._human_agent_identity
+                                    for p in caller_remote.values()
+                                ):
+                                    dest_in_caller = True
+                                    lookup_failed = False
+                                    break
+
                             try:
                                 p_info = await room_api.get_participant(
                                     api.RoomParticipantIdentity(
@@ -590,12 +602,15 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                             except Exception as lookup_exc:
                                 if _is_not_found(lookup_exc):
                                     lookup_failed = False
+                                    if attempt < max_attempts - 1:
+                                        await asyncio.sleep(0.2)
+                                        continue
                                     break
                                 lookup_failed = True
                                 logger.warning(
-                                    f"failed to query destination participant in caller room (attempt {attempt + 1}/2): {lookup_exc}"
+                                    f"failed to query destination participant in caller room (attempt {attempt + 1}/{max_attempts}): {lookup_exc}"
                                 )
-                                if attempt == 0:
+                                if attempt < max_attempts - 1:
                                     await asyncio.sleep(0.2)
 
                 # Record any departure facts captured during the move attempt or recovery
@@ -657,7 +672,17 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                 with contextlib.suppress(asyncio.InvalidStateError):
                     self._human_agent_failed_fut.set_result(None)
 
-                if not is_connected:
+                if self._destination_disconnect_reason is not None:
+                    reason_name = rtc.DisconnectReason.Name(self._destination_disconnect_reason)
+                    self._set_result(
+                        WarmTransferError(
+                            f"destination left: {reason_name}",
+                            code=WarmTransferFailure.DESTINATION_LEFT,
+                            disconnect_reason=self._destination_disconnect_reason,
+                            call_status=self._destination_call_status,
+                        )
+                    )
+                elif not is_connected:
                     reason = temp_room_closed_reason or getattr(
                         human_agent_room, "disconnect_reason", None
                     )
@@ -673,14 +698,9 @@ class WarmTransferTask(AgentTask[WarmTransferResult]):
                         )
                     )
                 else:
-                    reason_name = (
-                        rtc.DisconnectReason.Name(self._destination_disconnect_reason)
-                        if self._destination_disconnect_reason is not None
-                        else "UNKNOWN_REASON"
-                    )
                     self._set_result(
                         WarmTransferError(
-                            f"destination left: {reason_name}",
+                            "destination left: UNKNOWN_REASON",
                             code=WarmTransferFailure.DESTINATION_LEFT,
                             disconnect_reason=self._destination_disconnect_reason,
                             call_status=self._destination_call_status,
