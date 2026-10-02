@@ -191,7 +191,7 @@ examples:
         rows: 8
       - rpc: set_stt_model
         label: STT
-        default: deepgram/nova-3
+        default: assemblyai/universal-3-6-pro
         options:
           - { value: deepgram/nova-3, label: Deepgram Nova-3 }
           - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
