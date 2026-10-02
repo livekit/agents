@@ -119,6 +119,52 @@ async def test_prewarm_opens_connection(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
+async def test_option_update_during_connect_discards_stale_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connect_started = asyncio.Event()
+    resume_connect = asyncio.Event()
+    connections: list[object] = []
+
+    class _StubConnection:
+        def __init__(self, opts: object, session: object) -> None:
+            self._opts = opts
+            self._closed = False
+            self.is_current = True
+            self._recv_task = None
+            connections.append(self)
+
+        async def connect(self) -> None:
+            if len(connections) == 1:
+                connect_started.set()
+                await resume_connect.wait()
+
+        async def aclose(self) -> None:
+            self._closed = True
+
+        def mark_non_current(self) -> None:
+            self.is_current = False
+
+    monkeypatch.setattr(elevenlabs_tts, "_Connection", _StubConnection)
+
+    async with aiohttp.ClientSession() as session:
+        tts = elevenlabs_tts.TTS(api_key="test-key", voice_id="old", http_session=session)
+        connection_task = asyncio.create_task(tts._current_connection())
+        await asyncio.wait_for(connect_started.wait(), timeout=1)
+
+        tts.update_options(voice_id="new")
+        resume_connect.set()
+        connection, _, _ = await asyncio.wait_for(connection_task, timeout=1)
+
+        assert len(connections) == 2
+        assert connections[0]._closed  # pyright: ignore[reportAttributeAccessIssue]
+        assert connection is connections[1]
+        assert connection._opts.voice_id == "new"
+
+        await tts.aclose()
+
+
+@pytest.mark.asyncio
 async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -141,7 +187,7 @@ async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
     while not connections:
         await asyncio.sleep(0)
 
-    connections[0].set_result(None)
+    connections[0].cancel()
     await asyncio.wait_for(reconnected.wait(), timeout=1)
     await tts.aclose()
 
