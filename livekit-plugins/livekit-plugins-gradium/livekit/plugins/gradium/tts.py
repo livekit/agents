@@ -119,18 +119,6 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                self._model_endpoint,
-                headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
-            ),
-            timeout,
-        )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
-
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
