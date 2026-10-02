@@ -36,6 +36,7 @@ from ..utils.aio import itertools
 from . import io
 from .speech_handle import SpeechHandle
 from .tool_executor import _build_executor_map
+from .transcription.synchronizer import _SyncedTextOutput
 from .transcription.text_transforms import _apply_text_transforms
 
 if TYPE_CHECKING:
@@ -407,6 +408,8 @@ class _TTSGenerationData:
     # perf_counter when the first text of this segment reached the TTS provider, as stamped
     # by the TTS stream itself; None when a custom tts_node publishes no stamp
     synthesis_started_at: float | None = None
+    # what ended the inference early, e.g. a TTS that failed after its retries
+    error: BaseException | None = None
 
 
 def _time_to_first_sentence(
@@ -434,7 +437,12 @@ def perform_tts_inference(
         _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
     )
 
-    def _inference_done(_: asyncio.Task[bool]) -> None:
+    def _inference_done(task: asyncio.Task[bool]) -> None:
+        if not task.cancelled():
+            # recorded before the channel closes, so whoever forwards the audio knows why
+            # it ended
+            data.error = task.exception()
+
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
             timed_text_ch.close()
 
@@ -684,6 +692,19 @@ class _ForwardOutput:
         return self.text_out.text if self.text_out else ""
 
 
+def _transcript_was_released(text_output: io.TextOutput | None) -> bool:
+    """Whether text forwarded to ``text_output`` reaches the user without any audio.
+
+    A transcript synchronizer releases text in step with the playback and drops a segment
+    that never got audio. Any other output may publish the text as it is generated, also
+    one that wraps a synchronizer, so only a synchronizer at the head of the chain holds
+    the text back.
+    """
+    if text_output is None:
+        return False
+    return not (isinstance(text_output, _SyncedTextOutput) and text_output._synchronizer.enabled)
+
+
 async def forward_generation(
     *,
     speech_handle: SpeechHandle,
@@ -693,13 +714,19 @@ async def forward_generation(
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
     reconcile_playout_pause: Callable[[], None],
+    tts: _TTSGenerationData | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
     Returns when the segment has fully played, been interrupted, or never started
-    (e.g. interrupted before the first frame). Callers resolve the audio/text sources
-    and own message creation; this is the shared core between the pipeline and realtime
-    generation paths.
+    (e.g. interrupted before the first frame, or its TTS failed before producing one).
+    Callers resolve the audio/text sources and own message creation; this is the shared
+    core between the pipeline and realtime generation paths.
+
+    Args:
+        tts: The TTS generation behind ``audio_source``, when the caller wants a TTS
+            that failed before its first frame reported as a segment that never started
+            (unless its transcript was released without waiting for the audio).
     """
     out = _ForwardOutput()
     forward_tasks: list[asyncio.Task[Any]] = []
@@ -762,6 +789,17 @@ async def forward_generation(
 
         if audio_output is not None:
             assert playout_fut is not None
+            if (
+                tts is not None
+                and tts.error is not None
+                and audio_out is not None
+                and not audio_out.has_captured_own_frame
+                and not _transcript_was_released(text_output)
+            ):
+                # the TTS failed before its first frame: nothing was played, no transcript
+                # was released, and the event wait_for_playout returned belongs to an
+                # earlier segment. stays "skipped"
+                return out
             playback_ev = playout_fut.result()
             out.played = "full"
             out.playback_position = playback_ev.playback_position
