@@ -360,8 +360,11 @@ async def test_inference_failure_does_not_expose_provider_details(
     public_api: bool,
 ) -> None:
     private_detail = "model?access_token=private-test-token transcript=private-test-speech"
+    attempts = 0
 
     def fail(**kwargs: Any) -> list[dict[str, str]]:
+        nonlocal attempts
+        attempts += 1
         raise ValueError(private_detail)
 
     funasr_stt = _load_funasr_stt_module(monkeypatch, fail)
@@ -375,8 +378,10 @@ async def test_inference_failure_does_not_expose_provider_details(
             [_make_audio_frame()], conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
         )
 
+    assert attempts == 1
     error = exc_info.value
-    inference_error = error.__cause__ if public_api else error
+    # The public recognizer propagates non-retryable errors without wrapping them.
+    inference_error = error
     assert isinstance(inference_error, APIConnectionError)
     assert str(inference_error) == "failed to run FunASR inference"
     assert inference_error.retryable is False
