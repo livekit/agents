@@ -80,6 +80,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
         self.fail_instructions = False
+        self.instructions_received: list[tuple[str, NotGivenOr[str]]] = []
 
     @property
     def audio_stream(self) -> aio.Chan[llm.DuplexAudioFrame]:
@@ -89,7 +90,10 @@ class _FakeDuplexSession(llm.DuplexSession):
     def tools(self) -> llm.ToolContext:
         return self._tools
 
-    async def _update_instructions(self, instructions: str) -> None:
+    async def _update_instructions(
+        self, instructions: str, *, delegator: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
+        self.instructions_received.append((instructions, delegator))
         if self.fail_instructions:
             raise llm.RealtimeError("no")
 
@@ -127,11 +131,17 @@ class _FakeDuplexSession(llm.DuplexSession):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegator_instructions: NotGivenOr[str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:
         self.config_batches.append((instructions, chat_ctx, tools))
-        await super()._update_session(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+        await super()._update_session(
+            instructions=instructions,
+            delegator_instructions=delegator_instructions,
+            chat_ctx=chat_ctx,
+            tools=tools,
+        )
 
     # test helpers
 
@@ -986,6 +996,22 @@ async def test_duplex_session_reaches_the_plugin_past_the_adapter() -> None:
     async with AgentSession(llm=model, aec_warmup_duration=None) as session:
         await session.start(agent)
         assert agent.duplex_session is model.session_obj
+
+
+async def test_an_agents_delegator_instructions_reach_the_duplex_model_beside_the_full_ones() -> (
+    None
+):
+    """A model that hands tool calls to another model needs both halves to split them."""
+    from livekit.agents import Agent, AgentSession
+    from livekit.agents.llm.chat_context import Instructions
+
+    model = _FakeDuplexModel()
+    agent = Agent(instructions=Instructions("Call update_email.", delegator="Hand the email off."))
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        await session.start(agent)
+        assert model.session_obj.instructions_received == [
+            ("Call update_email.", "Hand the email off.")
+        ]
 
 
 async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:

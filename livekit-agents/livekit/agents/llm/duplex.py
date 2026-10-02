@@ -164,7 +164,11 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
     # apps reach a plugin's own methods through Agent.duplex_session
 
     @abstractmethod
-    async def _update_instructions(self, instructions: str) -> None: ...
+    async def _update_instructions(
+        self, instructions: str, *, delegator: NotGivenOr[str] = NOT_GIVEN
+    ) -> None:
+        """``delegator`` is ``Instructions.delegator``: a model that hands its tool calls to a
+        separate model takes this and gives ``instructions`` to that model; others ignore it."""
 
     @abstractmethod
     async def _append_items(self, items: list[ChatItem]) -> None:
@@ -192,12 +196,13 @@ class DuplexSession(ABC, rtc.EventEmitter[DuplexEventTypes | TEvent], Generic[TE
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegator_instructions: NotGivenOr[str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
         """Apply the whole configuration at once, right after the session is created."""
         if is_given(instructions):
-            await self._update_instructions(instructions)
+            await self._update_instructions(instructions, delegator=delegator_instructions)
 
         if is_given(chat_ctx):
             await self._append_items(chat_ctx.items)

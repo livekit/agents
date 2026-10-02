@@ -735,6 +735,7 @@ class RealtimeSession(llm.RealtimeSession):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegator_instructions: NotGivenOr[str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[llm.ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[llm.Tool]] = NOT_GIVEN,
     ) -> None:

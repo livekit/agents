@@ -113,3 +113,25 @@ async def test_get_dtmf_sip_event_with_confirmation() -> None:
             )
 
             assert result.final_output.user_input == "1 2 3 4 5 6 7 8 9 0"
+
+
+@pytest.mark.parametrize("require_confirmation", [None, False])
+def test_built_in_tasks_carry_delegator_instructions(require_confirmation: bool | None) -> None:
+    """A model that hands tool calls to another model speaks from these, so they say when to hand
+    off, carry the app's own instructions, and ask for a read-back only when one is required."""
+    from livekit.agents.beta.workflows.utils import DELEGATOR_CONFIRMATION
+    from livekit.agents.llm.chat_context import Instructions
+
+    kwargs = {} if require_confirmation is None else {"require_confirmation": require_confirmation}
+    tasks = [
+        beta.workflows.GetEmailTask(extra_instructions="Be warm.", **kwargs),
+        beta.workflows.GetNameTask(extra_instructions="Be warm.", **kwargs),
+        beta.workflows.GetPhoneNumberTask(extra_instructions="Be warm.", **kwargs),
+    ]
+    for task in tasks:
+        instructions = task.instructions
+        assert isinstance(instructions, Instructions)
+        assert instructions.delegator is not None
+        assert "delegate" in instructions.delegator
+        assert "Be warm." in instructions.delegator
+        assert (DELEGATOR_CONFIRMATION in instructions.delegator) is (require_confirmation is None)

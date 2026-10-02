@@ -551,6 +551,7 @@ class _DuplexRealtimeSession(RealtimeSession):
         self,
         *,
         instructions: NotGivenOr[str] = NOT_GIVEN,
+        delegator_instructions: NotGivenOr[str] = NOT_GIVEN,
         chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> None:
@@ -560,7 +561,10 @@ class _DuplexRealtimeSession(RealtimeSession):
             self._chat_ctx = chat_ctx.copy()
         try:
             await self._duplex._update_session(
-                instructions=instructions, chat_ctx=chat_ctx, tools=tools
+                instructions=instructions,
+                delegator_instructions=delegator_instructions,
+                chat_ctx=chat_ctx,
+                tools=tools,
             )
         except BaseException:
             # a session that cannot be configured is unusable, and a session whose start failed is
