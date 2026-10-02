@@ -69,7 +69,12 @@ def test_builders_produce_the_conventions_shapes() -> None:
         "arguments": {"loc": "Paris"},
     }
     # a serialized payload is deserialized, as the convention asks of instrumentations
-    assert messages[2]["parts"][0]["response"] == {"temp": 14}
+    assert messages[2]["parts"][0] == {
+        "type": "tool_call_response",
+        "id": "call_1",
+        "name": "get_weather",
+        "response": {"temp": 14},
+    }
 
     call = llm.FunctionCall(call_id="call_9", name="lookup", arguments='{"q": "x"}')
     output = gen_ai.to_output_messages(text="one moment", function_calls=[call])
