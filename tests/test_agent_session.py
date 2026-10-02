@@ -43,7 +43,7 @@ from livekit.agents.llm import (
 from livekit.agents.llm.chat_context import ChatContext, ChatMessage
 from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType, STTError
 from livekit.agents.utils import aio
-from livekit.agents.voice.agent_activity import AgentActivity
+from livekit.agents.voice.agent_activity import AgentActivity, _transcripts_equivalent
 from livekit.agents.voice.audio_recognition import AudioRecognition, _EndOfTurnInfo
 from livekit.agents.voice.endpointing import BaseEndpointing
 from livekit.agents.voice.events import AgentState, FunctionToolsExecutedEvent, UserState
@@ -2184,6 +2184,23 @@ async def test_preemptive_generation(preemptive_generation: dict, expected_laten
         max_abs_diff=0.2,
     )
     assert agent_state_events[3].new_state == "listening"
+
+
+@pytest.mark.parametrize(
+    "preflight, final, expected",
+    [
+        ("hello how are you", "Hello, how are you?", True),
+        ("مرحبا كيف حالك", "مرحبا، كيف حالك؟", True),
+        ("نعم أريد الحجز", "نعم، أريد الحجز؛", True),
+        ("آپ کیسے ہیں", "آپ کیسے ہیں۔", True),
+        ("आप कैसे हैं", "आप कैसे हैं।", True),
+        ("你好 我很好", "你好，我很好。", True),
+        # different words must still invalidate the preemptive generation
+        ("مرحبا كيف حالك", "مرحبا كيف حالكم؟", False),
+    ],
+)
+def test_preemptive_transcripts_equivalent(preflight: str, final: str, expected: bool) -> None:
+    assert _transcripts_equivalent(preflight, final) is expected
 
 
 @pytest.mark.parametrize(
