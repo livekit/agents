@@ -33,12 +33,20 @@ pytestmark = pytest.mark.unit
         ("future-live-model", True),
     ],
 )
-def test_model_api_compatibility(model: str, vertexai: bool) -> None:
-    realtime_model = RealtimeModel(
-        model=model, vertexai=vertexai, api_key="fake-key", project="test-project", location="eu"
-    )
+def test_model_api_compatibility(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
     assert realtime_model.model == model
     assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert not caplog.records
 
 
 @pytest.mark.parametrize(
@@ -50,15 +58,25 @@ def test_model_api_compatibility(model: str, vertexai: bool) -> None:
         ("gemini-live-2.5-flash-native-audio", False),
     ],
 )
-def test_model_api_mismatch(model: str, vertexai: bool) -> None:
-    with pytest.raises(ValueError, match=f"vertexai={vertexai}"):
-        RealtimeModel(
+def test_model_api_mismatch_warns(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
             model=model,
             vertexai=vertexai,
             api_key="fake-key",
             project="test-project",
             location="eu",
         )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert len(caplog.records) == 1
+    warning = caplog.records[0]
+    assert warning.name == "livekit.plugins.google"
+    assert warning.levelno == logging.WARNING
+    assert f"Model '{model}' may not be available" in warning.message
+    assert f"vertexai={vertexai}" in warning.message
 
 
 @pytest.mark.parametrize("vertexai", [False, True])

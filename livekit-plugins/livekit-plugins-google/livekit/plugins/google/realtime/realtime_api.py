@@ -103,28 +103,20 @@ def _default_tool_behavior(model: str) -> NotGivenOr[types.Behavior]:
     return NOT_GIVEN
 
 
-def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
-    """
-    Validate that the model name matches the API being used.
-
-    Raises ValueError if a known model is used with the wrong API configuration.
-
-    Args:
-        model: The model name being used
-        use_vertexai: Whether VertexAI is enabled
-    """
+def _warn_model_api_mismatch(model: str, use_vertexai: bool) -> None:
+    """Warn when a known model may not be available on the selected API."""
     if use_vertexai and model in KNOWN_GEMINI_API_MODELS and model not in KNOWN_VERTEXAI_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a Gemini API model, but vertexai=True. "
-            f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
-            f"or set vertexai=False."
+        logger.warning(
+            f"Model '{model}' may not be available on VertexAI (vertexai=True). "
+            "If the connection fails, use a VertexAI model "
+            "(e.g., 'gemini-live-2.5-flash-native-audio') or set vertexai=False."
         )
 
     if not use_vertexai and model in KNOWN_VERTEXAI_MODELS and model not in KNOWN_GEMINI_API_MODELS:
-        raise ValueError(
-            f"Model '{model}' is a VertexAI model, but vertexai=False. "
-            f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "
-            f"or set vertexai=True."
+        logger.warning(
+            f"Model '{model}' may not be available on the Gemini API (vertexai=False). "
+            "If the connection fails, use a Gemini API model "
+            "(e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') or set vertexai=True."
         )
 
 
@@ -322,7 +314,7 @@ class RealtimeModel(llm.RealtimeModel):
             conn_options (APIConnectOptions, optional): The configuration for the API connection. Defaults to DEFAULT_API_CONNECT_OPTIONS.
 
         Raises:
-            ValueError: If the API key is required but not found, or the model configuration is incompatible with the selected API.
+            ValueError: If the API key or VertexAI project is missing, or thinking_level is unsupported.
         """  # noqa: E501
         if not is_given(input_audio_transcription):
             input_audio_transcription = types.AudioTranscriptionConfig()
@@ -397,8 +389,7 @@ class RealtimeModel(llm.RealtimeModel):
                     "API key is required for Google API either via api_key or GOOGLE_API_KEY environment variable"  # noqa: E501
                 )
 
-        # Validate model/API compatibility for known models
-        _validate_model_api_match(model, use_vertexai)
+        _warn_model_api_mismatch(model, use_vertexai)
 
         if (
             not use_vertexai

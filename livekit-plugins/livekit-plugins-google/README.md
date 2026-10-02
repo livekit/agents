@@ -23,6 +23,8 @@ To use the STT and TTS API, you'll need to enable the respective services for yo
 
 LiveKit supports the Gemini Live API through both the Gemini Developer API and Vertex AI. Model availability and behavior differ between APIs. Some models, such as `gemini-3.8-live`, are available on both.
 
+For model/API pairs that appear incompatible, the plugin logs a warning and lets the API decide whether the model is available.
+
 The following models are supported by Gemini Developer API:
 
 - gemini-3.8-live
