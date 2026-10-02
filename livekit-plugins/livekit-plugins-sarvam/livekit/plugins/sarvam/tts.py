@@ -216,6 +216,15 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
 # Model-Speaker compatibility mapping
@@ -294,8 +303,6 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "priya",
             "neha",
             "roopa",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
@@ -342,13 +349,23 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "aayan",
             "ashutosh",
             "advait",
-            "amelia",
-            "sophia",
             "suhani",
             "rupali",
             "tanya",
             "shruti",
             "kavitha",
+            # Newly documented v3 speakers. The Sarvam docs list speakers
+            # without gender information, so they are intentionally kept out
+            # of the male/female subgroups.
+            "anand",
+            "tarun",
+            "sunny",
+            "mani",
+            "gokul",
+            "vijay",
+            "mohit",
+            "rehan",
+            "soham",
         ],
     },
 }
@@ -361,6 +378,22 @@ class ConnectionState(enum.Enum):
     CONNECTING = "connecting"
     CONNECTED = "connected"
     FAILED = "failed"
+
+
+# Sample rates the Sarvam streaming (WebSocket) API accepts. 32000/44100/48000 Hz
+# are REST-only per the Sarvam Bulbul docs.
+_STREAMING_SAMPLE_RATES = frozenset({8000, 16000, 22050, 24000})
+
+
+def _pace_bounds(model: str) -> tuple[float, float]:
+    """Accepted pace range for a Bulbul model, per the Sarvam API docs.
+
+    The docs specify 0.5–2.0 for bulbul:v3 and 0.3–3.0 for bulbul:v2.
+    bulbul:v3-beta is not documented, so it keeps the previous 0.3–3.0 bound.
+    """
+    if model == "bulbul:v3":
+        return (0.5, 2.0)
+    return (0.3, 3.0)
 
 
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
@@ -389,7 +422,7 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3, 0.3 to 3.0 for bulbul:v2 and bulbul:v3-beta)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
@@ -441,7 +474,7 @@ class TTS(tts.TTS):
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 for bulbul:v3, 0.3 to 3.0 for bulbul:v2 and bulbul:v3-beta)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -514,8 +547,9 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        pace_min, pace_max = _pace_bounds(model)
+        if not pace_min <= pace <= pace_max:
+            raise ValueError(f"Pace must be between {pace_min} and {pace_max} for model '{model}'")
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -758,31 +792,46 @@ class TTS(tts.TTS):
                 raise ValueError("Target language code cannot be empty")
             self._opts.target_language_code = LanguageCode(target_language_code)
 
-        if model is not None:
-            if not model.strip():
+        if model is not None or pace is not None or speaker is not None:
+            # Validate the *proposed* model/pace/speaker trio before mutating
+            # anything, so a rejected update leaves the current options in a
+            # fully valid state (atomic update). In particular, a call like
+            # update_options(model="bulbul:v3", pace=1.0) after configuring
+            # pace=2.5 for bulbul:v2 must succeed: the new pace is valid for
+            # the new model even though the old pace was not.
+            if model is not None and not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
+            if speaker is not None and not speaker.strip():
+                raise ValueError("Speaker cannot be empty")
+            proposed_model = model if model is not None else self._opts.model
+            proposed_pace = pace if pace is not None else self._opts.pace
+            pace_min, pace_max = _pace_bounds(proposed_model)
+            if not pace_min <= proposed_pace <= pace_max:
+                if model is not None:
+                    raise ValueError(
+                        f"Pace {proposed_pace} is outside the accepted range "
+                        f"{pace_min}–{pace_max} for model '{proposed_model}'. "
+                        "Pass a valid pace along with the model change."
+                    )
+                raise ValueError(
+                    f"Pace must be between {pace_min} and {pace_max} for model '{proposed_model}'"
+                )
+            effective_speaker = speaker if speaker is not None else self._opts.speaker
+            if effective_speaker is not None:
+                if not validate_model_speaker_compatibility(proposed_model, effective_speaker):
+                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(proposed_model, {}).get(
                         "all", []
                     )
                     raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
+                        f"Speaker '{effective_speaker}' incompatible with {proposed_model}. "
                         f"Compatible speakers: {', '.join(compatible_speakers)}"
                     )
-        if speaker is not None:
-            if not speaker.strip():
-                raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
-                raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
-                )
-            self._opts.speaker = speaker
+            if model is not None:
+                self._opts.model = model
+            if pace is not None:
+                self._opts.pace = pace
+            if speaker is not None:
+                self._opts.speaker = speaker
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
@@ -794,10 +843,6 @@ class TTS(tts.TTS):
                 pitch = max(-0.75, min(0.75, pitch))
             self._opts.pitch = pitch
 
-        if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
-            self._opts.pace = pace
 
         if loudness is not None:
             if not 0.5 <= loudness <= 2.0:
@@ -860,6 +905,11 @@ class TTS(tts.TTS):
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> SynthesizeStream:
         """Create a streaming TTS session."""
+        if self._opts.speech_sample_rate not in _STREAMING_SAMPLE_RATES:
+            raise ValueError(
+                "speech_sample_rate must be one of 8000, 16000, 22050, or 24000 Hz for "
+                f"streaming; {self._opts.speech_sample_rate} Hz is REST-only"
+            )
         stream = SynthesizeStream(tts=self, conn_options=conn_options)
         self._streams.add(stream)
         return stream
