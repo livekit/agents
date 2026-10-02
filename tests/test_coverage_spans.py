@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -87,6 +88,9 @@ async def test_barge_in_records_source_and_playout_position(
     assert len(interrupted) == 1
     turn = interrupted[0]
     assert (turn.attributes or {})[trace_types.ATTR_INTERRUPTION_SOURCE] == "audio_activity"
+    output = json.loads(turn.attributes["gen_ai.output.messages"])
+    assert output[0]["parts"][0]["content"] == turn.attributes[trace_types.ATTR_RESPONSE_TEXT]
+    assert output[0]["parts"][0]["content"] != "Here is a long story for you ... the end."
     position = (turn.attributes or {})[trace_types.ATTR_PLAYOUT_POSITION]
     assert isinstance(position, float)
     # ~2 s of the 10 s story had played (5.5 - 3.5), scaled by the speed factor
