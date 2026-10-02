@@ -165,6 +165,9 @@ class FallbackAdapter(
         if self._tts_instances:
             self._tts_instances[0].prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await asyncio.gather(*(t.release_idle_connections() for t in self._tts_instances))
+
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 

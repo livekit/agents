@@ -261,6 +261,9 @@ class TTS(tts.TTS):
     def prewarm(self) -> None:
         self._pool.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await self._pool.release_idle()
+
     async def aclose(self) -> None:
         await self._pool.aclose()
 

@@ -868,6 +868,9 @@ class TTS(tts.TTS):
         """Prewarm WebSocket connections."""
         self._pool.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await self._pool.release_idle()
+
     async def aclose(self) -> None:
         """Close all active streams and connections."""
         for stream in list(self._streams):

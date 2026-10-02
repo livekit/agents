@@ -374,3 +374,20 @@ async def test_cancelling_a_drain_leaves_the_connection_queued_for_a_later_close
     finish.set()
     await pool.aclose()
     assert doomed in closed, "Expected the requeued connection to be closed later."
+
+
+@pytest.mark.asyncio
+async def test_release_idle_closes_idle_and_keeps_checked_out():
+    pool, closed = _closing_pool()
+
+    in_use = await pool.get(timeout=10.0)
+    idle = await pool.get(timeout=10.0)
+    pool.put(idle)
+
+    await pool.release_idle()
+    assert idle in closed
+    assert in_use not in closed
+
+    # the in-flight connection returns to the pool as usual
+    pool.put(in_use)
+    assert await pool.get(timeout=10.0) is in_use
