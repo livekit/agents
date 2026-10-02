@@ -12,6 +12,7 @@ from .audio_recognition import AudioRecognition
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
+    AgentOutputTranscribedEvent,
     AgentStateChangedEvent,
     CloseEvent,
     CloseReason,
@@ -61,6 +62,7 @@ __all__ = [
     "SpeechHandle",
     "RunContext",
     "UserInputTranscribedEvent",
+    "AgentOutputTranscribedEvent",
     "AgentEvent",
     "MetricsCollectedEvent",
     "SessionUsageUpdatedEvent",

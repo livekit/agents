@@ -25,6 +25,7 @@ from ..llm import (
 from ..llm.chat_context import Instructions
 from ..log import logger
 from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
+from ..tts._provider_format import TranscriptMarkupStripper
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -34,6 +35,7 @@ from ..types import (
 from ..utils import aio
 from ..utils.aio import itertools
 from . import io
+from .events import AgentOutputTranscribedEvent
 from .speech_handle import SpeechHandle
 from .tool_executor import _build_executor_map
 from .transcription.text_transforms import _apply_text_transforms
@@ -522,6 +524,55 @@ class _TextOutput:
     first_text_fut: asyncio.Future[None]
 
 
+class _AgentOutputTranscriptionForwarder(io.TextOutput):
+    """Emit session transcription events while forwarding text to configured outputs."""
+
+    def __init__(
+        self,
+        *,
+        emit: Callable[[AgentOutputTranscribedEvent], None],
+        next_in_chain: io.TextOutput | None,
+    ) -> None:
+        super().__init__(label="AgentOutputTranscriptionForwarder", next_in_chain=next_in_chain)
+        self._emit = emit
+        self._transcript = ""
+        self._pending_transcript = ""
+        self._stripper = TranscriptMarkupStripper()
+
+    async def capture_text(self, text: str) -> None:
+        if text:
+            self._emit_partial(self._stripper.push(text))
+        if self.next_in_chain:
+            await self.next_in_chain.capture_text(text)
+
+    def flush(self) -> None:
+        self._emit_partial(self._stripper.flush())
+        self._pending_transcript = self._transcript
+        self._transcript = ""
+        self._stripper = TranscriptMarkupStripper()
+        if self.next_in_chain:
+            self.next_in_chain.flush()
+
+    def finalize(self, played_transcript: str | None) -> None:
+        """Emit the text confirmed by audio playout for the segment just flushed.
+
+        ``None`` means playback was interrupted and no aligned partial transcript was
+        available, so the speculative partial events cannot be finalized accurately.
+        """
+        if self._pending_transcript:
+            if played_transcript is not None:
+                stripper = TranscriptMarkupStripper()
+                transcript = stripper.push(played_transcript) + stripper.flush()
+                self._emit(AgentOutputTranscribedEvent(transcript=transcript, is_final=True))
+        self._pending_transcript = ""
+
+    def _emit_partial(self, text: str) -> None:
+        if not text:
+            return
+        self._transcript += text
+        self._emit(AgentOutputTranscribedEvent(transcript=self._transcript, is_final=False))
+
+
 def perform_text_forwarding(
     *,
     text_output: io.TextOutput | None,
@@ -758,6 +809,7 @@ async def forward_generation(
                 # else: audio never reached the speakers, stays "skipped"
             elif text_out is not None and text_out.text:
                 out.played = "partial"
+            _finalize_agent_output_transcription(text_output, out)
             return out
 
         if audio_output is not None:
@@ -768,9 +820,23 @@ async def forward_generation(
             out.synchronized_transcript = playback_ev.synchronized_transcript
         elif text_out is not None and text_out.text:
             out.played = "full"
+        _finalize_agent_output_transcription(text_output, out)
         return out
     finally:
         await utils.aio.cancel_and_wait(*forward_tasks)
+
+
+def _finalize_agent_output_transcription(
+    text_output: io.TextOutput | None, out: _ForwardOutput
+) -> None:
+    if not isinstance(text_output, _AgentOutputTranscriptionForwarder):
+        return
+    # A partial playback can only be finalized when the audio sink supplies its aligned
+    # transcript. Otherwise, keep the already-emitted snapshots speculative.
+    if out.played == "partial" and out.synchronized_transcript is None:
+        text_output.finalize(None)
+    else:
+        text_output.finalize(out.forwarded_text)
 
 
 @dataclass

@@ -14,6 +14,7 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
+    AgentOutputTranscribedEvent,
     AgentSession,
     AgentStateChangedEvent,
     APIConnectionError,
@@ -185,12 +186,14 @@ async def test_events_and_metrics() -> None:
     metrics_events: list[MetricsCollectedEvent] = []
     conversation_events: list[ConversationItemAddedEvent] = []
     user_transcription_events: list[UserInputTranscribedEvent] = []
+    agent_transcription_events: list[AgentOutputTranscribedEvent] = []
 
     session.on("user_state_changed", user_state_events.append)
     session.on("agent_state_changed", agent_state_events.append)
     session.on("metrics_collected", metrics_events.append)
     session.on("conversation_item_added", conversation_events.append)
     session.on("user_input_transcribed", user_transcription_events.append)
+    session.on("agent_output_transcribed", agent_transcription_events.append)
 
     t_origin = await asyncio.wait_for(run_session(session, agent), timeout=SESSION_TIMEOUT)
 
@@ -211,6 +214,18 @@ async def test_events_and_metrics() -> None:
     assert user_transcription_events[-1].transcript == "Hello, how are you?"
     assert user_transcription_events[-1].is_final is True
     check_timestamp(user_transcription_events[-1].created_at - t_origin, 2.7, speed_factor=speed)
+
+    # agent_output_transcribed
+    assert len(agent_transcription_events) >= 2
+    assert any(not event.is_final for event in agent_transcription_events)
+    assert agent_transcription_events[-1].transcript == "I'm doing well, thank you!"
+    assert agent_transcription_events[-1].is_final is True
+    recorded_agent_transcription_events = [
+        event
+        for event in session._recorded_events
+        if isinstance(event, AgentOutputTranscribedEvent)
+    ]
+    assert recorded_agent_transcription_events == [agent_transcription_events[-1]]
 
     # user_state_changed
     assert len(user_state_events) == 2

@@ -292,6 +292,7 @@ EventTypes = Literal[
     "user_state_changed",
     "agent_state_changed",
     "user_input_transcribed",
+    "agent_output_transcribed",
     "user_transcription_timeout",
     "conversation_item_added",
     "agent_false_interruption",
@@ -332,6 +333,15 @@ class UserInputTranscribedEvent(BaseModel):
     """Provider-specific ID for the transcribed input item, when available."""
     speaker_id: str | None = None
     language: LanguageCode | None = None
+    created_at: float = Field(default_factory=time.time)
+
+
+class AgentOutputTranscribedEvent(BaseModel):
+    """A partial or final transcript of the agent's spoken output."""
+
+    type: Literal["agent_output_transcribed"] = "agent_output_transcribed"
+    transcript: str
+    is_final: bool
     created_at: float = Field(default_factory=time.time)
 
 
@@ -585,6 +595,7 @@ class CloseEvent(BaseModel):
 
 AgentEvent = Annotated[
     UserInputTranscribedEvent
+    | AgentOutputTranscribedEvent
     | UserTranscriptionTimeoutEvent
     | UserStateChangedEvent
     | AgentStateChangedEvent
