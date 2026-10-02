@@ -627,9 +627,11 @@ class AvatarSession(BaseAvatarSession):
             form_data: FormData payload (mutually exclusive with json_data)
 
         Raises:
+            APIStatusError: If bitHuman returns a non-retryable error, or a retryable one
+                persists after all retries
             APIConnectionError: If all retry attempts fail
         """
-        for i in range(self._conn_options.max_retry):
+        for attempt in range(self._conn_options.max_retry + 1):
             try:
                 async with self._ensure_http_session().post(
                     self._api_url,
@@ -645,14 +647,27 @@ class AvatarSession(BaseAvatarSession):
                         )
                     return
 
-            except Exception as e:
-                if isinstance(e, APIConnectionError):
-                    logger.warning("failed to call bithuman avatar api", extra={"error": str(e)})
-                else:
-                    logger.exception("failed to call bithuman avatar api")
-
-                if i < self._conn_options.max_retry - 1:
-                    await asyncio.sleep(self._conn_options.retry_interval)
+            except APIStatusError as e:
+                # A 4xx such as a bad API secret will fail the same way every time.
+                if not e.retryable:
+                    raise
+                logger.warning(
+                    "failed to call bithuman avatar api",
+                    extra={"attempt": attempt + 1, "status_code": e.status_code},
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise
+                await asyncio.sleep(self._conn_options.retry_interval)
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    "failed to call bithuman avatar api",
+                    extra={"attempt": attempt + 1, "error": str(e)},
+                )
+                if attempt >= self._conn_options.max_retry:
+                    raise APIConnectionError(
+                        "Failed to start Bithuman Avatar Session after all retries"
+                    ) from e
+                await asyncio.sleep(self._conn_options.retry_interval)
 
         raise APIConnectionError("Failed to start Bithuman Avatar Session after all retries")
 
