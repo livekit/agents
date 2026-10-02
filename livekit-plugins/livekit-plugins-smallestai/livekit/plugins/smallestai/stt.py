@@ -28,6 +28,16 @@ Wire contract of the Pulse streaming API, as this plugin relies on it:
   a final on its own is not, because the server also cuts finals inside an utterance
   (word-count rollover, blank-token endpoint at a chunk boundary).
 * Errors arrive as ``{"error": "..."}``.
+
+``pulse-2`` is a separate, streaming-only, English-only model on the same WebSocket
+endpoint (``?model=pulse-2``). It replaces Pulse's silence/word-count finalization
+with built-in end-of-turn detection (``endpointing``, ``eou_timeout_ms``,
+``finalize_on_words``, and ``max_words`` have no effect on it) and adds per-final
+``emotion`` and ``gender`` objects, on by default. A final closed by the built-in
+end-of-turn model carries ``eot_finalized: true``; the terminal final from
+``close_stream`` / ``finalize`` carries ``is_last: true`` instead and has no
+``eot_finalized`` field. ``language`` other than ``"en"`` (or unset) is rejected
+with a ``LANGUAGE_NOT_SUPPORTED_BY_MODEL`` error that closes the socket.
 """
 
 from __future__ import annotations
@@ -75,7 +85,9 @@ DEFAULT_STREAM_PATH = "/stt/live"
 
 # Models that support real-time streaming. All others are batch-only and will be
 # wrapped with a StreamAdapter by the agent framework automatically.
-_STREAMING_MODELS: frozenset[str] = frozenset({"pulse"})
+_STREAMING_MODELS: frozenset[str] = frozenset({"pulse", "pulse-2"})
+# Models that support pre-recorded (batch) transcription. "pulse-2" is streaming-only.
+_BATCH_MODELS: frozenset[str] = frozenset({"pulse"})
 
 # Any letter or digit in any script; a transcript with none is punctuation only.
 _WORD_RE = re.compile(r"\w")
@@ -130,6 +142,8 @@ class _STTOptions:
     finalize_on_flush: bool  # {"type":"finalize"} when the framework flushes the stream
     finalize_on_words: bool | None  # word-count rollover of long segments; None = server default
     max_words: int | None  # rollover length; None = server default
+    emotion_detection: bool  # pulse-2 only: per-final "emotion" object
+    gender_detection: bool  # pulse-2 only: per-final "gender" object
     keepalive_interval: float | None  # seconds between {"type":"keepalive"} messages; None = off
     base_url: str
     stream_path: str
@@ -159,6 +173,8 @@ class STT(stt.STT):
         finalize_on_flush: bool = True,
         finalize_on_words: NotGivenOr[bool] = NOT_GIVEN,
         max_words: NotGivenOr[int] = NOT_GIVEN,
+        emotion_detection: bool = True,
+        gender_detection: bool = True,
         keepalive_interval: NotGivenOr[float | None] = NOT_GIVEN,
         api_key: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -169,8 +185,10 @@ class STT(stt.STT):
 
         Args:
             model: STT model to use. ``"pulse"`` supports streaming and batch
-                transcription. Other models are batch-only; ``stream()`` raises
-                ``ValueError`` for them.
+                transcription. ``"pulse-2"`` is streaming-only and English-only,
+                with built-in end-of-turn detection plus per-final emotion and
+                gender; ``recognize()`` raises ``ValueError`` for it. Other models
+                are batch-only; ``stream()`` raises ``ValueError`` for them.
             language: BCP-47 language code (e.g. "en", "hi", "fr"). Use "multi" for
                 automatic language detection.
             sample_rate: Audio sample rate in Hz. Supported: 8000, 16000, 22050,
@@ -221,6 +239,14 @@ class STT(stt.STT):
                 continuous speech. Unset uses the server default (on). The cut is not a
                 turn end; END_OF_SPEECH still follows the VAD.
             max_words: Word count for ``finalize_on_words``. Unset uses the server default.
+            emotion_detection: ``pulse-2`` only. Adds a six-class ``emotion`` object
+                (``neutral``, ``happy``, ``angry``, ``sad``, ``fear``, ``disgust``) with
+                confidence and score distribution to ``SpeechData.metadata["emotion"]``
+                on finals. No effect on ``"pulse"``. Defaults to True.
+            gender_detection: ``pulse-2`` only. Adds a ``gender`` object (``male`` /
+                ``female``) with confidence and scores to
+                ``SpeechData.metadata["gender"]`` on finals. No effect on ``"pulse"``.
+                Defaults to True.
             keepalive_interval: Seconds between ``{"type": "keepalive"}`` messages, which
                 reset the public API's inactivity timer during long pauses (it answers with
                 ``{"type": "pong"}``). Defaults to 5 s on the public API and off for a
@@ -273,6 +299,8 @@ class STT(stt.STT):
             finalize_on_flush=finalize_on_flush,
             finalize_on_words=finalize_on_words if is_given(finalize_on_words) else None,
             max_words=max_words if is_given(max_words) else None,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
             keepalive_interval=(
                 keepalive_interval
                 if is_given(keepalive_interval)
@@ -305,6 +333,10 @@ class STT(stt.STT):
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
         config = self._sanitize_options(language=language)
+        if config.model not in _BATCH_MODELS:
+            raise ValueError(
+                f"{config.model} does not support batch transcription; use stream() instead"
+            )
         params: dict[str, Any] = {
             "model": config.model,
             "language": config.language,
@@ -379,6 +411,8 @@ class STT(stt.STT):
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
+        emotion_detection: NotGivenOr[bool] = NOT_GIVEN,
+        gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         """Update STT options; propagates to all active streams (triggers reconnect)."""
         if is_given(model):
@@ -400,6 +434,8 @@ class STT(stt.STT):
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
         )
         for stream in self._streams:
             stream.update_options(
@@ -418,6 +454,8 @@ class STT(stt.STT):
                 eou_timeout_ms=eou_timeout_ms,
                 vad_events=vad_events,
                 finalize_on_flush=finalize_on_flush,
+                emotion_detection=emotion_detection,
+                gender_detection=gender_detection,
             )
 
     def _sanitize_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> _STTOptions:
@@ -477,6 +515,8 @@ class SpeechStream(stt.SpeechStream):
         eou_timeout_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_events: NotGivenOr[bool] = NOT_GIVEN,
         finalize_on_flush: NotGivenOr[bool] = NOT_GIVEN,
+        emotion_detection: NotGivenOr[bool] = NOT_GIVEN,
+        gender_detection: NotGivenOr[bool] = NOT_GIVEN,
     ) -> None:
         self._opts = _apply_updates(
             self._opts,
@@ -495,6 +535,8 @@ class SpeechStream(stt.SpeechStream):
             eou_timeout_ms=eou_timeout_ms,
             vad_events=vad_events,
             finalize_on_flush=finalize_on_flush,
+            emotion_detection=emotion_detection,
+            gender_detection=gender_detection,
         )
         self._reconnect_event.set()
 
@@ -678,6 +720,8 @@ class SpeechStream(stt.SpeechStream):
             "redact_pci": str(o.redact_pci).lower(),
             "endpointing": str(o.endpointing).lower(),
             "vad_events": str(o.vad_events).lower(),
+            "emotion_detection": str(o.emotion_detection).lower(),
+            "gender_detection": str(o.gender_detection).lower(),
         }
         if o.numerals is not None:
             params["numerals"] = str(o.numerals).lower()
@@ -794,14 +838,16 @@ class SpeechStream(stt.SpeechStream):
                 )
             )
 
-        # A final closes the turn when it answers a finalize, ends the stream, or the
-        # server says the speaker paused. Other finals are cuts inside an utterance
-        # (word rollover, blank-token endpoint); with vad_events the turn end comes
-        # from speech_ended, without them every final has to count as one.
+        # A final closes the turn when it answers a finalize, ends the stream, the
+        # server says the speaker paused, or (pulse-2) its built-in end-of-turn model
+        # fired. Other finals are cuts inside an utterance (word rollover, blank-token
+        # endpoint); with vad_events the turn end comes from speech_ended, without them
+        # every final has to count as one.
         if is_final and (
             is_last
             or from_finalize
             or data.get("speech_final") is True
+            or data.get("eot_finalized") is True
             or not self._opts.vad_events
         ):
             self._end_speech()
@@ -868,6 +914,17 @@ def _transcript_to_speech_data(
     redacted_entities: list[str] = data.get("redacted_entities") or []
     if redacted_entities:
         metadata["redacted_entities"] = redacted_entities
+
+    # pulse-2 only: per-utterance emotion/gender (omitted, not null, on short/slow
+    # utterances) and whether built-in end-of-turn detection closed this final.
+    emotion = data.get("emotion")
+    if emotion:
+        metadata["emotion"] = emotion
+    gender = data.get("gender")
+    if gender:
+        metadata["gender"] = gender
+    if "eot_finalized" in data:
+        metadata["eot_finalized"] = bool(data["eot_finalized"])
 
     return [
         stt.SpeechData(
