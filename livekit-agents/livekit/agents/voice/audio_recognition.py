@@ -28,7 +28,7 @@ from ..inference.interruption import (
 from ..language import LanguageCode
 from ..log import logger
 from ..stt import SpeechEvent
-from ..telemetry import trace_types, tracer
+from ..telemetry import gen_ai, trace_types, tracer
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
 from ..vad import VADStream
@@ -1783,6 +1783,13 @@ class AudioRecognition:
                         trace_types.ATTR_END_OF_TURN_DELAY: metrics.end_of_turn_delay or 0,
                     }
                 )
+                if user_turn_span.is_recording() and gen_ai.capture_content_enabled():
+                    gen_ai.set_content_attributes(
+                        user_turn_span,
+                        output_messages=gen_ai.to_speech_messages(
+                            self._audio_transcript, role="user"
+                        ),
+                    )
                 if self._stt_request_ids:
                     user_turn_span.set_attribute(
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
@@ -2005,15 +2012,13 @@ class AudioRecognition:
         if (room_io := self._session._room_io) and room_io.linked_participant:
             _set_participant_attributes(self._user_turn_span, room_io.linked_participant)
 
-        # add STT model/provider attributes
-        if self._stt_model:
-            self._user_turn_span.set_attribute(
-                trace_types.ATTR_GEN_AI_REQUEST_MODEL, self._stt_model
-            )
-        if self._stt_provider:
-            self._user_turn_span.set_attribute(
-                trace_types.ATTR_GEN_AI_PROVIDER_NAME, self._stt_provider
-            )
+        gen_ai.set_request_attributes(
+            self._user_turn_span,
+            operation=None,
+            model=self._stt_model,
+            provider=self._stt_provider,
+            output_type=trace_types.GenAIOutputType.TEXT,
+        )
 
         return self._user_turn_span
 

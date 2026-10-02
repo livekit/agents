@@ -90,6 +90,11 @@ def _text_part(content: str) -> dict[str, Any]:
     return {"type": "text", "content": content}
 
 
+def to_speech_messages(text: str, *, role: str) -> list[dict[str, Any]]:
+    """Text consumed by speech synthesis or produced by speech recognition."""
+    return [{"role": role, "parts": [_text_part(text)]}] if text else []
+
+
 def _message_parts(item: ChatItem) -> list[dict[str, Any]]:
     from ..llm import AudioContent, ImageContent
 
