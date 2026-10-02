@@ -665,6 +665,8 @@ class STT(stt.STT):
             self._opts.bit_depth = bit_depth
         if channels is not None:
             self._opts.channels = channels
+        if region is not None:
+            self._opts.region = region
         if encoding is not None:
             self._opts.encoding = encoding
         if custom_vocabulary is not None:
