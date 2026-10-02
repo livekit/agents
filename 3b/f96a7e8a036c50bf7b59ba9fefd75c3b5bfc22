@@ -1,0 +1,21 @@
+livekit-agents/livekit/agents/llm/fallback_adapter.py
+  s_2abcfe99e8ff21::t_47e5a2348d2071 84-85,329-330,344-347
+tests/test_llm_fallback.py
+  s_2abcfe99e8ff21::t_ffdc752dbacbb6 503-549
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3bf96a7e8a036c50bf7b59ba9fefd75c3b5bfc22",
+  "prompts": {},
+  "sessions": {
+    "s_2abcfe99e8ff21": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd53-9d09-7a60-9005-3559d80639d7",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
