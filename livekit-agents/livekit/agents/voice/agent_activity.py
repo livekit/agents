@@ -78,6 +78,7 @@ from .events import (
 from .generation import (
     ToolExecutionOutput,
     _AudioOutput,
+    _DependencyScheduler,
     _ForwardOutput,
     _inject_running_tool_calls,
     _interrupted_tool_output,
@@ -382,6 +383,10 @@ class AgentActivity(RecognitionHooks):
         self._tool_executor = _ToolExecutor(
             owning_activity=self, async_tool_options=activity_options
         )
+        # Dependency schedulers outlive the first tool progress result.  Keep them
+        # activity-owned so close/force-interrupt can settle queued nodes before the
+        # executor begins draining admitted work.
+        self._dependency_schedulers: set[_DependencyScheduler] = set()
 
         self._user_turn_exceeded_atask: asyncio.Task[None] | None = None
         self._user_turn_exceeded_locked: bool = False
@@ -1621,6 +1626,8 @@ class AgentActivity(RecognitionHooks):
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
+            await self._abandon_dependency_schedulers()
+
             # on_exit_task should be awaited in `drain`
             self._on_exit_task = None
 
@@ -1647,6 +1654,20 @@ class AgentActivity(RecognitionHooks):
             await self._tool_executor.aclose()
 
             self._agent._activity = None
+
+    async def _abandon_dependency_schedulers(self) -> None:
+        """Abandon response dependency graphs before this activity finishes closing."""
+        schedulers = tuple(self._dependency_schedulers)
+        if not schedulers:
+            return
+        await asyncio.gather(
+            *(
+                scheduler.abandon(ToolError("agent activity is closing"))
+                for scheduler in schedulers
+            ),
+            return_exceptions=True,
+        )
+        self._dependency_schedulers.difference_update(schedulers)
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         if not self._started:
@@ -1906,6 +1927,7 @@ class AgentActivity(RecognitionHooks):
         self._cancel_preemptive_generation()
 
         future = asyncio.Future[None]()
+        abandon_task = asyncio.create_task(self._abandon_dependency_schedulers()) if force else None
 
         interrupted_speeches = self._interrupt_background_speeches(force=force, source=source)
 
@@ -1932,16 +1954,21 @@ class AgentActivity(RecognitionHooks):
 
             interrupted_speeches.append(speech)
 
-        if not interrupted_speeches:
+        def maybe_done(_: Any = None) -> None:
+            if future.done():
+                return
+            if interrupted_speeches and not all(speech.done() for speech in interrupted_speeches):
+                return
+            if abandon_task is not None and not abandon_task.done():
+                return
             future.set_result(None)
-        else:
 
-            def on_playout_done(_: SpeechHandle) -> None:
-                if not future.done() and all(speech.done() for speech in interrupted_speeches):
-                    future.set_result(None)
-
+        if abandon_task is not None:
+            abandon_task.add_done_callback(maybe_done)
+        if interrupted_speeches:
             for speech in interrupted_speeches:
-                speech.add_done_callback(on_playout_done)
+                speech.add_done_callback(maybe_done)
+        maybe_done()
 
         return future
 
@@ -3892,13 +3919,14 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()  # mark the playout done before waiting for the tool execution  # noqa: E501
 
         if speech_handle.interrupted:
+            tool_output.interrupted = True
             await utils.aio.cancel_and_wait(exe_task)
 
             # commit results of tools that finished despite the interruption (#3702), so
             # the next inference doesn't run them again
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
+            for sanitized_out in tool_output.interrupted_outputs():
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
@@ -3917,7 +3945,13 @@ class AgentActivity(RecognitionHooks):
         # wait for the tool execution to complete
         self._background_speeches.add(speech_handle)
         try:
-            await exe_task
+            try:
+                await exe_task
+            except BaseException as error:
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                speech_handle._mark_done(error=error)
+                return
         finally:
             self._background_speeches.discard(speech_handle)
 
@@ -3964,6 +3998,7 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
+            tool_output.resolve_handoffs(fnc_executed_ev.has_agent_handoff)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -3981,6 +4016,7 @@ class AgentActivity(RecognitionHooks):
             if tool_messages:
                 self._agent._chat_ctx.insert(tool_messages)
                 self._session._tool_items_added(tool_messages)
+            tool_output.release_initial_batch()
 
             if fnc_executed_ev.has_tool_reply and not speech_handle.interrupted:
                 # forwarding chat_ctx to the tool reply: drop the in-progress placeholders
@@ -4588,13 +4624,14 @@ class AgentActivity(RecognitionHooks):
         speech_handle._mark_generation_done()
 
         if speech_handle.interrupted:
+            tool_output.interrupted = True
             await utils.aio.cancel_and_wait(exe_task)
 
             # commit results of tools that finished despite the interruption, as the pipeline
             # task does. the calls are already recorded, so each one answers or the model waits
             interrupted_calls: list[llm.FunctionCall] = []
             interrupted_fnc_outputs: list[llm.FunctionCallOutput] = []
-            for sanitized_out in tool_output.output:
+            for sanitized_out in tool_output.interrupted_outputs():
                 interrupted_calls.append(sanitized_out.fnc_call)
                 interrupted_fnc_outputs.append(_interrupted_tool_output(sanitized_out))
 
@@ -4628,7 +4665,13 @@ class AgentActivity(RecognitionHooks):
 
         self._background_speeches.add(speech_handle)
         try:
-            await exe_task
+            try:
+                await exe_task
+            except BaseException as error:
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                speech_handle._mark_done(error=error)
+                return
         finally:
             self._background_speeches.discard(speech_handle)
 
@@ -4672,6 +4715,7 @@ class AgentActivity(RecognitionHooks):
                 fnc_executed_ev._handoff_required = True
 
             self._session.emit("function_tools_executed", fnc_executed_ev)
+            tool_output.resolve_handoffs(fnc_executed_ev.has_agent_handoff)
 
             draining = self.scheduling_paused
             if fnc_executed_ev._handoff_required and new_agent_task and not ignore_task_switch:
@@ -4733,6 +4777,8 @@ class AgentActivity(RecognitionHooks):
                         if self._pending_auto_tool_reply_fut is auto_reply_fut:
                             self._pending_auto_tool_reply_fut = None
                         auto_reply_fut.set_result(None)
+
+                tool_output.release_initial_batch()
 
             tool_reply_expected = fnc_executed_ev.has_tool_reply
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
