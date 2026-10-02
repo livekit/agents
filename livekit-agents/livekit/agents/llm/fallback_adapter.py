@@ -81,6 +81,8 @@ class FallbackAdapter(
         self._retry_on_chunk_sent = retry_on_chunk_sent
         self._sticky = sticky
         self._current_index = 0
+        self._attempt_id = 0
+        self._last_successful_attempt_id = 0
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -324,6 +326,8 @@ class FallbackLLMStream(LLMStream):
             llm = self._fallback_adapter._llm_instances[i]
             llm_status = self._fallback_adapter._status[i]
             if llm_status.available or all_failed:
+                self._fallback_adapter._attempt_id += 1
+                attempt_id = self._fallback_adapter._attempt_id
                 self._fallback_adapter._current_index = i
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
@@ -337,8 +341,10 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
-                    # A concurrent failed attempt may have changed the selection.
-                    self._fallback_adapter._current_index = i
+                    # An older completion must not override a newer successful selection.
+                    if attempt_id > self._fallback_adapter._last_successful_attempt_id:
+                        self._fallback_adapter._current_index = i
+                        self._fallback_adapter._last_successful_attempt_id = attempt_id
                     if self._fallback_adapter._sticky and not llm_status.available:
                         llm_status.available = True
                         self._fallback_adapter.emit(
