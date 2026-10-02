@@ -945,6 +945,7 @@ def make_function_call_output(
                 call_id=fnc_call.call_id,
                 output="the tool returned an invalid output",
                 is_error=True,
+                reply_required=reply_required,
             ),
             raw_output=raw_output,
             raw_exception=None,

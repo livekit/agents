@@ -1108,10 +1108,13 @@ class TestExecuteFunctionCallToolResult:
         assert result.raw_output is tool_result
         assert result.raw_exception is None
 
-    async def test_invalid_wrapped_output_still_reports_an_error(self) -> None:
+    @pytest.mark.parametrize("reply_required", [True, False])
+    async def test_invalid_wrapped_output_preserves_reply_required(
+        self, reply_required: bool
+    ) -> None:
         from livekit.agents.llm import FunctionToolCall, execute_function_call
 
-        tool_result = ToolResult(object(), reply_required=False)
+        tool_result = ToolResult(object(), reply_required=reply_required)
 
         @function_tool
         async def invalid_output() -> ToolResult:
@@ -1125,7 +1128,9 @@ class TestExecuteFunctionCallToolResult:
 
         assert result.fnc_call_out.is_error
         assert result.fnc_call_out.output == "the tool returned an invalid output"
+        assert result.fnc_call_out.reply_required is reply_required
         assert result.raw_output is tool_result
+        assert result.raw_exception is None
 
 
 class TestExecuteFunctionCallValidationErrors:
@@ -2391,8 +2396,12 @@ class TestToolCallEvents:
         assert completed.update_ids == ["c5_update_1", "c5_final"]
 
     @pytest.mark.parametrize("reply_flags", [(False,), (True,), (False, True), (True, False)])
+    @pytest.mark.parametrize(
+        "output, expected_output",
+        [("Sent", "Sent"), (object(), "the tool returned an invalid output")],
+    )
     async def test_deferred_tool_results_honor_reply_required(
-        self, reply_flags: tuple[bool, ...]
+        self, reply_flags: tuple[bool, ...], output: Any, expected_output: str
     ) -> None:
         import asyncio
 
@@ -2404,7 +2413,7 @@ class TestToolCallEvents:
         async def send_dtmf(ctx: RunContext, reply_required: bool) -> ToolResult:
             """Send DTMF events."""
             await ctx.update("Sending digits")
-            return ToolResult("Sent", reply_required=reply_required)
+            return ToolResult(output, reply_required=reply_required)
 
         session = _make_reply_session(_make_fake_speech())
         agent = Agent(instructions="test", tools=[send_dtmf])
@@ -2442,7 +2451,8 @@ class TestToolCallEvents:
                     if item.type == "function_call_output"
                 }
                 assert outputs == {
-                    f"{index}_final": ("Sent", flag) for index, flag in enumerate(reply_flags)
+                    f"{index}_final": (expected_output, flag)
+                    for index, flag in enumerate(reply_flags)
                 }
 
             replies = [
