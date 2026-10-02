@@ -450,6 +450,56 @@ async def test_sticky_keeps_model_that_succeeds_after_all_models_failed() -> Non
         await _close_retry_adapter(adapter)
 
 
+@pytest.mark.parametrize("primary_recovers_first", [False, True])
+async def test_sticky_success_overrides_concurrent_failed_attempt(
+    primary_recovers_first: bool,
+) -> None:
+    primary = _ScriptedLLM(
+        "primary", [APITimeoutError(), "recovery", APITimeoutError(), "recovery"]
+    )
+    fallback = _ScriptedLLM(
+        "fallback", ["fallback", "fallback", APITimeoutError(), APITimeoutError()]
+    )
+    adapter = FallbackAdapter([primary, fallback], sticky=True)
+    fallback_finish = asyncio.Event()
+    primary_recovery_finish = asyncio.Event()
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        await _wait_for_recovery(adapter)
+
+        fallback.finish = fallback_finish
+        async with adapter.chat(chat_ctx=ChatContext.empty()) as stream:
+            chunk = await asyncio.wait_for(anext(stream), timeout=5)
+            assert chunk.delta is not None and chunk.delta.content == "fallback"
+            fallback.finish = None
+            primary.finish = primary_recovery_finish
+
+            with pytest.raises(APIConnectionError):
+                await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+
+            if primary_recovers_first:
+                primary_recovery_finish.set()
+                await _wait_for_recovery(adapter)
+
+            fallback_finish.set()
+            await stream.collect()
+
+        primary_recovery_finish.set()
+        await _wait_for_recovery(adapter)
+        assert adapter.model == "fallback"
+        assert adapter.provider == "fallback-provider"
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        assert primary.requests == 4
+        assert fallback.requests == 5
+    finally:
+        fallback_finish.set()
+        primary_recovery_finish.set()
+        await _close_retry_adapter(adapter)
+
+
 @pytest.mark.parametrize("empty_response", [False, True])
 async def test_sticky_model_survives_stream_close(empty_response: bool) -> None:
     primary = _ScriptedLLM("primary", [APITimeoutError()])

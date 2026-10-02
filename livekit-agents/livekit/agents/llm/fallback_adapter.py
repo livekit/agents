@@ -337,6 +337,8 @@ class FallbackLLMStream(LLMStream):
 
                         self._event_ch.send_nowait(result)
 
+                    # A concurrent failed attempt may have changed the selection.
+                    self._fallback_adapter._current_index = i
                     if self._fallback_adapter._sticky and not llm_status.available:
                         llm_status.available = True
                         self._fallback_adapter.emit(
