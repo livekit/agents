@@ -222,6 +222,7 @@ class AMD(EventEmitter[Literal["amd_prediction"]]):
                     self._stt.model,
                     EVALUATED_STT_MODELS,
                     model_kind="stt",
+                    display_model=self._stt.metrics_metadata.get("model_name"),
                 )
 
         self._setup_task: asyncio.Task[None] | None = None
@@ -630,6 +631,7 @@ def _warn_if_not_evaluated(
     evaluated_models: set[str],
     *,
     model_kind: str,
+    display_model: NotGivenOr[str | None] = NOT_GIVEN,
 ) -> None:
     if not model:
         return
@@ -643,5 +645,5 @@ def _warn_if_not_evaluated(
             "%s model %s hasn't been evaluated with our benchmark, it might not be compatible "
             "with amd. Set `suppress_compatibility_warning=True` to silence this warning.",
             model_kind,
-            model,
+            model if not is_given(display_model) else display_model or "unknown",
         )
