@@ -197,7 +197,7 @@ examples:
           - { value: deepgram/nova-3-medical, label: Deepgram Nova-3 Medical }
           - { value: deepgram/flux-general-en, label: Deepgram Flux (English) }
           - { value: deepgram/flux-general-multi, label: Deepgram Flux (Multilingual) }
-          - { value: assemblyai/u3-rt-pro, label: AssemblyAI Universal-3 Pro }
+          - { value: assemblyai/universal-3-6-pro, label: AssemblyAI Universal-3.6 Pro }
           - { value: assemblyai/universal-streaming, label: AssemblyAI Universal-Streaming }
           - { value: assemblyai/universal-streaming-multilingual, label: AssemblyAI Universal-Streaming Multilingual }
           - { value: cartesia/ink-whisper, label: Cartesia Ink Whisper }
