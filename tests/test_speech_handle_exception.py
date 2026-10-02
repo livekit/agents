@@ -73,3 +73,21 @@ async def test_run_result_propagates_speech_handle_error() -> None:
 
     with pytest.raises(RealtimeError, match="generate_reply timed out"):
         await run_result
+
+
+@pytest.mark.parametrize(
+    ("output_type", "output"),
+    [(bool, False), (int, 0), (str, ""), (list, [])],
+)
+async def test_run_result_preserves_falsy_final_output(
+    output_type: type[object], output: object
+) -> None:
+    run_result = RunResult[object](output_type=output_type)
+    handle = SpeechHandle.create()
+    handle._maybe_run_final_output = output
+    run_result._watch_handle(handle)
+
+    handle._mark_done()
+    await run_result
+
+    assert run_result.final_output is output
