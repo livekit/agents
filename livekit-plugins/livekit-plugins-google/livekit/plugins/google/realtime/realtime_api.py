@@ -66,6 +66,7 @@ MAX_TOOL_CALL_REJECTIONS = 3
 # See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api
 KNOWN_VERTEXAI_MODELS: frozenset[str] = frozenset(
     {
+        "gemini-3.8-live",
         "gemini-live-2.5-flash-native-audio",
     }
 )
@@ -112,14 +113,14 @@ def _validate_model_api_match(model: str, use_vertexai: bool) -> None:
         model: The model name being used
         use_vertexai: Whether VertexAI is enabled
     """
-    if use_vertexai and model in KNOWN_GEMINI_API_MODELS:
+    if use_vertexai and model in KNOWN_GEMINI_API_MODELS and model not in KNOWN_VERTEXAI_MODELS:
         raise ValueError(
             f"Model '{model}' is a Gemini API model, but vertexai=True. "
             f"Use a VertexAI model (e.g., 'gemini-live-2.5-flash-native-audio') "
             f"or set vertexai=False."
         )
 
-    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS:
+    if not use_vertexai and model in KNOWN_VERTEXAI_MODELS and model not in KNOWN_GEMINI_API_MODELS:
         raise ValueError(
             f"Model '{model}' is a VertexAI model, but vertexai=False. "
             f"Use a Gemini API model (e.g., 'gemini-2.5-flash-native-audio-preview-12-2025') "

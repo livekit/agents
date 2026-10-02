@@ -18,6 +18,57 @@ from livekit.plugins.google.utils import create_function_response
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", False),
+        ("gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", False),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("future-live-model", False),
+        ("future-live-model", True),
+    ],
+)
+def test_model_api_compatibility(model: str, vertexai: bool) -> None:
+    realtime_model = RealtimeModel(
+        model=model, vertexai=vertexai, api_key="fake-key", project="test-project", location="eu"
+    )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live-extended-thinking", True),
+        ("gemini-3.1-flash-live-preview", True),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", True),
+        ("gemini-live-2.5-flash-native-audio", False),
+    ],
+)
+def test_model_api_mismatch(model: str, vertexai: bool) -> None:
+    with pytest.raises(ValueError, match=f"vertexai={vertexai}"):
+        RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vertexai: bool) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", str(vertexai))
+    model = RealtimeModel(
+        model="gemini-3.8-live", api_key="fake-key", project="test-project", location="eu"
+    )
+    assert model.provider == ("Vertex AI" if vertexai else "Gemini")
+
+
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
     """Whether this task is a genai client's ``aclose()`` left behind by a finalizer.
 
