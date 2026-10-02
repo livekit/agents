@@ -8,6 +8,7 @@ import inspect
 import io
 import json
 import logging
+import time
 import traceback
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
@@ -2819,3 +2820,131 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     assert len(attempts) == requests
     assert all(span.events for span in attempts)
     assert all(_SECRET not in span.to_json() for span in spans)
+
+
+# Rime closes an idle /ws3 socket from its side after about 30 s (measured against the live service
+# on mistv2 and mistv3: a socket idle for 28 s still synthesizes, one idle for 30 s does not). The
+# client does not learn of it until it next reads, so the first write is accepted and the read
+# returns a close frame.
+_RIME_WS3_SERVER_IDLE_CLOSE_SECONDS = 30.0
+
+
+class _IdleClosingWS3:
+    """Stand-in for a Rime /ws3 socket that the server closes after sitting idle."""
+
+    def __init__(self) -> None:
+        self._last_activity = time.time()
+        self._server_closed = False
+        self._messages: asyncio.Queue[aiohttp.WSMessage] = asyncio.Queue()
+
+    def _text(self, payload: dict[str, Any]) -> aiohttp.WSMessage:
+        return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT, json.dumps(payload), None)
+
+    async def send_str(self, data: str) -> None:
+        now = time.time()
+        if now - self._last_activity >= _RIME_WS3_SERVER_IDLE_CLOSE_SECONDS:
+            self._server_closed = True
+            self._messages.put_nowait(aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, None))
+        self._last_activity = now
+        if self._server_closed:
+            return
+        payload = json.loads(data)
+        if "text" in payload:
+            chunk = base64.b64encode(b"\x01\x00" * 2400).decode()
+            self._messages.put_nowait(self._text({"type": "chunk", "data": chunk}))
+        elif payload.get("operation") == "flush":
+            self._messages.put_nowait(self._text({"type": "done"}))
+
+    async def receive(self, *, timeout: float | None = None) -> aiohttp.WSMessage:
+        return await asyncio.wait_for(self._messages.get(), timeout)
+
+    async def close(self) -> None:
+        pass
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_idle_closing_ws3_stand_in_closes_at_rimes_idle_limit() -> None:
+    """The tests below are only meaningful if the stand-in drops a socket at the simulated idle
+    limit, the way Rime does: still serving at 29 s, a close frame after the write at 31 s."""
+    request = json.dumps({"text": "hello ", "contextId": "c"})
+    healthy, stale = _IdleClosingWS3(), _IdleClosingWS3()
+
+    await asyncio.sleep(_RIME_WS3_SERVER_IDLE_CLOSE_SECONDS - 1)
+    await healthy.send_str(request)
+    assert (await healthy.receive(timeout=1)).type == aiohttp.WSMsgType.TEXT
+
+    await asyncio.sleep(2)
+    await stale.send_str(request)
+    assert (await stale.receive(timeout=1)).type == aiohttp.WSMsgType.CLOSE
+
+
+async def _synthesize_on_ws3_idle_closing_server(
+    monkeypatch: pytest.MonkeyPatch, idle_seconds_between_turns: float
+) -> tuple[list[_IdleClosingWS3], list[tts_module.TTSError], list[int]]:
+    """Run two turns on one TTS, `idle_seconds_between_turns` apart. Returns the sockets opened,
+    the errors the TTS emitted, and the audio frames each turn produced."""
+    from livekit.plugins.rime._legacy_websocket_adapter import LegacyWebSocketAdapter
+
+    sockets: list[_IdleClosingWS3] = []
+
+    async def connect_ws(
+        self: LegacyWebSocketAdapter, *, websocket_url: str, timeout: float
+    ) -> aiohttp.ClientWebSocketResponse:
+        sockets.append(_IdleClosingWS3())
+        return cast(aiohttp.ClientWebSocketResponse, sockets[-1])
+
+    monkeypatch.setattr(LegacyWebSocketAdapter, "_connect", connect_ws)
+    tts = TTS(api_key="test-key", model="mistv3", use_websocket=True)
+    errors: list[tts_module.TTSError] = []
+    tts.on("error", errors.append)
+    frames: list[int] = []
+
+    async def turn(text: str) -> None:
+        stream = tts.stream(conn_options=APIConnectOptions(max_retry=3, timeout=2))
+        stream.push_text(text)
+        stream.end_input()
+        try:
+            frames.append(len([event async for event in stream]))
+        finally:
+            await stream.aclose()
+
+    try:
+        await turn("Thanks for calling.")
+        await asyncio.sleep(idle_seconds_between_turns)
+        await turn("How can I help you today?")
+    finally:
+        await tts.aclose()
+    return sockets, errors, frames
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+@pytest.mark.parametrize("idle_seconds", [35, 120])
+async def test_ws3_does_not_reuse_a_socket_rime_has_already_closed(
+    idle_seconds: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn that starts after the caller has paused for longer than Rime keeps a socket open must
+    not be written to the dead socket: that costs a failed attempt, a retry and the delay of both,
+    and a turn that never speaks if the retry produces nothing."""
+    sockets, errors, frames = await _synthesize_on_ws3_idle_closing_server(
+        monkeypatch, idle_seconds
+    )
+
+    assert errors == []
+    assert all(count > 0 for count in frames) and len(frames) == 2
+    assert len(sockets) == 2  # the pooled socket expired and the second turn opened its own
+
+
+@pytest.mark.virtual_time
+@pytest.mark.no_concurrent
+async def test_ws3_keeps_reusing_a_socket_between_close_together_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The warm socket is the reason to stream over a websocket at all; a short pause between
+    turns must keep reusing it rather than reconnect every time."""
+    sockets, errors, frames = await _synthesize_on_ws3_idle_closing_server(monkeypatch, 5)
+
+    assert errors == []
+    assert all(count > 0 for count in frames) and len(frames) == 2
+    assert len(sockets) == 1
