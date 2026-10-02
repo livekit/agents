@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
 from .. import inference, llm, stt, tokenize, tts, utils, vad
+from ..decisions import Decision
+from ..decisions.model import _validate_decisions
 from ..llm import (
     LLM,
     ChatContext,
@@ -52,6 +55,7 @@ class Agent:
         id: str | None = None,
         chat_ctx: NotGivenOr[llm.ChatContext | None] = NOT_GIVEN,
         tools: list[llm.Tool | llm.Toolset] | None = None,
+        decisions: Mapping[str, Decision] | None = None,
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
@@ -88,6 +92,8 @@ class Agent:
         )
 
         self._instructions = instructions
+        self._decisions = copy.deepcopy(dict(decisions or {}))
+        _validate_decisions(self._decisions)
         self._tools = [*tools, *find_function_tools(self)]
         self._chat_ctx = chat_ctx.copy(tools=self._tools) if chat_ctx else ChatContext.empty()
         self._turn_detection = turn_handling.get("turn_detection", NOT_GIVEN)
@@ -143,6 +149,11 @@ class Agent:
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def decisions(self) -> dict[str, Decision]:
+        """Background decisions for this agent. Returns a copy of the definitions."""
+        return copy.deepcopy(self._decisions)
 
     @property
     def label(self) -> str:
