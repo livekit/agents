@@ -226,6 +226,31 @@ async def test_create_ws_enables_heartbeat() -> None:
     assert kwargs["heartbeat"] == _WS_HEARTBEAT
 
 
+async def test_responses_llm_prewarms_websocket_pool() -> None:
+    llm_model = ResponsesLLM(model="gpt-4.1", api_key="test-key")
+    assert llm_model._ws is not None
+    llm_model._ws._pool.prewarm = prewarm = MagicMock()  # type: ignore[method-assign]
+
+    try:
+        await llm_model._prewarm_impl()
+        prewarm.assert_called_once_with()
+    finally:
+        await llm_model.aclose()
+
+
+async def test_responses_llm_prewarms_http_client() -> None:
+    client = MagicMock()
+    client._base_url = httpx.URL("https://api.openai.com/v1")
+    client.models.list = list_models = AsyncMock()
+    llm_model = ResponsesLLM(model="gpt-4.1", client=client, use_websocket=False)
+
+    try:
+        await llm_model._prewarm_impl()
+        list_models.assert_awaited_once_with()
+    finally:
+        await llm_model.aclose()
+
+
 _RESPONSE_CREATED = {
     "type": "response.created",
     "sequence_number": 0,
