@@ -50,6 +50,7 @@ class FallbackAdapter(
         max_retry_per_llm: int = 0,
         retry_interval: float = 0.5,
         retry_on_chunk_sent: bool = False,
+        sticky: bool = False,
     ) -> None:
         """FallbackAdapter is an LLM that can fallback to a different LLM if the current LLM fails.
 
@@ -61,6 +62,9 @@ class FallbackAdapter(
             retry_interval (float, optional): Interval between retries. Defaults to 0.5.
             retry_on_chunk_sent (bool, optional): Whether to retry when a LLM failed after chunks
                 are sent. Defaults to False.
+            sticky (bool, optional): Keep using the current LLM until it fails, even if a
+                higher-priority LLM recovers. On failure, try the remaining LLMs in the given
+                order. Defaults to False.
 
         Raises:
             ValueError: If no LLM instances are provided.
@@ -75,6 +79,8 @@ class FallbackAdapter(
         self._max_retry_per_llm = max_retry_per_llm
         self._retry_interval = retry_interval
         self._retry_on_chunk_sent = retry_on_chunk_sent
+        self._sticky = sticky
+        self._current_index = 0
 
         self._status = [
             _LLMStatus(available=True, recovering_task=None) for _ in self._llm_instances
@@ -86,14 +92,18 @@ class FallbackAdapter(
         for llm_instance in self._llm_instances:
             llm_instance.on("metrics_collected", self._on_metrics_collected)
 
+    def _llm_order(self) -> list[int]:
+        order = list(range(len(self._llm_instances)))
+        if self._sticky and self._status[self._current_index].available:
+            order.remove(self._current_index)
+            order.insert(0, self._current_index)
+        return order
+
     def _next_instance(self) -> LLM:
-        """The instance the next request goes to first: the first one marked available, or
-        the primary once all are down (they are then all retried, primary first). A failed
-        instance's recovery task flips it back to available, so a recovered primary is
-        reported again before it has served."""
-        for instance, status in zip(self._llm_instances, self._status, strict=True):
-            if status.available:
-                return instance
+        """The first available instance in request order, or the primary if all are down."""
+        for i in self._llm_order():
+            if self._status[i].available:
+                return self._llm_instances[i]
         return self._llm_instances[0]
 
     @property
@@ -310,9 +320,11 @@ class FallbackLLMStream(LLMStream):
         if all_failed:
             logger.error("all LLMs are unavailable, retrying..")
 
-        for i, llm in enumerate(self._fallback_adapter._llm_instances):
+        for i in self._fallback_adapter._llm_order():
+            llm = self._fallback_adapter._llm_instances[i]
             llm_status = self._fallback_adapter._status[i]
             if llm_status.available or all_failed:
+                self._fallback_adapter._current_index = i
                 text_sent: str = ""
                 tool_calls_sent: list[str] = []
                 try:
@@ -324,6 +336,13 @@ class FallbackLLMStream(LLMStream):
                                 tool_calls_sent.append(tool_call.name)
 
                         self._event_ch.send_nowait(result)
+
+                    if self._fallback_adapter._sticky and not llm_status.available:
+                        llm_status.available = True
+                        self._fallback_adapter.emit(
+                            "llm_availability_changed",
+                            AvailabilityChangedEvent(llm=llm, available=True),
+                        )
 
                     served = _fallback_attrs(llm, i)
                     trace.get_current_span().set_attributes(served)

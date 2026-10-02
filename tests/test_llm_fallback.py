@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from typing import Any
 
 import pytest
@@ -87,8 +88,9 @@ _TOOL_CHUNK = ChatChunk(
 @pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
 @pytest.mark.parametrize("error_kind", ["timeout", "status", "nonretryable", "unexpected"])
 @pytest.mark.parametrize("child_retries", [0, 1])
+@pytest.mark.parametrize("sticky", [False, True])
 async def test_no_retry_after_output(
-    chunk: ChatChunk, with_fallback: bool, error_kind: str, child_retries: int
+    chunk: ChatChunk, with_fallback: bool, error_kind: str, child_retries: int, sticky: bool
 ) -> None:
     error: Exception
     if error_kind == "status":
@@ -100,7 +102,9 @@ async def test_no_retry_after_output(
     primary = _RetryLLM(chunk, error)
     fallback = _RetryLLM(chunk, None)
     adapter = FallbackAdapter(
-        [primary, fallback] if with_fallback else [primary], max_retry_per_llm=child_retries
+        [primary, fallback] if with_fallback else [primary],
+        max_retry_per_llm=child_retries,
+        sticky=sticky,
     )
     errors: list[LLMError] = []
     adapter.on("error", errors.append)
@@ -286,6 +290,192 @@ class _NamedLLM(FakeLLM):
     @property
     def provider(self) -> str:
         return self._provider_name
+
+
+class _ScriptedLLM(_NamedLLM):
+    def __init__(self, model: str, responses: list[str | Exception | None]) -> None:
+        super().__init__(model=model, provider=f"{model}-provider")
+        self.responses = deque(responses)
+        self.requests = 0
+        self.finish: asyncio.Event | None = None
+
+    def chat(
+        self,
+        *,
+        chat_ctx: ChatContext,
+        tools: list[Tool] | None = None,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+        **kwargs: Any,
+    ) -> LLMStream:
+        self.requests += 1
+        response = self.responses.popleft() if self.responses else self.model
+        return _ScriptedLLMStream(
+            self,
+            response=response,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+        )
+
+
+class _ScriptedLLMStream(LLMStream):
+    def __init__(
+        self, llm: _ScriptedLLM, *, response: str | Exception | None, **kwargs: Any
+    ) -> None:
+        super().__init__(llm, **kwargs)
+        self._response = response
+        self._finish = llm.finish
+
+    async def _run(self) -> None:
+        if isinstance(self._response, Exception):
+            raise self._response
+        if self._response is not None:
+            self._event_ch.send_nowait(
+                ChatChunk(id=self._llm.model, delta=ChoiceDelta(content=self._response))
+            )
+        if self._finish is not None:
+            await self._finish.wait()
+
+
+async def _wait_for_recovery(adapter: FallbackAdapter) -> None:
+    await asyncio.wait_for(
+        asyncio.gather(
+            *(status.recovering_task for status in adapter._status if status.recovering_task)
+        ),
+        timeout=5,
+    )
+
+
+@pytest.mark.parametrize("sticky", [None, False, True], ids=["default", "priority", "sticky"])
+async def test_recovered_primary_routing(sticky: bool | None) -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError(), "recovery"])
+    fallback = _ScriptedLLM("fallback", [])
+    adapter = FallbackAdapter(
+        [primary, fallback], **({"sticky": sticky} if sticky is not None else {})
+    )
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        await _wait_for_recovery(adapter)
+        assert adapter._status[0].available
+        assert primary.requests == 2
+        assert adapter.metrics_metadata == fallback.metrics_metadata
+
+        expected = fallback if sticky else primary
+        assert adapter.model == expected.model
+        assert adapter.provider == expected.provider
+        for _ in range(2):
+            response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+            assert response.text == expected.model
+        assert primary.requests == (2 if sticky else 4)
+        assert fallback.requests == (3 if sticky else 1)
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize("primary_recovers", [False, True])
+async def test_sticky_model_failure_uses_remaining_priority_order(primary_recovers: bool) -> None:
+    primary = _ScriptedLLM(
+        "primary",
+        [APITimeoutError()] + ([] if primary_recovers else [APITimeoutError()] * 3),
+    )
+    fallback = _ScriptedLLM("fallback", ["fallback", APITimeoutError()])
+    last = _ScriptedLLM("last", [])
+    adapter = FallbackAdapter([primary, fallback, last], sticky=True)
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        await _wait_for_recovery(adapter)
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        expected = primary if primary_recovers else last
+        assert response.text == expected.model
+        await _wait_for_recovery(adapter)
+        assert fallback.requests == 3  # served, failed, recovered
+        assert last.requests == (0 if primary_recovers else 1)
+        assert adapter.model == expected.model
+        assert adapter.provider == expected.provider
+        assert adapter.metrics_metadata == expected.metrics_metadata
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == expected.model
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+async def test_sticky_retries_from_primary_when_all_models_are_unavailable() -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError()] * 5)
+    fallback = _ScriptedLLM("fallback", ["fallback"] + [APITimeoutError()] * 5)
+    adapter = FallbackAdapter([primary, fallback], sticky=True)
+    try:
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        await _wait_for_recovery(adapter)
+
+        with pytest.raises(APIConnectionError):
+            await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        await _wait_for_recovery(adapter)
+        assert all(not status.available for status in adapter._status)
+
+        primary.responses.clear()
+        fallback.responses.clear()
+        fallback_requests = fallback.requests
+        assert adapter.model == "primary"
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "primary"
+        assert fallback.requests == fallback_requests
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+async def test_sticky_keeps_model_that_succeeds_after_all_models_failed() -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError()] * 3 + ["recovery"])
+    fallback = _ScriptedLLM("fallback", [APITimeoutError()] * 2)
+    adapter = FallbackAdapter([primary, fallback], sticky=True)
+    try:
+        with pytest.raises(APIConnectionError):
+            await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        await _wait_for_recovery(adapter)
+        assert all(not status.available for status in adapter._status)
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        await _wait_for_recovery(adapter)
+        assert adapter._status[0].available
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        assert primary.requests == 4
+    finally:
+        await _close_retry_adapter(adapter)
+
+
+@pytest.mark.parametrize("empty_response", [False, True])
+async def test_sticky_model_survives_stream_close(empty_response: bool) -> None:
+    primary = _ScriptedLLM("primary", [APITimeoutError()])
+    fallback = _ScriptedLLM("fallback", [None] if empty_response else [])
+    finish = asyncio.Event()
+    if not empty_response:
+        fallback.finish = finish
+    adapter = FallbackAdapter([primary, fallback], sticky=True)
+    try:
+        async with adapter.chat(chat_ctx=ChatContext.empty()) as stream:
+            if empty_response:
+                assert [chunk async for chunk in stream] == []
+            else:
+                chunk = await asyncio.wait_for(anext(stream), timeout=5)
+                assert chunk.delta is not None and chunk.delta.content == "fallback"
+            await _wait_for_recovery(adapter)
+        finish.set()
+
+        response = await adapter.chat(chat_ctx=ChatContext.empty()).collect()
+        assert response.text == "fallback"
+        assert primary.requests == 2
+        assert adapter.model == "fallback"
+        assert adapter.provider == "fallback-provider"
+    finally:
+        finish.set()
+        await _close_retry_adapter(adapter)
 
 
 class _FailingLLMStream(LLMStream):
