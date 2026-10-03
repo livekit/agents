@@ -25,6 +25,14 @@ Each tool's return ends with a directive for the next action (e.g. "next: call o
 Never speak the same question twice in a row. If a field was just captured ("name recorded", "time recorded"), it is DONE - asking for it again stalls the call; the only valid next move is the directive in the last tool return.
 """
 
+# Naming the concrete situation is what routes the model to the tool; widening this to
+# "cannot be captured, for any reason" stops covering the caller who needs to go look the
+# number up. A reservation requires a phone, so this flow gives up rather than waiting.
+_RESTAURANT_PHONE_INSTRUCTIONS = """\
+Caller cannot provide the phone number or does not have it handy: call
+`decline_phone_number_capture` immediately.
+"""
+
 
 class BookRestaurantTask(AgentTask[RestaurantReservation]):
     """Restaurant booking as one focused task, mirroring BookRoomTask: `set_party`
@@ -137,9 +145,16 @@ class BookRestaurantTask(AgentTask[RestaurantReservation]):
     @function_tool()
     async def open_phone_dialog(self) -> str:
         """Open the phone dialog. It collects the guest's phone number (read back and confirmed) from the caller."""
-        r = await beta.workflows.GetPhoneNumberTask(
-            chat_ctx=speech_only(self.chat_ctx), extra_instructions=COMMON_INSTRUCTIONS
-        )
+        try:
+            r = await beta.workflows.GetPhoneNumberTask(
+                chat_ctx=speech_only(self.chat_ctx),
+                extra_instructions=(f"{COMMON_INSTRUCTIONS}\n\n{_RESTAURANT_PHONE_INSTRUCTIONS}"),
+            )
+        except beta.workflows.PhoneNumberCaptureDeclinedError:
+            error = ToolError("reservation not created: a phone number is required")
+            if not self.done():
+                self.complete(error)
+            return f"{error} | never tell the caller the table is reserved"
         self._phone = r.phone_number
         return f"phone recorded: {self._phone} | {self._status()}"
 
