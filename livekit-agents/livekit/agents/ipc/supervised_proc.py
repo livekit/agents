@@ -458,6 +458,24 @@ class SupervisedProc(ABC):
 
         await self._join_fut
         self._exitcode = self._proc.exitcode
+
+        # Mark process as dead for prometheus multiprocess mode.
+        # This is required to clean up stale metrics.
+        if "PROMETHEUS_MULTIPROC_DIR" in os.environ and self._pid:
+            try:
+                from prometheus_client import multiprocess
+
+                multiprocess.mark_process_dead(self._pid)  # type: ignore[no-untyped-call]
+                logger.debug(
+                    "marked process as dead for prometheus multiprocess mode",
+                    extra=self.logging_extra(),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"failed to mark process as dead for prometheus: {e}",
+                    extra=self.logging_extra(),
+                )
+
         self._proc.close()
         await aio.cancel_and_wait(ping_task, read_ipc_task, main_task)
 
