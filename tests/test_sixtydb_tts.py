@@ -382,3 +382,21 @@ async def test_splitter_never_sends_whitespace_only_request(text):
     assert requests and all(piece.strip() and len(piece) <= 5000 for piece in requests)
     assert "".join(requests).strip() == text.strip()
     assert b"".join(bytes(event.frame.data) for event in events) == PCM * len(requests)
+
+
+async def test_ndjson_wav_chunks_preserve_all_audio():
+    body = (
+        b"\n".join(
+            json.dumps({"audioContent": base64.b64encode(wav_bytes()).decode()}).encode()
+            for _ in range(2)
+        )
+        + b'\n{"type":"complete"}\n'
+    )
+
+    async def handler(request):
+        return web.Response(body=body, content_type="application/x-ndjson")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        assert await collect(engine) == PCM * 2
+        await engine.aclose()

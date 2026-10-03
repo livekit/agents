@@ -286,7 +286,9 @@ class ChunkedStream(tts.ChunkedStream):
             content_type = response.content_type
             if content_type in {"application/x-ndjson", "application/ndjson", "text/plain"}:
                 audio = b"".join(
-                    _record_audio(json.loads(line)) for line in data.splitlines() if line.strip()
+                    _pcm(chunk)
+                    for line in data.splitlines()
+                    if line.strip() and (chunk := _record_audio(json.loads(line)))
                 )
             elif content_type == "application/json":
                 audio = _record_audio(json.loads(data))
