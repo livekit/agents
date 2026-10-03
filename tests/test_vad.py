@@ -8,6 +8,7 @@ import pytest
 from livekit.agents import vad
 from livekit.agents.inference import VAD as InferenceVAD
 from livekit.local_inference import VAD as NativeVAD, VAD_WINDOW_SAMPLES
+from livekit.plugins import silero
 from livekit.plugins.silero import onnx_model
 
 from . import utils
@@ -220,3 +221,37 @@ async def test_plugin_checkpoint_matches_inference_vad() -> None:
         windows += 1
 
     assert windows > 100, "test audio too short to be meaningful"
+
+
+def test_silero_with_options_matches_load_on_the_same_session() -> None:
+    base = silero.VAD.load()
+    vad = base.with_options(activation_threshold=0.6, sample_rate=8000)
+
+    assert vad._onnx_session is base._onnx_session
+    assert vad._opts == silero.VAD.load(activation_threshold=0.6, sample_rate=8000)._opts
+    assert base._opts == silero.VAD.load()._opts, "the source VAD must not change"
+
+
+def test_silero_with_options_keeps_the_options_it_is_not_given() -> None:
+    base = silero.VAD.load(min_silence_duration=0.3, deactivation_threshold=0.2)
+
+    assert (
+        base.with_options(min_speech_duration=0.1)._opts
+        == silero.VAD.load(
+            min_speech_duration=0.1, min_silence_duration=0.3, deactivation_threshold=0.2
+        )._opts
+    )
+
+
+async def test_silero_with_options_detects_speech_on_the_shared_session() -> None:
+    base = silero.VAD.load()
+    frames, *_ = await utils.make_test_speech(sample_rate=8000)
+
+    stream = base.with_options(sample_rate=8000).stream()
+    for frame in frames:
+        stream.push_frame(frame)
+    stream.end_input()
+
+    events = [ev.type async for ev in stream]
+    assert vad.VADEventType.START_OF_SPEECH in events
+    assert vad.VADEventType.END_OF_SPEECH in events
