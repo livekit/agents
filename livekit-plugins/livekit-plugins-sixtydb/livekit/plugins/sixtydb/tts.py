@@ -110,15 +110,21 @@ def _record_audio(record: Any, formats: dict[int, str] | None = None, offset: in
     return audio
 
 
+class _UnrecognizedWAVPrefix(ValueError):
+    pass
+
+
 def _decode_wav(audio: bytes, offset: int) -> tuple[bytes, int]:
     if (
         len(audio) - offset < 12
         or audio[offset : offset + 4] != b"RIFF"
         or audio[offset + 8 : offset + 12] != b"WAVE"
     ):
-        raise ValueError("60db returned invalid WAV framing")
+        raise _UnrecognizedWAVPrefix("60db returned invalid WAV framing")
     size = int.from_bytes(audio[offset + 4 : offset + 8], "little") + 8
-    if size < 12 or size > len(audio) - offset:
+    if size < 12:
+        raise _UnrecognizedWAVPrefix("60db returned invalid WAV size")
+    if size > len(audio) - offset:
         raise ValueError("60db returned truncated WAV audio")
     with wave.open(io.BytesIO(audio[offset : offset + size]), "rb") as wav:
         if (
@@ -161,7 +167,7 @@ def _pcm(
         ):
             try:
                 pcm, size = _decode_wav(audio, offset)
-            except (ValueError, wave.Error, EOFError):
+            except _UnrecognizedWAVPrefix:
                 # An unlabeled PCM continuation may contain WAV-shaped sample bytes.
                 if not pcm_declared or declared_format is not None:
                     raise

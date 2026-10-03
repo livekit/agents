@@ -532,3 +532,35 @@ async def test_wav_container_precedes_linear16_sample_encoding(content_type, nes
         engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
         assert await collect(engine) == PCM
         await engine.aclose()
+
+
+@pytest.mark.parametrize("invalid_kind", ["rate", "container", "frames"])
+async def test_incompatible_unlabeled_wav_after_pcm_is_rejected(invalid_kind):
+    wav = io.BytesIO()
+    with wave.open(wav, "wb") as output:
+        output.setparams(
+            (1, 2, 16000 if invalid_kind == "rate" else 24000, 0, "NONE", "not compressed")
+        )
+        output.writeframes(PCM)
+    payload = wav.getvalue()
+    if invalid_kind in {"container", "frames"}:
+        payload = payload[:-2]
+    if invalid_kind == "frames":
+        payload = payload[:4] + (len(payload) - 8).to_bytes(4, "little") + payload[8:]
+    body = b"\n".join(
+        [
+            json.dumps(
+                {"encoding": "pcm", "audioContent": base64.b64encode(PCM).decode()}
+            ).encode(),
+            json.dumps({"audioContent": base64.b64encode(payload).decode()}).encode(),
+        ]
+    )
+
+    async def handler(request):
+        return web.Response(body=body, content_type="application/x-ndjson")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        with pytest.raises(APIError):
+            await collect(engine)
+        await engine.aclose()

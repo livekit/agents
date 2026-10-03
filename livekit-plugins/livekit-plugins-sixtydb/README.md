@@ -32,7 +32,7 @@ order. Trailing whitespace and whitespace-only pieces are not synthesized.
 Each request has a 60-second total
 timeout, and uses LiveKit's connection options for connect/read timeouts.
 
-NDJSON encoding declarations apply until another declaration or a validated WAV
+NDJSON encoding declarations apply until another declaration or a recognized WAV
 container is encountered. Unlabeled PCM chunks retain their sample bytes, even
 when they begin with an audio-file signature. Explicit `pcm` or `wav` metadata
 resolves ambiguous payloads.
