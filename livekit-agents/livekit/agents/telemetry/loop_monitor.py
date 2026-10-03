@@ -529,28 +529,29 @@ class EventLoopMonitor:
                 logger.exception("event loop watchdog failed")
 
     def _watchdog_check(self) -> None:
-        # snapshot both together: the tick updates seq then time, so a torn read can only
-        # make the lag look smaller for one iteration
-        seq = self._tick_seq
-        lag = time.monotonic() - (self._last_tick_at + self._tick)
-        if lag < self._first_sample_lag:
-            return
-
         with self._lock:
+            seq = self._tick_seq
+            lag = time.monotonic() - (self._last_tick_at + self._tick)
+            if lag < self._first_sample_lag:
+                return
+
             incident = self._incident
-            if incident is None or incident.tick_seq != seq:
+            if incident is not None and incident.tick_seq != seq:
+                # The heartbeat is between updating its sequence and acquiring this lock.
+                # Leave the previous incident for that heartbeat to report.
+                return
+            if incident is None:
                 incident = self._incident = _Incident(tick_seq=seq)
             want_first = not incident.samples
             want_late = not incident.late_sampled and lag >= self._warn * _LATE_SAMPLE_FACTOR
-        if not (want_first or want_late):
-            return
+            if not (want_first or want_late):
+                return
 
-        sample = self._sample_loop_thread(lag)
-        with self._lock:
-            if self._incident is incident:
-                incident.samples.append(sample)
-                if want_late:
-                    incident.late_sampled = True
+            # Keep the incident lock while sampling so the heartbeat cannot report it before
+            # the sample is attached.
+            incident.samples.append(self._sample_loop_thread(lag))
+            if want_late:
+                incident.late_sampled = True
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None

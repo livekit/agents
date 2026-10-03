@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -803,6 +806,104 @@ def test_watchdog_samples_one_tick_before_the_threshold() -> None:
         m._watchdog_check()  # the same incident is not sampled twice before the late sample
         assert len(m._incident.samples) == 1
     finally:
+        loop.close()
+
+
+def test_tick_waits_for_watchdog_sample() -> None:
+    import traceback
+
+    loop = asyncio.new_event_loop()
+    monitor = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+    reports: list[BlockedReport] = []
+    monitor._on_report = reports.append
+    monitor._loop_thread_ident = threading.get_ident()
+    monitor._last_tick_at = time.monotonic() - 0.15
+    sample_ready = threading.Event()
+    release_sample = threading.Event()
+
+    def sample(lag: float) -> loop_monitor._StackSample:
+        sample_ready.set()
+        release_sample.wait(1)
+        return loop_monitor._StackSample(
+            lag=lag,
+            task_name=None,
+            frames=[traceback.FrameSummary(__file__, 1, "blocked")],
+        )
+
+    monitor._sample_loop_thread = sample  # type: ignore[method-assign]
+    watchdog = threading.Thread(target=monitor._watchdog_check)
+    watchdog.start()
+    ready = sample_ready.wait(1)
+    tick = threading.Thread(target=monitor._on_tick)
+    if ready:
+        tick.start()
+    release_sample.set()
+    if ready:
+        tick.join(1)
+    watchdog.join(1)
+
+    try:
+        assert ready and not watchdog.is_alive() and not tick.is_alive()
+        assert len(reports) == 1
+        assert reports[0].stacks[0].startswith("# loop thread sampled")
+    finally:
+        monitor.stop()
+        loop.close()
+
+
+def test_watchdog_keeps_incident_when_tick_sequence_advances() -> None:
+    loop = asyncio.new_event_loop()
+    monitor = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+    reports: list[BlockedReport] = []
+    monitor._on_report = reports.append
+    monitor._loop_thread_ident = threading.get_ident()
+    monitor._last_tick_at = time.monotonic() - 0.15
+    monitor._watchdog_check()
+    assert monitor._incident is not None and monitor._incident.samples
+
+    source, first_line = inspect.getsourcelines(EventLoopMonitor._on_tick)
+    target_line = first_line + next(
+        index for index, line in enumerate(source) if line.strip() == "self._last_tick_at = now"
+    )
+    watchdog_done = threading.Event()
+    paused = threading.Event()
+
+    def run_watchdog() -> None:
+        try:
+            monitor._watchdog_check()
+        finally:
+            watchdog_done.set()
+
+    def local_trace(frame: object, event: str, arg: object) -> object:
+        if (
+            event == "line"
+            and getattr(frame, "f_lineno", None) == target_line
+            and not paused.is_set()
+        ):
+            paused.set()
+            watchdog = threading.Thread(target=run_watchdog)
+            watchdog.start()
+            assert watchdog_done.wait(1)
+            watchdog.join(1)
+        return local_trace
+
+    def trace(frame: object, event: str, arg: object) -> object | None:
+        if getattr(frame, "f_code", None) is EventLoopMonitor._on_tick.__code__:
+            return local_trace
+        return None
+
+    sys.settrace(trace)
+    try:
+        monitor._on_tick()
+    finally:
+        sys.settrace(None)
+
+    try:
+        assert paused.is_set()
+        assert len(reports) == 1
+        assert reports[0].stacks[0].startswith("# loop thread sampled")
+    finally:
+        monitor.stop()
         loop.close()
 
 
