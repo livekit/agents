@@ -37,6 +37,13 @@ def _silence_noisy_loggers() -> None:
             logger.setLevel(logging.WARN)
 
 
+def _configure_stdout_for_logging() -> None:
+    """Use UTF-8 so Unicode log records remain writable on Windows locales."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 # skip default LogRecord attributes
 # http://docs.python.org/library/logging.html#logrecord-attributes
 _RESERVED_ATTRS: tuple[str, ...] = (
@@ -204,6 +211,7 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging(log_level: str, devmode: bool, console: bool, compact: bool = False) -> None:
+    _configure_stdout_for_logging()
     root = logging.getLogger()
 
     handler = logging.StreamHandler(sys.stdout)
