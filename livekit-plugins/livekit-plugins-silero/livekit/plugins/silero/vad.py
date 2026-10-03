@@ -15,10 +15,9 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import time
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -215,7 +214,7 @@ class VAD(agents.vad.VAD):
         if is_given(activation_threshold) and not is_given(deactivation_threshold):
             deactivation_threshold = _default_deactivation_threshold(activation_threshold)
 
-        opts = dataclasses.replace(self._opts)
+        opts = replace(self._opts)
         if is_given(min_speech_duration):
             opts.min_speech_duration = min_speech_duration
         if is_given(min_silence_duration):
