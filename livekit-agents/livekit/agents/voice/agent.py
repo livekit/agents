@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator
+from collections.abc import AsyncGenerator, AsyncIterable, Coroutine, Generator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from .agent_session import AgentSession, ExpressiveOptions
     from .audio_recognition import AudioRecognition
     from .io import TimedString
+    from .transcription.text_transforms import TextTransforms
     from .turn import TurnDetectionMode
 
 
@@ -63,6 +64,7 @@ class Agent:
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
         min_consecutive_speech_delay: NotGivenOr[float] = NOT_GIVEN,
         use_tts_aligned_transcript: NotGivenOr[bool] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
         # deprecated
         turn_detection: NotGivenOr[TurnDetectionMode | None] = NOT_GIVEN,
         min_endpointing_delay: NotGivenOr[float] = NOT_GIVEN,
@@ -120,6 +122,7 @@ class Agent:
         endpointing = turn_handling.get("endpointing", {})
         self._min_consecutive_speech_delay = min_consecutive_speech_delay
         self._use_tts_aligned_transcript = use_tts_aligned_transcript
+        self._tts_text_transforms = tts_text_transforms
         self._min_endpointing_delay = endpointing.get("min_delay", NOT_GIVEN)
         self._max_endpointing_delay = endpointing.get("max_delay", NOT_GIVEN)
         self._turn_handling = turn_handling
@@ -285,8 +288,9 @@ class Agent:
         ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
+        tts_text_transforms: NotGivenOr[Sequence[TextTransforms] | None] = NOT_GIVEN,
     ) -> None:
-        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting.
+        """Swap the STT, VAD, LLM, or TTS on this agent, or change its expressive setting or TTS text transforms.
         Only the options passed are changed.
 
         Useful for switching a component mid-call (e.g. a different STT language or TTS voice).
@@ -321,6 +325,8 @@ class Agent:
                 self._tts = tts
             if is_given(expressive):
                 self._expressive = expressive
+            if is_given(tts_text_transforms):
+                self._tts_text_transforms = tts_text_transforms
             return
 
         self._activity._update_models(new_stt=stt, new_vad=vad, new_llm=llm, new_tts=tts)
@@ -328,6 +334,8 @@ class Agent:
             # after _update_models so a rejected model swap leaves expressive untouched;
             # resolved per turn (agent value over session), no live plumbing needed
             self._expressive = expressive
+        if is_given(tts_text_transforms):
+            self._tts_text_transforms = tts_text_transforms
 
     # -- Pipeline nodes --
     # They can all be overriden by subclasses, by default they use the STT/LLM/TTS specified in the
@@ -847,6 +855,18 @@ class Agent:
             NotGivenOr[bool]: Whether to use TTS-aligned transcript.
         """
         return self._use_tts_aligned_transcript
+
+    @property
+    def tts_text_transforms(self) -> NotGivenOr[Sequence[TextTransforms] | None]:
+        """
+        The transforms to apply to the text before sending it to the TTS node.
+
+        If this property was not set at Agent creation or via update_options, the session's value will be used at runtime instead.
+
+        Returns:
+            NotGivenOr[Sequence[TextTransforms] | None]: The TTS text transforms.
+        """
+        return self._tts_text_transforms
 
     @property
     def session(self) -> AgentSession:
