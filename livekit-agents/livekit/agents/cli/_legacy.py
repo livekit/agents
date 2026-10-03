@@ -1007,7 +1007,7 @@ class RichLoggingHandler(logging.Handler):
 
 
 def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
-    _configure_stdout_for_logging()
+    ensure_ascii = _configure_stdout_for_logging()
     logging.addLevelName(TRACE_LOG_LEVEL, "TRACE")
 
     root = logging.getLogger()
@@ -1018,7 +1018,7 @@ def _configure_logger(c: AgentsConsole | None, log_level: int | str) -> None:
         handler = logging.StreamHandler(sys.stdout)
         _add_global_log_fields(handler)
         root.addHandler(handler)
-        handler.setFormatter(JsonFormatter())
+        handler.setFormatter(JsonFormatter(ensure_ascii=ensure_ascii))
 
     root.setLevel(log_level)
 
