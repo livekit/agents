@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import os
 import time
 from collections.abc import Iterable
 from types import TracebackType
 from typing import TypedDict
+from urllib.parse import urlencode
 
 import aiohttp
 
@@ -67,7 +70,7 @@ def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
             if len(word) > 20:
                 raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
             boost_value = float(boost)
-            if boost_value < -5.0 or boost_value > 5.0:
+            if not math.isfinite(boost_value) or not -5.0 <= boost_value <= 5.0:
                 raise ValueError("RTZR keyword boost must be between -5.0 and 5.0")
             formatted.append(f"{word}:{boost_value}")
             continue
@@ -87,9 +90,9 @@ def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
                 raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
             try:
                 boost = float(boost_str)
-            except ValueError as exc:
-                raise ValueError("RTZR keyword boost must be a number") from exc
-            if boost < -5.0 or boost > 5.0:
+            except ValueError:
+                raise ValueError("RTZR keyword boost must be a number") from None
+            if not math.isfinite(boost) or not -5.0 <= boost <= 5.0:
                 raise ValueError("RTZR keyword boost must be between -5.0 and 5.0")
             formatted.append(f"{word}:{boost}")
             continue
@@ -98,6 +101,10 @@ def _format_keywords(keywords: Iterable[str | tuple[str, float]]) -> str:
             raise ValueError("RTZR keyword boosting keywords must be <= 20 chars")
         formatted.append(keyword)
 
+    for keyword in formatted:
+        word = keyword.split(":", 1)[0]
+        if not word.strip() or any(c != " " and not "가" <= c <= "힣" for c in word):
+            raise ValueError("RTZR keywords must contain only Korean syllables and spaces")
     return ",".join(formatted)
 
 
@@ -135,8 +142,12 @@ class RTZROpenAPIClient:
         self._http_session = http_session
         self._owns_session = http_session is None  # Track if we own the session
         self._token: _Token | None = None
-        self._api_base = "https://openapi.vito.ai"
-        self._ws_base = "wss://" + self._api_base.split("://", 1)[1]
+        self._token_lock = asyncio.Lock()
+        self._api_base = os.getenv("RTZR_API_BASE", "https://openapi.vito.ai").rstrip("/")
+        self._ws_base = os.getenv(
+            "RTZR_WEBSOCKET_URL",
+            self._api_base.replace("https://", "wss://", 1).replace("http://", "ws://", 1),
+        ).rstrip("/")
 
     async def __aenter__(self) -> RTZROpenAPIClient:
         """Async context manager entry."""
@@ -152,14 +163,14 @@ class RTZROpenAPIClient:
         await self.close()
 
     async def get_token(self) -> str:
-        """Get a valid access token, refreshing if necessary."""
-        token = self._token
-        if token is None or token["expire_at"] < time.time() - 3600:
-            await self._refresh_token()
-            token = self._token
-        if token is None:
-            raise RTZRAPIError("Failed to obtain RTZR access token")
-        return token["access_token"]
+        """Get a valid access token, refreshing 30 minutes before expiry."""
+        async with self._token_lock:
+            if self._token is None or time.time() + 1800 >= self._token["expire_at"]:
+                await self._refresh_token()
+
+            if self._token is None:
+                raise RTZRAPIError("Failed to obtain RTZR access token")
+            return self._token["access_token"]
 
     async def _refresh_token(self) -> None:
         """Refresh the access token."""
@@ -181,19 +192,15 @@ class RTZROpenAPIClient:
                 self._token = {"access_token": access_token, "expire_at": float(expire_at)}
                 logger.debug("Successfully refreshed RTZR access token")
         except aiohttp.ClientResponseError as e:
-            logger.error("RTZR authentication failed: %s %s", e.status, e.message)
-            raise RTZRStatusError(
-                message=f"Authentication failed: {e.message}",
-                status_code=e.status,
-            ) from e
-        except aiohttp.ClientError as e:
-            logger.error("RTZR authentication connection error: %s", e)
-            raise RTZRConnectionError("Failed to authenticate with RTZR API") from e
+            raise RTZRStatusError("RTZR authentication failed", status_code=e.status) from None
+        except aiohttp.ClientError:
+            raise RTZRConnectionError("Failed to authenticate with RTZR API") from None
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""
         if not self._http_session:
-            self._http_session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(enable_cleanup_closed=True)
+            self._http_session = aiohttp.ClientSession(connector=connector)
         return self._http_session
 
     async def close(self) -> None:
@@ -206,31 +213,31 @@ class RTZROpenAPIClient:
         self, config: dict[str, str], headers: dict[str, str] | None = None
     ) -> aiohttp.ClientWebSocketResponse:
         """Connect to the streaming WebSocket endpoint."""
-        # Build URL like reference client
-        query_string = "&".join(f"{k}={v}" for k, v in config.items())
+        query_string = urlencode(config, safe=":,")
         url = f"{self._ws_base}/v1/transcribe:streaming?{query_string}"
 
-        # Prepare headers
-        token = await self.get_token()
-        ws_headers = {"Authorization": f"bearer {token}"}
-        if headers:
-            ws_headers.update(headers)
-
         session = self._ensure_http_session()
-
-        try:
-            ws = await session.ws_connect(url, headers=ws_headers)
-            logger.debug("Connected to RTZR WebSocket at %s", url)
-            return ws
-        except aiohttp.ClientResponseError as e:
-            logger.error("RTZR WebSocket connection failed: %s %s", e.status, e.message)
-            raise RTZRStatusError(
-                message=f"WebSocket connection failed: {e.message}",
-                status_code=e.status,
-            ) from e
-        except aiohttp.ClientError as e:
-            logger.error("RTZR WebSocket client error: %s", e)
-            raise RTZRConnectionError("WebSocket connection failed") from e
+        custom_auth = any(key.lower() == "authorization" for key in (headers or {}))
+        for attempt in range(2):
+            token = await self.get_token()
+            ws_headers = {"Authorization": f"Bearer {token}"}
+            if headers:
+                ws_headers.update(headers)
+            try:
+                return await session.ws_connect(url, headers=ws_headers, heartbeat=15.0)
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401 and attempt == 0 and not custom_auth:
+                    async with self._token_lock:
+                        # Another connection may already have replaced the rejected token.
+                        if self._token is not None and self._token["access_token"] == token:
+                            self._token = None
+                    continue
+                raise RTZRStatusError(
+                    "RTZR WebSocket connection failed", status_code=e.status
+                ) from None
+            except aiohttp.ClientError:
+                raise RTZRConnectionError("RTZR WebSocket connection failed") from None
+        raise AssertionError("WebSocket retry loop exhausted")
 
     def build_config(
         self,
@@ -241,8 +248,12 @@ class RTZROpenAPIClient:
         epd_time: float = 0.5,
         noise_threshold: float = 0.60,
         active_threshold: float = 0.80,
+        use_itn: bool = True,
+        use_disfluency_filter: bool = False,
+        use_profanity_filter: bool = False,
         use_punctuation: bool = False,
         keywords: Iterable[str | tuple[str, float]] | None = None,
+        language: str = "ko",
     ) -> dict[str, str]:
         """Build configuration dictionary for WebSocket connection."""
         config = {
@@ -253,8 +264,13 @@ class RTZROpenAPIClient:
             "epd_time": str(epd_time),
             "noise_threshold": str(noise_threshold),
             "active_threshold": str(active_threshold),
+            "use_itn": "true" if use_itn else "false",
+            "use_disfluency_filter": "true" if use_disfluency_filter else "false",
+            "use_profanity_filter": "true" if use_profanity_filter else "false",
             "use_punctuation": "true" if use_punctuation else "false",
         }
+        if model_name == "whisper":
+            config["language"] = language
 
         if keywords:
             config["keywords"] = _format_keywords(keywords)
