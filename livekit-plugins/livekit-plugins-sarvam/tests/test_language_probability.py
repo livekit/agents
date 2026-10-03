@@ -16,6 +16,8 @@ import pytest
 from livekit.agents import stt
 from livekit.plugins.sarvam.stt import SpeechStream
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers — build a minimal STT instance + fake the channel/logger/state that
 # `_handle_transcript_data` touches. We bypass __init__ so the test doesn't
@@ -39,6 +41,11 @@ def _make_stream_under_test() -> tuple[SpeechStream, list[Any]]:
     instance._build_log_context = lambda: {}  # type: ignore[attr-defined]
     instance._server_request_id = None  # type: ignore[attr-defined]
     instance._opts = MagicMock(language="en-IN")  # type: ignore[attr-defined]
+    instance._start_time_offset = 0.0  # type: ignore[attr-defined]
+    instance._pending_eos = False  # type: ignore[attr-defined]
+    instance._pending_final_data = None  # type: ignore[attr-defined]
+    instance._final_received_for_utterance = False  # type: ignore[attr-defined]
+    instance._eos_emitted_for_utterance = False  # type: ignore[attr-defined]
     return instance, captured
 
 
