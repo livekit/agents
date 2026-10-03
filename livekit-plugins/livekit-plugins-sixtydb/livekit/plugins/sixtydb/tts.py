@@ -94,12 +94,16 @@ def _record_audio(record: Any) -> bytes:
     return audio
 
 
-def _pcm(audio: bytes) -> bytes:
-    if audio.startswith(b"RIFF"):
-        decoded = bytearray()
-        offset = 0
-        while offset < len(audio):
-            if audio[offset : offset + 4] != b"RIFF" or len(audio) - offset < 12:
+def _pcm(audio: bytes, record_ends: list[int] | None = None) -> bytes:
+    decoded = bytearray()
+    offset = 0
+    boundaries = iter(record_ends or [len(audio)])
+    end = next(boundaries)
+    while offset < len(audio):
+        while end <= offset:
+            end = next(boundaries, len(audio))
+        if audio[offset : offset + 4] == b"RIFF":
+            if len(audio) - offset < 12:
                 raise ValueError("60db returned invalid WAV framing")
             size = int.from_bytes(audio[offset + 4 : offset + 8], "little") + 8
             if size < 12 or size > len(audio) - offset:
@@ -123,12 +127,16 @@ def _pcm(audio: bytes) -> bytes:
                     raise ValueError("60db returned truncated WAV audio")
                 decoded.extend(pcm)
             offset += size
-        audio = bytes(decoded)
-    elif audio.startswith((b"ID3", b"OggS", b"fLaC")):
-        raise ValueError("60db returned compressed audio instead of PCM")
-    if not audio or len(audio) % 2:
+        else:
+            if record_ends is None and offset:
+                raise ValueError("60db returned invalid WAV framing")
+            if audio[offset : offset + 4].startswith((b"ID3", b"OggS", b"fLaC")):
+                raise ValueError("60db returned compressed audio instead of PCM")
+            decoded.extend(audio[offset:end])
+            offset = end
+    if not decoded or len(decoded) % 2:
         raise ValueError("60db returned empty or incomplete PCM16 audio")
-    return audio
+    return bytes(decoded)
 
 
 class TTS(tts.TTS):
@@ -301,9 +309,16 @@ class ChunkedStream(tts.ChunkedStream):
                     raise ValueError("60db response exceeds 32 MiB")
             content_type = response.content_type
             if content_type in {"application/x-ndjson", "application/ndjson", "text/plain"}:
-                audio = b"".join(
+                audio_records = [
                     _record_audio(json.loads(line)) for line in data.splitlines() if line.strip()
-                )
+                ]
+                ends = []
+                total = 0
+                for record in audio_records:
+                    total += len(record)
+                    if record:
+                        ends.append(total)
+                return _pcm(b"".join(audio_records), ends)
             elif content_type == "application/json":
                 audio = _record_audio(json.loads(data))
             elif content_type in {
