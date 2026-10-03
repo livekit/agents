@@ -261,16 +261,88 @@ def test_otlp_json_and_readable_spans_agree(span_exporter: InMemorySpanExporter)
     assert check_trace(converted) == check_trace(readable) == []
 
 
-async def test_full_fake_session_is_well_formed(span_exporter: InMemorySpanExporter) -> None:
+@pytest.mark.parametrize("audio", [True, False])
+async def test_full_fake_session_is_well_formed(
+    span_exporter: InMemorySpanExporter, audio: bool
+) -> None:
     actions = FakeActions()
     actions.add_user_speech(0.5, 1.5, "Hello there", stt_delay=0.1)
     actions.add_llm("Hi!", ttft=0.1, duration=0.2)
     actions.add_tts(0.5, ttfb=0.1, duration=0.2)
     session = create_session(actions, speed_factor=2.0)
+    if not audio:
+        from .fake_io import FakeTextOutput
+
+        await session.output.audio._synchronizer.aclose()
+        session.output.audio = None
+        session.output.transcription = FakeTextOutput()
     await asyncio.wait_for(
         run_session(session, Agent(instructions="t"), drain_delay=1.0), timeout=60
     )
     assert_trace_well_formed(span_exporter.get_finished_spans())
+    [turn] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_turn"]
+    assert ("lk.playback_latency" in turn.attributes) == audio
+    if audio:
+        assert turn.attributes["lk.playback_latency"] >= 0
+
+
+async def test_text_only_say_has_no_playback_latency(span_exporter: InMemorySpanExporter) -> None:
+    from livekit.agents import AgentSession
+
+    from .fake_io import FakeTextOutput
+
+    session = AgentSession()
+    session.output.transcription = FakeTextOutput()
+    await session.start(Agent(instructions="t"))
+    try:
+        await session.say("Text only")
+    finally:
+        await session.aclose()
+    [turn] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_turn"]
+    assert "lk.playback_latency" not in turn.attributes
+
+
+async def test_text_only_realtime_has_no_playback_latency(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    from livekit import rtc
+    from livekit.agents import AgentSession, llm, utils
+
+    from .fake_io import FakeTextOutput
+    from .fake_realtime import FakeRealtimeModel, fake_capabilities
+
+    model = FakeRealtimeModel(capabilities=fake_capabilities(audio_output=False))
+    async with AgentSession(llm=model) as session:
+        session.output.transcription = FakeTextOutput()
+        await session.start(Agent(instructions="t"))
+        speech = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+        messages = utils.aio.Chan[llm.MessageGeneration]()
+        functions = utils.aio.Chan[llm.FunctionCall]()
+        text = utils.aio.Chan[str]()
+        audio = utils.aio.Chan[rtc.AudioFrame]()
+        modalities = asyncio.Future[list[str]]()
+        modalities.set_result(["text"])
+        messages.send_nowait(
+            llm.MessageGeneration(
+                message_id="text-only",
+                text_stream=text,
+                audio_stream=audio,
+                modalities=modalities,
+            )
+        )
+        text.send_nowait("Text only")
+        for channel in (messages, functions, text, audio):
+            channel.close()
+        model.active_session._reply_futs[0].set_result(
+            llm.GenerationCreatedEvent(
+                message_stream=messages, function_stream=functions, user_initiated=True
+            )
+        )
+        await speech
+    [turn] = [s for s in span_exporter.get_finished_spans() if s.name == "agent_turn"]
+    assert "lk.playback_latency" not in turn.attributes
 
 
 async def test_adapter_request_shapes_are_allowed(span_exporter: InMemorySpanExporter) -> None:
