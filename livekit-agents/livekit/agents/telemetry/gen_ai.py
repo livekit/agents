@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from opentelemetry import trace
 from opentelemetry.util.types import AttributeValue
 
+from ..log import logger
 from . import trace_types
 
 if TYPE_CHECKING:
@@ -86,6 +87,44 @@ def mark_inference_span_recorded() -> None:
         on_created()
 
 
+def _env_max_input_messages() -> int:
+    raw = os.environ.get("OTEL_INSTRUMENTATION_GENAI_MAX_INPUT_MESSAGES", "").strip()
+    try:
+        return max(0, int(raw or 0))
+    except ValueError:
+        # a malformed telemetry setting must not stop the process from starting
+        logger.warning(
+            "ignoring non-integer OTEL_INSTRUMENTATION_GENAI_MAX_INPUT_MESSAGES, keeping all"
+        )
+        return 0
+
+
+# opt-in truncation, both off by default: an inference span repeats the prompt and history
+_capture_system_instructions: bool = (
+    os.environ.get("OTEL_INSTRUMENTATION_GENAI_CAPTURE_SYSTEM_INSTRUCTIONS", "").strip().lower()
+    not in _FALSY
+)
+_max_input_messages: int = _env_max_input_messages()
+
+
+def set_capture_system_instructions(enabled: bool) -> None:
+    """Set whether ``gen_ai.system_instructions`` is recorded; False omits it.
+
+    The instructions are the largest payload in a session and identical on every
+    inference span."""
+    global _capture_system_instructions
+    _capture_system_instructions = enabled
+
+
+def set_max_input_messages(count: int) -> None:
+    """Keep only the ``count`` most recent ``gen_ai.input.messages``, or all when 0.
+
+    Negative is treated as 0, and a span that drops any reports how many in
+    ``lk.gen_ai.input.messages_dropped``."""
+    global _max_input_messages
+    _max_input_messages = max(0, count)
+
+
 def _text_part(content: str) -> dict[str, Any]:
     return {"type": "text", "content": content}
 
@@ -130,13 +169,15 @@ def _message_parts(item: ChatItem) -> list[dict[str, Any]]:
             }
         )
     elif item.type == "function_call_output":
-        parts.append(
-            {
-                "type": "tool_call_response",
-                "id": item.call_id,
-                "response": _maybe_json(item.output),
-            }
-        )
+        response_part: dict[str, Any] = {
+            "type": "tool_call_response",
+            "id": item.call_id,
+            "response": _maybe_json(item.output),
+        }
+        # the part's schema is open, and a backend labelling from it alone shows "unknown"
+        if item.name:
+            response_part["name"] = item.name
+        parts.append(response_part)
     return parts
 
 
@@ -224,6 +265,16 @@ def to_output_messages(
     return [message]
 
 
+def to_speech_messages(text: str, *, role: str) -> list[dict[str, Any]]:
+    """An STT transcript or the words handed to a TTS, in the convention's message shape.
+
+    ``role`` is ``"user"`` for a transcript and ``"assistant"`` for synthesized speech.
+    Empty text yields no message."""
+    if not text:
+        return []
+    return [{"role": role, "parts": [_text_part(text)]}]
+
+
 def to_tool_definitions(tools: Iterable[Tool]) -> list[dict[str, Any]]:
     """``parameters`` is deliberately omitted: the convention marks it NOT RECOMMENDED by
     default because a schema is large, and building one per request would be pure
@@ -291,17 +342,31 @@ def set_content_attributes(
     input_messages: list[dict[str, Any]] | None = None,
     output_messages: list[dict[str, Any]] | None = None,
     tool_definitions: list[dict[str, Any]] | None = None,
+    truncate: bool = True,
 ) -> None:
     """Values are JSON strings: OpenTelemetry attributes cannot hold structured values
-    yet, which the convention explicitly allows for spans."""
+    yet, which the convention explicitly allows for spans.
+
+    ``truncate`` applies the session-wide content limits; the span carrying a whole
+    session's conversation passes False, since trimming it defeats the purpose."""
     if not _capture_content or not span.is_recording():
         return
+
+    dropped = 0
+    if truncate:
+        if not _capture_system_instructions:
+            system_instructions = None
+        if input_messages and _max_input_messages:
+            dropped = max(0, len(input_messages) - _max_input_messages)
+            input_messages = input_messages[len(input_messages) - _max_input_messages :]
 
     attrs: dict[str, AttributeValue] = {}
     if system_instructions:
         attrs[trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS] = _json(system_instructions)
     if input_messages:
         attrs[trace_types.ATTR_GEN_AI_INPUT_MESSAGES] = _json(input_messages)
+    if dropped:
+        attrs[trace_types.ATTR_INPUT_MESSAGES_DROPPED] = dropped
     if output_messages:
         attrs[trace_types.ATTR_GEN_AI_OUTPUT_MESSAGES] = _json(output_messages)
     if tool_definitions:

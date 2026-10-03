@@ -1341,11 +1341,26 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
                 close_span.end()
                 otel_context.detach(close_token)
                 if self._session_span:
+                    self._record_session_content(self._session_span)
                     self._session_span.end()
                     self._session_span = None
                 self._root_span_context = None
 
         logger.debug("session closed", extra={"reason": reason.value, "error": error})
+
+    def _record_session_content(self, span: trace.Span) -> None:
+        """The whole conversation on the ``agent_session`` span, recorded once at close.
+
+        A turn span carries only its own messages, so this is the one span a chat renderer
+        can read end to end; instructions stay on the inference spans that were given them."""
+        messages = gen_ai_telemetry.to_input_messages(self._chat_ctx)
+        output_messages: list[dict[str, Any]] = []
+        if messages and messages[-1]["role"] == "assistant":
+            output_messages = [messages.pop()]
+
+        gen_ai_telemetry.set_content_attributes(
+            span, input_messages=messages, output_messages=output_messages, truncate=False
+        )
 
     async def _teardown_activity(self, *, reason: CloseReason, drain: bool) -> None:
         """Stop the activity and the models; the first step of closing."""
