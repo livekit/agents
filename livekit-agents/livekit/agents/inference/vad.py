@@ -37,6 +37,10 @@ _MODEL_SAMPLE_RATE = 16000
 VADModels = Literal["silero"]
 
 
+def _default_deactivation_threshold(activation_threshold: float) -> float:
+    return max(activation_threshold - 0.15, 0.01)
+
+
 @dataclass
 class _VADOptions:
     min_speech_duration: float
@@ -45,6 +49,8 @@ class _VADOptions:
     max_buffered_speech: float
     activation_threshold: float
     deactivation_threshold: float
+    # when False, deactivation_threshold follows activation_threshold
+    deactivation_threshold_explicit: bool = False
 
 
 class VAD(vad.VAD):
@@ -83,7 +89,8 @@ class VAD(vad.VAD):
             activation_threshold=activation_threshold,
             deactivation_threshold=deactivation_threshold
             if is_given(deactivation_threshold)
-            else max(activation_threshold - 0.15, 0.01),
+            else _default_deactivation_threshold(activation_threshold),
+            deactivation_threshold_explicit=is_given(deactivation_threshold),
         )
         self._streams: weakref.WeakSet[_VADStream] = weakref.WeakSet()
 
@@ -127,6 +134,11 @@ class VAD(vad.VAD):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_explicit = True
+        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_explicit:
+            self._opts.deactivation_threshold = _default_deactivation_threshold(
+                activation_threshold
+            )
 
         for stream in self._streams:
             stream.update_options(
@@ -189,6 +201,11 @@ class _VADStream(vad.VADStream):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
             self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.deactivation_threshold_explicit = True
+        elif is_given(activation_threshold) and not self._opts.deactivation_threshold_explicit:
+            self._opts.deactivation_threshold = _default_deactivation_threshold(
+                activation_threshold
+            )
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
