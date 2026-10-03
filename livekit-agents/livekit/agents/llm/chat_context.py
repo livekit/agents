@@ -185,7 +185,8 @@ class ImageContent(BaseModel):
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
-    Unique identifier for the image
+    Unique identifier for the image. Use a new id when replacing inline image data
+    or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
     """
 
     type: Literal["image_content"] = Field(default="image_content")
@@ -330,9 +331,23 @@ class _ChatItemBase(BaseModel):
 
 
 def _fingerprint_default(value: Any) -> Any:
-    # stand-ins for media payloads, which are never worth hashing
+    # Avoid hashing inline media payloads. Their object identity detects replacement
+    # within a running session; callers should also give replacements a new image id.
     if isinstance(value, ImageContent):
-        return ["image", value.id]
+        image_source = (
+            value.image
+            if isinstance(value.image, str) and not value.image.startswith("data:")
+            else id(value.image)
+        )
+        return [
+            "image",
+            value.id,
+            image_source,
+            value.inference_width,
+            value.inference_height,
+            value.inference_detail,
+            value.mime_type,
+        ]
     if isinstance(value, AudioContent):
         return ["audio", value.transcript]
     return str(value)

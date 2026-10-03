@@ -1137,11 +1137,27 @@ def test_metadata_does_not_affect_equivalence_or_fingerprint() -> None:
     assert [i._fingerprint() for i in items] == [i._fingerprint() for i in changed]
 
 
-def test_fingerprint_does_not_hash_image_payloads() -> None:
+def test_fingerprint_detects_replaced_image_without_hashing_payload() -> None:
     a = ChatMessage(role="user", content=[ImageContent(id="img", image="data:image/png;base64,AA")])
     b = a.model_copy(update={"content": [ImageContent(id="img", image="data:image/png;base64,BB")]})
     other = a.model_copy(
         update={"content": [ImageContent(id="img2", image="data:image/png;base64,AA")]}
     )
-    assert a._fingerprint() == b._fingerprint()
+    assert a._fingerprint() != b._fingerprint()
     assert a._fingerprint() != other._fingerprint()
+
+
+def test_fingerprint_tracks_image_url_and_inference_settings() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="https://a.example/img")])
+    changed_url = a.model_copy(
+        update={"content": [ImageContent(id="img", image="https://b.example/img")]}
+    )
+    changed_detail = a.model_copy(
+        update={
+            "content": [
+                ImageContent(id="img", image="https://a.example/img", inference_detail="high")
+            ]
+        }
+    )
+    assert a._fingerprint() != changed_url._fingerprint()
+    assert a._fingerprint() != changed_detail._fingerprint()

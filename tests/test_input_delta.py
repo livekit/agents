@@ -180,20 +180,22 @@ def test_copied_context_is_still_a_delta(span_exporter: InMemorySpanExporter) ->
     assert _ids(delta) == ["u2"]
 
 
-def test_baseline_is_fingerprinted_when_committed(span_exporter: InMemorySpanExporter) -> None:
+def test_preemptive_transcript_edit_is_recorded_again(span_exporter: InMemorySpanExporter) -> None:
     tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
     scope1 = tracker.begin()
-    _delta(scope1, ctx)
+    _, span1 = _delta(scope1, ctx)
     # an adopted preemptive generation's user message gets the final transcript before the
-    # speech is scheduled
+    # speech is scheduled, but span1 still contains the preliminary transcript
     ctx.items[1].content = ["Hi."]  # type: ignore[union-attr]
     scope1.commit()
 
     ctx.add_message(role="user", content="bye", id="u2")
     delta, _ = _delta(tracker.begin(), ctx)
-    assert delta.messages_base is not None
-    assert _ids(delta) == ["u2"]
+    assert delta.messages_base is None
+    assert delta.instructions_base is not None
+    assert delta.instructions_base.span_context == span1.get_span_context()
+    assert _ids(delta) == ["u1", "u2"]
 
 
 def test_states_are_independent(span_exporter: InMemorySpanExporter) -> None:

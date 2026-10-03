@@ -121,7 +121,7 @@ class InputDelta:
 
 @dataclass
 class _PendingBaseline:
-    conversation: list[ChatItem]
+    item_keys: list[tuple[str, bytes]]
     instructions: _InstructionsBaseline
     span_context: trace.SpanContext
 
@@ -164,10 +164,10 @@ class InputDeltaScope:
             self._promote(site, pending)
 
     def _promote(self, site: str, pending: _PendingBaseline) -> None:
-        # fingerprinted now rather than when the span started: an adopted preemptive
-        # generation's user message is updated with the final transcript in between
+        # Keep the content recorded on the span. A preemptive generation's message may
+        # change before it is committed; the next span must then record that edit.
         self._tracker._messages[site] = _MessagesBaseline(
-            item_keys=_item_keys(pending.conversation), span_context=pending.span_context
+            item_keys=pending.item_keys, span_context=pending.span_context
         )
         self._tracker._instructions[site] = pending.instructions
 
@@ -196,7 +196,7 @@ class InputDeltaScope:
                 instructions_base = None
 
         if span.is_recording():
-            pending = _PendingBaseline(conversation, instructions, span_context)
+            pending = _PendingBaseline(_item_keys(conversation), instructions, span_context)
             self._pending[site] = pending
             if self._committed:
                 self._promote(site, pending)
