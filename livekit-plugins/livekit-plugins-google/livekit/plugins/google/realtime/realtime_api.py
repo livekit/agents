@@ -554,7 +554,8 @@ class RealtimeSession(llm.RealtimeSession):
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
         # call ids we made up for tool calls the server sent without one; their responses must
-        # not carry an id, since the server never issued it
+        # not carry an id, since the server never issued it. kept for the session's lifetime: a
+        # resumption can replay a response long after it was first queued
         self._synthetic_call_ids: set[str] = set()
 
         self._session_resumption_handle: str | None = (
@@ -765,9 +766,9 @@ class RealtimeSession(llm.RealtimeSession):
                         _ChatCtxContent(turns=turns, turn_complete=False, item_ids=item_ids)
                     )
             if tool_results:
-                outputs = [item for item in append_ctx.items if item.type == "function_call_output"]
-                self._synthetic_call_ids.difference_update(item.call_id for item in outputs)
-                item_ids = {item.id for item in outputs}
+                item_ids = {
+                    item.id for item in append_ctx.items if item.type == "function_call_output"
+                }
                 self._unsent_item_ids |= item_ids
                 self._send_client_event(
                     _ChatCtxToolResponse(

@@ -688,7 +688,15 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert len(responses) == 1
         assert responses[0].function_responses is not None
         assert responses[0].function_responses[0].id is None
-        assert not session._synthetic_call_ids, "forgotten once answered"
+
+        # a resumption replays the response from the chat context; it still carries no id
+        session._sync_chat_ctx(chat_ctx, known=llm.ChatContext.empty())
+        replayed = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(replayed) == 1
+        assert replayed[0].function_responses is not None
+        assert replayed[0].function_responses[0].id is None
 
 
 def test_vertex_scheduling_warns(
