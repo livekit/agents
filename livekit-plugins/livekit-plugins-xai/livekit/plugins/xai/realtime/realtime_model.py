@@ -126,6 +126,7 @@ class RealtimeModel(openai.realtime.RealtimeModel):
         # xAI force_message drives scripted TTS without a follow-up response.create
         self._capabilities.supports_say = True
         self._provider_label = "xAI Realtime API"
+        self._supports_targeted_cancellation = False
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # manual turn-taking is unsupported (can_disable_turn_detection=False)
