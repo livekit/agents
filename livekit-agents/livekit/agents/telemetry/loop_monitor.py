@@ -502,15 +502,15 @@ class EventLoopMonitor:
 
         Two sources, since the two threads race when a descheduled process resumes: the
         watchdog's recorded late wake-up if it fell inside the window (an older one belongs to
-        a stall already reported), and the time since its last run if it has not run since
-        before the window opened."""
+        a stall already reported), and the time since its last run. The watchdog wakes every
+        tick, so any wait past one tick since its last wake is starvation, wherever in the
+        window that wake fell: a watchdog that ran early in the window and then waited for the
+        GIL has not yet recorded a late wake-up."""
         late, self._watchdog_late = self._watchdog_late, None
         gap = 0.0
         if late is not None and late[0] >= window_start:
             gap = late[1]
-        if self._watchdog_last_wake < window_start:
-            gap = max(gap, now - self._watchdog_last_wake - self._tick)
-        return max(gap, 0.0)
+        return max(gap, now - self._watchdog_last_wake - self._tick, 0.0)
 
     def _watchdog_main(self) -> None:
         while True:
