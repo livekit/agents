@@ -447,3 +447,24 @@ async def test_ndjson_mixed_audio_records(chunks, expected):
         engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
         assert await collect(engine) == expected
         await engine.aclose()
+
+
+@pytest.mark.parametrize("content_type", ["application/x-ndjson", "application/json"])
+@pytest.mark.parametrize("encoding,signature", [("wav", b"NOPE"), ("pcm", b"WAVE")])
+async def test_ndjson_declared_format_controls_decoding(encoding, signature, content_type):
+    payload = b"RIFF\x08\x00\x00\x00" + signature + b"abcd"
+    body = json.dumps(
+        {"encoding": encoding, "audioContent": base64.b64encode(payload).decode()}
+    ).encode()
+
+    async def handler(request):
+        return web.Response(body=body, content_type=content_type)
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        if encoding == "wav":
+            with pytest.raises(APIError):
+                await collect(engine)
+        else:
+            assert await collect(engine) == payload
+        await engine.aclose()
