@@ -9,6 +9,7 @@ from .agent_session import (
     VoiceActivityVideoSampler,
 )
 from .audio_recognition import AudioRecognition
+from .delegation import ClientDelegation, DelegationContext, DelegationRequest
 from .events import (
     AgentEvent,
     AgentFalseInterruptionEvent,
@@ -48,6 +49,9 @@ from .speech_handle import SpeechHandle
 from .transcription import TranscriptSynchronizer, text_transforms
 
 __all__ = [
+    "ClientDelegation",
+    "DelegationContext",
+    "DelegationRequest",
     "AgentSession",
     "ExpressiveOptions",
     "NonverbalOptions",
