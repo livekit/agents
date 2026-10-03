@@ -487,3 +487,48 @@ async def test_labeled_pcm_followed_by_unlabeled_wav():
         engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
         assert await collect(engine) == PCM * 2
         await engine.aclose()
+
+
+@pytest.mark.parametrize("tail", [b"ID3\x00", b"RIFF\x00\x00\x00\x00WAVE"])
+async def test_unlabeled_pcm_continuation_preserves_signature_samples(tail):
+    body = b"\n".join(
+        [
+            json.dumps(
+                {"encoding": "pcm", "audioContent": base64.b64encode(PCM).decode()}
+            ).encode(),
+            json.dumps({"audioContent": base64.b64encode(tail).decode()}).encode(),
+        ]
+    )
+
+    async def handler(request):
+        return web.Response(body=body, content_type="application/x-ndjson")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        assert await collect(engine) == PCM + tail
+        await engine.aclose()
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "application/x-ndjson"])
+@pytest.mark.parametrize("nested", [False, True])
+async def test_wav_container_precedes_linear16_sample_encoding(content_type, nested):
+    audio = base64.b64encode(wav_bytes()).decode()
+    if nested:
+        audio = base64.b64encode(
+            json.dumps({"audio_encoding": "LINEAR16", "audioContent": audio}).encode()
+        ).decode()
+    body = json.dumps(
+        {
+            "output_format": "wav",
+            "audio_config": {"audio_encoding": "LINEAR16"},
+            "audioContent": audio,
+        }
+    ).encode()
+
+    async def handler(request):
+        return web.Response(body=body, content_type=content_type)
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        assert await collect(engine) == PCM
+        await engine.aclose()
