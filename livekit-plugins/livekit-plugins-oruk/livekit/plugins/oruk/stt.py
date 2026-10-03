@@ -33,7 +33,7 @@ class _Request:
 class STT(stt.STT):
     """Final-utterance transcription through the authenticated Oruk API.
 
-    Spectra-2 preview entitlement is required for the default model. Use a VAD
+    Spectra-2 uses your existing Oruk API key and shared plan minutes. Use a VAD
     StreamAdapter for a live agent; this file API does not produce partial words.
     """
 

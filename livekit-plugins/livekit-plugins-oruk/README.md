@@ -1,6 +1,6 @@
 # Oruk hosted STT plugin
 
-This plugin sends final utterances to the authenticated [Oruk speech API](https://oruk.ai/docs). It defaults to Spectra-2 (`oruk-spectra-2`), which requires preview access on the account behind the API key. This is separate from local Orukeet inference: audio leaves the device and uses the account's plan minutes or credits.
+This plugin sends final utterances to the authenticated [Oruk speech API](https://oruk.ai/docs). It defaults to stable Spectra-2 (`oruk-spectra-2`), using your existing Oruk API key and shared speech understanding plan minutes. This is separate from local Orukeet inference: audio leaves the device. Your plan's allowance, overage rate and spending cap apply.
 
 Before a package release, install from this checkout:
 
