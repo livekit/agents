@@ -11,6 +11,7 @@ from livekit.agents.llm import (
     ChatMessage,
     FunctionCall,
     FunctionCallOutput,
+    ImageContent,
     utils,
 )
 from livekit.agents.llm.chat_context import _ReadOnlyChatContext
@@ -1086,3 +1087,61 @@ def test_readonly_chat_ctx_blocks_every_mutation_path():
     # nothing above may reach the context the read-only view was built from
     assert len(ro.items) == 1
     assert len(ctx.items) == 1
+
+
+def _equivalence_items() -> list[Any]:
+    return [
+        ChatMessage(id="m", role="user", content=["hi"]),
+        FunctionCall(id="c", call_id="1", name="f", arguments="{}"),
+        FunctionCallOutput(id="o", call_id="1", name="f", output="ok", is_error=False),
+        AgentHandoff(id="h", new_agent_id="b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("index", "update"),
+    [
+        (0, {"role": "assistant"}),
+        (0, {"content": ["hello"]}),
+        (0, {"interrupted": True}),
+        (1, {"arguments": '{"x": 1}'}),
+        (1, {"name": "g"}),
+        (2, {"output": "nope"}),
+        (2, {"is_error": True}),
+    ],
+)
+def test_essential_field_change_breaks_equivalence_and_fingerprint(
+    index: int, update: dict[str, Any]
+) -> None:
+    items = _equivalence_items()
+    changed = list(items)
+    changed[index] = items[index].model_copy(update=update)
+
+    assert not ChatContext(items).is_equivalent(ChatContext(changed))
+    assert items[index]._fingerprint() != changed[index]._fingerprint()
+
+
+def test_metadata_does_not_affect_equivalence_or_fingerprint() -> None:
+    items = _equivalence_items()
+    changed = [
+        items[0].model_copy(
+            update={"created_at": 0.0, "transcript_confidence": 0.5, "extra": {"k": 1}}
+        ),
+        items[1].model_copy(update={"created_at": 0.0, "group_id": "g"}),
+        items[2].model_copy(update={"created_at": 0.0, "reply_required": False}),
+        # handoffs are compared by id and type only
+        items[3].model_copy(update={"new_agent_id": "c"}),
+    ]
+
+    assert ChatContext(items).is_equivalent(ChatContext(changed))
+    assert [i._fingerprint() for i in items] == [i._fingerprint() for i in changed]
+
+
+def test_fingerprint_does_not_hash_image_payloads() -> None:
+    a = ChatMessage(role="user", content=[ImageContent(id="img", image="data:image/png;base64,AA")])
+    b = a.model_copy(update={"content": [ImageContent(id="img", image="data:image/png;base64,BB")]})
+    other = a.model_copy(
+        update={"content": [ImageContent(id="img2", image="data:image/png;base64,AA")]}
+    )
+    assert a._fingerprint() == b._fingerprint()
+    assert a._fingerprint() != other._fingerprint()

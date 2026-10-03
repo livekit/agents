@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextvars
-import hashlib
 import json
 import os
 from collections.abc import Callable, Iterable, Sequence
@@ -221,33 +220,7 @@ def _is_system_message(item: ChatItem) -> bool:
 
 
 def _item_keys(items: Sequence[ChatItem]) -> list[tuple[str, bytes]]:
-    return [(item.id, _fingerprint(item)) for item in items]
-
-
-def _fingerprint(item: ChatItem) -> bytes:
-    """The fields ``ChatContext.is_equivalent`` treats as essential; timestamps, metrics and
-    transcript confidence are left out, the framework updates those on its own."""
-    from ..llm import AudioContent, ImageContent
-
-    fields: list[Any]
-    if item.type == "message":
-        content: list[Any] = []
-        for c in item.content:
-            if isinstance(c, ImageContent):
-                content.append(["image", c.id])
-            elif isinstance(c, AudioContent):
-                content.append(["audio", c.transcript])
-            else:
-                content.append(c)
-        fields = [item.role, item.interrupted, content]
-    elif item.type == "function_call":
-        fields = [item.name, item.call_id, item.arguments]
-    elif item.type == "function_call_output":
-        fields = [item.name, item.call_id, item.output, item.is_error]
-    else:
-        fields = [item.model_dump(mode="json", exclude={"created_at"})]
-    payload = json.dumps([item.type, *fields], ensure_ascii=False, default=str)
-    return hashlib.blake2b(payload.encode(), digest_size=8).digest()
+    return [(item.id, item._fingerprint()) for item in items]
 
 
 _generation_input: contextvars.ContextVar[GenerationInput | None] = contextvars.ContextVar(
