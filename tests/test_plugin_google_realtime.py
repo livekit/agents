@@ -503,7 +503,7 @@ async def test_session_close_releases_the_genai_client(
     assert closed
 
 
-def _tool_call(call_id: str = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
+def _tool_call(call_id: str | None = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
     return types.LiveServerToolCall(
         function_calls=[types.FunctionCall(id=call_id, name=name, args={})]
     )
@@ -659,6 +659,36 @@ async def test_tool_response_carries_the_call_id(
         assert len(responses) == 1
         assert responses[0].function_responses is not None
         assert responses[0].function_responses[0].id == "fc_1"
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+async def test_tool_response_omits_a_locally_made_call_id(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool
+) -> None:
+    """A call the server sent without an id is answered without one.
+
+    The id we make up to track the call locally names nothing on the server.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        session._opts.tool_behavior = types.Behavior.BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id=None))
+        await _drain_sent(session)
+        assert len(session._synthetic_call_ids) == 1
+        (call_id,) = session._synthetic_call_ids
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id=call_id))
+        await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].id is None
+        assert not session._synthetic_call_ids, "forgotten once answered"
 
 
 def test_vertex_scheduling_warns(

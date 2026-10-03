@@ -553,6 +553,9 @@ class RealtimeSession(llm.RealtimeSession):
         # means we're draining that turn's trailing events (which have no generation to attach
         # to). reset when the next generation starts.
         self._rejected_tool_calls = 0
+        # call ids we made up for tool calls the server sent without one; their responses must
+        # not carry an id, since the server never issued it
+        self._synthetic_call_ids: set[str] = set()
 
         self._session_resumption_handle: str | None = (
             self._opts.session_resumption.handle
@@ -745,6 +748,7 @@ class RealtimeSession(llm.RealtimeSession):
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
                 supports_silent_scheduling=supports_silent_scheduling,
+                synthetic_call_ids=self._synthetic_call_ids,
             )
             turns: list[types.Content] = []
             if self._realtime_model.capabilities.mutable_chat_context:
@@ -761,9 +765,9 @@ class RealtimeSession(llm.RealtimeSession):
                         _ChatCtxContent(turns=turns, turn_complete=False, item_ids=item_ids)
                     )
             if tool_results:
-                item_ids = {
-                    item.id for item in append_ctx.items if item.type == "function_call_output"
-                }
+                outputs = [item for item in append_ctx.items if item.type == "function_call_output"]
+                self._synthetic_call_ids.difference_update(item.call_id for item in outputs)
+                item_ids = {item.id for item in outputs}
                 self._unsent_item_ids |= item_ids
                 self._send_client_event(
                     _ChatCtxToolResponse(
@@ -1559,6 +1563,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ),
                 vertexai=self._opts.vertexai,
                 tool_response_scheduling=self._opts.tool_response_scheduling,
+                send_id=bool(fnc_call.id),
             )
             for fnc_call in function_calls
         ]
@@ -1572,10 +1577,14 @@ class RealtimeSession(llm.RealtimeSession):
         gen = self._current_generation
         for fnc_call in tool_call.function_calls or []:
             arguments = json.dumps(fnc_call.args)
+            call_id = fnc_call.id
+            if not call_id:
+                call_id = utils.shortuuid("fnc-call-")
+                self._synthetic_call_ids.add(call_id)
 
             gen.function_ch.send_nowait(
                 llm.FunctionCall(
-                    call_id=fnc_call.id or utils.shortuuid("fnc-call-"),
+                    call_id=call_id,
                     name=fnc_call.name,
                     arguments=arguments,
                 )
