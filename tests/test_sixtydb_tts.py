@@ -361,3 +361,24 @@ async def test_later_piece_error_emits_no_partial_audio():
                     events.append(event)
         assert not events and calls == 2
         await engine.aclose()
+
+
+@pytest.mark.parametrize("text", ["a" * 5000 + " ", "a" * 5000 + "\n\t", " " * 6000 + "spoken"])
+async def test_splitter_never_sends_whitespace_only_request(text):
+    requests = []
+
+    async def handler(request):
+        piece = (await request.json())["text"]
+        requests.append(piece)
+        if not piece.strip():
+            return web.Response(status=400)
+        return web.Response(body=PCM, content_type="audio/pcm")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        async with engine.synthesize(text, conn_options=OPTIONS) as stream:
+            events = [event async for event in stream]
+        await engine.aclose()
+    assert requests and all(piece.strip() and len(piece) <= 5000 for piece in requests)
+    assert "".join(requests).strip() == text.strip()
+    assert b"".join(bytes(event.frame.data) for event in events) == PCM * len(requests)

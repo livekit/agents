@@ -207,7 +207,7 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
             audio = bytearray()
-            remaining = self._input_text
+            remaining = self._input_text.rstrip()
             while remaining:
                 end = min(len(remaining), 5000)
                 if end < len(remaining):
@@ -217,7 +217,9 @@ class ChunkedStream(tts.ChunkedStream):
                     )
                     if boundary >= 0:
                         end = boundary + 1
-                audio.extend(await self._synthesize_piece(remaining[:end]))
+                piece = remaining[:end]
+                if piece.strip():
+                    audio.extend(await self._synthesize_piece(piece))
                 if len(audio) > _MAX_RESPONSE_BYTES:
                     raise ValueError("60db audio exceeds 32 MiB")
                 remaining = remaining[end:]

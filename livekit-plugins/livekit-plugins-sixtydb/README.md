@@ -27,7 +27,8 @@ requests; active requests retain their original settings.
 WebSocket input streaming is not implemented. Responses are buffered (maximum
 32 MiB) and validated before playback, so time to first audio includes the full
 HTTP synthesis, including all pieces of a long sentence. Longer input is split
-into requests of at most 5000 characters while preserving text and audio order.
+into requests of at most 5000 characters while preserving speech text and audio
+order. Trailing whitespace and whitespace-only pieces are not synthesized.
 Each request has a 60-second total
 timeout, and uses LiveKit's connection options for connect/read timeouts.
 
