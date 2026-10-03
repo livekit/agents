@@ -35,7 +35,9 @@ timeout, and uses LiveKit's connection options for connect/read timeouts.
 NDJSON encoding declarations apply until another declaration or a recognized WAV
 container is encountered. Unlabeled PCM chunks retain their sample bytes, even
 when they begin with an audio-file signature. Explicit `pcm` or `wav` metadata
-resolves ambiguous payloads.
+resolves ambiguous payloads. Binary `audio/pcm` responses likewise retain their
+sample bytes; an audio-file prefix cannot identify compression in declared raw
+PCM. Untyped binary responses are inferred and reject known compressed prefixes.
 
 An injected `http_session` belongs to the caller and is not closed by the plugin.
 Without one, the plugin reuses LiveKit's managed HTTP session. Text is sent to
