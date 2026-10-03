@@ -51,6 +51,6 @@ GnaniTTSLanguages = Literal[
 """``language`` is honored by ``timbre-v2.5`` only. See
 https://docs.gnani.ai/api/TTS/tts-inference#supported-languages"""
 
-GnaniTTSEncodings = Literal["linear_pcm", "oggopus"]
-GnaniTTSContainers = Literal["raw", "mp3", "wav", "ogg"]
-GnaniTTSBitrates = Literal["96k", "128k", "192k"]
+GnaniTTSEncodings = Literal["linear_pcm", "oggopus", "pcm_mulaw", "pcm_alaw"]
+GnaniTTSContainers = Literal["raw", "mp3", "wav", "ogg", "mulaw", "alaw"]
+GnaniTTSBitrates = Literal["32k", "64k", "96k", "128k", "192k"]

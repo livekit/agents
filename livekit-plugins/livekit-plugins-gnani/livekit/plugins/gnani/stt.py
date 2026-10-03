@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 from .log import logger
 from .models import GnaniSTTLanguages
+from .request_id import _generate_request_id
 
 GnaniSTTFormat = Literal["verbatim", "transcribe"]
 
@@ -215,8 +216,11 @@ class STT(stt.STT):
         if self._opts.itn_native_numerals:
             form_data.add_field("itn_native_numerals", "true")
 
+        request_id = _generate_request_id()
         headers: dict[str, str] = {
             "X-API-Key-ID": self._opts.api_key,
+            "X-API-Request-ID": request_id,
+            "X-Source": "livekit",
         }
 
         try:
@@ -240,11 +244,11 @@ class STT(stt.STT):
 
                 response_json = await res.json()
                 transcript = response_json.get("transcript", "")
-                request_id = response_json.get("request_id", "")
+                api_request_id = response_json.get("request_id", request_id)
 
                 return stt.SpeechEvent(
                     type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                    request_id=request_id,
+                    request_id=api_request_id,
                     alternatives=[
                         stt.SpeechData(
                             language=LanguageCode(lang),
@@ -321,10 +325,13 @@ class SpeechStream(stt.RecognizeStream):
         import websockets
 
         ws_url = self._build_ws_url()
+        ws_request_id = _generate_request_id()
         headers: dict[str, str] = {
             "x-api-key-id": self._opts.api_key,
             "lang_code": self._opts.language,
             "x-sample-rate": str(self._opts.sample_rate),
+            "x-api-request-id": ws_request_id,
+            "x-source": "livekit",
         }
         if self._opts.format != "verbatim":
             headers["x-format"] = self._opts.format
