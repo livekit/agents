@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import gc
+import threading
 import time
+import weakref
 from collections.abc import Iterator
 from types import SimpleNamespace
 
@@ -823,6 +826,46 @@ async def test_sampler_finds_the_loop_thread_by_the_blocked_task(
     assert "time.sleep" in attrs[trace_types.ATTR_BLOCKING_STACK]
     assert attrs[trace_types.ATTR_BLOCKING_TASK] == "blocked_task"
     assert monitor._loop_thread_ident == __import__("threading").get_ident()
+
+
+def test_a_stack_sample_frees_the_sampled_threads_frames_on_return() -> None:
+    """A stack sample must not leave a reference cycle behind. Through one, it would keep the
+    frame of every thread it saw, with all of its locals, alive until a cyclic collection.
+    The automatic collector is off, so only reference counting can free the sampled local."""
+
+    class Payload:
+        pass
+
+    held = threading.Event()
+    release = threading.Event()
+    payload_ref: list[weakref.ref[Payload]] = []
+
+    def hold_a_local() -> None:
+        payload = Payload()
+        payload_ref.append(weakref.ref(payload))
+        held.set()
+        release.wait(5)
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=hold_a_local)
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        thread.start()
+        assert held.wait(5)
+        m._loop_thread_ident = thread.ident
+        sample = m._sample_loop_thread(lag=WARN)
+        assert any(f.name == "hold_a_local" for f in sample.frames)
+        release.set()
+        thread.join(5)
+        assert payload_ref[0]() is None, "the sample keeps the sampled thread's frame alive"
+    finally:
+        release.set()
+        thread.join(5)
+        if gc_was_enabled:
+            gc.enable()
+        loop.close()
 
 
 def test_import_block_names_the_module_and_the_caller(
