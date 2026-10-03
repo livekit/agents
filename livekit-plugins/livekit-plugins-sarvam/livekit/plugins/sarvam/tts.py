@@ -26,6 +26,7 @@ import enum
 import json
 import os
 import platform
+import re
 import weakref
 from dataclasses import dataclass, replace
 from typing import Literal
@@ -69,8 +70,12 @@ _WS_HEARTBEAT_INTERVAL: float = 20.0
 _KEEPALIVE_INTERVAL: float = 30.0
 
 # Sarvam TTS specific models and speakers
-SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3"]
+SarvamTTSModels = Literal["bulbul:v2", "bulbul:v3-beta", "bulbul:v3", "bulbul:v4-flash"]
 SarvamTTSOutputAudioBitrate = Literal["32k", "64k", "96k", "128k", "192k"]
+
+# bulbul:v4-flash rides the same pipeline as v3/v3-beta: temperature and the websocket
+# buffering knobs apply to all three.
+_V3_PIPELINE_MODELS = ("bulbul:v3", "bulbul:v3-beta", "bulbul:v4-flash")
 
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
@@ -157,19 +162,32 @@ def _decode_telephony(codec: str, data: bytes) -> bytes:
     return pcm.astype("<i2").tobytes()
 
 
-# Supported languages in BCP-47 format
+# Supported languages in BCP-47 format. The IN22 languages are bulbul:v4-flash only and
+# additionally require the `enable_in22_languages` flag on the subscription.
 SarvamTTSLanguages = Literal[
+    "as-IN",  # Assamese (IN22)
     "bn-IN",  # Bengali
+    "brx-IN",  # Bodo (IN22)
+    "doi-IN",  # Dogri (IN22)
     "en-IN",  # English (India)
     "gu-IN",  # Gujarati
     "hi-IN",  # Hindi
     "kn-IN",  # Kannada
+    "kok-IN",  # Konkani (IN22)
+    "ks-IN",  # Kashmiri (IN22)
+    "mai-IN",  # Maithili (IN22)
     "ml-IN",  # Malayalam
+    "mni-IN",  # Manipuri (IN22)
     "mr-IN",  # Marathi
+    "ne-IN",  # Nepali (IN22)
     "od-IN",  # Odia
     "pa-IN",  # Punjabi
+    "sa-IN",  # Sanskrit (IN22)
+    "sat-IN",  # Santali (IN22)
+    "sd-IN",  # Sindhi (IN22)
     "ta-IN",  # Tamil
     "te-IN",  # Telugu
+    "ur-IN",  # Urdu (IN22)
 ]
 
 SarvamTTSSpeakers = Literal[
@@ -216,6 +234,235 @@ SarvamTTSSpeakers = Literal[
     "tanya",
     "shruti",
     "kavitha",
+]
+
+# bulbul:v4-flash wire names. v4-flash shares no public speaker name with v3, and the
+# target language is encoded in the name itself (``_as_``, ``_en_``, ``_enhi_``, ...).
+BULBUL_V4_FLASH_SPEAKERS = [
+    "kangkana_as_conversational",
+    "mouchumi_as_conversational",
+    "bappa_bn_conversation",
+    "roopa_bn_conversational",
+    "bimal_bn_suspense",
+    "aditi_en_stories",
+    "aparna_en_companion",
+    "aparna_en_edtech",
+    "ashwin_en_sports",
+    "ashwin_en_sports_energetic",
+    "chandrika_en_stories",
+    "dev_en_recovery",
+    "dev_en_conversational",
+    "deven_en_conversation",
+    "ishita_en_customer",
+    "ishita_en_medical",
+    "ishita_en_numbers",
+    "ishita_en_social",
+    "ishita_en_stories",
+    "kalpit_en_edtech",
+    "nachiket_en_ads",
+    "neha_en_customer",
+    "neha_en_latenight",
+    "nupur_en_kids",
+    "ojas_en_social",
+    "ritu_en_edtech",
+    "ritu_en_latenight",
+    "ritu_en_medical",
+    "ritu_en_reels",
+    "rohan_en_recovery",
+    "roopa_en_conversational",
+    "rustom_en_suspense",
+    "sanchita_en_companion",
+    "sanchita_en_insurance",
+    "sanchita_en_recovery",
+    "sanchita_en_market",
+    "sanchita_en_social",
+    "shabana_en_edtech",
+    "shalini_en_companion",
+    "shalini_en_customer",
+    "shubh_en_narration",
+    "shubh_en_numbers",
+    "shubh_en_ads",
+    "shubh_en_recovery",
+    "shubh_en_audiobook",
+    "shubh_en_narration_gentle",
+    "shubh_en_sports",
+    "simran_en_narration",
+    "simran_en_automobile",
+    "simran_en_conversation",
+    "simran_en_customer",
+    "simran_en_edtech",
+    "simran_en_edtech_bot",
+    "simran_en_sales",
+    "simran_en_recovery",
+    "simran_en_ads",
+    "simran_en_therapist",
+    "sunny_en_social",
+    "varun_en_ads",
+    "varun_en_suspense",
+    "zarina_en_conversation",
+    "amelia_en_conversational",
+    "sophia_en_conversational",
+    "girish_en_documentary",
+    "girish_en_devotional",
+    "payal_en_edtech",
+    "sarang_en_narration",
+    "ishita_enhi_companion",
+    "ishita_enhi_customer",
+    "ishita_enhi_customer_expressive",
+    "sanchita_enhi_companion",
+    "shalini_enhi_companion",
+    "shalini_enhi_customer",
+    "shubh_enhi_companion",
+    "shubh_enhi_ads",
+    "shubh_enhi_banking",
+    "simran_enhi_companion",
+    "simran_enhi_customer",
+    "simran_enhi_banking_expressive",
+    "sunny_enhi_customer",
+    "bhavik_gu_conversation",
+    "pooja_gu_conversational",
+    "pooja_gu_customer",
+    "aayan_hi_conversational",
+    "amit_hi_conversational",
+    "ashutosh_hi_conversational",
+    "kabir_hi_conversational",
+    "kavya_hi_conversational",
+    "manan_hi_conversational",
+    "rahul_hi_conversational",
+    "sumit_hi_conversational",
+    "aditya_hi_conversational",
+    "aditya_hi_sales",
+    "anand_hi_documentary",
+    "anand_hi_news",
+    "aparna_hi_customer",
+    "aparna_hi_kyc",
+    "ashok_hi_character",
+    "ashok_hi_news",
+    "chhavi_hi_kids",
+    "ishita_hi_ads",
+    "ishita_hi_edtech",
+    "ishita_hi_banking",
+    "ishita_hi_ads_informal",
+    "ishita_hi_devotional",
+    "ishita_hi_numbers",
+    "ishita_hi_social",
+    "kunal_hi_kids",
+    "mahesh_hi_documentary",
+    "mani_hi_devotional",
+    "mani_hi_conversational",
+    "mohit_hi_conversational",
+    "nachiket_hi_devotional",
+    "priya_hi_recovery",
+    "ratan_hi_latenight",
+    "ratan_hi_customer_expressive",
+    "ratan_hi_documentary",
+    "ratan_hi_devotional",
+    "ratan_hi_recovery",
+    "ratan_hi_social",
+    "ratan_hi_sports",
+    "ratan_hi_latenight_warm",
+    "rehan_hi_social",
+    "ritu_hi_customer_utility",
+    "ritu_hi_kids",
+    "ritu_hi_conversation",
+    "ritu_hi_customer",
+    "ritu_hi_edtech",
+    "ritu_hi_ads_formal",
+    "ritu_hi_banking",
+    "ritu_hi_ads_informal",
+    "ritu_hi_insurance",
+    "ritu_hi_edtech_bot",
+    "ritu_hi_medical",
+    "ritu_hi_sales",
+    "ritu_hi_reels",
+    "ritu_hi_social",
+    "ritu_hi_customer_warm",
+    "ritu_hi_social_lively",
+    "roopa_hi_companion",
+    "roopa_hi_narration",
+    "roopa_hi_recovery",
+    "roopa_hi_market",
+    "roopa_hi_conversational",
+    "sanchita_hi_assistant",
+    "sanchita_hi_edtech",
+    "sanchita_hi_banking",
+    "sanchita_hi_feedback",
+    "sanchita_hi_ads_formal",
+    "sanchita_hi_ads_informal",
+    "sanchita_hi_interview",
+    "sanchita_hi_romantic",
+    "sanchita_hi_market",
+    "sanchita_hi_social",
+    "sanchita_hi_kyc",
+    "sarika_hi_conversation",
+    "shalini_hi_companion",
+    "shalini_hi_social",
+    "shreya_hi_conversational",
+    "shreya_hi_news",
+    "shruti_hi_edtech",
+    "shubh_hi_customer",
+    "shubh_hi_ecomm",
+    "shubh_hi_stories_mixed",
+    "shubh_hi_devotional",
+    "shubh_hi_ads",
+    "shubh_hi_recovery",
+    "shubh_hi_stories_dramatic",
+    "simran_hi_assistant",
+    "simran_hi_narration",
+    "simran_hi_automobile",
+    "simran_hi_conversation",
+    "simran_hi_news_breaking",
+    "simran_hi_social_energetic",
+    "simran_hi_social_excited",
+    "simran_hi_latenight",
+    "simran_hi_news",
+    "simran_hi_recovery",
+    "simran_hi_sales",
+    "suchitra_hi_ecomm",
+    "suhani_hi_social",
+    "sunny_hi_ads",
+    "sunny_hi_reels",
+    "tarun_hi_conversational",
+    "tarun_hi_sales",
+    "chaitra_hi_customer",
+    "shilpa_hi_narration",
+    "tanya_hi_narration",
+    "aarti_hi_customer",
+    "advait_hi_character",
+    "aryaman_hi_ads",
+    "chirag_hi_social",
+    "girish_hi_devotional",
+    "mukul_hi_ads",
+    "mukul_hi_suspense",
+    "suman_hi_companion",
+    "vaibhav_hi_social",
+    "vandana_hi_ecomm",
+    "vipul_hi_social",
+    "chaitra_kn_conversation",
+    "chaitra_kn_narration",
+    "chetan_kn_conversation",
+    "suchitra_kn_narration",
+    "ishita_mr_conversational",
+    "mrunal_mr_narration",
+    "neha_mr_narration",
+    "nilesh_mr_conversation",
+    "ritu_mr_insurance",
+    "ritu_mr_narration",
+    "rupali_mr_stories",
+    "soham_mr_narration",
+    "mukul_mr_stories",
+    "anand_pa_conversation",
+    "anand_pa_customer",
+    "harpreet_pa_narration",
+    "jaspal_pa_banking",
+    "gokul_ta_narration",
+    "vetri_ta_ads",
+    "vetri_ta_suspense",
+    "vijay_ta_narration",
+    "kavitha_te_conversation",
+    "kavitha_te_narration",
+    "pooja_te_conversation",
+    "tarun_te_narration",
 ]
 
 # Model-Speaker compatibility mapping
@@ -351,6 +598,7 @@ MODEL_SPEAKER_COMPATIBILITY = {
             "kavitha",
         ],
     },
+    "bulbul:v4-flash": {"all": BULBUL_V4_FLASH_SPEAKERS},
 }
 
 
@@ -379,6 +627,48 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
+# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v2/v3.
+_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "pitch": (-0.75, 0.75),
+    "pace": (0.3, 3.0),
+    "loudness": (0.5, 2.0),
+    "temperature": (0.01, 2.0),
+}
+_V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "pitch": (-0.5, 0.5),
+    "pace": (0.5, 2.0),
+    "loudness": (0.1, 2.5),
+    "temperature": (0.01, 1.0),
+}
+
+
+def _param_bounds(model: str, param: str) -> tuple[float, float]:
+    """Accepted range for a synthesis parameter on the given model."""
+    return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS)[param]
+
+
+def _validate_param(model: str, param: str, value: float) -> None:
+    """Raise if a synthesis parameter is outside the range the model accepts."""
+    low, high = _param_bounds(model, param)
+    if not low <= value <= high:
+        raise ValueError(f"{param} must be between {low} and {high} for model '{model}'")
+
+
+def _clamp_pitch(model: str, pitch: float) -> float:
+    low, high = _param_bounds(model, "pitch")
+    if not low <= pitch <= high:
+        logger.warning(
+            "pitch value %.2f is outside the Sarvam API accepted range [%s, %s] for %s; "
+            "clamping to nearest bound. Please update your code.",
+            pitch,
+            low,
+            high,
+            model,
+        )
+        return max(low, min(high, pitch))
+    return pitch
+
+
 @dataclass
 class SarvamTTSOptions:
     """Options for the Sarvam.ai TTS service.
@@ -388,16 +678,20 @@ class SarvamTTSOptions:
         api_key: Sarvam.ai API key
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
-        pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
-        loudness: Volume multiplier (0.5 to 2.0)
-        temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
+        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash)
+        pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
+        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash)
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
+            used for v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
+            forces it to 0.6 server-side, so setting it there has no effect.
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
-        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
-        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000;
+            streaming bulbul:v4-flash is limited to 8000, 16000, 22050 or 24000)
+        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 and bulbul:v4-flash;
+            bulbul:v4-flash forces it on server-side regardless of this value)
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         model: The Sarvam TTS model to use
         base_url: API endpoint URL
@@ -428,6 +722,71 @@ class SarvamTTSOptions:
     output_audio_codec: str = "mp3"
 
 
+# Streaming bulbul:v4-flash rejects the higher REST sample rates, and OPUS narrows it further.
+_V4_STREAM_SAMPLE_RATES = (8000, 16000, 22050, 24000)
+_V4_STREAM_OPUS_SAMPLE_RATES = (8000, 16000, 24000)
+
+
+def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
+    """Model-specific fields shared by the REST body and the websocket config."""
+    extra: dict[str, object] = {}
+    if opts.model in ("bulbul:v2", "bulbul:v4-flash"):
+        extra["pitch"] = opts.pitch
+        extra["loudness"] = opts.loudness
+        extra["enable_preprocessing"] = opts.enable_preprocessing
+    # v3 and v4 silently ignore caching, so it is only ever sent for v2
+    if opts.model == "bulbul:v2" and opts.enable_cached_responses is not None:
+        extra["enable_cached_responses"] = opts.enable_cached_responses
+    if opts.model in _V3_PIPELINE_MODELS:
+        extra["temperature"] = opts.temperature
+    if opts.model in ("bulbul:v3", "bulbul:v4-flash") and opts.dict_id is not None:
+        extra["dict_id"] = opts.dict_id
+    return extra
+
+
+def _websocket_url(opts: SarvamTTSOptions) -> str:
+    """Build the TTS websocket URL, validating the stream-only limits of bulbul:v4-flash."""
+
+    url = opts.ws_url
+    if opts.model == "bulbul:v4-flash":
+        allowed = (
+            _V4_STREAM_OPUS_SAMPLE_RATES
+            if opts.output_audio_codec == "opus"
+            else _V4_STREAM_SAMPLE_RATES
+        )
+        if opts.speech_sample_rate not in allowed:
+            raise ValueError(
+                f"speech_sample_rate must be one of {', '.join(str(r) for r in allowed)} "
+                f"when streaming bulbul:v4-flash with codec '{opts.output_audio_codec}'"
+            )
+        if not url.rstrip("/").endswith("/v2"):
+            url = f"{url.rstrip('/')}/v2"
+    return f"{url}?model={opts.model}&send_completion_event={opts.send_completion_event}"
+
+
+_MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
+
+
+def _error_status_code(error_data: object) -> int:
+    """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
+
+    Schema rejections carry an integer ``code`` (e.g. 422). Others omit it and prefix
+    the message instead, as in ``"400: Speaker '...' is not compatible with model
+    bulbul:v4-flash"``. Returns -1 when neither form is present.
+    """
+    if not isinstance(error_data, dict):
+        return -1
+
+    code = error_data.get("code")
+    if isinstance(code, bool):  # bool is an int subclass; never a status code
+        return -1
+    if isinstance(code, int):
+        return code
+
+    match = _MESSAGE_STATUS_RE.match(str(error_data.get("message", "")))
+    return int(match.group(1)) if match else -1
+
+
 class TTS(tts.TTS):
     """Sarvam.ai Text-to-Speech implementation.
 
@@ -440,16 +799,21 @@ class TTS(tts.TTS):
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
-        loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
-        temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
-        dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
+        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash) -
+            only supported in v2 and v4-flash
+        pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
+        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash) -
+            only supported in v2 and v4-flash
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
+            only used in v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
+            forces it to 0.6 server-side, so setting it there has no effect.
+        dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
-        enable_preprocessing: Whether to use text preprocessing
+        enable_preprocessing: Whether to use text preprocessing (bulbul:v4-flash forces it
+            on server-side regardless of this value)
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
@@ -501,25 +865,18 @@ class TTS(tts.TTS):
             raise ValueError("Model is required and cannot be empty")
         if speaker is None:
             # speaker = "shubh"
-            if model == "bulbul:v3-beta" or model == "bulbul:v3":
+            if model == "bulbul:v4-flash":
+                speaker = "shubh_en_narration_gentle"
+            elif model == "bulbul:v3-beta" or model == "bulbul:v3":
                 speaker = "shubh"
             else:
                 speaker = "anushka"
 
         # Validate parameter ranges
-        if not -0.75 <= pitch <= 0.75:
-            logger.warning(
-                "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
-                "clamping to nearest bound. Please update your code.",
-                pitch,
-            )
-            pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
-        if not 0.5 <= loudness <= 2.0:
-            raise ValueError("Loudness must be between 0.5 and 2.0")
-        if not 0.01 <= temperature <= 2.0:
-            raise ValueError("Temperature must be between 0.01 and 2.0")
+        pitch = _clamp_pitch(model, pitch)
+        _validate_param(model, "pace", pace)
+        _validate_param(model, "loudness", loudness)
+        _validate_param(model, "temperature", temperature)
         if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
             raise ValueError(
                 f"output_audio_bitrate must be one of {', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
@@ -576,6 +933,11 @@ class TTS(tts.TTS):
         # the connection sits idle in the pool. Sarvam closes idle connections
         # after 60 s; pinging every 30 s keeps them alive for reuse.
         self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
+        # Maps id(ws) -> the options that socket was handshaken with. The pool
+        # builds sockets from whatever options this TTS holds at connect time,
+        # while each stream carries its own snapshot, so a stream reads these
+        # to keep its config frame from contradicting the socket it was handed.
+        self._ws_handshake_opts: dict[int, SarvamTTSOptions] = {}
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -593,7 +955,7 @@ class TTS(tts.TTS):
             "Accept-Encoding": "gzip, deflate, br",
         }
         # Add model parameter to URL like the client does
-        ws_url = f"{self._opts.ws_url}?model={self._opts.model}&send_completion_event={self._opts.send_completion_event}"
+        ws_url = _websocket_url(self._opts)
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
@@ -621,10 +983,12 @@ class TTS(tts.TTS):
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
         self._start_keepalive(ws)
+        self._ws_handshake_opts[id(ws)] = replace(self._opts)
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._stop_keepalive(ws)
+        self._ws_handshake_opts.pop(id(ws), None)
         await ws.close()
 
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
@@ -752,62 +1116,41 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
-        """Update TTS options with validation."""
+        """Update TTS options with validation.
+
+        Changes land on a copy that is committed only after every model-dependent
+        limit validates against the resulting model. A rejected update therefore
+        leaves the live options untouched, and switching models cannot carry over
+        a speaker or a pitch/pace/loudness/temperature the new model refuses.
+        """
+        opts = replace(self._opts)
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            opts.target_language_code = LanguageCode(target_language_code)
 
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                        "all", []
-                    )
-                    raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers)}"
-                    )
+            opts.model = model
+
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
-                raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
-                )
-            self._opts.speaker = speaker
+            opts.speaker = speaker
 
         if pitch is not None:
-            if not -0.75 <= pitch <= 0.75:
-                logger.warning(
-                    "pitch value %.2f is outside the Sarvam API accepted range [-0.75, 0.75]; "
-                    "clamping to nearest bound. Please update your code.",
-                    pitch,
-                )
-                pitch = max(-0.75, min(0.75, pitch))
-            self._opts.pitch = pitch
+            opts.pitch = pitch
 
         if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
-            self._opts.pace = pace
+            opts.pace = pace
 
         if loudness is not None:
-            if not 0.5 <= loudness <= 2.0:
-                raise ValueError("Loudness must be between 0.5 and 2.0")
-            self._opts.loudness = loudness
+            opts.loudness = loudness
 
         if temperature is not None:
-            if not 0.01 <= temperature <= 2.0:
-                raise ValueError("Temperature must be between 0.01 and 2.0")
-            self._opts.temperature = temperature
+            opts.temperature = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -815,29 +1158,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            opts.output_audio_bitrate = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            opts.min_buffer_size = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            opts.max_chunk_length = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            opts.enable_preprocessing = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            opts.dict_id = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            opts.enable_cached_responses = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            opts.send_completion_event = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -845,7 +1188,34 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            opts.output_audio_codec = output_audio_codec
+
+        # Re-check every model-dependent limit against the resulting model, not just
+        # the arguments this call passed: the v4-flash speaker catalogue and bounds
+        # are disjoint from v3's, so a bare model switch can invalidate stored values.
+        if opts.speaker is not None and not validate_model_speaker_compatibility(
+            opts.model, opts.speaker
+        ):
+            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(opts.model, {}).get("all", [])
+            raise ValueError(
+                f"Speaker '{opts.speaker}' incompatible with {opts.model}. "
+                f"Compatible speakers: {', '.join(compatible_speakers)}"
+            )
+        _validate_param(opts.model, "pace", opts.pace)
+        _validate_param(opts.model, "loudness", opts.loudness)
+        _validate_param(opts.model, "temperature", opts.temperature)
+        opts.pitch = _clamp_pitch(opts.model, opts.pitch)
+
+        # model and send_completion_event are pinned in the handshake URL (and v4-flash
+        # is served on a different path), so a pooled socket would keep synthesising
+        # with the previous ones. Retire them; checked-out streams finish untouched.
+        reconnect = (opts.model, opts.send_completion_event) != (
+            self._opts.model,
+            self._opts.send_completion_event,
+        )
+        self._opts = opts
+        if reconnect:
+            self._pool.invalidate()
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -885,7 +1255,7 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         """Run the Sarvam.ai TTS request and emit audio via the output emitter."""
-        payload = {
+        payload: dict[str, object] = {
             "target_language_code": self._opts.target_language_code,
             "text": self._input_text,
             "speaker": self._opts.speaker,
@@ -897,19 +1267,7 @@ class ChunkedStream(tts.ChunkedStream):
             "max_chunk_length": self._opts.max_chunk_length,
             "output_audio_codec": self._opts.output_audio_codec,
         }
-        # Only include pitch and loudness for v2 model (not supported in v3 or v3-beta)
-        if self._opts.model == "bulbul:v2":
-            payload["pitch"] = self._opts.pitch
-            payload["loudness"] = self._opts.loudness
-            payload["enable_preprocessing"] = self._opts.enable_preprocessing
-            if self._opts.enable_cached_responses is not None:
-                payload["enable_cached_responses"] = self._opts.enable_cached_responses
-        # temperature is supported only for v3 and v3-beta; ignored for v2
-        if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
-            payload["temperature"] = self._opts.temperature
-        # dict_id is supported only for v3 (not v3-beta)
-        if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
-            payload["dict_id"] = self._opts.dict_id
+        payload.update(_model_extra_fields(self._opts))
         headers = {
             "api-subscription-key": self._opts.api_key,
             "Content-Type": "application/json",
@@ -1043,6 +1401,36 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
             output_emitter.end_input()
 
+    def _adopt_handshake_opts(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Align this stream's model with the socket the pool handed it.
+
+        The pool builds sockets from the TTS's options at connect time while each
+        stream carries its own snapshot, so a stream constructed before a model
+        switch would otherwise send a config frame for the old model over a socket
+        handshaken for the new one -- and v4-flash is served on a different path.
+
+        Only ``model`` is carried by both the handshake and the config frame, so it
+        is the only field that has to agree. Everything else in the frame is sent
+        per segment and legitimately follows this stream's snapshot.
+        """
+        handshake = self._tts._ws_handshake_opts.get(id(ws))
+        if handshake is None or handshake.model == self._opts.model:
+            # The socket already speaks this stream's model, so its speaker and
+            # tuning are valid and must win. Taking the socket's instead would
+            # revert a config-only update_options for as long as it stays pooled.
+            return
+
+        # A different model, so this stream's speaker and tuning bounds are not
+        # valid for it; take the whole model-coupled set from the socket. Language,
+        # sample rate and codec ride in the config frame and the output emitter is
+        # already initialized from them, so those stay snapshotted.
+        self._opts = replace(
+            handshake,
+            target_language_code=self._opts.target_language_code,
+            speech_sample_rate=self._opts.speech_sample_rate,
+            output_audio_codec=self._opts.output_audio_codec,
+        )
+
     async def _run_ws(
         self, word_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
     ) -> None:
@@ -1066,22 +1454,16 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "speech_sample_rate": self._opts.speech_sample_rate,
                     "output_audio_codec": self._opts.output_audio_codec,
                 }
-                if self._opts.model == "bulbul:v2":
-                    data["pitch"] = self._opts.pitch
-                    data["loudness"] = self._opts.loudness
-                    data["enable_preprocessing"] = self._opts.enable_preprocessing
-                    if self._opts.enable_cached_responses is not None:
-                        data["enable_cached_responses"] = self._opts.enable_cached_responses
-                if self._opts.model in ("bulbul:v3", "bulbul:v3-beta"):
-                    data["temperature"] = self._opts.temperature
+                data.update(_model_extra_fields(self._opts))
+                if self._opts.model in _V3_PIPELINE_MODELS:
                     data["output_audio_bitrate"] = self._opts.output_audio_bitrate
                     data["min_buffer_size"] = self._opts.min_buffer_size
                     data["max_chunk_length"] = self._opts.max_chunk_length
-                if self._opts.model == "bulbul:v3" and self._opts.dict_id is not None:
-                    data["dict_id"] = self._opts.dict_id
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
-                    "Sending TTS config", extra={**self._build_log_context(), "config": config_msg}
+                    "Sending TTS config",
+                    # carries speaker and dict_id, so it is tagged for redaction
+                    extra={**self._build_log_context(), "lk.pii.config": config_msg},
                 )
                 await ws.send_str(json.dumps(config_msg))
                 input_sent_event.set()
@@ -1224,6 +1606,7 @@ class SynthesizeStream(tts.SynthesizeStream):
                 # that returned this connection to the pool.
                 await self._tts._stop_keepalive(ws)
                 keepalive_should_resume = False
+                self._adopt_handshake_opts(ws)
 
                 try:
                     self._acquire_time = self._tts._pool.last_acquire_time
@@ -1360,31 +1743,34 @@ class SynthesizeStream(tts.SynthesizeStream):
         """Handle error messages from the API."""
         error_data = resp.get("data", {})
         error_msg = error_data.get("message", "Unknown error")
-        error_code = error_data.get("code", "unknown")
-        raw_error_message = json.dumps(resp, ensure_ascii=False, separators=(",", ":"))
+        error_code = _error_status_code(error_data)
 
+        # The provider decides what goes in these fields, so they are tagged for
+        # redaction and kept out of the log body, which collectors cannot redact.
+        # This is the one place the frame is recorded in full.
         logger.error(
-            f"TTS API error: {error_msg}",
+            "TTS API error",
             extra={
                 **self._build_log_context(),
                 "error_code": error_code,
-                "error_message": error_msg,
+                "lk.pii.error_message": error_msg,
                 "lk.pii.raw_message": resp,
             },
         )
 
-        # Determine if error is recoverable based on error code/type
-        recoverable_errors = ["rate_limit", "temporary_unavailable", "timeout"]
-        is_recoverable = any(err in str(error_msg).lower() for err in recoverable_errors)
-
-        if is_recoverable:
-            raise APIConnectionError(f"Recoverable TTS API error from Sarvam: {raw_error_message}")
-        else:
-            raise APIStatusError(
-                message=f"TTS API error from Sarvam: {raw_error_message}",
-                status_code=500,
-                body=resp,
-            )
+        # APIStatusError derives retryability from the status code (4xx permanent
+        # except 408/429/499, 5xx transient), so forwarding Sarvam's own code is
+        # all that is needed -- an unrecognized frame stays retryable via -1.
+        #
+        # Nothing provider-written goes on the exception: its __str__ renders both
+        # message and body, and the framework logs that with %s when it retries,
+        # where no collector can redact it. status_code and request_id carry the
+        # non-PII identifiers a caller needs to correlate against Sarvam's logs.
+        raise APIStatusError(
+            message=f"TTS API error from Sarvam (status {error_code})",
+            status_code=error_code,
+            request_id=error_data.get("request_id") if isinstance(error_data, dict) else None,
+        )
 
     async def _handle_event_message(self, resp: dict, output_emitter: tts.AudioEmitter) -> bool:
         """Handle event messages from the API."""
