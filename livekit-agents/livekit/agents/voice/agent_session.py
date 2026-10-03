@@ -142,6 +142,16 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
+    input_truncation: bool
+    """Record LLM inputs on trace spans incrementally. Defaults to ``False``.
+
+    When the conversation only grew since the last committed generation, a span's
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold just the new items (the previous
+    agent turn and the new user turn), and ``gen_ai.system_instructions`` is left out while
+    unchanged. Any other change to the conversation (an item edited, removed or reordered)
+    makes the next span record it in full again.
+    Such spans carry ``lk.input.*`` attributes pointing at the span that holds the rest.
+    """
 
 
 _RECORDING_ALL_ON: RecordingOptions = {

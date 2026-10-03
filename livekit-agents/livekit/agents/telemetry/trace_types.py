@@ -123,6 +123,16 @@ ATTR_RESPONSE_TEXT = "lk.pii.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.pii.response.function_calls"
 ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
+# input truncation (RecordingOptions.input_truncation)
+ATTR_INPUT_TRUNCATED = "lk.input.truncated"
+"""The span's lk.pii.chat_ctx / gen_ai.input.messages hold only the items added after the input
+recorded on ``lk.input.base_span_id``; the full conversation is the base's (resolved
+recursively) followed by this span's."""
+ATTR_INPUT_OMITTED_ITEMS = "lk.input.omitted_items"
+ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
+ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID = "lk.input.instructions_base_span_id"
+"""The span's system instructions were left out as identical to those recorded on this span."""
+
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
 ATTR_FUNCTION_TOOL_NAME = "lk.function_tool.name"

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from opentelemetry import trace
@@ -84,6 +86,218 @@ def mark_inference_span_recorded() -> None:
     """Called where an ``llm_request`` span is created, so the enclosing node stands down."""
     if (on_created := _on_inference_span_created.get()) is not None:
         on_created()
+
+
+INPUT_SITE_LLM_NODE = "llm_node"
+INPUT_SITE_LLM_REQUEST = "llm_request"
+
+
+@dataclass
+class _MessagesBaseline:
+    item_keys: list[tuple[str, bytes]]
+    """(id, content fingerprint) of each conversation item, in order"""
+    span_context: trace.SpanContext
+
+
+@dataclass
+class _InstructionsBaseline:
+    text: str
+    span_context: trace.SpanContext
+
+
+@dataclass
+class InputSelection:
+    """What a span records as its input.
+
+    With ``messages_base`` set, ``chat_ctx`` holds only the conversation items added after
+    the input recorded on that span. With ``instructions_base`` set, the system instructions
+    are left out because they are identical to the ones recorded on that span.
+    """
+
+    chat_ctx: ChatContext
+    messages_base: _MessagesBaseline | None = None
+    instructions_base: _InstructionsBaseline | None = None
+
+
+@dataclass
+class _PendingInput:
+    conversation: list[ChatItem]
+    instructions: _InstructionsBaseline
+    span_context: trace.SpanContext
+
+
+class InputTruncationState:
+    """Per-agent memory of the LLM input recorded for the last committed generation.
+
+    A span records only the conversation items appended since then; any other change
+    (an item edited, removed or reordered, a replaced context) makes it record the full
+    conversation. System instructions are compared by their text, since a generation
+    assembles them from several sources (modality rendering, the expressive guide,
+    ``generate_reply(instructions=...)``, a custom ``llm_node``).
+    """
+
+    def __init__(self) -> None:
+        self._messages: dict[str, _MessagesBaseline] = {}
+        self._instructions: dict[str, _InstructionsBaseline] = {}
+
+    def begin(self) -> GenerationInput:
+        return GenerationInput(self)
+
+
+class GenerationInput:
+    """The inputs recorded by one generation; they become the baseline once committed.
+
+    A generation that is never committed (a discarded preemptive generation, an aborted
+    reply) is compared against the baseline but never replaces it.
+    """
+
+    def __init__(self, state: InputTruncationState) -> None:
+        self._state = state
+        self._pending: dict[str, _PendingInput] = {}
+        self._committed = False
+
+    def commit(self) -> None:
+        self._committed = True
+        for site, pending in self._pending.items():
+            self._promote(site, pending)
+
+    def _promote(self, site: str, pending: _PendingInput) -> None:
+        # fingerprinted now rather than when the span started: an adopted preemptive
+        # generation's user message is updated with the final transcript in between
+        self._state._messages[site] = _MessagesBaseline(
+            item_keys=_item_keys(pending.conversation), span_context=pending.span_context
+        )
+        self._state._instructions[site] = pending.instructions
+
+    def select(self, site: str, chat_ctx: ChatContext, span: trace.Span) -> InputSelection:
+        from ..llm import ChatContext
+
+        system = [item for item in chat_ctx.items if _is_system_message(item)]
+        conversation = [item for item in chat_ctx.items if not _is_system_message(item)]
+        span_context = span.get_span_context()
+
+        messages_base = self._state._messages.get(site)
+        if messages_base is not None:
+            n = len(messages_base.item_keys)
+            if _item_keys(conversation[:n]) != messages_base.item_keys:
+                messages_base = None
+
+        instructions = _InstructionsBaseline(
+            text=_json(to_system_instructions(chat_ctx)), span_context=span_context
+        )
+        instructions_base = self._state._instructions.get(site)
+        if instructions_base is not None:
+            if instructions_base.text == instructions.text:
+                # keep pointing at the span that recorded them, not at one that omitted them
+                instructions = instructions_base
+            else:
+                instructions_base = None
+
+        if span.is_recording():
+            pending = _PendingInput(conversation, instructions, span_context)
+            self._pending[site] = pending
+            if self._committed:
+                self._promote(site, pending)
+
+        if messages_base is None and instructions_base is None:
+            return InputSelection(chat_ctx=chat_ctx)
+
+        items: list[ChatItem] = []
+        if instructions_base is None:
+            items.extend(system)
+        if messages_base is not None:
+            items.extend(conversation[len(messages_base.item_keys) :])
+        else:
+            items.extend(conversation)
+        return InputSelection(
+            chat_ctx=ChatContext(items),
+            messages_base=messages_base,
+            instructions_base=instructions_base,
+        )
+
+
+def _is_system_message(item: ChatItem) -> bool:
+    return item.type == "message" and item.role in ("system", "developer")
+
+
+def _item_keys(items: Sequence[ChatItem]) -> list[tuple[str, bytes]]:
+    return [(item.id, _fingerprint(item)) for item in items]
+
+
+def _fingerprint(item: ChatItem) -> bytes:
+    """The fields ``ChatContext.is_equivalent`` treats as essential; timestamps, metrics and
+    transcript confidence are left out, the framework updates those on its own."""
+    from ..llm import AudioContent, ImageContent
+
+    fields: list[Any]
+    if item.type == "message":
+        content: list[Any] = []
+        for c in item.content:
+            if isinstance(c, ImageContent):
+                content.append(["image", c.id])
+            elif isinstance(c, AudioContent):
+                content.append(["audio", c.transcript])
+            else:
+                content.append(c)
+        fields = [item.role, item.interrupted, content]
+    elif item.type == "function_call":
+        fields = [item.name, item.call_id, item.arguments]
+    elif item.type == "function_call_output":
+        fields = [item.name, item.call_id, item.output, item.is_error]
+    else:
+        fields = [item.model_dump(mode="json", exclude={"created_at"})]
+    payload = json.dumps([item.type, *fields], ensure_ascii=False, default=str)
+    return hashlib.blake2b(payload.encode(), digest_size=8).digest()
+
+
+_generation_input: contextvars.ContextVar[GenerationInput | None] = contextvars.ContextVar(
+    "lk_generation_input", default=None
+)
+
+
+def set_generation_input(gen: GenerationInput | None) -> contextvars.Token[GenerationInput | None]:
+    return _generation_input.set(gen)
+
+
+def reset_generation_input(token: contextvars.Token[GenerationInput | None]) -> None:
+    _generation_input.reset(token)
+
+
+def input_truncation_active() -> bool:
+    return _generation_input.get() is not None
+
+
+def select_input(site: str, chat_ctx: ChatContext, span: trace.Span) -> InputSelection:
+    """The input a span should record: the full context, or only what changed since the
+    last committed generation when the session records with ``input_truncation``."""
+    if (gen := _generation_input.get()) is None:
+        return InputSelection(chat_ctx=chat_ctx)
+    return gen.select(site, chat_ctx, span)
+
+
+def set_input_truncation_attributes(span: trace.Span, selection: InputSelection) -> None:
+    if not span.is_recording():
+        return
+    linked: set[int] = set()
+    if (messages_base := selection.messages_base) is not None:
+        span.set_attributes(
+            {
+                trace_types.ATTR_INPUT_TRUNCATED: True,
+                trace_types.ATTR_INPUT_OMITTED_ITEMS: len(messages_base.item_keys),
+                trace_types.ATTR_INPUT_BASE_SPAN_ID: trace.format_span_id(
+                    messages_base.span_context.span_id
+                ),
+            }
+        )
+        span.add_link(messages_base.span_context)
+        linked.add(messages_base.span_context.span_id)
+    if (instructions_base := selection.instructions_base) is not None:
+        span.set_attribute(
+            trace_types.ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID,
+            trace.format_span_id(instructions_base.span_context.span_id),
+        )
+        if instructions_base.span_context.span_id not in linked:
+            span.add_link(instructions_base.span_context)
 
 
 def _text_part(content: str) -> dict[str, Any]:

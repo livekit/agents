@@ -192,10 +192,17 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.flatten()
 
+    # the input as this span records it: the full context, or only what was added since
+    # the last committed generation when the session records with `input_truncation`
+    input_selection = gen_ai_telemetry.select_input(
+        gen_ai_telemetry.INPUT_SITE_LLM_NODE, chat_ctx, current_span
+    )
+    recorded_ctx = input_selection.chat_ctx
+
     if current_span.is_recording():
         attrs: dict[str, Any] = {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(
+                recorded_ctx.to_dict(
                     exclude_audio=True,
                     exclude_image=True,
                     exclude_timestamp=True,
@@ -209,6 +216,7 @@ async def _llm_inference_task(
             trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
         current_span.set_attributes(attrs)
+        gen_ai_telemetry.set_input_truncation_attributes(current_span, input_selection)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
     # provider call the convention describes — setting them here as well would make a
@@ -235,7 +243,7 @@ async def _llm_inference_task(
         _record_uninstrumented_inference(
             current_span,
             inference_recorded,
-            chat_ctx,
+            recorded_ctx,
             tools,
             data,
             streaming=False,
@@ -317,7 +325,7 @@ async def _llm_inference_task(
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(
-            current_span, inference_recorded, chat_ctx, tools, data, error=exc
+            current_span, inference_recorded, recorded_ctx, tools, data, error=exc
         )
         raise
     finally:
@@ -341,7 +349,7 @@ async def _llm_inference_task(
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     _record_uninstrumented_inference(
-        current_span, inference_recorded, chat_ctx, tools, data, usage=usage
+        current_span, inference_recorded, recorded_ctx, tools, data, usage=usage
     )
     return True
 
