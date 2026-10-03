@@ -26,7 +26,9 @@ requests; active requests retain their original settings.
 `AgentSession` adapts incremental text into sentence synthesis requests. Native
 WebSocket input streaming is not implemented. Responses are buffered (maximum
 32 MiB) and validated before playback, so time to first audio includes the full
-HTTP request. Each request accepts at most 5000 characters, has a 60-second total
+HTTP synthesis, including all pieces of a long sentence. Longer input is split
+into requests of at most 5000 characters while preserving text and audio order.
+Each request has a 60-second total
 timeout, and uses LiveKit's connection options for connect/read timeouts.
 
 An injected `http_session` belongs to the caller and is not closed by the plugin.

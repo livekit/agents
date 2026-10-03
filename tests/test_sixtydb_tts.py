@@ -12,7 +12,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError, APITimeoutError, tts
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, APITimeoutError, tts, utils
 from livekit.plugins import sixtydb
 from livekit.plugins.sixtydb import tts as provider
 
@@ -232,7 +232,7 @@ def test_credentials_options_and_text(monkeypatch):
     assert engine._api_key == "environment-key"
     assert not engine.capabilities.streaming
     assert engine.provider == "60db"
-    for text in ("", "  ", "a" * 5001):
+    for text in ("", "  "):
         with pytest.raises(ValueError):
             engine.synthesize(text)
     with pytest.raises(ValueError):
@@ -298,3 +298,66 @@ async def test_cancellation_closes_pending_response():
         await stream.aclose()
         await asyncio.wait_for(disconnected.wait(), 2)
         assert not session.closed
+
+
+@pytest.mark.parametrize("text", ["a" * 5001, ("word " * 2200) + "end", "a" * 5000])
+async def test_long_text_preserves_input_and_audio_order(text):
+    requests = []
+    expected_audio = bytearray()
+
+    async def handler(request):
+        piece = (await request.json())["text"]
+        requests.append(piece)
+        audio = bytes([len(requests), 0]) * 480
+        expected_audio.extend(audio)
+        return web.Response(body=audio, content_type="audio/pcm")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        async with engine.synthesize(text, conn_options=OPTIONS) as stream:
+            events = [event async for event in stream]
+        await engine.aclose()
+    assert "".join(requests) == text
+    assert all(0 < len(piece) <= 5000 for piece in requests)
+    assert len(requests) == (1 if len(text) <= 5000 else (3 if len(text) > 10000 else 2))
+    assert b"".join(bytes(event.frame.data) for event in events) == bytes(expected_audio)
+    assert events[-1].is_final
+
+
+async def test_managed_session_reuse_across_contexts():
+    async def handler(request):
+        return web.Response(body=PCM, content_type="audio/pcm")
+
+    async with endpoint(handler) as url:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url)
+        async with utils.http_context.open():
+            first = engine._ensure_session()
+            assert await collect(engine) == PCM
+        assert first.closed
+        async with utils.http_context.open():
+            second = engine._ensure_session()
+            assert second is not first and not second.closed
+            assert await collect(engine) == PCM
+        assert second.closed
+        await engine.aclose()
+
+
+async def test_later_piece_error_emits_no_partial_audio():
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            return web.Response(status=500)
+        return web.Response(body=PCM, content_type="audio/pcm")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        events = []
+        with pytest.raises(APIStatusError):
+            async with engine.synthesize("a" * 5001, conn_options=OPTIONS) as stream:
+                async for event in stream:
+                    events.append(event)
+        assert not events and calls == 2
+        await engine.aclose()

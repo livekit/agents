@@ -174,9 +174,9 @@ class TTS(tts.TTS):
         return "workspace-voice"
 
     def _ensure_session(self) -> aiohttp.ClientSession:
-        if self._session is None:
-            self._session = utils.http_context.http_session()
-        return self._session
+        if self._session is not None:
+            return self._session
+        return utils.http_context.http_session()
 
     def update_options(
         self, *, voice_id: NotGivenOr[str] = NOT_GIVEN, speed: NotGivenOr[float] = NOT_GIVEN
@@ -190,14 +190,14 @@ class TTS(tts.TTS):
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:
-        """Synthesize 1–5000 characters using a snapshot of the current options."""
-        if not text.strip() or len(text) > 5000:
-            raise ValueError("text must contain 1 to 5000 characters")
+        """Synthesize text, splitting requests at the provider's 5000-character limit."""
+        if not text.strip():
+            raise ValueError("text must not be empty")
         return ChunkedStream(tts=self, input_text=text, conn_options=conn_options)
 
 
 class ChunkedStream(tts.ChunkedStream):
-    """One HTTP synthesis request with bounded response buffering."""
+    """Ordered HTTP synthesis requests with bounded response buffering."""
 
     def __init__(self, *, tts: TTS, input_text: str, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
@@ -206,75 +206,28 @@ class ChunkedStream(tts.ChunkedStream):
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         try:
-            async with self._tts._ensure_session().post(
-                self._tts._base_url + "/tts-synthesize",
-                headers={"Authorization": "Bearer " + self._tts._api_key},
-                json={
-                    "text": self._input_text,
-                    "voice_id": self._opts.voice_id,
-                    "speed": self._opts.speed,
-                    "timestamp_type": "NONE",
-                    "audio_config": {
-                        "audio_encoding": "LINEAR16",
-                        "sample_rate_hertz": _SAMPLE_RATE,
-                    },
-                },
-                timeout=aiohttp.ClientTimeout(
-                    total=60,
-                    sock_connect=self._conn_options.timeout,
-                    sock_read=self._conn_options.timeout,
-                ),
-                allow_redirects=False,
-            ) as response:
-                if not 200 <= response.status < 300:
-                    raise APIStatusError(
-                        "60db synthesis request failed",
-                        status_code=response.status,
-                        body=None,
-                        request_id=None,
+            audio = bytearray()
+            remaining = self._input_text
+            while remaining:
+                end = min(len(remaining), 5000)
+                if end < len(remaining):
+                    # Prefer a word boundary, preserving every character.
+                    boundary = max(
+                        remaining.rfind(" ", 2500, end), remaining.rfind("\n", 2500, end)
                     )
-                _validate_metadata(
-                    {
-                        key: int(response.headers[header])
-                        for key, header in (
-                            ("sample_rate", "X-Sample-Rate"),
-                            ("channels", "X-Channels"),
-                            ("bit_depth", "X-Bit-Depth"),
-                        )
-                        if header in response.headers
-                    }
-                )
-                data = bytearray()
-                async for chunk in response.content.iter_chunked(8192):
-                    data.extend(chunk)
-                    if len(data) > _MAX_RESPONSE_BYTES:
-                        raise ValueError("60db response exceeds 32 MiB")
-                content_type = response.content_type
-                if content_type in {"application/x-ndjson", "application/ndjson", "text/plain"}:
-                    audio = b"".join(
-                        _record_audio(json.loads(line))
-                        for line in data.splitlines()
-                        if line.strip()
-                    )
-                elif content_type == "application/json":
-                    audio = _record_audio(json.loads(data))
-                elif content_type in {
-                    "audio/wav",
-                    "audio/x-wav",
-                    "audio/pcm",
-                    "application/octet-stream",
-                }:
-                    audio = bytes(data)
-                else:
-                    raise ValueError("60db returned an unsupported content type")
-                audio = _pcm(audio)
-                output_emitter.initialize(
-                    request_id=utils.shortuuid(),
-                    sample_rate=_SAMPLE_RATE,
-                    num_channels=1,
-                    mime_type="audio/pcm",
-                )
-                output_emitter.push(audio)
+                    if boundary >= 0:
+                        end = boundary + 1
+                audio.extend(await self._synthesize_piece(remaining[:end]))
+                if len(audio) > _MAX_RESPONSE_BYTES:
+                    raise ValueError("60db audio exceeds 32 MiB")
+                remaining = remaining[end:]
+            output_emitter.initialize(
+                request_id=utils.shortuuid(),
+                sample_rate=_SAMPLE_RATE,
+                num_channels=1,
+                mime_type="audio/pcm",
+            )
+            output_emitter.push(bytes(audio))
         except asyncio.TimeoutError:
             raise APITimeoutError("60db synthesis timed out") from None
         except APIError:
@@ -283,3 +236,65 @@ class ChunkedStream(tts.ChunkedStream):
             raise APIConnectionError("60db synthesis connection failed") from None
         except (ValueError, TypeError, KeyError, RecursionError, EOFError, wave.Error):
             raise APIError("60db returned invalid audio", retryable=False) from None
+
+    async def _synthesize_piece(self, text: str) -> bytes:
+        async with self._tts._ensure_session().post(
+            self._tts._base_url + "/tts-synthesize",
+            headers={"Authorization": "Bearer " + self._tts._api_key},
+            json={
+                "text": text,
+                "voice_id": self._opts.voice_id,
+                "speed": self._opts.speed,
+                "timestamp_type": "NONE",
+                "audio_config": {
+                    "audio_encoding": "LINEAR16",
+                    "sample_rate_hertz": _SAMPLE_RATE,
+                },
+            },
+            timeout=aiohttp.ClientTimeout(
+                total=60,
+                sock_connect=self._conn_options.timeout,
+                sock_read=self._conn_options.timeout,
+            ),
+            allow_redirects=False,
+        ) as response:
+            if not 200 <= response.status < 300:
+                raise APIStatusError(
+                    "60db synthesis request failed",
+                    status_code=response.status,
+                    body=None,
+                    request_id=None,
+                )
+            _validate_metadata(
+                {
+                    key: int(response.headers[header])
+                    for key, header in (
+                        ("sample_rate", "X-Sample-Rate"),
+                        ("channels", "X-Channels"),
+                        ("bit_depth", "X-Bit-Depth"),
+                    )
+                    if header in response.headers
+                }
+            )
+            data = bytearray()
+            async for chunk in response.content.iter_chunked(8192):
+                data.extend(chunk)
+                if len(data) > _MAX_RESPONSE_BYTES:
+                    raise ValueError("60db response exceeds 32 MiB")
+            content_type = response.content_type
+            if content_type in {"application/x-ndjson", "application/ndjson", "text/plain"}:
+                audio = b"".join(
+                    _record_audio(json.loads(line)) for line in data.splitlines() if line.strip()
+                )
+            elif content_type == "application/json":
+                audio = _record_audio(json.loads(data))
+            elif content_type in {
+                "audio/wav",
+                "audio/x-wav",
+                "audio/pcm",
+                "application/octet-stream",
+            }:
+                audio = bytes(data)
+            else:
+                raise ValueError("60db returned an unsupported content type")
+            return _pcm(audio)
