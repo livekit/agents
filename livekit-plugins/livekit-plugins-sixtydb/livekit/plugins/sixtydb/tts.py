@@ -102,7 +102,9 @@ def _pcm(audio: bytes, record_ends: list[int] | None = None) -> bytes:
     while offset < len(audio):
         while end <= offset:
             end = next(boundaries, len(audio))
-        if audio[offset : offset + 4] == b"RIFF":
+        if audio[offset : offset + 4] == b"RIFF" and (
+            record_ends is None or audio[offset + 8 : offset + 12] == b"WAVE"
+        ):
             if len(audio) - offset < 12:
                 raise ValueError("60db returned invalid WAV framing")
             size = int.from_bytes(audio[offset + 4 : offset + 8], "little") + 8
