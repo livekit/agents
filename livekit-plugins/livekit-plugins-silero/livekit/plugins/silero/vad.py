@@ -215,18 +215,21 @@ class VAD(agents.vad.VAD):
         if is_given(activation_threshold) and not is_given(deactivation_threshold):
             deactivation_threshold = _default_deactivation_threshold(activation_threshold)
 
-        changes = {
-            "min_speech_duration": min_speech_duration,
-            "min_silence_duration": min_silence_duration,
-            "prefix_padding_duration": prefix_padding_duration,
-            "max_buffered_speech": max_buffered_speech,
-            "activation_threshold": activation_threshold,
-            "deactivation_threshold": deactivation_threshold,
-            "sample_rate": sample_rate,
-        }
-        opts = dataclasses.replace(
-            self._opts, **{name: value for name, value in changes.items() if is_given(value)}
-        )
+        opts = dataclasses.replace(self._opts)
+        if is_given(min_speech_duration):
+            opts.min_speech_duration = min_speech_duration
+        if is_given(min_silence_duration):
+            opts.min_silence_duration = min_silence_duration
+        if is_given(prefix_padding_duration):
+            opts.prefix_padding_duration = prefix_padding_duration
+        if is_given(max_buffered_speech):
+            opts.max_buffered_speech = max_buffered_speech
+        if is_given(activation_threshold):
+            opts.activation_threshold = activation_threshold
+        if is_given(deactivation_threshold):
+            opts.deactivation_threshold = deactivation_threshold
+        if is_given(sample_rate):
+            opts.sample_rate = sample_rate
         return type(self)(session=self._onnx_session, opts=opts)
 
     @property
