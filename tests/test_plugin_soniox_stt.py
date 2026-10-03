@@ -115,6 +115,67 @@ def test_token_accumulator_lang_segments_empty_initially():
     assert accumulator._lang_segments == []
 
 
+def test_token_accumulator_span_covers_all_timed_tokens():
+    """A token that carries timing late must not collapse the span onto itself.
+
+    Regression for #6885: when the leading tokens of an utterance arrive
+    without ``start_ms``/``end_ms`` and only a trailing token has them, the
+    emitted span used to collapse onto that trailing token (e.g. two words in
+    180ms).
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update({"text": " He's", "language": "en", "is_final": True})
+    accumulator.update({"text": " trying", "language": "en", "is_final": True})
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43843}
+    )
+
+    assert accumulator.text == " He's trying."
+    assert accumulator.start_time == 43663
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_end_time_never_regresses():
+    """A trailing token whose ``end_ms`` regresses must not pull the end back.
+
+    Regression for #6885: ``end_time`` was overwritten by every token that
+    carried ``end_ms``, so a non-monotonic trailing token shortened the span.
+    """
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 41400, "end_ms": 43843}
+    )
+    accumulator.update(
+        {"text": ".", "language": "en", "is_final": True, "start_ms": 43663, "end_ms": 43700}
+    )
+
+    assert accumulator.start_time == 41000
+    assert accumulator.end_time == 43843
+
+
+def test_token_accumulator_start_time_takes_earliest():
+    """The earliest ``start_ms`` wins even if a later token carries an earlier one."""
+    from livekit.plugins.soniox.stt import _TokenAccumulator
+
+    accumulator = _TokenAccumulator()
+    accumulator.update(
+        {"text": " He's", "language": "en", "is_final": True, "start_ms": 41000, "end_ms": 41400}
+    )
+    accumulator.update(
+        {"text": " trying", "language": "en", "is_final": True, "start_ms": 40000, "end_ms": 43843}
+    )
+
+    assert accumulator.start_time == 40000
+    assert accumulator.end_time == 43843
+
+
 # ---------------------------------------------------------------------------
 # _lang_segments_to_fields helper
 # ---------------------------------------------------------------------------
