@@ -489,7 +489,15 @@ async def test_labeled_pcm_followed_by_unlabeled_wav():
         await engine.aclose()
 
 
-@pytest.mark.parametrize("tail", [b"ID3\x00", b"RIFF\x00\x00\x00\x00WAVE"])
+@pytest.mark.parametrize(
+    "tail",
+    [
+        b"ID3\x00",
+        b"RIFF\x00\x00\x00\x00WAVE",
+        b"RIFF\x04\x00\x00\x00WAVE",
+        b"RIFF\xff\xff\xff\xffWAVE",
+    ],
+)
 async def test_unlabeled_pcm_continuation_preserves_signature_samples(tail):
     body = b"\n".join(
         [
