@@ -13,6 +13,9 @@ from .utils import (
     parse_tool_call_arguments,
 )
 
+# content block types allowed inside a `tool_result`
+_TOOL_RESULT_BLOCK_TYPES = {"text", "image", "document", "search_result", "tool_reference"}
+
 
 @dataclass
 class AnthropicFormatData:
@@ -76,7 +79,16 @@ def to_chat_ctx(
             result_content: list[Any] | str = msg.output
             try:
                 parsed = json.loads(msg.output)
-                if isinstance(parsed, list):
+                # only a list of content blocks (e.g. computer-use screenshots) is sent as
+                # blocks, any other JSON list is plain tool output and stays text
+                if (
+                    isinstance(parsed, list)
+                    and parsed
+                    and all(
+                        isinstance(block, dict) and block.get("type") in _TOOL_RESULT_BLOCK_TYPES
+                        for block in parsed
+                    )
+                ):
                     result_content = parsed
             except (json.JSONDecodeError, TypeError):
                 pass
