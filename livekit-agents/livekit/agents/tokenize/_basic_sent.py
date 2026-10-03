@@ -38,7 +38,7 @@ def split_sentences(
     text = re.sub(acronyms+" "+starters,"\\1<stop> \\2",text)
     text = re.sub(alphabets + "[.]" + alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>\\3<prd>",text)  # noqa: E501
     text = re.sub(alphabets + "[.]" + alphabets + "[.]","\\1<prd>\\2<prd>",text)
-    text = re.sub(r" "+suffixes+"[.] "+starters," \\1<stop> \\2",text)
+    text = re.sub(r" "+suffixes+"[.] "+starters," \\1<prd><stop> \\2",text)
     text = re.sub(r" "+suffixes+"[.]"," \\1<prd>",text)
     text = re.sub(r" " + alphabets + "[.]"," \\1<prd>",text)
 
