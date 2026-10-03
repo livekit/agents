@@ -620,7 +620,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 
 @pytest.mark.parametrize("vertexai", [False, True])
 def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
-    """Vertex AI rejects `scheduling` (and `id`), so neither is set for it."""
+    """Vertex AI rejects `scheduling`, so it is set only for the Gemini API."""
     res = create_function_response(
         _tool_output(),
         vertexai=vertexai,
@@ -629,10 +629,36 @@ def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> Non
 
     if vertexai:
         assert res.scheduling is None
-        assert res.id is None
     else:
         assert res.scheduling == types.FunctionResponseScheduling.SILENT
-        assert res.id == "fc_1"
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+async def test_tool_response_carries_the_call_id(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool
+) -> None:
+    """The response names the call it answers on both APIs.
+
+    gemini-3.8-live on Vertex AI drops a response to a BLOCKING call that has no id and never
+    replies, so the turn stalls after the first tool call.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        session._opts.tool_behavior = types.Behavior.BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].id == "fc_1"
 
 
 def test_vertex_scheduling_warns(

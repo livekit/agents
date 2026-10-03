@@ -68,17 +68,16 @@ def create_function_response(
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
 ) -> types.FunctionResponse:
+    # the id is sent on both APIs: gemini-3.8-live on Vertex AI silently drops a response to a
+    # BLOCKING call that carries no id, and never replies
     res = types.FunctionResponse(
+        id=output.call_id,
         name=output.name,
         response={"error": output.output} if output.is_error else {"output": output.output},
     )
-    if not vertexai:
-        # vertexai supports neither scheduling nor id in FunctionResponse; the gemini api
-        # defaults scheduling to WHEN_IDLE
-        # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
-        if is_given(tool_response_scheduling):
-            res.scheduling = tool_response_scheduling
-        res.id = output.call_id
+    # vertexai does not support scheduling; the gemini api defaults it to WHEN_IDLE
+    if not vertexai and is_given(tool_response_scheduling):
+        res.scheduling = tool_response_scheduling
     return res
 
 
