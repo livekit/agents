@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import gc
+import subprocess
+import sys
+import threading
 import time
+import weakref
 from collections.abc import Iterator
-from types import SimpleNamespace
+from types import FrameType, SimpleNamespace
 
 import pytest
 from opentelemetry import trace
@@ -804,6 +809,91 @@ def test_watchdog_samples_one_tick_before_the_threshold() -> None:
         assert len(m._incident.samples) == 1
     finally:
         loop.close()
+
+
+def _check_sampler_frame_lifetime(target_ident: str) -> None:
+    """Measure in an isolated process, without automatic GC hiding retained frames."""
+
+    class Sentinel:
+        pass
+
+    async def worker(
+        refs: list[weakref.ReferenceType[Sentinel]],
+        ready: threading.Event,
+        release: threading.Event,
+    ) -> None:
+        sentinel = Sentinel()
+        refs.append(weakref.ref(sentinel))
+        ready.set()
+        release.wait()
+
+    def sampler_frame_count() -> int:
+        # Keep only the count, never the frame objects returned by this temporary observer.
+        return sum(
+            isinstance(obj, FrameType)
+            and obj.f_code is EventLoopMonitor._sample_loop_thread.__code__
+            for obj in gc.get_objects()
+        )
+
+    loop = asyncio.new_event_loop()
+    worker_loop = asyncio.new_event_loop() if target_ident == "missing" else loop
+    was_enabled = gc.isenabled()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        gc.collect()
+        gc.disable()
+        observations: list[tuple[bool, int]] = []
+        for _ in range(5):
+            ready = threading.Event()
+            release = threading.Event()
+            refs: list[weakref.ReferenceType[Sentinel]] = []
+
+            thread = threading.Thread(
+                target=worker_loop.run_until_complete, args=(worker(refs, ready, release),)
+            )
+            thread.start()
+            try:
+                assert ready.wait(timeout=5), "worker did not become ready"
+                m._loop_thread_ident = thread.ident if target_ident == "known" else -1
+                sample = m._sample_loop_thread(WARN)
+                assert sample.lag == WARN
+                if target_ident != "missing":
+                    assert any(frame.name == "worker" for frame in sample.frames)
+                    assert sample.task_name is not None
+                    assert m._loop_thread_ident == thread.ident
+                else:
+                    assert sample.frames == []
+            finally:
+                release.set()
+                thread.join(timeout=5)
+            assert not thread.is_alive(), "worker did not terminate"
+            # Both checks happen before any collection: no completed sample may retain the
+            # foreign worker's local or accumulate its own frame between watchdog samples.
+            observations.append((refs[0]() is None, sampler_frame_count()))
+        assert observations == [(True, 0)] * 5, observations
+    finally:
+        loop.close()
+        if worker_loop is not loop:
+            worker_loop.close()
+        if was_enabled:
+            gc.enable()
+        gc.collect()
+
+
+@pytest.mark.parametrize("target_ident", ["known", "stale", "missing"])
+def test_sampler_does_not_retain_thread_frames(target_ident: str) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from tests.test_loop_monitor import _check_sampler_frame_lifetime; "
+            f"_check_sampler_frame_lifetime({target_ident!r})",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 async def test_sampler_finds_the_loop_thread_by_the_blocked_task(

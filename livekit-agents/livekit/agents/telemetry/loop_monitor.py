@@ -567,6 +567,8 @@ class EventLoopMonitor:
 
         frames: list[traceback.FrameSummary] = []
         current_frames = sys._current_frames()
+        # Our own frame holds this dict; drop it to avoid a cycle retaining other threads' frames.
+        current_frames.pop(threading.get_ident(), None)
         frame = current_frames.get(self._loop_thread_ident) if self._loop_thread_ident else None
         if frame is None and task is not None:
             # the loop moved to another thread since the heartbeat was armed: find the thread
