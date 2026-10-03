@@ -400,3 +400,27 @@ async def test_ndjson_wav_chunks_preserve_all_audio():
         engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
         assert await collect(engine) == PCM * 2
         await engine.aclose()
+
+
+@pytest.mark.parametrize("split", [False, True])
+@pytest.mark.parametrize("pcm", [PCM, b"RIFF" + PCM], ids=["ordinary", "riff_samples"])
+async def test_ndjson_split_wav_preserves_audio(pcm, split):
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(pcm)
+    wav_payload = buffer.getvalue()
+    chunks = [wav_payload[:13], wav_payload[13:45], wav_payload[45:]] if split else [wav_payload]
+    body = b"\n".join(
+        json.dumps({"audioContent": base64.b64encode(chunk).decode()}).encode() for chunk in chunks
+    )
+
+    async def handler(request):
+        return web.Response(body=body, content_type="application/x-ndjson")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        assert await collect(engine) == pcm
+        await engine.aclose()
