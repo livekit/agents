@@ -54,6 +54,8 @@ session = AgentSession(
 
 The TTS supports real-time streaming from LLM - text chunks are tokenized and sent to Soniox as words are formed, enabling low-latency speech synthesis.
 
+Soniox also returns character-level audio timestamps, which the plugin forwards as an aligned transcript so an interrupted turn records the text that was actually spoken rather than a speaking-rate estimate. It is on by default; pass `return_timestamps=False` to turn it off.
+
 ## More information and reference
 
 Explore integration details and find comprehensive examples:
