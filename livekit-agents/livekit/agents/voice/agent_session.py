@@ -142,8 +142,9 @@ class RecordingOptions(TypedDict, total=False):
     """Upload the conversation transcript (chat history). Defaults to ``True``."""
     redaction: bool
     """Enable redaction. ``False`` does not disable project redaction."""
-    input_truncation: bool
-    """Record LLM inputs on trace spans incrementally. Defaults to ``False``.
+    input_delta: bool
+    """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
+    The model always receives the full input; this only affects telemetry.
 
     When the conversation only grew since the last committed generation, a span's
     ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold just the new items (the previous

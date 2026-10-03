@@ -1,4 +1,4 @@
-"""RecordingOptions.input_truncation: LLM spans record only what changed since the last
+"""RecordingOptions.input_delta: LLM spans record only what changed since the last
 committed generation — the new conversation items, and the system instructions only when
 they differ."""
 
@@ -23,7 +23,7 @@ from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
 
-SITE = gen_ai.INPUT_SITE_LLM_REQUEST
+SITE = gen_ai.INPUT_DELTA_SITE_LLM_REQUEST
 
 
 @pytest.fixture
@@ -47,74 +47,74 @@ def _ctx(*items: tuple[str, str, str]) -> llm.ChatContext:
     return ctx
 
 
-def _select(
-    gen: gen_ai.GenerationInput, ctx: llm.ChatContext
-) -> tuple[gen_ai.InputSelection, trace.Span]:
+def _delta(
+    scope: gen_ai.InputDeltaScope, ctx: llm.ChatContext
+) -> tuple[gen_ai.InputDelta, trace.Span]:
     with tracer.start_as_current_span("llm_request") as span:
-        return gen.select(SITE, ctx, span), span
+        return scope.delta(SITE, ctx, span), span
 
 
-def _ids(selection: gen_ai.InputSelection) -> list[str]:
-    return [item.id for item in selection.chat_ctx.items]
+def _ids(delta: gen_ai.InputDelta) -> list[str]:
+    return [item.id for item in delta.chat_ctx.items]
 
 
 SYS = ("sys", "system", "be nice")
 
 
 def test_first_generation_is_full(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
+    tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
-    selection, _ = _select(state.begin(), ctx)
-    assert selection.chat_ctx is ctx
-    assert selection.messages_base is None and selection.instructions_base is None
+    delta, _ = _delta(tracker.begin(), ctx)
+    assert delta.chat_ctx is ctx
+    assert delta.messages_base is None and delta.instructions_base is None
 
 
 def test_appended_items_are_a_delta(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _, span1 = _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _, span1 = _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
 
     ctx2 = _ctx(SYS, ("u1", "user", "hi"), ("a1", "assistant", "hello"), ("u2", "user", "bye"))
-    selection, _ = _select(state.begin(), ctx2)
+    delta, _ = _delta(tracker.begin(), ctx2)
     # instructions are unchanged, so only the previous agent turn and the new user turn
-    assert _ids(selection) == ["a1", "u2"]
-    assert selection.messages_base is not None
-    assert [item_id for item_id, _ in selection.messages_base.item_keys] == ["u1"]
-    assert selection.messages_base.span_context == span1.get_span_context()
-    assert selection.instructions_base is not None
-    assert selection.instructions_base.span_context == span1.get_span_context()
+    assert _ids(delta) == ["a1", "u2"]
+    assert delta.messages_base is not None
+    assert [item_id for item_id, _ in delta.messages_base.item_keys] == ["u1"]
+    assert delta.messages_base.span_context == span1.get_span_context()
+    assert delta.instructions_base is not None
+    assert delta.instructions_base.span_context == span1.get_span_context()
 
 
 def test_changed_instructions_are_recorded_with_the_delta(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
 
     ctx2 = _ctx(("sys", "system", "be terse"), ("u1", "user", "hi"), ("u2", "user", "bye"))
-    selection, _ = _select(state.begin(), ctx2)
-    assert _ids(selection) == ["sys", "u2"]
-    assert selection.messages_base is not None
-    assert selection.instructions_base is None
+    delta, _ = _delta(tracker.begin(), ctx2)
+    assert _ids(delta) == ["sys", "u2"]
+    assert delta.messages_base is not None
+    assert delta.instructions_base is None
 
 
 def test_one_off_system_message_does_not_break_the_delta(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
 
     # generate_reply(instructions=...) appends a system message after the conversation
     ctx2 = _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye"), ("tmp", "system", "greet"))
-    selection, _ = _select(state.begin(), ctx2)
-    assert selection.messages_base is not None
-    assert selection.instructions_base is None
-    assert _ids(selection) == ["sys", "tmp", "u2"]
+    delta, _ = _delta(tracker.begin(), ctx2)
+    assert delta.messages_base is not None
+    assert delta.instructions_base is None
+    assert _ids(delta) == ["sys", "tmp", "u2"]
 
 
 @pytest.mark.parametrize(
@@ -128,126 +128,126 @@ def test_one_off_system_message_does_not_break_the_delta(
 def test_manipulated_conversation_is_full(
     span_exporter: InMemorySpanExporter, items: list[tuple[str, str, str]]
 ) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
 
-    selection, _ = _select(state.begin(), _ctx(SYS, *items))
-    assert selection.messages_base is None
+    delta, _ = _delta(tracker.begin(), _ctx(SYS, *items))
+    assert delta.messages_base is None
     # the instructions are still the base's
-    assert selection.instructions_base is not None
-    assert _ids(selection) == [item[0] for item in items]
+    assert delta.instructions_base is not None
+    assert _ids(delta) == [item[0] for item in items]
 
 
 def test_edited_item_makes_messages_full(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
+    tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
-    gen1 = state.begin()
-    _select(gen1, ctx)
-    gen1.commit()
+    scope1 = tracker.begin()
+    _delta(scope1, ctx)
+    scope1.commit()
 
     # edited in place, keeping its id
     ctx.items[1].content = ["hello"]  # type: ignore[union-attr]
     ctx.add_message(role="user", content="bye", id="u2")
-    gen2 = state.begin()
-    selection, span2 = _select(gen2, ctx)
-    assert selection.messages_base is None
-    assert selection.instructions_base is not None
-    assert _ids(selection) == ["u1", "u2"]
-    gen2.commit()
+    scope2 = tracker.begin()
+    delta, span2 = _delta(scope2, ctx)
+    assert delta.messages_base is None
+    assert delta.instructions_base is not None
+    assert _ids(delta) == ["u1", "u2"]
+    scope2.commit()
 
     # the next committed generation re-establishes the baseline
     ctx.add_message(role="user", content="again", id="u3")
-    selection, _ = _select(state.begin(), ctx)
-    assert selection.messages_base is not None
-    assert selection.messages_base.span_context == span2.get_span_context()
-    assert _ids(selection) == ["u3"]
+    delta, _ = _delta(tracker.begin(), ctx)
+    assert delta.messages_base is not None
+    assert delta.messages_base.span_context == span2.get_span_context()
+    assert _ids(delta) == ["u3"]
 
 
 def test_copied_context_is_still_a_delta(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
+    tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
-    gen1 = state.begin()
-    _select(gen1, ctx)
-    gen1.commit()
+    scope1 = tracker.begin()
+    _delta(scope1, ctx)
+    scope1.commit()
 
     # each turn runs on a copy, and update_chat_ctx(ctx.copy()) replaces the history
     copy = ctx.copy()
     copy.add_message(role="user", content="bye", id="u2")
-    selection, _ = _select(state.begin(), copy)
-    assert selection.messages_base is not None
-    assert _ids(selection) == ["u2"]
+    delta, _ = _delta(tracker.begin(), copy)
+    assert delta.messages_base is not None
+    assert _ids(delta) == ["u2"]
 
 
 def test_baseline_is_fingerprinted_when_committed(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
+    tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
-    gen1 = state.begin()
-    _select(gen1, ctx)
+    scope1 = tracker.begin()
+    _delta(scope1, ctx)
     # an adopted preemptive generation's user message gets the final transcript before the
     # speech is scheduled
     ctx.items[1].content = ["Hi."]  # type: ignore[union-attr]
-    gen1.commit()
+    scope1.commit()
 
     ctx.add_message(role="user", content="bye", id="u2")
-    selection, _ = _select(state.begin(), ctx)
-    assert selection.messages_base is not None
-    assert _ids(selection) == ["u2"]
+    delta, _ = _delta(tracker.begin(), ctx)
+    assert delta.messages_base is not None
+    assert _ids(delta) == ["u2"]
 
 
 def test_states_are_independent(span_exporter: InMemorySpanExporter) -> None:
-    a, b = gen_ai.InputTruncationState(), gen_ai.InputTruncationState()
-    gen = a.begin()
-    _select(gen, _ctx(SYS, ("u1", "user", "hi")))
-    gen.commit()
+    a, b = gen_ai.InputDeltaTracker(), gen_ai.InputDeltaTracker()
+    scope = a.begin()
+    _delta(scope, _ctx(SYS, ("u1", "user", "hi")))
+    scope.commit()
 
-    selection, _ = _select(b.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
-    assert selection.messages_base is None and selection.instructions_base is None
+    delta, _ = _delta(b.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
+    assert delta.messages_base is None and delta.instructions_base is None
 
 
 def test_uncommitted_generation_does_not_move_the_baseline(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _, span1 = _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _, span1 = _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
 
     # a preemptive generation that gets discarded
-    _select(state.begin(), _ctx(SYS, ("u1", "user", "hi"), ("p2", "user", "by")))
+    _delta(tracker.begin(), _ctx(SYS, ("u1", "user", "hi"), ("p2", "user", "by")))
 
-    selection, _ = _select(state.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
-    assert selection.messages_base is not None
-    assert selection.messages_base.span_context == span1.get_span_context()
-    assert _ids(selection) == ["u2"]
+    delta, _ = _delta(tracker.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
+    assert delta.messages_base is not None
+    assert delta.messages_base.span_context == span1.get_span_context()
+    assert _ids(delta) == ["u2"]
 
 
 def test_select_after_commit_becomes_the_baseline(span_exporter: InMemorySpanExporter) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    gen1.commit()  # scheduled before the llm_request span started
-    _, span1 = _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    scope1.commit()  # scheduled before the llm_request span started
+    _, span1 = _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
 
-    selection, _ = _select(state.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
-    assert selection.messages_base is not None
-    assert selection.messages_base.span_context == span1.get_span_context()
+    delta, _ = _delta(tracker.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
+    assert delta.messages_base is not None
+    assert delta.messages_base.span_context == span1.get_span_context()
 
 
 def test_instructions_base_points_at_the_span_that_recorded_them(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    state = gen_ai.InputTruncationState()
-    gen1 = state.begin()
-    _, span1 = _select(gen1, _ctx(SYS, ("u1", "user", "hi")))
-    gen1.commit()
-    gen2 = state.begin()
-    _select(gen2, _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
-    gen2.commit()
+    tracker = gen_ai.InputDeltaTracker()
+    scope1 = tracker.begin()
+    _, span1 = _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
+    scope1.commit()
+    scope2 = tracker.begin()
+    _delta(scope2, _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
+    scope2.commit()
 
-    selection, _ = _select(state.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
-    assert selection.instructions_base is not None
-    assert selection.instructions_base.span_context == span1.get_span_context()
+    delta, _ = _delta(tracker.begin(), _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye")))
+    assert delta.instructions_base is not None
+    assert delta.instructions_base.span_context == span1.get_span_context()
 
 
 # -- session ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ async def test_session_records_incremental_input(span_exporter: InMemorySpanExpo
             session,
             _WeatherAgent(),
             drain_delay=1.0,
-            record={"traces": True, "input_truncation": True},
+            record={"traces": True, "input_delta": True},
         ),
         timeout=60,
     )
@@ -305,12 +305,12 @@ async def test_session_records_incremental_input(span_exporter: InMemorySpanExpo
     attrs = [s.attributes or {} for s in (first, second, tool_step)]
 
     # the first generation is recorded in full
-    assert trace_types.ATTR_INPUT_TRUNCATED not in attrs[0]
+    assert trace_types.ATTR_INPUT_DELTA not in attrs[0]
     assert trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS in attrs[0]
     assert _input_texts(first) == [("user", "Hello")]
 
     # the second holds the previous agent turn and the new user turn
-    assert attrs[1][trace_types.ATTR_INPUT_TRUNCATED] is True
+    assert attrs[1][trace_types.ATTR_INPUT_DELTA] is True
     assert attrs[1][trace_types.ATTR_INPUT_BASE_SPAN_ID] == trace.format_span_id(
         first.context.span_id
     )
@@ -331,7 +331,7 @@ async def test_session_records_incremental_input(span_exporter: InMemorySpanExpo
     assert [role for role, _ in _input_texts(tool_step)] == ["assistant", "tool"]
 
 
-async def test_session_without_input_truncation_records_full_input(
+async def test_session_without_input_delta_records_full_input(
     span_exporter: InMemorySpanExporter,
 ) -> None:
     session = create_session(_two_turns_with_a_tool(), speed_factor=2.0)
@@ -356,9 +356,7 @@ async def test_fallback_records_input_on_the_provider_span_only(
     assert isinstance(session.llm, llm.LLM)
     agent = _WeatherAgent(llm=llm.FallbackAdapter([session.llm]))
     await asyncio.wait_for(
-        run_session(
-            session, agent, drain_delay=1.0, record={"traces": True, "input_truncation": True}
-        ),
+        run_session(session, agent, drain_delay=1.0, record={"traces": True, "input_delta": True}),
         timeout=60,
     )
 

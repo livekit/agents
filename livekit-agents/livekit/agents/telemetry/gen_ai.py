@@ -87,8 +87,8 @@ def mark_inference_span_recorded() -> None:
         on_created()
 
 
-INPUT_SITE_LLM_NODE = "llm_node"
-INPUT_SITE_LLM_REQUEST = "llm_request"
+INPUT_DELTA_SITE_LLM_NODE = "llm_node"
+INPUT_DELTA_SITE_LLM_REQUEST = "llm_request"
 
 
 @dataclass
@@ -105,12 +105,13 @@ class _InstructionsBaseline:
 
 
 @dataclass
-class InputSelection:
-    """What a span records as its input.
+class InputDelta:
+    """How much of an LLM input a span records; the model always receives all of it.
 
-    With ``messages_base`` set, ``chat_ctx`` holds only the conversation items added after
-    the input recorded on that span. With ``instructions_base`` set, the system instructions
-    are left out because they are identical to the ones recorded on that span.
+    ``chat_ctx`` holds what to record. With ``messages_base`` set, that is only the
+    conversation items appended after the input recorded on that span. With
+    ``instructions_base`` set, the system instructions are left out as identical to the
+    ones recorded on that span. With neither set, ``chat_ctx`` is the full input.
     """
 
     chat_ctx: ChatContext
@@ -119,14 +120,15 @@ class InputSelection:
 
 
 @dataclass
-class _PendingInput:
+class _PendingBaseline:
     conversation: list[ChatItem]
     instructions: _InstructionsBaseline
     span_context: trace.SpanContext
 
 
-class InputTruncationState:
-    """Per-agent memory of the LLM input recorded for the last committed generation.
+class InputDeltaTracker:
+    """Per-agent memory of the LLM input recorded for the last committed generation, which
+    the next generation's spans record their input against (see :func:`input_delta`).
 
     A span records only the conversation items appended since then; any other change
     (an item edited, removed or reordered, a replaced context) makes it record the full
@@ -139,20 +141,21 @@ class InputTruncationState:
         self._messages: dict[str, _MessagesBaseline] = {}
         self._instructions: dict[str, _InstructionsBaseline] = {}
 
-    def begin(self) -> GenerationInput:
-        return GenerationInput(self)
+    def begin(self) -> InputDeltaScope:
+        return InputDeltaScope(self)
 
 
-class GenerationInput:
-    """The inputs recorded by one generation; they become the baseline once committed.
+class InputDeltaScope:
+    """One generation's view of an :class:`InputDeltaTracker`: the inputs its spans
+    recorded, which become the tracker's baseline once the generation is committed.
 
     A generation that is never committed (a discarded preemptive generation, an aborted
     reply) is compared against the baseline but never replaces it.
     """
 
-    def __init__(self, state: InputTruncationState) -> None:
-        self._state = state
-        self._pending: dict[str, _PendingInput] = {}
+    def __init__(self, tracker: InputDeltaTracker) -> None:
+        self._tracker = tracker
+        self._pending: dict[str, _PendingBaseline] = {}
         self._committed = False
 
     def commit(self) -> None:
@@ -160,22 +163,22 @@ class GenerationInput:
         for site, pending in self._pending.items():
             self._promote(site, pending)
 
-    def _promote(self, site: str, pending: _PendingInput) -> None:
+    def _promote(self, site: str, pending: _PendingBaseline) -> None:
         # fingerprinted now rather than when the span started: an adopted preemptive
         # generation's user message is updated with the final transcript in between
-        self._state._messages[site] = _MessagesBaseline(
+        self._tracker._messages[site] = _MessagesBaseline(
             item_keys=_item_keys(pending.conversation), span_context=pending.span_context
         )
-        self._state._instructions[site] = pending.instructions
+        self._tracker._instructions[site] = pending.instructions
 
-    def select(self, site: str, chat_ctx: ChatContext, span: trace.Span) -> InputSelection:
+    def delta(self, site: str, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
         from ..llm import ChatContext
 
         system = [item for item in chat_ctx.items if _is_system_message(item)]
         conversation = [item for item in chat_ctx.items if not _is_system_message(item)]
         span_context = span.get_span_context()
 
-        messages_base = self._state._messages.get(site)
+        messages_base = self._tracker._messages.get(site)
         if messages_base is not None:
             n = len(messages_base.item_keys)
             if _item_keys(conversation[:n]) != messages_base.item_keys:
@@ -184,7 +187,7 @@ class GenerationInput:
         instructions = _InstructionsBaseline(
             text=_json(to_system_instructions(chat_ctx)), span_context=span_context
         )
-        instructions_base = self._state._instructions.get(site)
+        instructions_base = self._tracker._instructions.get(site)
         if instructions_base is not None:
             if instructions_base.text == instructions.text:
                 # keep pointing at the span that recorded them, not at one that omitted them
@@ -193,13 +196,13 @@ class GenerationInput:
                 instructions_base = None
 
         if span.is_recording():
-            pending = _PendingInput(conversation, instructions, span_context)
+            pending = _PendingBaseline(conversation, instructions, span_context)
             self._pending[site] = pending
             if self._committed:
                 self._promote(site, pending)
 
         if messages_base is None and instructions_base is None:
-            return InputSelection(chat_ctx=chat_ctx)
+            return InputDelta(chat_ctx=chat_ctx)
 
         items: list[ChatItem] = []
         if instructions_base is None:
@@ -208,7 +211,7 @@ class GenerationInput:
             items.extend(conversation[len(messages_base.item_keys) :])
         else:
             items.extend(conversation)
-        return InputSelection(
+        return InputDelta(
             chat_ctx=ChatContext(items),
             messages_base=messages_base,
             instructions_base=instructions_base,
@@ -223,39 +226,56 @@ def _item_keys(items: Sequence[ChatItem]) -> list[tuple[str, bytes]]:
     return [(item.id, item._fingerprint()) for item in items]
 
 
-_generation_input: contextvars.ContextVar[GenerationInput | None] = contextvars.ContextVar(
-    "lk_generation_input", default=None
+_input_delta_scope: contextvars.ContextVar[InputDeltaScope | None] = contextvars.ContextVar(
+    "lk_input_delta_scope", default=None
 )
 
 
-def set_generation_input(gen: GenerationInput | None) -> contextvars.Token[GenerationInput | None]:
-    return _generation_input.set(gen)
+def set_input_delta_scope(
+    scope: InputDeltaScope | None,
+) -> contextvars.Token[InputDeltaScope | None]:
+    return _input_delta_scope.set(scope)
 
 
-def reset_generation_input(token: contextvars.Token[GenerationInput | None]) -> None:
-    _generation_input.reset(token)
+def reset_input_delta_scope(token: contextvars.Token[InputDeltaScope | None]) -> None:
+    _input_delta_scope.reset(token)
 
 
-def input_truncation_active() -> bool:
-    return _generation_input.get() is not None
+def input_delta_active() -> bool:
+    return _input_delta_scope.get() is not None
 
 
-def select_input(site: str, chat_ctx: ChatContext, span: trace.Span) -> InputSelection:
-    """The input a span should record: the full context, or only what changed since the
-    last committed generation when the session records with ``input_truncation``."""
-    if (gen := _generation_input.get()) is None:
-        return InputSelection(chat_ctx=chat_ctx)
-    return gen.select(site, chat_ctx, span)
+def input_delta(site: str, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
+    """Decide how much of ``chat_ctx`` the span records. The model always receives
+    all of it; this only affects telemetry.
+
+    When the session records with ``input_delta``, compare ``chat_ctx`` with the input
+    recorded at ``site`` for the last committed generation:
+
+    - if the conversation only had items appended, keep just those items and set
+      ``messages_base`` to the span holding the rest;
+    - if the system instructions are unchanged, leave them out and set
+      ``instructions_base`` to the span that recorded them;
+    - anything else (an item edited, removed or reordered) keeps the full conversation.
+
+    The span's own input is held as pending, and becomes the baseline for the next
+    generation only once this one is committed. Without ``input_delta``, return all
+    of ``chat_ctx``.
+    """
+    if (scope := _input_delta_scope.get()) is None:
+        return InputDelta(chat_ctx=chat_ctx)
+    return scope.delta(site, chat_ctx, span)
 
 
-def set_input_truncation_attributes(span: trace.Span, selection: InputSelection) -> None:
+def set_input_delta_attributes(span: trace.Span, delta: InputDelta) -> None:
+    """Point a span whose input is a delta at the span(s) holding the omitted part."""
     if not span.is_recording():
         return
     linked: set[int] = set()
-    if (messages_base := selection.messages_base) is not None:
+    if (messages_base := delta.messages_base) is not None:
         span.set_attributes(
             {
-                trace_types.ATTR_INPUT_TRUNCATED: True,
+                trace_types.ATTR_INPUT_DELTA: True,
                 trace_types.ATTR_INPUT_OMITTED_ITEMS: len(messages_base.item_keys),
                 trace_types.ATTR_INPUT_BASE_SPAN_ID: trace.format_span_id(
                     messages_base.span_context.span_id
@@ -264,7 +284,7 @@ def set_input_truncation_attributes(span: trace.Span, selection: InputSelection)
         )
         span.add_link(messages_base.span_context)
         linked.add(messages_base.span_context.span_id)
-    if (instructions_base := selection.instructions_base) is not None:
+    if (instructions_base := delta.instructions_base) is not None:
         span.set_attribute(
             trace_types.ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID,
             trace.format_span_id(instructions_base.span_context.span_id),

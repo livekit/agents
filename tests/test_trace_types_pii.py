@@ -58,8 +58,8 @@ SAFE_KEYS = frozenset(
         "lk.agent_name",
         "lk.cloud_agent_id",
         "lk.deployment_id",
-        # input truncation markers: a flag, a count and span ids
-        "lk.input.truncated",
+        # input delta markers: a flag, a count and span ids
+        "lk.input.delta",
         "lk.input.omitted_items",
         "lk.input.base_span_id",
         "lk.input.instructions_base_span_id",

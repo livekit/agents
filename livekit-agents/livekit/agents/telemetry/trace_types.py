@@ -123,8 +123,8 @@ ATTR_RESPONSE_TEXT = "lk.pii.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.pii.response.function_calls"
 ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
-# input truncation (RecordingOptions.input_truncation)
-ATTR_INPUT_TRUNCATED = "lk.input.truncated"
+# input delta (RecordingOptions.input_delta)
+ATTR_INPUT_DELTA = "lk.input.delta"
 """The span's lk.pii.chat_ctx / gen_ai.input.messages hold only the items added after the input
 recorded on ``lk.input.base_span_id``; the full conversation is the base's (resolved
 recursively) followed by this span's."""

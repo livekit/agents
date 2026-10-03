@@ -367,8 +367,8 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
         self._preemptive_generation_count: int = 0
-        # LLM input recorded for the last committed generation (RecordingOptions.input_truncation)
-        self._input_truncation = gen_ai_telemetry.InputTruncationState()
+        # LLM input recorded for the last committed generation (RecordingOptions.input_delta)
+        self._input_delta = gen_ai_telemetry.InputDeltaTracker()
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
@@ -3515,12 +3515,12 @@ class AgentActivity(RecognitionHooks):
 
         tasks: list[asyncio.Task[Any]] = []
         # the spans of this generation record their input against the last committed one
-        generation_input = (
-            self._input_truncation.begin()
-            if self._session.options.recording_options.get("input_truncation")
+        delta_scope = (
+            self._input_delta.begin()
+            if self._session.options.recording_options.get("input_delta")
             else None
         )
-        input_token = gen_ai_telemetry.set_generation_input(generation_input)
+        input_token = gen_ai_telemetry.set_input_delta_scope(delta_scope)
         try:
             llm_task, llm_gen_data = perform_llm_inference(
                 node=self._agent.llm_node,
@@ -3531,7 +3531,7 @@ class AgentActivity(RecognitionHooks):
                 provider=self.llm.provider if self.llm else None,
             )
         finally:
-            gen_ai_telemetry.reset_generation_input(input_token)
+            gen_ai_telemetry.reset_input_delta_scope(input_token)
         tasks.append(llm_task)
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
@@ -3629,8 +3629,8 @@ class AgentActivity(RecognitionHooks):
 
         # a scheduled generation is the one the conversation continues from (a discarded
         # preemptive generation never gets here)
-        if generation_input is not None and speech_handle.scheduled:
-            generation_input.commit()
+        if delta_scope is not None and speech_handle.scheduled:
+            delta_scope.commit()
 
         # add new message to chat context if the speech is scheduled
 
