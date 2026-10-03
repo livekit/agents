@@ -536,6 +536,9 @@ class RealtimeSession(  # noqa: F811
         self._audio_input_task = None
         self._stream_response = None
         self._bedrock_client = None
+        # Assigned by Nova Sonic, not us. Read off the first server event of each stream, so
+        # it changes whenever the stream is recycled or restarted.
+        self._session_id: str | None = None
         self._pending_tools: set[str] = set()
         self._is_sess_active = asyncio.Event()
         self._chat_ctx = llm.ChatContext.empty()
@@ -927,6 +930,11 @@ class RealtimeSession(  # noqa: F811
                 logger.info("Creating Bedrock client")
                 await self._initialize_client()
             assert self._bedrock_client is not None, "bedrock_client is None"
+
+            # The stream opened below is assigned its own ID, so drop any ID held from a previous
+            # one: a replacement that fails before reporting its own must not read back as the
+            # stream it replaced.
+            self._session_id = None
 
             logger.info("Initializing Bedrock stream")
             t0 = time.perf_counter()
@@ -1478,6 +1486,14 @@ class RealtimeSession(  # noqa: F811
 
     async def _handle_usage_event(self, event_data: dict) -> None:
         # log_event_data(event_data)
+        # usageEvent is the earliest server event carrying sessionId - it arrives as soon as the
+        # session is initialized, before the user has said anything. Logged on change rather than
+        # once, because recycling and turn restarts each open a stream with a new sessionId.
+        session_id = event_data["event"]["usageEvent"].get("sessionId")
+        if session_id and session_id != self._session_id:
+            self._session_id = session_id
+            logger.info(f"Nova Sonic sessionId: {session_id}")
+
         input_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["input"]
         output_tokens = event_data["event"]["usageEvent"]["details"]["delta"]["output"]
 
@@ -1757,6 +1773,17 @@ class RealtimeSession(  # noqa: F811
     @property
     def tools(self) -> llm.ToolContext:
         return self._tools.copy()
+
+    @property
+    def session_id(self) -> str | None:
+        """Nova Sonic's session ID for the current stream, ``None`` before the first server event.
+
+        Assigned by the service and identical across every server event of a stream, so this is
+        the identifier to quote when reporting a session to AWS. One ``RealtimeSession`` can span
+        several of them: recycling and turn restarts open a new stream, and this resets to ``None``
+        until that stream reports an ID of its own.
+        """
+        return self._session_id
 
     async def update_instructions(self, instructions: str) -> None:
         """Injects the system prompt at the start of the session."""
