@@ -391,6 +391,8 @@ class ChunkedStream(tts.ChunkedStream):
                 "application/octet-stream",
             }:
                 audio = bytes(data)
+                if audio.startswith((b"ID3", b"OggS", b"fLaC")):
+                    raise ValueError("60db returned compressed audio instead of PCM")
                 formats = {}
                 if content_type in {"audio/wav", "audio/x-wav"}:
                     formats[0] = "wav"

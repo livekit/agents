@@ -591,3 +591,18 @@ async def test_binary_content_type_controls_decoding(content_type):
             with pytest.raises(APIError):
                 await collect(engine)
         await engine.aclose()
+
+
+@pytest.mark.parametrize("content_type", ["audio/pcm", "application/octet-stream"])
+@pytest.mark.parametrize(
+    "payload", [b"ID3\x00\x00\x00\x00\x00", b"OggS\x00\x00\x00\x00", b"fLaC\x00\x00\x00\x00"]
+)
+async def test_even_length_compressed_binary_audio_is_rejected(content_type, payload):
+    async def handler(request):
+        return web.Response(body=payload, content_type=content_type)
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        with pytest.raises(APIError):
+            await collect(engine)
+        await engine.aclose()
