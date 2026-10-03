@@ -468,3 +468,22 @@ async def test_ndjson_declared_format_controls_decoding(encoding, signature, con
         else:
             assert await collect(engine) == payload
         await engine.aclose()
+
+
+async def test_labeled_pcm_followed_by_unlabeled_wav():
+    body = b"\n".join(
+        [
+            json.dumps(
+                {"encoding": "pcm", "audioContent": base64.b64encode(PCM).decode()}
+            ).encode(),
+            json.dumps({"audioContent": base64.b64encode(wav_bytes()).decode()}).encode(),
+        ]
+    )
+
+    async def handler(request):
+        return web.Response(body=body, content_type="application/x-ndjson")
+
+    async with endpoint(handler) as url, aiohttp.ClientSession() as session:
+        engine = sixtydb.TTS(voice_id="voice", api_key="key", base_url=url, http_session=session)
+        assert await collect(engine) == PCM * 2
+        await engine.aclose()
