@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import psutil
 import pytest
 
 from livekit.agents.worker import _clean_prometheus_multiproc_dir
@@ -31,3 +32,19 @@ def test_removes_files_this_process_does_not_have_open(tmp_path: Path) -> None:
     _clean_prometheus_multiproc_dir(str(tmp_path))
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_skips_cleanup_when_open_files_cannot_be_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metric_file = tmp_path / f"gauge_all_{os.getpid()}.db"
+    metric_file.write_bytes(b"")
+
+    def open_files_denied(self: psutil.Process) -> list[object]:
+        raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(psutil.Process, "open_files", open_files_denied)
+
+    _clean_prometheus_multiproc_dir(str(tmp_path))
+
+    assert metric_file.exists()

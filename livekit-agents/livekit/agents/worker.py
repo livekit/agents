@@ -86,8 +86,13 @@ def _clean_prometheus_multiproc_dir(path: str) -> None:
     """
     try:
         open_files = {os.path.realpath(f.path) for f in psutil.Process().open_files()}
-    except psutil.Error:
-        open_files = set()
+    except psutil.Error as e:
+        # without the open-file list, deleting could break live metrics; stale files are safer
+        logger.warning(
+            "failed to list open files, skipping prometheus multiprocess directory cleanup",
+            exc_info=e,
+        )
+        return
 
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
