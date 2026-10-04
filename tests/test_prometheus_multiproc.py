@@ -31,7 +31,7 @@ def _run(scenario: str, *args: object) -> dict[str, str]:
 def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> None:
     out = _run(
         """
-        import asyncio, os, socket, sys, time
+        import asyncio, os, sys, time
 
         mp_dir, live_pid, dead_pid = sys.argv[1], sys.argv[2], sys.argv[3]
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = mp_dir
@@ -50,12 +50,6 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
         gauge.set(1)
 
 
-        def free_port():
-            with socket.socket() as s:
-                s.bind(("127.0.0.1", 0))
-                return s.getsockname()[1]
-
-
         def collect():
             registry = CollectorRegistry()
             multiprocess.MultiProcessCollector(registry)
@@ -67,7 +61,7 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
                 job_executor_type=JobExecutorType.THREAD,
                 num_idle_processes=0,
                 host="127.0.0.1",
-                port=free_port(),
+                port=0,
             )
 
             @server.rtc_session()

@@ -59,8 +59,10 @@ def _clean_multiproc_dir(path: str) -> None:
     PROMETHEUS_MULTIPROC_DIR names at that moment. If that is *path*, this
     process's own files stay too, and a stale file from an earlier process with
     the same pid stays with them; clear the directory before the process starts
-    to drop it. Otherwise this process has written no file in *path*, so any file
-    with its pid is stale. Call this before pointing PROMETHEUS_MULTIPROC_DIR at
+    to drop it. Otherwise this process writes no new file in *path*, so any file
+    with its pid is treated as stale. A process that moved
+    PROMETHEUS_MULTIPROC_DIR away from *path* still writes its earlier metrics
+    there, and loses them. Call this before pointing PROMETHEUS_MULTIPROC_DIR at
     a new *path*.
     """
     own_pid = os.getpid()
