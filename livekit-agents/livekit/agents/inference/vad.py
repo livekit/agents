@@ -48,7 +48,6 @@ class _VADOptions:
 
     @property
     def deactivation_threshold(self) -> float:
-        # derived on read, so a new activation_threshold also moves the default exit threshold
         if is_given(self.explicit_deactivation_threshold):
             return self.explicit_deactivation_threshold
         return max(self.activation_threshold - 0.15, 0.01)
