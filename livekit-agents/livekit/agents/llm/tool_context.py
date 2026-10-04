@@ -269,12 +269,19 @@ class _BaseFunctionTool(Tool, Generic[_InfoT, _P, _R]):
         if obj is None:
             return self
 
+        sig = inspect.signature(self._func)
+        params = list(sig.parameters.values())
+        # A plain function assigned as a class attribute reaches `__get__` too, but it
+        # has no receiver: `obj` is not the first argument. Binding it anyway would
+        # delete a real parameter from the schema and then pass `obj` where the function
+        # expects something else. Only bind when the first parameter is the receiver.
+        if not params or params[0].name not in ("self", "cls"):
+            return self
+
         # bind the tool to an instance
         bound_tool = self.__class__(self._func, self._info, instance=obj)
-        sig = inspect.signature(self._func)
         # skip the instance parameter (e.g. usually the 'self')
-        params = list(sig.parameters.values())[1:]
-        bound_tool.__signature__ = sig.replace(parameters=params)  # type: ignore[attr-defined]
+        bound_tool.__signature__ = sig.replace(parameters=params[1:])  # type: ignore[attr-defined]
         return bound_tool
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
