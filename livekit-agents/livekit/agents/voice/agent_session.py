@@ -68,6 +68,7 @@ from .agent_activity import AgentActivity, _ReusableResources
 from .amd import AMD
 from .events import (
     AgentEvent,
+    AgentOutputTranscribedEvent,
     AgentState,
     AgentStateChangedEvent,
     CloseEvent,
@@ -763,7 +764,10 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         return super().on(event, callback)
 
     def emit(self, event: EventTypes, arg: AgentEvent) -> None:
-        self._recorded_events.append(arg)
+        # Emit partial snapshots to listeners, but retain only the final one so
+        # session reports don't grow quadratically with streamed replies.
+        if not isinstance(arg, AgentOutputTranscribedEvent) or arg.is_final:
+            self._recorded_events.append(arg)
         super().emit(event, arg)
 
     @property

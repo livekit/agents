@@ -77,6 +77,7 @@ from .events import (
 )
 from .generation import (
     ToolExecutionOutput,
+    _AgentOutputTranscriptionForwarder,
     _AudioOutput,
     _ForwardOutput,
     _inject_running_tool_calls,
@@ -3147,6 +3148,10 @@ class AgentActivity(RecognitionHooks):
             if self._session.output.transcription_enabled
             else None
         )
+        tr_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=tr_output,
+        )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
         # See discussion in https://github.com/livekit/agents/issues/4432
@@ -3278,6 +3283,11 @@ class AgentActivity(RecognitionHooks):
         if audio_output is not None:
             await speech_handle.wait_if_not_interrupted(
                 [asyncio.ensure_future(audio_output.wait_for_playout())]
+            )
+
+        if isinstance(tr_output, _AgentOutputTranscriptionForwarder):
+            tr_output.finalize(
+                text_out.text if not speech_handle.interrupted and text_out is not None else None
             )
 
         stopped_speaking_at = time.time()
@@ -3455,6 +3465,10 @@ class AgentActivity(RecognitionHooks):
             self._session.output.transcription
             if self._session.output.transcription_enabled
             else None
+        )
+        text_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=text_output,
         )
         chat_ctx = chat_ctx.copy()
         tool_ctx = llm.ToolContext(tools)
@@ -4222,6 +4236,10 @@ class AgentActivity(RecognitionHooks):
             self._session.output.transcription
             if self._session.output.transcription_enabled
             else None
+        )
+        text_output = _AgentOutputTranscriptionForwarder(
+            emit=lambda event: self._session.emit(event.type, event),
+            next_in_chain=text_output,
         )
 
         gen_ai_telemetry.set_request_attributes(
