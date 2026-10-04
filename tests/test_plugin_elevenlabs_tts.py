@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from types import SimpleNamespace
@@ -436,6 +437,74 @@ async def test_recv_loop_drops_audio_for_unregistered_context() -> None:
     assert connection.emitter.audio_chunks == []
     # the server released the context, so the connection can drain
     assert connection._active_contexts == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+@pytest.mark.parametrize("input_closed", [False, True])
+async def test_recv_loop_resets_timeout_timer_on_audio(
+    connection_cls: type, input_closed: bool
+) -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"hello-audio").decode("ascii"),
+                }
+            ),
+        ],
+    )
+    ctx = connection._context_data[context_id]
+    ctx.input_closed = input_closed
+    timer = asyncio.get_event_loop().call_later(60, lambda: None)
+    ctx.timeout_timer = timer
+    restarted: list[str] = []
+    connection._start_timeout_timer = restarted.append  # type: ignore[attr-defined]
+
+    with contextlib.suppress(Exception):
+        await connection_cls._recv_loop(connection)
+
+    # cleared so _start_timeout_timer can arm a new timer on the next send
+    assert timer.cancelled()
+    assert ctx.timeout_timer is None
+    # after close_context, no send will re-arm it: the audio handler must
+    assert restarted == ([context_id] if input_closed else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection_cls", "model"),
+    [
+        (elevenlabs_tts._Connection, "eleven_flash_v2_5"),
+        (elevenlabs_tts._DialogueConnection, "eleven_v3_conversational"),
+    ],
+)
+async def test_send_loop_arms_timeout_on_close_context(connection_cls: type, model: str) -> None:
+    tts = elevenlabs_tts.TTS(api_key="test-key", model=model, voice_id="voice-1")
+    async with aiohttp.ClientSession() as session:
+        connection = connection_cls(tts._opts, session)
+        connection._ws = _RecordingWs()
+        ctx = elevenlabs_tts._StreamData(
+            emitter=_FakeEmitter(),  # type: ignore[arg-type]
+            stream=SimpleNamespace(_conn_options=SimpleNamespace(timeout=60)),  # type: ignore[arg-type]
+            waiter=asyncio.get_event_loop().create_future(),
+        )
+        connection._context_data["ctx-1"] = ctx
+        connection._active_contexts.add("ctx-1")
+        connection.close_context("ctx-1")
+        connection._input_queue.close()
+
+        await asyncio.wait_for(connection._send_loop(), timeout=1.0)
+
+        # no more sends will arm it, so close_context must
+        assert ctx.input_closed
+        assert ctx.timeout_timer is not None
+        ctx.timeout_timer.cancel()
 
 
 def test_unregister_stream_keeps_the_context_closable() -> None:

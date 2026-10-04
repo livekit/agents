@@ -727,6 +727,8 @@ class _StreamData:
     stream: SynthesizeStream
     waiter: asyncio.Future[None]
     timeout_timer: asyncio.TimerHandle | None = None
+    # set once close_context is sent: no more input, only provider output is pending
+    input_closed: bool = False
 
 
 def _accumulate_alignment(
@@ -878,6 +880,7 @@ class _Connection:
                             "context_id": msg.context_id,
                             "close_context": True,
                         }
+                        self._mark_input_closed(msg.context_id)
                         await self._ws.send_json(close_pkt)
 
         except Exception as e:
@@ -968,6 +971,10 @@ class _Connection:
                     emitter.push(b64data)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
+                    if ctx.input_closed:
+                        # the final response is still pending, keep the idle timeout active
+                        self._start_timeout_timer(context_id)
 
                 if data.get("isFinal"):
                     timed_words, _ = _to_timed_words(
@@ -1027,6 +1034,12 @@ class _Connection:
             self._cleanup_context(context_id)
 
         ctx.timeout_timer = asyncio.get_event_loop().call_later(timeout, _on_timeout)
+
+    def _mark_input_closed(self, context_id: str) -> None:
+        """Arm the timeout for the final response once no more input will be sent"""
+        if ctx := self._context_data.get(context_id):
+            ctx.input_closed = True
+            self._start_timeout_timer(context_id)
 
     async def aclose(self) -> None:
         """Close the connection and clean up"""
@@ -1141,6 +1154,7 @@ class _DialogueConnection(_Connection):
                             "context_id": msg.context_id,
                             "close_context": True,
                         }
+                        self._mark_input_closed(msg.context_id)
                         await self._ws.send_json(close_pkt)
 
                 await self._send_due_keep_alives()
@@ -1234,6 +1248,10 @@ class _DialogueConnection(_Connection):
                     emitter.push(b64data)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
+                    if ctx.input_closed:
+                        # the final response is still pending, keep the idle timeout active
+                        self._start_timeout_timer(context_id)
 
                 if data.get("is_final"):
                     timed_words, _ = _to_timed_words(
