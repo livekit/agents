@@ -26,6 +26,7 @@ from livekit.agents.voice.room_io.types import (
     AudioOutputOptions,
     NoiseCancellationParams,
     RoomOptions,
+    TextOutputOptions,
 )
 from livekit.rtc._proto.track_pb2 import AudioTrackFeature
 
@@ -1385,5 +1386,35 @@ async def test_audio_output_is_unbuffered_by_default() -> None:
     try:
         await asyncio.sleep(0)
         assert room_io._effective_audio_output is room_io._audio_output
+    finally:
+        await room_io.aclose()
+
+
+async def test_prebuffer_and_transcription_synchronizer_chain_correctly() -> None:
+    """The prebuffer sits below the synchronizer so transcript timing tracks real playback."""
+    room = _FakeRoom()
+    room_io = RoomIO(
+        MagicMock(spec=AgentSession),
+        room,
+        options=RoomOptions(
+            audio_output=AudioOutputOptions(prebuffer_ms=300),
+            text_output=TextOutputOptions(sync_transcription=True),
+        ),
+    )
+    await room_io.start()
+    try:
+        await asyncio.sleep(0)
+        # session output should be the synchronizer's output
+        assert room_io._tr_synchronizer is not None
+        assert room_io._effective_audio_output is not room_io._audio_output
+        # chain: _SyncedAudioOutput -> BufferedAudioOutput -> _ParticipantAudioOutput
+        synced = room_io._tr_synchronizer.audio_output
+        assert synced is not None
+        buffered = synced.next_in_chain
+        assert isinstance(buffered, BufferedAudioOutput)
+        sink = buffered.next_in_chain
+        assert sink is not None
+        # the sink's next_in_chain might be _AudioSinkProxy, so just verify it reaches the RoomIO sink
+        assert sink.next_in_chain is not None
     finally:
         await room_io.aclose()
