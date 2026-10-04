@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from livekit import rtc
-from livekit.agents.voice.io import AudioOutput, BufferedAudioOutput
+from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities, BufferedAudioOutput
 
 from .fake_io import FakeAudioOutput
 
@@ -183,3 +183,80 @@ async def test_a_sink_that_cannot_pause_is_reported_as_such() -> None:
     buf = _buffered(FakeAudioOutput(can_pause=False), 0.1)
 
     assert buf.can_pause is False
+
+
+# -- Devin regression tests ---------------------------------------------------
+
+
+async def test_interruption_during_flush_does_not_hang() -> None:
+    """
+    Regression test for: when clear_buffer() is called while a flush task is
+    in-flight, the task must complete and flush the downstream sink for any
+    frames already forwarded, so wait_for_playout() does not hang.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.3)
+
+    # push enough frames to cross the buffer threshold and auto-release
+    for _ in range(4):
+        await buf.capture_frame(_frame(0.1))  # 0.4s > 0.3s buffer
+
+    # flush schedules the release task
+    buf.flush()
+
+    # immediate interruption before the task completes
+    buf.clear_buffer()
+
+    # must not hang - the in-flight task completes and flushes the sink
+    await asyncio.wait_for(buf.wait_for_playout(), timeout=1.0)
+
+    # give the delayed clear task a moment to run
+    await asyncio.sleep(0.01)
+    assert sink.flushed is True, "sink must be flushed for forwarded frames"
+
+
+async def test_adjacent_replies_do_not_merge_segments() -> None:
+    """
+    Regression test for: flush() closes the wrapper's segment synchronously
+    but delays the sink's flush to a task. If a new reply captures audio
+    before that task runs, it must not enter the previous sink segment.
+    """
+    sink = _TrackingSink()
+    buf = _buffered(sink, 0.1)
+
+    # first reply: fill buffer, auto-releases, then flush
+    await buf.capture_frame(_frame(0.1))
+    await buf.capture_frame(_frame(0.1))
+    buf.flush()
+    await buf.wait_for_playout()
+
+    # second reply must be a separate segment
+    await buf.capture_frame(_frame(0.1))
+    buf.flush()
+    await buf.wait_for_playout()
+
+    assert sink.segments == 2, f"each reply must be its own segment, got {sink.segments}"
+
+
+class _TrackingSink(AudioOutput):
+    """Sink that counts segments and tracks flush state."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="TrackingSink",
+            capabilities=AudioOutputCapabilities(pause=True),
+        )
+        self.segments = 0
+        self.flushed = False
+
+    async def capture_frame(self, frame: rtc.AudioFrame) -> None:
+        await super().capture_frame(frame)
+
+    def flush(self) -> None:
+        super().flush()
+        self.segments += 1
+        self.flushed = True
+        self.on_playback_finished(playback_position=0.0, interrupted=False)
+
+    def clear_buffer(self) -> None:
+        pass
