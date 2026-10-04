@@ -107,7 +107,6 @@ def test_ssl_context_is_built_once_per_trust_configuration(
     assert http_context._create_ssl_context() is system_ctx
     assert len(built) == 1
 
-    # a changed trust configuration gets its own context
     monkeypatch.setenv("SSL_CERT_FILE", certifi.where())
     certifi_ctx = http_context._create_ssl_context()
     assert certifi_ctx is not system_ctx
@@ -155,7 +154,6 @@ def test_concurrent_first_calls_build_one_ssl_context(
     assert first_entered.wait(timeout=10)
     second = threading.Thread(target=lambda: results.append(http_context._create_ssl_context()))
     second.start()
-    # the second call either waits for the first build or starts a build of its own
     deadline = time.monotonic() + 10
     while not (second_waits.is_set() or second_entered.is_set()):
         assert time.monotonic() < deadline
