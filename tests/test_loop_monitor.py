@@ -117,7 +117,6 @@ def _block_loop_synchronously(duration: float) -> None:
     time.sleep(duration)
 
 
-# how a report names the time.sleep call above: by file and line, without source text
 _SLEEP_CALL = "line {}, in _block_loop_synchronously".format(
     _block_loop_synchronously.__code__.co_firstlineno
     + next(
@@ -859,7 +858,6 @@ def test_no_thread_reads_source_for_a_report(tmp_path: Path) -> None:
 
     module = ModuleType("loader_source")
     module.__loader__ = RecordingLoader()  # type: ignore[assignment]
-    # not on disk, so linecache asks the module's loader for the source
     exec(compile(source, str(tmp_path / "missing" / "loader_source.py"), "exec"), module.__dict__)
 
     loop = asyncio.new_event_loop()
