@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
+import sys
+import threading
 import time
 from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from opentelemetry import trace
@@ -802,6 +806,79 @@ def test_watchdog_samples_one_tick_before_the_threshold() -> None:
         assert m._incident is not None and len(m._incident.samples) == 1
         m._watchdog_check()  # the same incident is not sampled twice before the late sample
         assert len(m._incident.samples) == 1
+    finally:
+        loop.close()
+
+
+def _blocked_monitor(loop: asyncio.AbstractEventLoop) -> EventLoopMonitor:
+    """A monitor whose loop thread is this thread, blocked well past the warn threshold."""
+    m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+    reports: list[BlockedReport] = []
+    m._on_report = reports.append
+    m.reports = reports  # type: ignore[attr-defined]
+    m._loop_thread_ident = threading.get_ident()
+    m._last_tick_at = time.monotonic() - TICK - WARN * 2
+    return m
+
+
+def test_a_tick_during_the_sample_reports_it() -> None:
+    """The block can end while the watchdog walks the loop thread's stack. The tick that ends
+    it must report that sample, not take the incident before the sample is stored."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = _blocked_monitor(loop)
+        sample_loop_thread = m._sample_loop_thread
+        tick = threading.Thread(target=m._on_tick)
+
+        def sample_while_the_block_ends(lag: float) -> loop_monitor._StackSample:
+            sample = sample_loop_thread(lag)
+            tick.start()
+            tick.join(0.2)  # a tick that does not wait for the sample reports meanwhile
+            return sample
+
+        m._sample_loop_thread = sample_while_the_block_ends  # type: ignore[method-assign]
+        m._watchdog_check()
+        tick.join()
+
+        [report] = m.reports  # type: ignore[attr-defined]
+        assert report.stacks[0].startswith("# loop thread sampled"), _describe([report])
+    finally:
+        loop.close()
+
+
+def test_a_watchdog_check_inside_the_tick_keeps_the_sample() -> None:
+    """The watchdog can run while the tick that ends a block is between advancing the
+    heartbeat sequence and recording its time. It must not read that half-written state as a
+    new block and drop the sample of the block that is ending."""
+    loop = asyncio.new_event_loop()
+    try:
+        m = _blocked_monitor(loop)
+        m._watchdog_check()  # samples the block
+        assert m._incident is not None and m._incident.samples
+
+        lines, first = inspect.getsourcelines(EventLoopMonitor._on_tick)
+        [between] = [
+            first + i for i, line in enumerate(lines) if line.strip() == "self._last_tick_at = now"
+        ]
+        watchdog = threading.Thread(target=m._watchdog_check)
+
+        def at_line(frame: Any, event: str, arg: Any) -> Any:
+            if event == "line" and frame.f_lineno == between and watchdog.ident is None:
+                watchdog.start()
+                watchdog.join(0.2)  # a watchdog that can read the half-written state runs now
+            return at_line
+
+        tick_code = EventLoopMonitor._on_tick.__code__
+        sys.settrace(lambda frame, event, arg: at_line if frame.f_code is tick_code else None)
+        try:
+            m._on_tick()
+        finally:
+            sys.settrace(None)
+        watchdog.join()
+
+        assert watchdog.ident is not None
+        [report] = m.reports  # type: ignore[attr-defined]
+        assert report.stacks[0].startswith("# loop thread sampled"), _describe([report])
     finally:
         loop.close()
 
