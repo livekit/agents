@@ -51,7 +51,6 @@ import asyncio
 import contextlib
 import contextvars
 import gc
-import linecache
 import math
 import os
 import sys
@@ -175,10 +174,6 @@ class _StackSample:
     # the module a lazy import was loading when sampled; the import machinery's frames say
     # nothing useful by themselves
     importing: str | None = None
-    # the innermost frame's source line: it names the call that blocked, which has no frame of
-    # its own when it is a C function. The watchdog sets it after publishing the sample; a
-    # report formatted before then omits it.
-    innermost_line: str = ""
 
 
 @dataclass
@@ -347,7 +342,7 @@ class EventLoopMonitor:
         process_descheduled = watchdog_starved and cpu_time < lag * 0.5
         stacks = [
             f"# loop thread sampled {s.lag * 1000:.0f}ms into the stall\n"
-            + _format_frames(s.frames, importing=s.importing, innermost_line=s.innermost_line)
+            + _format_frames(s.frames, importing=s.importing)
             for s in samples
             if s.frames
         ]
@@ -556,11 +551,6 @@ class EventLoopMonitor:
                 incident.samples.append(sample)
                 if want_late:
                     incident.late_sampled = True
-        # only once the sample is published: a cold read can outlast the stall, and a report
-        # formatted before it finishes still has the stack, without the line
-        innermost = sample.frames[-1] if sample.frames else None
-        if innermost is not None and innermost.lineno:
-            sample.innermost_line = linecache.getline(innermost.filename, innermost.lineno).strip()
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
@@ -594,7 +584,8 @@ class EventLoopMonitor:
         if frame is not None:
             importing = _module_being_imported(frame)
             # no source lookup here: the watchdog holds the GIL while it samples, and the loop
-            # thread is what it is taking it from. _watchdog_check reads the innermost line.
+            # thread is what it is taking it from. Its wake-ups also measure host starvation,
+            # so it must never wait on a file.
             frames = list(
                 traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
             )
@@ -663,12 +654,7 @@ def _module_being_imported(frame: Any) -> str | None:
     return None
 
 
-def _format_frames(
-    frames: list[traceback.FrameSummary],
-    *,
-    importing: str | None = None,
-    innermost_line: str = "",
-) -> str:
+def _format_frames(frames: list[traceback.FrameSummary], *, importing: str | None = None) -> str:
     # drop the event loop machinery (the same in every sample), but never the innermost frame:
     # a C call scheduled directly as a callback has no frame of its own
     trimmed = [
@@ -692,10 +678,9 @@ def _format_frames(
         if run:
             entries.append(_import_run_line(run, importing))
             run = 0
-        # never FrameSummary.line: it reads the source file, and this runs on the loop thread
+        # file, line and function, like faulthandler: the source text would be read from the
+        # file here, on the loop thread that just unblocked
         entries.append(f'  File "{f.filename}", line {f.lineno}, in {f.name}\n')
-        if i == len(trimmed) - 1 and innermost_line:
-            entries[-1] += f"    {innermost_line}\n"
     if run:
         entries.append(_import_run_line(run, importing))
     return "".join(entries[-MAX_STACK_FRAMES:]).rstrip()
