@@ -597,9 +597,10 @@ class BufferedAudioOutput(AudioOutput):
         self._flush_task = asyncio.create_task(self._release_and_flush())
 
     async def _release_and_flush(self) -> None:
-        self._start_segment()
         await self._release()
         self.next_in_chain.flush()
+        # start the next segment only after the current one has been fully flushed
+        self._start_segment()
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
         task, self._flush_task = self._flush_task, None
@@ -609,13 +610,23 @@ class BufferedAudioOutput(AudioOutput):
 
     def clear_buffer(self) -> None:
         task, self._flush_task = self._flush_task, None
-        if task is not None and not task.done():
-            # an interruption should not wait on audio that is about to be dropped
-            task.cancel()
         self._held.clear()
         self._held_duration = 0.0
         self._start_segment()
-        self.next_in_chain.clear_buffer()
+        if task is not None and not task.done():
+            # don't cancel the in-flight release; let it finish and flush the old
+            # segment, then clear the new one downstream. schedule after the task
+            # to preserve the "flush before clear" invariant.
+            async def _delayed_clear() -> None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                self.next_in_chain.clear_buffer()
+
+            _ = asyncio.create_task(_delayed_clear())  # noqa: RUF006 fire-and-forget cleanup
+        else:
+            self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:
         self._paused_at = time.monotonic()
