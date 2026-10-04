@@ -696,18 +696,20 @@ class AgentServer(utils.EventEmitter[EventTypes]):
                     self._host, self._prometheus_port
                 )
 
-            if not self._prometheus_multiproc_dir and "PROMETHEUS_MULTIPROC_DIR" in os.environ:
+            if self._prometheus_multiproc_dir:
+                os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
+            elif "PROMETHEUS_MULTIPROC_DIR" in os.environ:
                 self._prometheus_multiproc_dir = os.environ["PROMETHEUS_MULTIPROC_DIR"]
 
             if self._prometheus_multiproc_dir:
                 os.makedirs(self._prometheus_multiproc_dir, exist_ok=True)
+
+            if self._prometheus_multiproc_dir and os.path.exists(self._prometheus_multiproc_dir):
                 logger.debug(
                     "cleaning prometheus multiprocess directory",
                     extra={"path": self._prometheus_multiproc_dir},
                 )
-                # before the directory is set, so no file of this process can appear in it
                 telemetry.metrics._clean_multiproc_dir(self._prometheus_multiproc_dir)
-                os.environ["PROMETHEUS_MULTIPROC_DIR"] = self._prometheus_multiproc_dir
 
             if self._ws_url:
                 os.environ["LIVEKIT_URL"] = self._ws_url

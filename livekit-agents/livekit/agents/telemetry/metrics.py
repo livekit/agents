@@ -73,48 +73,45 @@ def _clean_multiproc_dir(path: str) -> None:
     after it is deleted, so the collector would lose every metric of that kind.
     The files of running processes stay.
 
-    In multiprocess mode, prometheus_client keeps every file it writes open, and
-    creates each new file on any thread at any time, in the directory that
-    PROMETHEUS_MULTIPROC_DIR names at that moment. If that is *path*, a file of
-    this process can appear while the cleanup runs, so this process's files stay,
-    and a stale file from an earlier process with the same pid stays with them;
-    clear the directory before the process starts to drop it. Otherwise no new
-    file of this process can appear in *path*, and a file with its pid is deleted
-    unless this process holds it open. Where the platform does not list open
-    files, it stays. Call this before pointing PROMETHEUS_MULTIPROC_DIR at a new
-    *path*.
+    In multiprocess mode, prometheus_client keeps every file it writes open, in
+    whichever directory PROMETHEUS_MULTIPROC_DIR named when it created the file,
+    and can create one on any thread at any time. A file with this process's pid
+    is deleted only when it was already initialized and this process does not
+    hold it open. prometheus_client sizes a new file only through the descriptor
+    it keeps, so a file that is not open yet is still empty and stays. Where the
+    platform does not list open files, every file of this process stays.
     """
     own_pid = os.getpid()
-    # (st_dev, st_ino) of this process's files to keep; None keeps all of them
-    own_open: set[tuple[int, int]] | None = set()
-    if values.ValueClass is not values.MutexValue:
-        current_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
-            "prometheus_multiproc_dir"
-        )
-        if current_dir is not None and os.path.realpath(current_dir) == os.path.realpath(path):
-            own_open = None
-        else:
-            own_open = _open_files()
-
+    multiprocess_mode = values.ValueClass is not values.MutexValue
+    to_remove: list[str] = []
+    own_files: dict[str, tuple[int, int]] = {}
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
         pid_str = filename.removesuffix(".db").rpartition("_")[2]
         if pid_str.isdigit():
             pid = int(pid_str)
             if pid == own_pid:
-                if own_open is None:
-                    continue
-                try:
-                    st = os.stat(file_path)
-                except OSError:
-                    continue
-                if (st.st_dev, st.st_ino) in own_open:
+                if multiprocess_mode:
+                    try:
+                        st = os.stat(file_path)
+                    except OSError:
+                        continue
+                    if st.st_size > 0:
+                        own_files[file_path] = (st.st_dev, st.st_ino)
                     continue
             elif psutil.pid_exists(pid):
                 # A live process that reused a dead process's pid keeps its stale
                 # file. prometheus_client's mark_process_dead has the same limit.
                 continue
+        to_remove.append(file_path)
 
+    if own_files:
+        # listed after every stat: a file sized before its stat was open by then
+        open_files = _open_files()
+        if open_files is not None:
+            to_remove.extend(p for p, file_id in own_files.items() if file_id not in open_files)
+
+    for file_path in to_remove:
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
