@@ -217,6 +217,8 @@ class TTS(tts.TTS):
 
         self.__current_connection: _Connection | _DialogueConnection | None = None
         self._connection_lock = asyncio.Lock()
+        self._prewarm_task: asyncio.Task[None] | None = None
+        self._opts_revision = 0
         self._warn_if_dialogue_model_ignores_options()
 
     @property
@@ -316,9 +318,11 @@ class TTS(tts.TTS):
             self._opts.pronunciation_dictionary_locators = pronunciation_dictionary_locators
             changed = True
 
-        if changed and self.__current_connection:
-            self.__current_connection.mark_non_current()
-            self.__current_connection = None
+        if changed:
+            self._opts_revision += 1
+            if self.__current_connection:
+                self.__current_connection.mark_non_current()
+                self.__current_connection = None
 
     async def _current_connection(self) -> tuple[_Connection | _DialogueConnection, float, bool]:
         """Get the current connection, creating one if needed.
@@ -327,24 +331,32 @@ class TTS(tts.TTS):
             Tuple of (connection, acquire_time, connection_reused)
         """
         async with self._connection_lock:
-            if (
-                self.__current_connection
-                and self.__current_connection.is_current
-                and not self.__current_connection._closed
-            ):
-                return self.__current_connection, 0.0, True
-
             session = self._ensure_session()
-            conn: _Connection | _DialogueConnection = (
-                _DialogueConnection(self._opts, session)
-                if is_dialogue_model(self._opts.model)
-                else _Connection(self._opts, session)
-            )
             t0 = time.perf_counter()
-            await conn.connect()
-            acquire_time = time.perf_counter() - t0
-            self.__current_connection = conn
-            return conn, acquire_time, False
+            while True:
+                if (
+                    self.__current_connection
+                    and self.__current_connection.is_current
+                    and not self.__current_connection._closed
+                ):
+                    return self.__current_connection, 0.0, True
+
+                opts_revision = self._opts_revision
+                opts = replace(self._opts)
+                conn: _Connection | _DialogueConnection = (
+                    _DialogueConnection(opts, session)
+                    if is_dialogue_model(opts.model)
+                    else _Connection(opts, session)
+                )
+                await conn.connect()
+
+                if opts_revision != self._opts_revision:
+                    await conn.aclose()
+                    continue
+
+                acquire_time = time.perf_counter() - t0
+                self.__current_connection = conn
+                return conn, acquire_time, False
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
@@ -358,7 +370,50 @@ class TTS(tts.TTS):
         self._streams.add(stream)
         return stream
 
+    def prewarm(self) -> None:
+        """Open the websocket connection before the first synthesis request."""
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.create_task(self._run_prewarm())
+
+    async def _run_prewarm(self) -> None:
+        retry_delay = 1.0
+        max_retry_delay = 30.0
+
+        try:
+            while True:
+                try:
+                    conn, _, _ = await self._current_connection()
+                    retry_delay = 1.0
+
+                    if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
+                        return
+
+                    # Text-to-dialogue sockets are closed by the server after an idle period.
+                    # Wait for that closure and reconnect immediately so the next turn remains warm.
+                    # asyncio.wait() does not propagate cancellation from the receive task.
+                    await asyncio.wait({conn._recv_task})
+                except asyncio.CancelledError:
+                    raise
+                except APIStatusError as exc:
+                    if not exc.retryable:
+                        logger.warning(
+                            "elevenlabs prewarm stopped after non-retryable API error",
+                            extra={"status_code": exc.status_code, "lk.pii.error": str(exc)},
+                        )
+                        return
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
+                except Exception:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
+        except asyncio.CancelledError:
+            raise
+
     async def aclose(self) -> None:
+        if self._prewarm_task:
+            await utils.aio.gracefully_cancel(self._prewarm_task)
+            self._prewarm_task = None
+
         for stream in list(self._streams):
             await stream.aclose()
         self._streams.clear()
