@@ -125,15 +125,17 @@ ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # input delta (RecordingOptions.input_delta)
 ATTR_INPUT_DELTA = "lk.input.delta"
-"""The span's lk.pii.chat_ctx / gen_ai.input.messages hold only the items added after the input
-recorded on ``lk.input.base_span_id``; the full conversation is the base's (resolved
-recursively) followed by this span's. lk.pii.chat_ctx is a delta only while the system
-instructions are unchanged, so it never holds system messages; gen_ai.system_instructions
-comes from this span when present, otherwise from ``lk.input.instructions_base_span_id``."""
+"""The span's gen_ai.input.messages / lk.pii.chat_ctx hold only the conversation that follows
+the one recorded on ``lk.input.base_span_id``. To rebuild it, take the base's conversation
+(resolved recursively) without its system messages, which were for that turn only, followed
+by this span's. Instructions are not part of the conversation; see
+``lk.input.instructions_base_span_id``."""
 ATTR_INPUT_OMITTED_ITEMS = "lk.input.omitted_items"
 ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
 ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID = "lk.input.instructions_base_span_id"
-"""The span's system instructions were left out as identical to those recorded on this span."""
+"""The span's instructions (gen_ai.system_instructions, or the system messages lk.pii.chat_ctx
+starts with) were left out as identical to those recorded on this span. lk.pii.chat_ctx
+carries instructions only when it is the full context."""
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"

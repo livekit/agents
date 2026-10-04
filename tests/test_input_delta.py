@@ -55,7 +55,7 @@ def _delta(
 
 
 def _ids(delta: gen_ai.InputDelta) -> list[str]:
-    return [item.id for item in delta.chat_ctx.items]
+    return [item.id for item in delta.chat_ctx().items]
 
 
 SYS = ("sys", "system", "be nice")
@@ -65,7 +65,7 @@ def test_first_generation_is_full(span_exporter: InMemorySpanExporter) -> None:
     tracker = gen_ai.InputDeltaTracker()
     ctx = _ctx(SYS, ("u1", "user", "hi"))
     delta, _ = _delta(tracker.begin(), ctx)
-    assert delta.chat_ctx is ctx
+    assert _ids(delta) == ["sys", "u1"]
     assert delta.messages_base is None and delta.instructions_base is None
 
 
@@ -109,12 +109,17 @@ def test_one_off_system_message_does_not_break_the_delta(
     _delta(scope1, _ctx(SYS, ("u1", "user", "hi")))
     scope1.commit()
 
-    # generate_reply(instructions=...) appends a system message after the conversation
+    # generate_reply(instructions=...) appends a system message after the conversation;
+    # it is part of this turn's conversation, not of the instructions
     ctx2 = _ctx(SYS, ("u1", "user", "hi"), ("u2", "user", "bye"), ("tmp", "system", "greet"))
     delta, _ = _delta(tracker.begin(), ctx2)
     assert delta.messages_base is not None
-    assert delta.instructions_base is None
-    assert _ids(delta) == ["sys", "tmp", "u2"]
+    assert delta.instructions_base is not None
+    assert _ids(delta) == ["u2", "tmp"]
+    assert delta.input_messages()[-1] == {
+        "role": "system",
+        "parts": [{"type": "text", "content": "greet"}],
+    }
 
 
 @pytest.mark.parametrize(
@@ -252,101 +257,122 @@ def test_instructions_base_points_at_the_span_that_recorded_them(
     assert delta.instructions_base.span_context == span1.get_span_context()
 
 
+def _per_turn(
+    *items: tuple[str, str, str], guide: bool = True, one_off: str | None = None
+) -> llm.ChatContext:
+    """A turn as the framework sends it: the instructions, the agent's initial config, the
+    stored history, then the turn's own system messages (a generate_reply(instructions=...)
+    message, the expressive guide) last."""
+    extra = [("x", "system", one_off)] if one_off else []
+    ctx = _ctx(*items, *extra, *([("G", "system", "markup guide")] if guide else []))
+    ctx.items.insert(1, llm.AgentConfigUpdate(id="cfg", instructions="initial"))
+    return ctx
+
+
+def _tool_step(*items: tuple[str, str, str]) -> llm.ChatContext:
+    """A tool reply reuses the turn's context: the guide stays before the tool items."""
+    ctx = _ctx(*items[:-2], ("G", "system", "markup guide"))
+    ctx.items.insert(1, llm.AgentConfigUpdate(id="cfg", instructions="initial"))
+    (call_id, _, _), (out_id, _, _) = items[-2:]
+    ctx.items.append(llm.FunctionCall(id=call_id, call_id="c1", name="f", arguments="{}"))
+    ctx.items.append(
+        llm.FunctionCallOutput(id=out_id, call_id="c1", name="f", output="ok", is_error=False)
+    )
+    return ctx
+
+
+INSTR = ("I", "system", "be brief")
+INSTR2 = ("I", "system", "be detailed")
+
+
 def test_rebuilt_input_matches_what_was_sent(span_exporter: InMemorySpanExporter) -> None:
     """Following lk.input.* from each span back to a full one reproduces the input the
-    model received, for both gen_ai.* (instructions separate) and lk.pii.chat_ctx
-    (instructions among the conversation)."""
+    model received, in order, for both gen_ai.* and lk.pii.chat_ctx."""
+    a1, u1 = ("a1", "assistant", "hello"), ("u1", "user", "hi")
+    a2, u2 = ("a2", "assistant", "sure"), ("u2", "user", "weather?")
+    a3, u3 = ("a3", "assistant", "sunny"), ("u3", "user", "tomorrow?")
+    a4, u4 = ("a4", "assistant", "rain"), ("u4", "user", "thanks")
     turns = [
-        _ctx(("sys", "system", "be brief"), ("u1", "user", "hi")),
-        _ctx(
-            ("sys", "system", "be brief"),
-            ("u1", "user", "hi"),
-            ("a1", "assistant", "hello"),
-            ("u2", "user", "weather?"),
-        ),
-        # update_instructions: same id, new text
-        _ctx(
-            ("sys", "system", "be detailed"),
-            ("u1", "user", "hi"),
-            ("a1", "assistant", "hello"),
-            ("u2", "user", "weather?"),
-            ("a2", "assistant", "sunny"),
-            ("u3", "user", "tomorrow?"),
-        ),
-        _ctx(
-            ("sys", "system", "be detailed"),
-            ("u1", "user", "hi"),
-            ("a1", "assistant", "hello"),
-            ("u2", "user", "weather?"),
-            ("a2", "assistant", "sunny"),
-            ("u3", "user", "tomorrow?"),
-            ("a3", "assistant", "rain"),
-            ("u4", "user", "thanks"),
-        ),
+        # greeting: generate_reply(instructions=...) on an empty conversation
+        _per_turn(INSTR, one_off="greet the user"),
+        _per_turn(INSTR, a1, u1),
+        _per_turn(INSTR, a1, u1, a2, u2),
+        # a tool step: the guide stays in the middle
+        _tool_step(INSTR, a1, u1, a2, u2, ("fc", "", ""), ("fo", "", "")),
+        _per_turn(INSTR, a1, u1, a2, u2, a3, u3),
+        # update_instructions, then a one-off instruction on a regular turn
+        _per_turn(INSTR2, a1, u1, a2, u2, a3, u3, a4, u4, one_off="be quick"),
         # an earlier message edited
-        _ctx(
-            ("sys", "system", "be detailed"),
-            ("u1", "user", "hey"),
-            ("a1", "assistant", "hello"),
-            ("u2", "user", "weather?"),
-            ("a2", "assistant", "sunny"),
-            ("u3", "user", "tomorrow?"),
-            ("a3", "assistant", "rain"),
-            ("u4", "user", "thanks"),
-            ("a4", "assistant", "bye"),
-            ("u5", "user", "bye"),
-        ),
+        _per_turn(INSTR2, a1, ("u1", "user", "hey"), a2, u2, a3, u3, a4, u4),
     ]
+    # the tool items sit in the history of every later turn
+    for ctx in turns[4:]:
+        fc = turns[3].items[-2:]
+        at = next(i for i, item in enumerate(ctx.items) if item.id == "a3")
+        ctx.items[at:at] = fc
 
     tracker = gen_ai.InputDeltaTracker()
-    recorded: dict[str, dict[int, gen_ai.InputDelta]] = {"gen_ai": {}, "chat_ctx": {}}
-    last: dict[str, int] = {}
+    recorded: dict[int, gen_ai.InputDelta] = {}
+    last: dict[gen_ai.InputDeltaSite, int] = {}
+    kinds: dict[gen_ai.InputDeltaSite, list[tuple[bool, bool]]] = {}
     for ctx in turns:
         scope = tracker.begin()
-        for kind, site, in_messages in (
-            ("chat_ctx", gen_ai.INPUT_DELTA_SITE_LLM_NODE, True),
-            ("gen_ai", gen_ai.INPUT_DELTA_SITE_LLM_REQUEST, False),
-        ):
-            with tracer.start_as_current_span(site) as span:
-                delta = scope.delta(site, ctx, span, instructions_in_messages=in_messages)
-            span_id = span.get_span_context().span_id
-            recorded[kind][span_id] = delta
-            last[kind] = span_id
+        for site in (gen_ai.INPUT_DELTA_SITE_LLM_NODE, gen_ai.INPUT_DELTA_SITE_LLM_REQUEST):
+            with tracer.start_as_current_span(site.name) as span:
+                delta = scope.delta(site, ctx, span)
+            recorded[span.get_span_context().span_id] = delta
+            last[site] = span.get_span_context().span_id
+            kinds.setdefault(site, []).append(
+                (delta.messages_base is not None, delta.instructions_base is not None)
+            )
         scope.commit()
 
-        def messages(span_id: int) -> list[Any]:
-            delta = recorded["gen_ai"][span_id]
-            base = delta.messages_base
-            head = messages(base.span_context.span_id) if base else []
-            return head + gen_ai.to_input_messages(delta.chat_ctx)
+        def base_of(delta: gen_ai.InputDelta, *, instructions: bool) -> gen_ai.InputDelta | None:
+            base = delta.instructions_base if instructions else delta.messages_base
+            return recorded[base.span_context.span_id] if base else None
 
-        def instructions(span_id: int) -> list[Any]:
-            delta = recorded["gen_ai"][span_id]
-            if (base := delta.instructions_base) is not None:
-                return instructions(base.span_context.span_id)
-            return gen_ai.to_system_instructions(delta.chat_ctx)
+        def instructions(delta: gen_ai.InputDelta) -> list[Any]:
+            base = base_of(delta, instructions=True)
+            return instructions(base) if base else delta.instructions
 
-        def chat_items(span_id: int) -> list[Any]:
-            delta = recorded["chat_ctx"][span_id]
-            base = delta.messages_base
-            if base is not None:
-                # a delta never carries system messages; they are the base's
-                assert not any(gen_ai._is_system_message(i) for i in delta.chat_ctx.items)
-            head = chat_items(base.span_context.span_id) if base else []
-            return head + [(i.id, i._fingerprint()) for i in delta.chat_ctx.items]
+        def conversation(delta: gen_ai.InputDelta) -> list[Any]:
+            base = base_of(delta, instructions=False)
+            # the base's per-turn system messages were for that turn only
+            head = (
+                [i for i in conversation(base) if not gen_ai._is_system_message(i)] if base else []
+            )
+            return head + delta.conversation
 
-        assert messages(last["gen_ai"]) == gen_ai.to_input_messages(ctx)
-        assert instructions(last["gen_ai"]) == gen_ai.to_system_instructions(ctx)
-        assert chat_items(last["chat_ctx"]) == [(i.id, i._fingerprint()) for i in ctx.items]
+        def keys(items: list[Any]) -> list[tuple[str, bytes]]:
+            return [(i.id, i._fingerprint()) for i in items]
 
-    # the deltas the scenario is meant to exercise actually happened
-    kinds = [
-        (d.messages_base is not None, d.instructions_base is not None)
-        for d in recorded["gen_ai"].values()
+        node = recorded[last[gen_ai.INPUT_DELTA_SITE_LLM_NODE]]
+        request = recorded[last[gen_ai.INPUT_DELTA_SITE_LLM_REQUEST]]
+        for delta in (node, request):
+            assert keys(instructions(delta) + conversation(delta)) == keys(ctx.items)
+        # lk.pii.chat_ctx carries instructions only in a full record
+        if node.instructions:
+            assert keys(node.chat_ctx().items) == keys(ctx.items)
+        # the attributes match what the model was sent
+        rebuilt = llm.ChatContext(instructions(request) + conversation(request))
+        assert gen_ai.to_input_messages(rebuilt) == gen_ai.to_input_messages(ctx)
+        assert gen_ai.to_system_instructions(rebuilt) == gen_ai.to_system_instructions(ctx)
+
+    # the cases the scenario is meant to exercise actually happened
+    request_kinds = kinds[gen_ai.INPUT_DELTA_SITE_LLM_REQUEST]
+    assert request_kinds == [
+        (False, False),  # greeting
+        (True, True),
+        (True, True),
+        (True, True),  # tool step
+        (True, True),
+        (True, False),  # instructions changed: delta, with the new instructions
+        (False, True),  # edited message
     ]
-    assert kinds == [(False, False), (True, True), (True, False), (True, True), (False, True)]
-    chat_kinds = [d.messages_base is not None for d in recorded["chat_ctx"].values()]
-    assert chat_kinds == [False, True, False, True, False]
+    node_kinds = kinds[gen_ai.INPUT_DELTA_SITE_LLM_NODE]
+    # lk.pii.chat_ctx can't carry changed instructions in a delta
+    assert node_kinds[5] == (False, False)
+    assert node_kinds[:5] == request_kinds[:5]
 
 
 # -- session ---------------------------------------------------------------------------

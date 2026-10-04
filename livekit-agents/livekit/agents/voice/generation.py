@@ -193,20 +193,15 @@ async def _llm_inference_task(
     tools = tool_ctx.flatten()
 
     # the input as this span records it: the full context, or only what was added since
-    # the last committed generation when the session records with `input_delta`.
-    # lk.pii.chat_ctx keeps the system messages among the conversation.
+    # the last committed generation when the session records with `input_delta`
     delta = gen_ai_telemetry.input_delta(
-        gen_ai_telemetry.INPUT_DELTA_SITE_LLM_NODE,
-        chat_ctx,
-        current_span,
-        instructions_in_messages=True,
+        gen_ai_telemetry.INPUT_DELTA_SITE_LLM_NODE, chat_ctx, current_span
     )
-    recorded_ctx = delta.chat_ctx
 
     if current_span.is_recording():
         attrs: dict[str, Any] = {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                recorded_ctx.to_dict(
+                delta.chat_ctx().to_dict(
                     exclude_audio=True,
                     exclude_image=True,
                     exclude_timestamp=True,
@@ -247,7 +242,7 @@ async def _llm_inference_task(
         _record_uninstrumented_inference(
             current_span,
             inference_recorded,
-            recorded_ctx,
+            delta,
             tools,
             data,
             streaming=False,
@@ -329,7 +324,7 @@ async def _llm_inference_task(
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(
-            current_span, inference_recorded, recorded_ctx, tools, data, error=exc
+            current_span, inference_recorded, delta, tools, data, error=exc
         )
         raise
     finally:
@@ -353,7 +348,7 @@ async def _llm_inference_task(
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     _record_uninstrumented_inference(
-        current_span, inference_recorded, recorded_ctx, tools, data, usage=usage
+        current_span, inference_recorded, delta, tools, data, usage=usage
     )
     return True
 
@@ -361,7 +356,7 @@ async def _llm_inference_task(
 def _record_uninstrumented_inference(
     span: trace.Span,
     inference_recorded: list[bool],
-    chat_ctx: ChatContext,
+    delta: gen_ai_telemetry.InputDelta,
     tools: list[llm.Tool],
     data: _LLMGenerationData,
     *,
@@ -398,8 +393,8 @@ def _record_uninstrumented_inference(
     if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
         gen_ai_telemetry.set_content_attributes(
             span,
-            system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+            system_instructions=delta.system_instructions(),
+            input_messages=delta.input_messages(),
             tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
             output_messages=gen_ai_telemetry.to_output_messages(
                 text=data.generated_text,

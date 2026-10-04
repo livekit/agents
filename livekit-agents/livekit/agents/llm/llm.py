@@ -304,8 +304,8 @@ class LLMStream(ABC):
             )
             gen_ai_telemetry.set_content_attributes(
                 span,
-                system_instructions=gen_ai_telemetry.to_system_instructions(delta.chat_ctx),
-                input_messages=gen_ai_telemetry.to_input_messages(delta.chat_ctx),
+                system_instructions=delta.system_instructions(),
+                input_messages=delta.input_messages(),
                 tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
             )
             gen_ai_telemetry.set_input_delta_attributes(span, delta)

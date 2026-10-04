@@ -87,14 +87,26 @@ def mark_inference_span_recorded() -> None:
         on_created()
 
 
-INPUT_DELTA_SITE_LLM_NODE = "llm_node"
-INPUT_DELTA_SITE_LLM_REQUEST = "llm_request"
+@dataclass(frozen=True)
+class InputDeltaSite:
+    """Where an LLM input is recorded, and how its record may be split."""
+
+    name: str
+    instructions_in_messages: bool
+    """The record keeps the instructions in the message list (``lk.pii.chat_ctx``) rather
+    than in a separate attribute. A record that has to carry changed instructions is then
+    the full context; otherwise it holds no instructions at all."""
+
+
+INPUT_DELTA_SITE_LLM_NODE = InputDeltaSite("llm_node", instructions_in_messages=True)
+INPUT_DELTA_SITE_LLM_REQUEST = InputDeltaSite("llm_request", instructions_in_messages=False)
 
 
 @dataclass
 class _MessagesBaseline:
     item_keys: list[tuple[str, bytes]]
-    """(id, content fingerprint) of each conversation item, in order"""
+    """(id, content fingerprint) of each conversation item, in order, leaving out the
+    per-turn system messages"""
     span_context: trace.SpanContext
 
 
@@ -108,15 +120,34 @@ class _InstructionsBaseline:
 class InputDelta:
     """How much of an LLM input a span records; the model always receives all of it.
 
-    ``chat_ctx`` holds what to record. With ``messages_base`` set, that is only the
-    conversation items appended after the input recorded on that span. With
-    ``instructions_base`` set, the system instructions are left out as identical to the
-    ones recorded on that span. With neither set, ``chat_ctx`` is the full input.
+    ``instructions`` are the system/developer messages the context starts with, left
+    empty (with ``instructions_base`` set) when identical to the ones recorded on that
+    span. ``conversation`` is everything after them; with ``messages_base`` set it holds
+    only what follows the conversation recorded on that span. Per-turn system messages
+    (``generate_reply(instructions=...)``, the expressive guide) are part of the
+    conversation, in place.
     """
 
-    chat_ctx: ChatContext
+    instructions: list[ChatItem]
+    conversation: list[ChatItem]
     messages_base: _MessagesBaseline | None = None
     instructions_base: _InstructionsBaseline | None = None
+
+    @classmethod
+    def full(cls, chat_ctx: ChatContext) -> InputDelta:
+        instructions, conversation = _split_instructions(chat_ctx.items)
+        return cls(instructions=instructions, conversation=conversation)
+
+    def chat_ctx(self) -> ChatContext:
+        from ..llm import ChatContext
+
+        return ChatContext([*self.instructions, *self.conversation])
+
+    def system_instructions(self) -> list[dict[str, Any]]:
+        return _instruction_parts(self.instructions)
+
+    def input_messages(self) -> list[dict[str, Any]]:
+        return _conversation_messages(self.conversation)
 
 
 @dataclass
@@ -131,14 +162,15 @@ class InputDeltaTracker:
 
     A span records only the conversation items appended since then; any other change
     (an item edited, removed or reordered, a replaced context) makes it record the full
-    conversation. System instructions are compared by their text, since a generation
-    assembles them from several sources (modality rendering, the expressive guide,
-    ``generate_reply(instructions=...)``, a custom ``llm_node``).
+    conversation. System messages after the instructions exist for a single turn
+    (``generate_reply(instructions=...)``, the expressive guide), so they are left out of
+    the comparison and recorded where the turn has them. Instructions are compared by
+    their text.
     """
 
     def __init__(self) -> None:
-        self._messages: dict[str, _MessagesBaseline] = {}
-        self._instructions: dict[str, _InstructionsBaseline] = {}
+        self._messages: dict[InputDeltaSite, _MessagesBaseline] = {}
+        self._instructions: dict[InputDeltaSite, _InstructionsBaseline] = {}
 
     def begin(self) -> InputDeltaScope:
         return InputDeltaScope(self)
@@ -154,7 +186,7 @@ class InputDeltaScope:
 
     def __init__(self, tracker: InputDeltaTracker) -> None:
         self._tracker = tracker
-        self._pending: dict[str, _PendingBaseline] = {}
+        self._pending: dict[InputDeltaSite, _PendingBaseline] = {}
         self._committed = False
 
     def commit(self) -> None:
@@ -162,73 +194,83 @@ class InputDeltaScope:
         for site, pending in self._pending.items():
             self._promote(site, pending)
 
-    def _promote(self, site: str, pending: _PendingBaseline) -> None:
+    def _promote(self, site: InputDeltaSite, pending: _PendingBaseline) -> None:
         # Keep the content recorded on the span. A preemptive generation's message may
         # change before it is committed; the next span must then record that edit.
         self._tracker._messages[site] = pending.messages
         self._tracker._instructions[site] = pending.instructions
 
-    def delta(
-        self,
-        site: str,
-        chat_ctx: ChatContext,
-        span: trace.Span,
-        *,
-        instructions_in_messages: bool = False,
-    ) -> InputDelta:
-        from ..llm import ChatContext
-
-        system = [item for item in chat_ctx.items if _is_system_message(item)]
-        conversation = [item for item in chat_ctx.items if not _is_system_message(item)]
+    def delta(self, site: InputDeltaSite, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
+        instructions, conversation = _split_instructions(chat_ctx.items)
         span_context = span.get_span_context()
 
-        messages = _MessagesBaseline(item_keys=_item_keys(conversation), span_context=span_context)
+        messages = _MessagesBaseline(
+            item_keys=_item_keys([i for i in conversation if not _is_system_message(i)]),
+            span_context=span_context,
+        )
         messages_base = self._tracker._messages.get(site)
-        if messages_base is not None:
-            n = len(messages_base.item_keys)
-            if messages.item_keys[:n] != messages_base.item_keys:
-                messages_base = None
+        cut = _appended_from(conversation, messages, messages_base) if messages_base else None
+        if cut is None:
+            messages_base = None
 
-        instructions = _InstructionsBaseline(
-            text=_json(to_system_instructions(chat_ctx)), span_context=span_context
+        instructions_state = _InstructionsBaseline(
+            text=_json(_instruction_parts(instructions)), span_context=span_context
         )
         instructions_base = self._tracker._instructions.get(site)
         if instructions_base is not None:
-            if instructions_base.text == instructions.text:
+            if instructions_base.text == instructions_state.text:
                 # keep pointing at the span that recorded them, not at one that omitted them
-                instructions = instructions_base
+                instructions_state = instructions_base
             else:
                 instructions_base = None
 
         if span.is_recording():
-            pending = _PendingBaseline(messages, instructions)
+            pending = _PendingBaseline(messages, instructions_state)
             self._pending[site] = pending
             if self._committed:
                 self._promote(site, pending)
 
-        if messages_base is None and instructions_base is None:
-            return InputDelta(chat_ctx=chat_ctx)
-        if instructions_in_messages and (messages_base is None or instructions_base is None):
-            # system messages sit among the conversation here, so the record is either the
-            # full context or the base's followed by appended items, never a mix
-            return InputDelta(chat_ctx=chat_ctx)
+        if instructions_base is None and (site.instructions_in_messages or messages_base is None):
+            return InputDelta(instructions=instructions, conversation=conversation)
 
-        items: list[ChatItem] = []
-        if instructions_base is None:
-            items.extend(system)
-        if messages_base is not None:
-            items.extend(conversation[len(messages_base.item_keys) :])
-        else:
-            items.extend(conversation)
         return InputDelta(
-            chat_ctx=ChatContext(items),
+            instructions=[] if instructions_base is not None else instructions,
+            conversation=conversation[cut:] if cut is not None else conversation,
             messages_base=messages_base,
             instructions_base=instructions_base,
         )
 
 
+def _appended_from(
+    conversation: list[ChatItem], current: _MessagesBaseline, base: _MessagesBaseline
+) -> int | None:
+    """Where the items appended after ``base`` start in ``conversation``, or None when the
+    conversation is not ``base`` followed by new items."""
+    n = len(base.item_keys)
+    if current.item_keys[:n] != base.item_keys:
+        return None
+    cut, seen = 0, 0
+    while seen < n:
+        if _is_system_message(conversation[cut]):
+            # a per-turn system message inside the shared part would be lost on rebuild
+            return None
+        seen += 1
+        cut += 1
+    return cut
+
+
 def _is_system_message(item: ChatItem) -> bool:
     return item.type == "message" and item.role in ("system", "developer")
+
+
+def _split_instructions(items: Sequence[ChatItem]) -> tuple[list[ChatItem], list[ChatItem]]:
+    """The agent's instructions are the system/developer messages the context starts with.
+    A later one (``generate_reply(instructions=...)``, the expressive guide) is sent in
+    place by chat-completion providers, so it belongs to the conversation."""
+    n = 0
+    while n < len(items) and _is_system_message(items[n]):
+        n += 1
+    return list(items[:n]), list(items[n:])
 
 
 def _item_keys(items: Sequence[ChatItem]) -> list[tuple[str, bytes]]:
@@ -254,37 +296,27 @@ def input_delta_active() -> bool:
     return _input_delta_scope.get() is not None
 
 
-def input_delta(
-    site: str,
-    chat_ctx: ChatContext,
-    span: trace.Span,
-    *,
-    instructions_in_messages: bool = False,
-) -> InputDelta:
+def input_delta(site: InputDeltaSite, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
     """Decide how much of ``chat_ctx`` the span records. The model always receives
     all of it; this only affects telemetry.
 
     When the session records with ``input_delta``, compare ``chat_ctx`` with the input
     recorded at ``site`` for the last committed generation:
 
-    - if the conversation only had items appended, keep just those items and set
-      ``messages_base`` to the span holding the rest;
-    - if the system instructions are unchanged, leave them out and set
-      ``instructions_base`` to the span that recorded them;
+    - if the conversation only had items appended, keep just those and set
+      ``messages_base`` to the span holding the rest. Per-turn system messages are
+      ignored in the comparison and recorded in place;
+    - if the instructions are unchanged, leave them out and set ``instructions_base`` to
+      the span that recorded them;
     - anything else (an item edited, removed or reordered) keeps the full conversation.
-
-    Set ``instructions_in_messages`` when the span records system messages among the
-    conversation (``lk.pii.chat_ctx``) rather than in a separate attribute: the span then
-    records either the full context or only appended items, and changed instructions
-    make it record the full context.
 
     The span's own input is held as pending, and becomes the baseline for the next
     generation only once this one is committed. Without ``input_delta``, return all
     of ``chat_ctx``.
     """
     if (scope := _input_delta_scope.get()) is None:
-        return InputDelta(chat_ctx=chat_ctx)
-    return scope.delta(site, chat_ctx, span, instructions_in_messages=instructions_in_messages)
+        return InputDelta.full(chat_ctx)
+    return scope.delta(site, chat_ctx, span)
 
 
 def set_input_delta_attributes(span: trace.Span, delta: InputDelta) -> None:
@@ -378,28 +410,33 @@ def _maybe_json(raw: str) -> Any:
 
 
 def to_system_instructions(chat_ctx: ChatContext) -> list[dict[str, Any]]:
-    """LiveKit carries an agent's instructions as ``system``/``developer`` messages in
-    the chat context, but they originate from ``Agent(instructions=...)`` rather than
-    from the conversation, so they are reported as instructions rather than history."""
-    parts: list[dict[str, Any]] = []
-    for item in chat_ctx.items:
-        if item.type == "message" and item.role in ("system", "developer"):
-            if (text := item.raw_text_content) is not None:
-                parts.append(_text_part(text))
-    return parts
+    """LiveKit carries an agent's instructions as the ``system``/``developer`` messages the
+    chat context starts with, but they originate from ``Agent(instructions=...)`` rather
+    than from the conversation, so they are reported as instructions rather than history."""
+    return _instruction_parts(_split_instructions(chat_ctx.items)[0])
 
 
 def to_input_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:
-    """History in the order it was sent. ``system``/``developer`` messages go to
-    ``gen_ai.system_instructions`` instead, and non-conversational items (agent
-    handoffs, config updates) are skipped."""
+    """History in the order it was sent. The leading ``system``/``developer`` messages go
+    to ``gen_ai.system_instructions`` instead; a later one stays in place as a ``system``
+    message. Non-conversational items (agent handoffs, config updates) are skipped."""
+    return _conversation_messages(_split_instructions(chat_ctx.items)[1])
+
+
+def _instruction_parts(items: Sequence[ChatItem]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for item in items:
+        if item.type == "message" and (text := item.raw_text_content) is not None:
+            parts.append(_text_part(text))
+    return parts
+
+
+def _conversation_messages(items: Sequence[ChatItem]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    for item in chat_ctx.items:
+    for item in items:
         role: str
         if item.type == "message":
-            if item.role in ("system", "developer"):
-                continue
-            role = item.role
+            role = "system" if item.role == "developer" else item.role
         elif item.type == "function_call":
             role = "assistant"
         elif item.type == "function_call_output":
