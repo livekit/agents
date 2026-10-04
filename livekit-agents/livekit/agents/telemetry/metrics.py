@@ -54,15 +54,24 @@ def _clean_multiproc_dir(path: str) -> None:
 
     prometheus_client names each file ``<kind>_<pid>.db`` and keeps writing to it
     after it is deleted, so the collector would lose every metric of that kind.
-    The files of running processes stay. In multiprocess mode this process can
-    create a file on any thread at any time, so its own files stay too. A stale
-    file from an earlier process with the same pid then stays as well; clear the
-    directory before the process starts to drop it. A process that imported
-    prometheus_client before PROMETHEUS_MULTIPROC_DIR was set writes no file, so
-    any file with its pid is stale.
+    The files of running processes stay. In multiprocess mode, prometheus_client
+    creates each new file on any thread at any time, in the directory that
+    PROMETHEUS_MULTIPROC_DIR names at that moment. If that is *path*, this
+    process's own files stay too, and a stale file from an earlier process with
+    the same pid stays with them; clear the directory before the process starts
+    to drop it. Otherwise this process has written no file in *path*, so any file
+    with its pid is stale. Call this before pointing PROMETHEUS_MULTIPROC_DIR at
+    a new *path*.
     """
     own_pid = os.getpid()
-    writes_files = values.ValueClass is not values.MutexValue
+    current_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
+        "prometheus_multiproc_dir"
+    )
+    writes_files = (
+        values.ValueClass is not values.MutexValue
+        and current_dir is not None
+        and os.path.realpath(current_dir) == os.path.realpath(path)
+    )
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
         pid_str = filename.removesuffix(".db").rpartition("_")[2]
