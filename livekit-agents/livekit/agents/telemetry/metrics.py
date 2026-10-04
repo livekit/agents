@@ -2,6 +2,7 @@ import os
 
 import prometheus_client
 import psutil
+from prometheus_client import values
 
 from .. import utils
 from ..log import logger
@@ -51,21 +52,24 @@ def _update_child_proc_count() -> None:
 def _clean_multiproc_dir(path: str) -> None:
     """Remove the metric files of processes that no longer run.
 
-    prometheus_client names each file ``<kind>_<pid>.db`` and keeps the files of
-    the current process open while it writes them. Deleting an open file would
-    hide every metric of that kind from the collector, so the files of running
-    processes stay. A file named after this process that it does not hold open
-    is left over from an earlier process with the same pid, so it goes.
+    prometheus_client names each file ``<kind>_<pid>.db`` and keeps writing to it
+    after it is deleted, so the collector would lose every metric of that kind.
+    The files of running processes stay. In multiprocess mode this process can
+    create a file on any thread at any time, so its own files stay too. A stale
+    file from an earlier process with the same pid then stays as well; clear the
+    directory before the process starts to drop it. A process that imported
+    prometheus_client before PROMETHEUS_MULTIPROC_DIR was set writes no file, so
+    any file with its pid is stale.
     """
     own_pid = os.getpid()
-    held_open = {os.path.realpath(f.path) for f in psutil.Process(own_pid).open_files()}
+    writes_files = values.ValueClass is not values.MutexValue
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
         pid_str = filename.removesuffix(".db").rpartition("_")[2]
         if pid_str.isdigit():
             pid = int(pid_str)
             if pid == own_pid:
-                if os.path.realpath(file_path) in held_open:
+                if writes_files:
                     continue
             elif psutil.pid_exists(pid):
                 # A live process that reused a dead process's pid keeps its stale
