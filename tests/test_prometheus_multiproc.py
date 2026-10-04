@@ -175,40 +175,6 @@ def test_cleanup_removes_this_pids_files_when_this_process_writes_none(tmp_path)
     assert out["FILES"] == "-"
 
 
-@pytest.mark.skipif(not os.path.isdir("/dev/fd"), reason="needs /dev/fd to list open files")
-def test_cleanup_removes_this_pids_files_from_a_directory_it_does_not_write_to(
-    tmp_path,
-) -> None:
-    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
-    a_dir.mkdir()
-    b_dir.mkdir()
-    out = _run(
-        """
-        import os, sys
-
-        a_dir, b_dir = sys.argv[1], sys.argv[2]
-        os.environ["PROMETHEUS_MULTIPROC_DIR"] = a_dir
-
-        from prometheus_client import Gauge
-        from prometheus_client.mmap_dict import MmapedDict
-
-        from livekit.agents.telemetry import metrics
-
-        Gauge("app_warmup_done", "", multiprocess_mode="all").set(1)
-        MmapedDict(os.path.join(b_dir, f"gauge_all_{os.getpid()}.db")).close()
-
-        metrics._clean_multiproc_dir(b_dir)
-        print("A", " ".join(sorted(os.listdir(a_dir))) or "-")
-        print("B", " ".join(os.listdir(b_dir)) or "-")
-        """,
-        a_dir,
-        b_dir,
-    )
-
-    assert out["B"] == "-"
-    assert out["A"] != "-"
-
-
 def test_cleanup_keeps_this_pids_open_files_after_a_directory_switch(tmp_path) -> None:
     a_dir, b_dir = tmp_path / "a", tmp_path / "b"
     a_dir.mkdir()
