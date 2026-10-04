@@ -14,9 +14,12 @@ _DEAD_PID = 2**22 + 1  # above every default pid_max
 
 def _run(scenario: str, *args: object) -> dict[str, str]:
     # prometheus_client reads PROMETHEUS_MULTIPROC_DIR when it is imported, so
-    # each scenario runs in a fresh interpreter. It prints `KEY value` lines.
+    # each scenario runs in a fresh interpreter, without the caller's value, and
+    # sets the directory itself. It prints `KEY value` lines.
+    env = {k: v for k, v in os.environ.items() if k.lower() != "prometheus_multiproc_dir"}
     out = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(scenario), *map(str, args)],
+        env=env,
         check=True,
         capture_output=True,
         text=True,
