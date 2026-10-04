@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 from types import SimpleNamespace
@@ -436,6 +437,35 @@ async def test_recv_loop_drops_audio_for_unregistered_context() -> None:
     assert connection.emitter.audio_chunks == []
     # the server released the context, so the connection can drain
     assert connection._active_contexts == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connection_cls", [elevenlabs_tts._Connection, elevenlabs_tts._DialogueConnection]
+)
+async def test_recv_loop_resets_timeout_timer_on_audio(connection_cls: type) -> None:
+    context_id = "ctx_123"
+    connection = _FakeConnection(
+        context_id,
+        [
+            _websocket_text_message(
+                {
+                    "context_id": context_id,
+                    "audio": base64.b64encode(b"hello-audio").decode("ascii"),
+                }
+            ),
+        ],
+    )
+    ctx = connection._context_data[context_id]
+    timer = asyncio.get_event_loop().call_later(60, lambda: None)
+    ctx.timeout_timer = timer
+
+    with contextlib.suppress(Exception):
+        await connection_cls._recv_loop(connection)
+
+    # cleared so _start_timeout_timer can arm a new timer on the next send
+    assert timer.cancelled()
+    assert ctx.timeout_timer is None
 
 
 def test_unregister_stream_keeps_the_context_closable() -> None:

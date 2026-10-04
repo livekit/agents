@@ -968,6 +968,7 @@ class _Connection:
                     emitter.push(b64data)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
 
                 if data.get("isFinal"):
                     timed_words, _ = _to_timed_words(
@@ -1234,6 +1235,7 @@ class _DialogueConnection(_Connection):
                     emitter.push(b64data)
                     if ctx.timeout_timer:
                         ctx.timeout_timer.cancel()
+                        ctx.timeout_timer = None
 
                 if data.get("is_final"):
                     timed_words, _ = _to_timed_words(
