@@ -5,6 +5,7 @@ from collections.abc import AsyncIterable
 from typing import Any, ClassVar
 
 from .. import tokenize, utils
+from ..metrics.provider_request import _provider_request_context
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .stream_pacer import SentenceStreamPacer
 from .tts import (
@@ -48,6 +49,7 @@ class StreamAdapter(TTS):
             self._stream_pacer = text_pacing
 
         self._wrapped_tts.on("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.on("provider_request_completed", self._on_provider_request_completed)
 
     class Markup(TTS.Markup):
         # a pass-through speaks whatever dialect it wraps
@@ -104,12 +106,17 @@ class StreamAdapter(TTS):
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
+    def _on_provider_request_completed(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("provider_request_completed", *args, **kwargs)
+
     async def aclose(self) -> None:
         self._wrapped_tts.off("metrics_collected", self._on_metrics_collected)
+        self._wrapped_tts.off("provider_request_completed", self._on_provider_request_completed)
 
 
 class StreamAdapterWrapper(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_stream_adapter"
+    _emit_provider_request_attempts: ClassVar[bool] = False
 
     def __init__(self, *, tts: StreamAdapter, conn_options: APIConnectOptions) -> None:
         super().__init__(tts=tts, conn_options=DEFAULT_STREAM_ADAPTER_API_CONNECT_OPTIONS)
@@ -179,13 +186,18 @@ class StreamAdapterWrapper(SynthesizeStream):
                         continue
 
                 self._mark_started()
-                async with self._tts._wrapped_tts.synthesize(
-                    text, conn_options=self._wrapped_tts_conn_options
-                ) as tts_stream:
-                    async for audio in tts_stream:
-                        output_emitter.push_frame(audio.frame)
-                        duration += audio.frame.duration
-                    output_emitter.flush()
+                with _provider_request_context(
+                    self._provider_request_tracker.operation_id,
+                    self._provider_request_tracker.fallback_index,
+                    self._provider_request_tracker.purpose,
+                ):
+                    async with self._tts._wrapped_tts.synthesize(
+                        text, conn_options=self._wrapped_tts_conn_options
+                    ) as tts_stream:
+                        async for audio in tts_stream:
+                            output_emitter.push_frame(audio.frame)
+                            duration += audio.frame.duration
+                        output_emitter.flush()
 
         tasks = [
             asyncio.create_task(_forward_input()),

@@ -59,6 +59,7 @@ from .llm.tool_context import (
     ToolResult,
     function_tool,
 )
+from .metrics import ProviderRequestAttempt, ProviderRequestLedger
 from .plugin import Plugin
 from .simulation import (
     Scenario,
@@ -226,6 +227,8 @@ __all__ = [
     "SimulationRun",
     "SimulationVerdict",
     "AgentSession",
+    "ProviderRequestAttempt",
+    "ProviderRequestLedger",
     "AudioRecognition",
     "ExpressiveOptions",
     "NonverbalOptions",

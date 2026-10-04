@@ -14,6 +14,10 @@ from livekit import rtc
 from .. import utils
 from .._exceptions import APIConnectionError
 from ..log import logger
+from ..metrics.provider_request import (
+    _provider_request_context,
+    _provider_request_recovery_context,
+)
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, USERDATA_TIMED_TRANSCRIPT, APIConnectOptions
 from ..utils import aio
@@ -123,6 +127,7 @@ class FallbackAdapter(
             )
 
             t.on("metrics_collected", self._on_metrics_collected)
+            t.on("provider_request_completed", self._on_provider_request_completed)
 
     def _next_instance(self) -> TTS:
         """The instance the next request goes to first: the first one marked available, or
@@ -168,6 +173,9 @@ class FallbackAdapter(
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 
+    def _on_provider_request_completed(self, *args: Any, **kwargs: Any) -> None:
+        self.emit("provider_request_completed", *args, **kwargs)
+
     async def aclose(self) -> None:
         # set before the sweep: _try_recovery is synchronous, so a probe is
         # either already in a slot (and cancelled below) or refused by this
@@ -184,6 +192,7 @@ class FallbackAdapter(
 
         for t in self._tts_instances:
             t.off("metrics_collected", self._on_metrics_collected)
+            t.off("provider_request_completed", self._on_provider_request_completed)
 
 
 def _fallback_attrs(tts: TTS, index: int) -> dict[str, Any]:
@@ -215,6 +224,7 @@ def _record_fallback_served(tts: TTS, index: int, *spans: trace.Span | None) -> 
 
 class FallbackChunkedStream(ChunkedStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    _emit_provider_request_attempts: ClassVar[bool] = False
 
     def __init__(
         self, *, tts: FallbackAdapter, input_text: str, conn_options: APIConnectOptions
@@ -229,24 +239,32 @@ class FallbackChunkedStream(ChunkedStream):
             pass
 
     async def _try_synthesize(
-        self, *, tts: TTS, recovering: bool = False
+        self, *, tts: TTS, fallback_index: int, recovering: bool = False
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         try:
-            async with tts.synthesize(
-                self._input_text,
-                conn_options=dataclasses.replace(
-                    self._conn_options,
-                    max_retry=self._fallback_adapter._max_retry_per_tts,
-                    timeout=self._conn_options.timeout,
-                    retry_interval=self._conn_options.retry_interval,
-                ),
-            ) as stream:
-                should_set_active = not recovering
-                async for audio in stream:
-                    if should_set_active:
-                        should_set_active = False
-                        self._fallback_adapter._active_instance = tts
-                    yield audio
+            request_context = (
+                _provider_request_recovery_context(fallback_index)
+                if recovering
+                else _provider_request_context(
+                    self._provider_request_tracker.operation_id, fallback_index
+                )
+            )
+            with request_context:
+                async with tts.synthesize(
+                    self._input_text,
+                    conn_options=dataclasses.replace(
+                        self._conn_options,
+                        max_retry=self._fallback_adapter._max_retry_per_tts,
+                        timeout=self._conn_options.timeout,
+                        retry_interval=self._conn_options.retry_interval,
+                    ),
+                ) as stream:
+                    should_set_active = not recovering
+                    async for audio in stream:
+                        if should_set_active:
+                            should_set_active = False
+                            self._fallback_adapter._active_instance = tts
+                        yield audio
 
         except Exception as e:
             if recovering:
@@ -272,7 +290,11 @@ class FallbackChunkedStream(ChunkedStream):
 
             async def _recover_tts_task(tts: TTS) -> None:
                 try:
-                    async for _ in self._try_synthesize(tts=tts, recovering=True):
+                    async for _ in self._try_synthesize(
+                        tts=tts,
+                        fallback_index=self._fallback_adapter._tts_instances.index(tts),
+                        recovering=True,
+                    ):
                         pass
 
                     tts_status.available = True
@@ -314,7 +336,9 @@ class FallbackChunkedStream(ChunkedStream):
                         if tts_status.needs_resampling
                         else None
                     )
-                    async for synthesized_audio in self._try_synthesize(tts=tts, recovering=False):
+                    async for synthesized_audio in self._try_synthesize(
+                        tts=tts, fallback_index=i, recovering=False
+                    ):
                         if texts := synthesized_audio.frame.userdata.get(USERDATA_TIMED_TRANSCRIPT):
                             output_emitter.push_timed_transcript(texts)
 
@@ -355,6 +379,7 @@ class FallbackChunkedStream(ChunkedStream):
 
 class FallbackSynthesizeStream(SynthesizeStream):
     _tts_request_span_name: ClassVar[str] = "tts_fallback_adapter"
+    _emit_provider_request_attempts: ClassVar[bool] = False
 
     def __init__(self, *, tts: FallbackAdapter, conn_options: APIConnectOptions):
         super().__init__(tts=tts, conn_options=conn_options)
@@ -372,20 +397,29 @@ class FallbackSynthesizeStream(SynthesizeStream):
         tts: TTS,
         input_ch: aio.ChanReceiver[str | SynthesizeStream._FlushSentinel],
         conn_options: APIConnectOptions,
+        fallback_index: int,
         recovering: bool = False,
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         # If TTS doesn't support streaming, wrap it with StreamAdapter
         temporary_adapter: StreamAdapter | None = None
-        if tts.capabilities.streaming:
-            stream = tts.stream(conn_options=conn_options)
-        else:
-            from .. import tokenize
-
-            temporary_adapter = StreamAdapter(
-                tts=tts,
-                sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+        request_context = (
+            _provider_request_recovery_context(fallback_index)
+            if recovering
+            else _provider_request_context(
+                self._provider_request_tracker.operation_id, fallback_index
             )
-            stream = temporary_adapter.stream(conn_options=conn_options)
+        )
+        with request_context:
+            if tts.capabilities.streaming:
+                stream = tts.stream(conn_options=conn_options)
+            else:
+                from .. import tokenize
+
+                temporary_adapter = StreamAdapter(
+                    tts=tts,
+                    sentence_tokenizer=tokenize.blingfire.SentenceTokenizer(retain_format=True),
+                )
+                stream = temporary_adapter.stream(conn_options=conn_options)
 
         @utils.log_exceptions(logger=logger)
         async def _forward_input_task() -> None:
@@ -507,6 +541,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                                 timeout=self._conn_options.timeout,
                                 retry_interval=self._conn_options.retry_interval,
                             ),
+                            fallback_index=i,
                             recovering=False,
                         ):
                             if texts := synthesized_audio.frame.userdata.get(
@@ -582,6 +617,7 @@ class FallbackSynthesizeStream(SynthesizeStream):
                     async for _ in self._try_synthesize(
                         tts=tts,
                         input_ch=input_ch,
+                        fallback_index=self._fallback_adapter._tts_instances.index(tts),
                         recovering=True,
                         conn_options=dataclasses.replace(
                             self._conn_options,

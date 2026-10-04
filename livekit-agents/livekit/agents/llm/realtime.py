@@ -54,6 +54,8 @@ class RealtimeModelError(BaseModel):
     label: str
     error: Exception = Field(..., exclude=True)
     recoverable: bool
+    request_id: str | None = None
+    """SDK-local or otherwise ambiguous request ID, when the provider exposes one."""
 
 
 @dataclass

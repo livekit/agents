@@ -9,6 +9,7 @@ from .base import (
     TTSMetrics,
     VADMetrics,
 )
+from .provider_request import ProviderRequestAttempt, ProviderRequestLedger
 from .usage import (
     AgentSessionUsage,
     EOTModelUsage,
@@ -32,6 +33,8 @@ __all__ = [
     "TTSMetrics",
     "RealtimeModelMetrics",
     "InterruptionMetrics",
+    "ProviderRequestAttempt",
+    "ProviderRequestLedger",
     # New model usage classes
     "LLMModelUsage",
     "TTSModelUsage",
