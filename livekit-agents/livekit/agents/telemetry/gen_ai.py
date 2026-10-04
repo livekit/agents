@@ -121,9 +121,8 @@ class InputDelta:
 
 @dataclass
 class _PendingBaseline:
-    item_keys: list[tuple[str, bytes]]
+    messages: _MessagesBaseline
     instructions: _InstructionsBaseline
-    span_context: trace.SpanContext
 
 
 class InputDeltaTracker:
@@ -166,9 +165,7 @@ class InputDeltaScope:
     def _promote(self, site: str, pending: _PendingBaseline) -> None:
         # Keep the content recorded on the span. A preemptive generation's message may
         # change before it is committed; the next span must then record that edit.
-        self._tracker._messages[site] = _MessagesBaseline(
-            item_keys=pending.item_keys, span_context=pending.span_context
-        )
+        self._tracker._messages[site] = pending.messages
         self._tracker._instructions[site] = pending.instructions
 
     def delta(
@@ -185,10 +182,11 @@ class InputDeltaScope:
         conversation = [item for item in chat_ctx.items if not _is_system_message(item)]
         span_context = span.get_span_context()
 
+        messages = _MessagesBaseline(item_keys=_item_keys(conversation), span_context=span_context)
         messages_base = self._tracker._messages.get(site)
         if messages_base is not None:
             n = len(messages_base.item_keys)
-            if _item_keys(conversation[:n]) != messages_base.item_keys:
+            if messages.item_keys[:n] != messages_base.item_keys:
                 messages_base = None
 
         instructions = _InstructionsBaseline(
@@ -203,7 +201,7 @@ class InputDeltaScope:
                 instructions_base = None
 
         if span.is_recording():
-            pending = _PendingBaseline(_item_keys(conversation), instructions, span_context)
+            pending = _PendingBaseline(messages, instructions)
             self._pending[site] = pending
             if self._committed:
                 self._promote(site, pending)
