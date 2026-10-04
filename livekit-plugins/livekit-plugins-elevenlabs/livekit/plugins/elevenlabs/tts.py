@@ -376,19 +376,29 @@ class TTS(tts.TTS):
             self._prewarm_task = asyncio.create_task(self._run_prewarm())
 
     async def _run_prewarm(self) -> None:
+        retry_delay = 1.0
+        max_retry_delay = 30.0
+
         try:
             while True:
-                conn, _, _ = await self._current_connection()
-                if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
-                    return
+                try:
+                    conn, _, _ = await self._current_connection()
+                    retry_delay = 1.0
 
-                # Text-to-dialogue sockets are closed by the server after an idle period.
-                # Wait for that closure and reconnect immediately so the next turn remains warm.
-                # asyncio.wait() does not propagate cancellation from the receive task.
-                await asyncio.wait({conn._recv_task})
-        except Exception:
-            # Prewarming is best-effort; synthesis will retry through _current_connection().
-            pass
+                    if not is_dialogue_model(self._opts.model) or conn._recv_task is None:
+                        return
+
+                    # Text-to-dialogue sockets are closed by the server after an idle period.
+                    # Wait for that closure and reconnect immediately so the next turn remains warm.
+                    # asyncio.wait() does not propagate cancellation from the receive task.
+                    await asyncio.wait({conn._recv_task})
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
+        except asyncio.CancelledError:
+            raise
 
     async def aclose(self) -> None:
         if self._prewarm_task:
