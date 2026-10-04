@@ -176,7 +176,8 @@ class _StackSample:
     # nothing useful by themselves
     importing: str | None = None
     # the innermost frame's source line: it names the call that blocked, which has no frame of
-    # its own when it is a C function
+    # its own when it is a C function. The watchdog sets it after publishing the sample; a
+    # report formatted before then omits it.
     innermost_line: str = ""
 
 
@@ -555,6 +556,11 @@ class EventLoopMonitor:
                 incident.samples.append(sample)
                 if want_late:
                     incident.late_sampled = True
+        # only once the sample is published: a cold read can outlast the stall, and a report
+        # formatted before it finishes still has the stack, without the line
+        innermost = sample.frames[-1] if sample.frames else None
+        if innermost is not None and innermost.lineno:
+            sample.innermost_line = linecache.getline(innermost.filename, innermost.lineno).strip()
 
     def _sample_loop_thread(self, lag: float) -> _StackSample:
         task_name: str | None = None
@@ -585,26 +591,20 @@ class EventLoopMonitor:
                     self._loop_thread_ident = ident
                     break
         importing: str | None = None
-        innermost_line = ""
         if frame is not None:
             importing = _module_being_imported(frame)
-            # the watchdog holds the GIL while it samples, and the loop thread is what it is
-            # taking it from: read only the innermost frame's line, which names the call that
-            # blocked. linecache keeps the file after the first read. The report is formatted
-            # on the loop thread, which reads no source at all.
+            # no source lookup here: the watchdog holds the GIL while it samples, and the loop
+            # thread is what it is taking it from. _watchdog_check reads the innermost line.
             frames = list(
                 traceback.StackSummary.extract(traceback.walk_stack(frame), lookup_lines=False)
             )
             frames.reverse()  # outermost first, like extract_stack
-            if frames and frames[-1].lineno:
-                innermost_line = linecache.getline(frames[-1].filename, frames[-1].lineno).strip()
         return _StackSample(
             lag=lag,
             task_name=task_name,
             frames=frames,
             span_context=span_context,
             importing=importing,
-            innermost_line=innermost_line,
         )
 
 

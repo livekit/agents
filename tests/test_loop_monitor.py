@@ -10,11 +10,12 @@ import asyncio
 import contextvars
 import importlib.util
 import linecache
+import sys
 import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from opentelemetry import trace
@@ -823,6 +824,60 @@ def test_formatting_a_report_reads_no_source_file(tmp_path: Path) -> None:
         assert str(module_path) not in linecache.cache
     finally:
         loop.close()
+
+
+def test_a_slow_source_read_never_costs_the_report_its_stack(tmp_path: Path) -> None:
+    """The watchdog reads the innermost frame's source line after it hands the sample over. A
+    stall that ends during that read is reported with its stack, only without the line."""
+    in_lookup = threading.Event()
+    finish_lookup = threading.Event()
+    stalled = threading.Lock()
+    stalled.acquire()
+    entered_hold = threading.Event()
+    source = "def hold(lock, entered):\n    entered.set()\n    lock.acquire(True, 10)\n"
+
+    class SlowSourceLoader:
+        def get_source(self, name: str) -> str:
+            in_lookup.set()
+            stalled.release()  # the stall ends while the watchdog is still reading
+            finish_lookup.wait(10)
+            return source
+
+    module = ModuleType("slow_source")
+    module.__loader__ = SlowSourceLoader()  # type: ignore[assignment]
+    # not on disk, so linecache asks the module's loader for the source
+    exec(compile(source, str(tmp_path / "missing" / "slow_source.py"), "exec"), module.__dict__)
+
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(
+            loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK, emit_spans=False
+        )
+        reports: list[BlockedReport] = []
+        m._on_report = reports.append
+        m._loop_thread_ident = threading.get_ident()
+        m._last_tick_at = time.monotonic() - 1.0  # the loop has been stalled for a second
+        loop_thread = threading.get_ident()
+
+        def watchdog_check_once_stalled_in_hold() -> None:
+            entered_hold.wait(10)
+            while sys._current_frames()[loop_thread].f_code is not module.hold.__code__:
+                pass  # until Event.set has returned into hold
+            m._watchdog_check()
+
+        watchdog = threading.Thread(target=watchdog_check_once_stalled_in_hold)
+        watchdog.start()
+        # returns once the watchdog sampled it and is reading the source
+        module.hold(stalled, entered_hold)
+        assert in_lookup.is_set()
+        m._on_tick()  # the heartbeat that ends the stall
+        finish_lookup.set()
+        watchdog.join()
+    finally:
+        loop.close()
+
+    [report] = reports
+    assert report.stacks[0].rstrip().endswith("in hold")
 
 
 def test_watchdog_samples_one_tick_before_the_threshold() -> None:
