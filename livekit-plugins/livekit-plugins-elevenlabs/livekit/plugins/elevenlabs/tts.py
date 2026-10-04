@@ -394,6 +394,15 @@ class TTS(tts.TTS):
                     await asyncio.wait({conn._recv_task})
                 except asyncio.CancelledError:
                     raise
+                except APIStatusError as exc:
+                    if not exc.retryable:
+                        logger.warning(
+                            "elevenlabs prewarm stopped after non-retryable API error",
+                            extra={"status_code": exc.status_code, "lk.pii.error": str(exc)},
+                        )
+                        return
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, max_retry_delay)
                 except Exception:
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
