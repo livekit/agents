@@ -840,6 +840,13 @@ def _run_until_done_or_waiting(target: Any, lock: _ContendedLock) -> threading.T
     return thread
 
 
+def _on_watchdog_thread(check: Any) -> None:
+    """Run *check* on another thread, as the watchdog does, while this thread is the loop's."""
+    thread = threading.Thread(target=check)
+    thread.start()
+    thread.join()
+
+
 def _blocked_monitor(loop: asyncio.AbstractEventLoop) -> EventLoopMonitor:
     """A monitor whose loop thread is this thread, blocked well past the warn threshold."""
     m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
@@ -867,7 +874,7 @@ def test_a_tick_during_the_sample_reports_it() -> None:
             return sample
 
         m._sample_loop_thread = sample_while_the_block_ends  # type: ignore[method-assign]
-        m._watchdog_check()
+        _on_watchdog_thread(m._watchdog_check)
         ticks[0].join()
 
         [report] = m.reports  # type: ignore[attr-defined]
@@ -883,7 +890,7 @@ def test_a_watchdog_check_inside_the_tick_keeps_the_sample() -> None:
     loop = asyncio.new_event_loop()
     try:
         m = _blocked_monitor(loop)
-        m._watchdog_check()
+        _on_watchdog_thread(m._watchdog_check)
         assert m._incident is not None and m._incident.samples
 
         lines, first = inspect.getsourcelines(EventLoopMonitor._on_tick)
