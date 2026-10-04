@@ -853,7 +853,7 @@ def test_a_watchdog_check_inside_the_tick_keeps_the_sample() -> None:
     loop = asyncio.new_event_loop()
     try:
         m = _blocked_monitor(loop)
-        m._watchdog_check()  # samples the block
+        m._watchdog_check()
         assert m._incident is not None and m._incident.samples
 
         lines, first = inspect.getsourcelines(EventLoopMonitor._on_tick)

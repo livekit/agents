@@ -178,9 +178,8 @@ class _StackSample:
 
 @dataclass
 class _Incident:
-    """Watchdog-side view of one block, keyed by the heartbeat sequence it interrupted."""
+    """Watchdog-side view of one block."""
 
-    tick_seq: int
     samples: list[_StackSample] = field(default_factory=list)
     late_sampled: bool = False
 
@@ -216,9 +215,8 @@ class EventLoopMonitor:
         self._name = name
         self._emit_spans = emit_spans  # False on the worker loop: no job to attach spans to
 
-        # written by the loop thread, read by the watchdog (the tick time and sequence under _lock)
+        # written by the loop thread, read by the watchdog
         self._last_tick_at: float = 0.0
-        self._tick_seq: int = 0
         self._loop_thread_ident: int | None = None
 
         # written by the watchdog, read by the loop thread under _lock
@@ -311,19 +309,13 @@ class EventLoopMonitor:
         watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
 
-        # the watchdog reads the sequence, the time and the incident under the lock, so it sees
-        # either the block still running or the next heartbeat, never half of each
         with self._lock:
-            blocked_seq = self._tick_seq
-            self._tick_seq += 1
             self._last_tick_at = now
             incident = self._incident
             self._incident = None
         if lag < self._warn:
             return
-        samples = (
-            incident.samples if incident is not None and incident.tick_seq == blocked_seq else []
-        )
+        samples = incident.samples if incident is not None else []
 
         self._report(self._build_report(lag, gc_time, cpu_time, watchdog_gap, samples))
 
@@ -531,15 +523,14 @@ class EventLoopMonitor:
                 logger.exception("event loop watchdog failed")
 
     def _watchdog_check(self) -> None:
-        # sample under the lock: a tick that ends the block meanwhile waits for the sample
-        # instead of reporting without it
+        # a tick that ends the block during the sample waits for it instead of reporting without it
         with self._lock:
             lag = time.monotonic() - (self._last_tick_at + self._tick)
             if lag < self._first_sample_lag:
                 return
             incident = self._incident
             if incident is None:
-                incident = self._incident = _Incident(tick_seq=self._tick_seq)
+                incident = self._incident = _Incident()
             want_first = not incident.samples
             want_late = not incident.late_sampled and lag >= self._warn * _LATE_SAMPLE_FACTOR
             if not (want_first or want_late):
