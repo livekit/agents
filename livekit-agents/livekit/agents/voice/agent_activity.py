@@ -36,7 +36,6 @@ from ..metrics import (
 )
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
-    otel_metrics,
     trace_types,
     tracer,
     utils as trace_utils,
@@ -59,6 +58,7 @@ from .audio_recognition import (
     _PreemptiveGenerationInfo,
     _STTPipeline,
 )
+from .decision_runner import _DecisionRunner
 from .endpointing import create_endpointing
 from .events import (
     AgentFalseInterruptionEvent,
@@ -68,7 +68,6 @@ from .events import (
     ErrorEvent,
     FunctionToolsExecutedEvent,
     MetricsCollectedEvent,
-    SessionUsageUpdatedEvent,
     SpeechCreatedEvent,
     UserInputTranscribedEvent,
     UserTranscriptionTimeoutEvent,
@@ -330,6 +329,7 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
+        self._decision_runner: _DecisionRunner | None = None
         self._rt_session: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
@@ -1346,6 +1346,10 @@ class AgentActivity(RecognitionHooks):
             if self.stt.capabilities.chat_context and forward_chat_ctx:
                 self._session.on("conversation_item_added", self.stt._push_conversation_item)
 
+        if self._agent.decisions and self._session.decision_model is not None:
+            self._decision_runner = _DecisionRunner(self, self._session.decision_model)
+            self._decision_runner.start()
+
     @tracer.start_as_current_span("drain_agent_activity")
     async def drain(
         self, *, new_activity: AgentActivity | None = None
@@ -1396,6 +1400,9 @@ class AgentActivity(RecognitionHooks):
             return
 
         await self._session._keyterm_detector.aclose()
+
+        if self._decision_runner is not None:
+            await self._decision_runner.aclose()
 
         self._scheduling_paused = True
         # a parked preemptive generation is never scheduled, so the wait below would never
@@ -1618,6 +1625,8 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            if self._decision_runner is not None:
+                await self._decision_runner.aclose()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
@@ -2148,13 +2157,7 @@ class AgentActivity(RecognitionHooks):
             and (realtime_span := self._realtime_spans.pop(ev.request_id, None))
         ):
             trace_utils.record_realtime_metrics(realtime_span, ev)
-        self._session._usage_collector.collect(ev)
-        otel_metrics.collect_usage(ev)
-        self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=ev))
-        self._session.emit(
-            "session_usage_updated",
-            SessionUsageUpdatedEvent(usage=self._session.usage),
-        )
+        self._session._on_metrics_collected(ev)
 
     def _on_remote_item_added(self, ev: llm.RemoteItemAddedEvent) -> None:
         # add the remote item to the local chat context as a placeholder

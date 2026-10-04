@@ -47,6 +47,17 @@ class LLMMetrics(_BaseMetrics):
     metadata: Metadata | None = None
 
 
+class DecisionMetrics(_BaseMetrics):
+    type: Literal["decision_metrics"] = "decision_metrics"
+    label: str
+    request_id: str
+    timestamp: float
+    duration: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    metadata: Metadata | None = None
+
+
 class STTMetrics(_BaseMetrics):
     type: Literal["stt_metrics"] = "stt_metrics"
     label: str
@@ -237,6 +248,7 @@ class AvatarMetrics(_BaseMetrics):
 
 AgentMetrics = (
     STTMetrics
+    | DecisionMetrics
     | LLMMetrics
     | TTSMetrics
     | VADMetrics

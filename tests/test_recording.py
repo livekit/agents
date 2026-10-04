@@ -16,6 +16,7 @@ import pytest
 from google.rpc import error_details_pb2, status_pb2
 
 from livekit.agents import Agent, AgentSession
+from livekit.agents.metrics import DecisionModelUsage
 from livekit.agents.telemetry.traces import _upload_session_report
 from livekit.agents.voice.agent_session import (
     _RECORDING_ALL_OFF,
@@ -606,6 +607,36 @@ async def test_upload_session_report_sent_without_transcript() -> None:
     bodies = [c.kwargs.get("body") for c in mock_logger.emit.call_args_list]
     assert "session report" in bodies
     assert "chat item" not in bodies
+
+
+async def test_cloud_session_report_preserves_full_decision_usage() -> None:
+    report = _make_mock_report({"audio": False, "traces": True, "logs": False, "transcript": False})
+    report.model_usage = [
+        DecisionModelUsage(
+            provider="openrouter",
+            model="typesafe/jev-1.13",
+            input_tokens=123,
+            output_tokens=17,
+            total_requests=3,
+        )
+    ]
+    with _patch_upload_deps() as mock_logger:
+        await _call_upload(report)
+    session_report = next(
+        call
+        for call in mock_logger.emit.call_args_list
+        if call.kwargs.get("body") == "session report"
+    )
+    assert session_report.kwargs["attributes"]["usage"] == [
+        {
+            "type": "decision_usage",
+            "provider": "openrouter",
+            "model": "typesafe/jev-1.13",
+            "input_tokens": 123,
+            "output_tokens": 17,
+            "total_requests": 3,
+        }
+    ]
 
 
 async def test_upload_session_report_marks_stt_keyterms_as_pii() -> None:
@@ -1405,6 +1436,42 @@ def test_metric_measurements_carry_job_identity() -> None:
         otel_metrics.collect_usage(ev)
     attrs = mock_counter.add.call_args.kwargs["attributes"]
     assert "room_id" not in attrs and "job_id" not in attrs
+
+
+@pytest.mark.parametrize("input_tokens,output_tokens", [(50, 5), (None, 5), (50, None), (0, 0)])
+def test_decision_tokens_use_separate_counters_with_model_metadata(
+    input_tokens, output_tokens
+) -> None:
+    from livekit.agents.metrics.base import DecisionMetrics, Metadata
+    from livekit.agents.telemetry import otel_metrics
+
+    ev = DecisionMetrics(
+        label="test.DecisionModel",
+        request_id="request-1",
+        timestamp=0,
+        duration=0.1,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        metadata=Metadata(model_provider="typesafe", model_name="jev"),
+    )
+    with (
+        patch.object(otel_metrics, "_decision_input_tokens") as inputs,
+        patch.object(otel_metrics, "_decision_output_tokens") as outputs,
+        patch.object(otel_metrics, "_llm_input_tokens") as llm_inputs,
+        patch.object(otel_metrics, "_llm_output_tokens") as llm_outputs,
+    ):
+        otel_metrics.collect_usage(ev)
+    attrs = {"model_provider": "typesafe", "model_name": "jev"}
+    if input_tokens:
+        inputs.add.assert_called_once_with(input_tokens, attributes=attrs)
+    else:
+        inputs.add.assert_not_called()
+    if output_tokens:
+        outputs.add.assert_called_once_with(output_tokens, attributes=attrs)
+    else:
+        outputs.add.assert_not_called()
+    llm_inputs.add.assert_not_called()
+    llm_outputs.add.assert_not_called()
 
 
 def test_provider_swap_keeps_the_old_pipeline_and_shuts_both_down_at_exit() -> None:

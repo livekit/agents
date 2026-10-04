@@ -6,6 +6,7 @@ from opentelemetry import metrics as metrics_api
 
 from ..metrics.base import (
     AgentMetrics,
+    DecisionMetrics,
     InterruptionMetrics,
     LLMMetrics,
     Metadata,
@@ -74,6 +75,8 @@ _stt_audio_duration = _meter.create_counter(
     unit="s",
 )
 _interruption_num_requests = _meter.create_counter("lk.agents.usage.interruption_num_requests")
+_decision_input_tokens = _meter.create_counter("lk.agents.usage.decision_input_tokens")
+_decision_output_tokens = _meter.create_counter("lk.agents.usage.decision_output_tokens")
 
 # -- Connection metrics --
 _connection_acquire_time = _meter.create_histogram(
@@ -298,6 +301,13 @@ def collect_usage(ev: AgentMetrics) -> None:
         attrs = _model_attrs(ev.metadata)
         if ev.num_requests:
             _interruption_num_requests.add(ev.num_requests, attributes=attrs)
+
+    elif isinstance(ev, DecisionMetrics):
+        attrs = _model_attrs(ev.metadata)
+        if ev.input_tokens:
+            _decision_input_tokens.add(ev.input_tokens, attributes=attrs)
+        if ev.output_tokens:
+            _decision_output_tokens.add(ev.output_tokens, attributes=attrs)
 
     # Connection timing
     if isinstance(ev, (STTMetrics, TTSMetrics, RealtimeModelMetrics)):
