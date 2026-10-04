@@ -13,8 +13,14 @@ from .utils import (
     parse_tool_call_arguments,
 )
 
-# content block types allowed inside a `tool_result`
-_TOOL_RESULT_BLOCK_TYPES = {"text", "image", "document", "search_result", "tool_reference"}
+# content block types allowed inside a `tool_result`, with their required fields
+_TOOL_RESULT_BLOCK_FIELDS = {
+    "text": ("text",),
+    "image": ("source",),
+    "document": ("source",),
+    "search_result": ("source", "title", "content"),
+    "tool_reference": ("tool_name",),
+}
 
 
 @dataclass
@@ -84,10 +90,7 @@ def to_chat_ctx(
                 if (
                     isinstance(parsed, list)
                     and parsed
-                    and all(
-                        isinstance(block, dict) and block.get("type") in _TOOL_RESULT_BLOCK_TYPES
-                        for block in parsed
-                    )
+                    and all(_is_tool_result_block(block) for block in parsed)
                 ):
                     result_content = parsed
             except (json.JSONDecodeError, TypeError):
@@ -120,6 +123,13 @@ def to_chat_ctx(
         messages.append({"role": "user", "content": [{"text": ".", "type": "text"}]})
 
     return messages, AnthropicFormatData(system_messages=system_messages)
+
+
+def _is_tool_result_block(block: Any) -> bool:
+    if not isinstance(block, dict) or not isinstance(block_type := block.get("type"), str):
+        return False
+    fields = _TOOL_RESULT_BLOCK_FIELDS.get(block_type)
+    return fields is not None and all(field in block for field in fields)
 
 
 def _to_image_content(image: llm.ImageContent) -> dict[str, Any]:
