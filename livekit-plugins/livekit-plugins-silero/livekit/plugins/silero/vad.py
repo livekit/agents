@@ -75,7 +75,7 @@ class VAD(agents.vad.VAD):
         deactivation_threshold: NotGivenOr[float] = NOT_GIVEN,
         # deprecated
         padding_duration: NotGivenOr[float] = NOT_GIVEN,
-    ) -> agents.vad.VAD:
+    ) -> VAD:
         """
         Load and initialize the Silero VAD model.
 
