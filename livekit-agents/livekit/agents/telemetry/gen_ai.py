@@ -333,8 +333,6 @@ def set_request_attributes(
     if stream:
         # "if and only if the request is streaming; if unset, assumed non-streaming"
         attrs[trace_types.ATTR_GEN_AI_REQUEST_STREAM] = True
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if output_type:
         attrs[trace_types.ATTR_GEN_AI_OUTPUT_TYPE] = output_type
     span.set_attributes(attrs)
@@ -419,11 +417,6 @@ def set_tool_attributes(
     if agent_name:
         # "the human-readable name of the agent executing the tool", conditionally required
         attrs[trace_types.ATTR_GEN_AI_AGENT_NAME] = agent_name
-    # not in the convention's execute_tool table, but Datadog groups a session by this
-    # attribute rather than by trace membership, so a tool span without it drops out of
-    # the session view
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if _capture_content:
         if description:
             attrs[trace_types.ATTR_GEN_AI_TOOL_DESCRIPTION] = description
@@ -464,8 +457,6 @@ def set_agent_attributes(
         attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     if model:
         attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 
 
@@ -478,8 +469,6 @@ def set_workflow_attributes(span: trace.Span, *, name: str) -> None:
         trace_types.ATTR_GEN_AI_OPERATION_NAME: trace_types.GenAIOperationName.INVOKE_WORKFLOW,
         trace_types.ATTR_GEN_AI_WORKFLOW_NAME: name,
     }
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 
 
