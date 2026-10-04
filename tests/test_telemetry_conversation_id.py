@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, nullcontext
+from functools import partial
 from types import MappingProxyType
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import SpanKind
+from opentelemetry.trace import Span, SpanKind
 
 from livekit.agents.telemetry import gen_ai, set_tracer_provider, tracer
 
@@ -73,3 +75,47 @@ def test_spans_without_attributes_receive_conversation_id(
     assert len(span_exporter.get_finished_spans()) == 3
     for span in span_exporter.get_finished_spans():
         assert span.attributes["gen_ai.conversation.id"] == "RM_test"
+
+
+@pytest.mark.parametrize(
+    "set_attributes",
+    [
+        pytest.param(partial(gen_ai.set_request_attributes, operation="chat"), id="request"),
+        pytest.param(partial(gen_ai.set_tool_attributes, name="get_weather"), id="tool"),
+        pytest.param(
+            partial(gen_ai.set_agent_attributes, operation="invoke_agent", agent_name="agent"),
+            id="agent",
+        ),
+        pytest.param(partial(gen_ai.set_workflow_attributes, name="agent_session"), id="workflow"),
+    ],
+)
+@pytest.mark.parametrize("explicit_id", [None, "explicit"])
+@pytest.mark.parametrize("conversation_id", [None, "RM_test"])
+@pytest.mark.parametrize("api", ["start_span", "start_as_current_span", "detached_span"])
+def test_gen_ai_setters_preserve_conversation_id(
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+    set_attributes: Callable[[Span], None],
+    explicit_id: str | None,
+    conversation_id: str | None,
+    api: str,
+) -> None:
+    monkeypatch.setattr(gen_ai, "_conversation_id", lambda: conversation_id)
+    attributes = {"gen_ai.conversation.id": explicit_id} if explicit_id is not None else {}
+    span_context: AbstractContextManager[Span]
+    if api == "start_span":
+        span_context = nullcontext(tracer.start_span("test", attributes=attributes))
+    elif api == "start_as_current_span":
+        span_context = tracer.start_as_current_span("test", attributes=attributes)
+    else:
+        span_context = tracer.detached_span("test", attributes=attributes)
+
+    with span_context as span:
+        set_attributes(span)
+        monkeypatch.setattr(gen_ai, "_conversation_id", lambda: "RM_other")
+        set_attributes(span)
+        if api == "start_span":
+            span.end()
+
+    exported = span_exporter.get_finished_spans()[0]
+    assert exported.attributes.get("gen_ai.conversation.id") == (explicit_id or conversation_id)
