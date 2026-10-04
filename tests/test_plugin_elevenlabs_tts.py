@@ -166,6 +166,31 @@ async def test_option_update_during_connect_discards_stale_socket(
 
 @pytest.mark.asyncio
 @pytest.mark.asyncio
+async def test_prewarm_stops_on_non_retryable_api_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = 0
+    finished = asyncio.Event()
+
+    async def _current_connection(self: object) -> tuple[SimpleNamespace, float, bool]:
+        nonlocal attempts
+        attempts += 1
+        raise elevenlabs_tts.APIStatusError("Unauthorized", status_code=401)
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(
+        elevenlabs_tts.asyncio,
+        "sleep",
+        lambda _delay: finished.set(),
+    )
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert attempts == 1
+    assert not finished.is_set()
+    await tts.aclose()
+
+
 async def test_prewarm_retries_with_exponential_backoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
