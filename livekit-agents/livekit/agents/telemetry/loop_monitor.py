@@ -299,7 +299,11 @@ class EventLoopMonitor:
         if self._closed:
             return
         now = time.monotonic()
-        expected_at = self._last_tick_at + self._tick
+        with self._lock:
+            expected_at = self._last_tick_at + self._tick
+            self._last_tick_at = now
+            incident = self._incident
+            self._incident = None
         lag = now - expected_at
         thread_cpu = time.thread_time()
         cpu_time = thread_cpu - self._last_thread_cpu
@@ -309,10 +313,6 @@ class EventLoopMonitor:
         watchdog_gap = self._consume_watchdog_gap(now, window_start=expected_at - self._tick)
         self._timer = self._loop.call_later(self._tick, self._on_tick)
 
-        with self._lock:
-            self._last_tick_at = now
-            incident = self._incident
-            self._incident = None
         if lag < self._warn:
             return
         samples = incident.samples if incident is not None else []
