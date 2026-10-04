@@ -592,14 +592,20 @@ class BufferedAudioOutput(AudioOutput):
 
     def flush(self) -> None:
         super().flush()
+        # snapshot held frames so the async task works on its own copy; new
+        # captures go to a fresh _held list
+        held_snapshot, self._held = self._held, []
+        self._held_duration = 0.0
         # flush() is synchronous but handing held frames over is not, so do it in the
         # background and let wait_for_playout() join in before waiting on the sink
-        self._flush_task = asyncio.create_task(self._release_and_flush())
+        self._flush_task = asyncio.create_task(self._release_and_flush(held_snapshot))
 
-    async def _release_and_flush(self) -> None:
-        await self._release()
+    async def _release_and_flush(self, held: list[rtc.AudioFrame]) -> None:
+        # forward the snapshot frames
+        for frame in held:
+            await self._forward(frame)
+        # then flush the sink; the next segment starts after flush completes
         self.next_in_chain.flush()
-        # start the next segment only after the current one has been fully flushed
         self._start_segment()
 
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
@@ -609,24 +615,15 @@ class BufferedAudioOutput(AudioOutput):
         return await super().wait_for_playout()
 
     def clear_buffer(self) -> None:
-        task, self._flush_task = self._flush_task, None
+        _ = self._flush_task
+        self._flush_task = None
         self._held.clear()
         self._held_duration = 0.0
         self._start_segment()
-        if task is not None and not task.done():
-            # don't cancel the in-flight release; let it finish and flush the old
-            # segment, then clear the new one downstream. schedule after the task
-            # to preserve the "flush before clear" invariant.
-            async def _delayed_clear() -> None:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                self.next_in_chain.clear_buffer()
-
-            _ = asyncio.create_task(_delayed_clear())  # noqa: RUF006 fire-and-forget cleanup
-        else:
-            self.next_in_chain.clear_buffer()
+        # interrupt downstream immediately; the old flush task (if any) will still
+        # run with its snapshot and call flush() on the already-cleared sink,
+        # which is a no-op for the room sink.
+        self.next_in_chain.clear_buffer()
 
     def pause(self) -> None:
         self._paused_at = time.monotonic()
