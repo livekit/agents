@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import importlib.util
+import linecache
+import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -782,6 +786,41 @@ def test_a_block_the_watchdog_missed_is_still_blocking_code() -> None:
             0.11, gc_time=0.0, cpu_time=0.0001, watchdog_gap=0.0, samples=[sample]
         )
         assert not waited.process_descheduled and "/app/a.py" in waited.stacks[0]
+    finally:
+        loop.close()
+
+
+def test_formatting_a_report_reads_no_source_file(tmp_path: Path) -> None:
+    """The heartbeat formats the report on the loop thread right after the block ends, so it
+    must not read source files: linecache reads and splits each file in Python, holding up
+    the loop it is reporting on."""
+    module_path = tmp_path / "blocking_module.py"
+    module_path.write_text("x = 1\n" * 1000 + "def call(block):\n    return block()\n")
+    spec = importlib.util.spec_from_file_location("blocking_module", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    loop = asyncio.new_event_loop()
+    try:
+        m = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
+        m._loop_thread_ident = threading.get_ident()
+
+        def sampled_by_watchdog() -> loop_monitor._StackSample:
+            samples: list[loop_monitor._StackSample] = []
+            t = threading.Thread(target=lambda: samples.append(m._sample_loop_thread(0.06)))
+            t.start()
+            t.join()
+            return samples[0]
+
+        sample = module.call(sampled_by_watchdog)
+        linecache.clearcache()
+        report = m._build_report(
+            0.11, gc_time=0.0, cpu_time=0.0, watchdog_gap=0.0, samples=[sample]
+        )
+
+        assert f'File "{module_path}", line 1002, in call' in report.stacks[0]
+        assert str(module_path) not in linecache.cache
     finally:
         loop.close()
 
