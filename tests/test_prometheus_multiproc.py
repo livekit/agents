@@ -14,8 +14,7 @@ _DEAD_PID = 2**22 + 1  # above every default pid_max
 
 def _run(scenario: str, *args: object) -> dict[str, str]:
     # prometheus_client reads PROMETHEUS_MULTIPROC_DIR when it is imported, so
-    # each scenario runs in a fresh interpreter, without the caller's value, and
-    # sets the directory itself. It prints `KEY value` lines.
+    # each scenario runs in a fresh interpreter, without the caller's value
     env = {k: v for k, v in os.environ.items() if k.lower() != "prometheus_multiproc_dir"}
     out = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(scenario), *map(str, args)],
@@ -46,7 +45,6 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
         for pid in (dead_pid, live_pid):
             MmapedDict(os.path.join(mp_dir, f"gauge_all_{pid}.db")).close()
 
-        # A metric this process records before the server runs, as a warm-up step would.
         gauge = prometheus_client.Gauge("app_warmup_done", "warm-up finished")
         gauge.set(1)
 
@@ -69,9 +67,7 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
             async def entrypoint(ctx: JobContext) -> None:
                 pass
 
-            # The load task writes lk_agents_child_process_count after the cleanup,
-            # right after lk_agents_worker_load. Wait until that write returns, so
-            # the collector never reads a file that is still being initialized.
+            # the collector must not read a metric file that is still being initialized
             child_count_written = threading.Event()
             update_child_proc_count = lk_metrics._update_child_proc_count
 
@@ -133,7 +129,6 @@ def test_cleanup_keeps_a_metric_file_created_while_it_runs(tmp_path) -> None:
 
 
         def listdir(path):
-            # Another thread records its first gauge while the cleanup runs.
             if not late:
                 late.append(prometheus_client.Gauge("late_gauge", "created during cleanup"))
                 late[0].set(1)
@@ -157,9 +152,6 @@ def test_cleanup_keeps_a_metric_file_created_while_it_runs(tmp_path) -> None:
 
 
 def test_cleanup_removes_this_pids_files_when_this_process_writes_none(tmp_path) -> None:
-    # PROMETHEUS_MULTIPROC_DIR is set after prometheus_client is imported, as
-    # AgentServer(prometheus_multiproc_dir=...) does, so this process writes no
-    # file and one with its pid is left over from an earlier process.
     out = _run(
         """
         import os, sys
@@ -187,8 +179,6 @@ def test_cleanup_removes_this_pids_files_when_this_process_writes_none(tmp_path)
 def test_cleanup_removes_this_pids_files_from_a_directory_it_does_not_write_to(
     tmp_path,
 ) -> None:
-    # Multiprocess mode is on with directory A, and the server is given directory
-    # B, which holds a file with this pid from an earlier process.
     a_dir, b_dir = tmp_path / "a", tmp_path / "b"
     a_dir.mkdir()
     b_dir.mkdir()
@@ -220,8 +210,6 @@ def test_cleanup_removes_this_pids_files_from_a_directory_it_does_not_write_to(
 
 
 def test_cleanup_keeps_this_pids_open_files_after_a_directory_switch(tmp_path) -> None:
-    # A gauge is recorded in directory A, PROMETHEUS_MULTIPROC_DIR moves to B,
-    # and A is cleaned again, as a server that returns to A would.
     a_dir, b_dir = tmp_path / "a", tmp_path / "b"
     a_dir.mkdir()
     b_dir.mkdir()
@@ -252,35 +240,3 @@ def test_cleanup_keeps_this_pids_open_files_after_a_directory_switch(tmp_path) -
     )
 
     assert f'app_warmup_done{{pid="{out["PID"]}"}} 2.0' in out["METRICS"]
-
-
-@pytest.mark.skipif(not os.path.isdir("/dev/fd"), reason="needs /dev/fd to list open files")
-def test_cleanup_in_the_current_directory_removes_only_this_pids_stale_files(tmp_path) -> None:
-    # Multiprocess mode is on with this directory. counter_<pid>.db is left over
-    # from an earlier process with this pid. gauge_max_<pid>.db is created but not
-    # sized yet, as a file is while another thread opens it.
-    out = _run(
-        """
-        import os, sys
-
-        mp_dir = sys.argv[1]
-        os.environ["PROMETHEUS_MULTIPROC_DIR"] = mp_dir
-
-        from prometheus_client import Gauge
-        from prometheus_client.mmap_dict import MmapedDict
-
-        from livekit.agents.telemetry import metrics
-
-        Gauge("app_warmup_done", "", multiprocess_mode="all").set(1)
-        MmapedDict(os.path.join(mp_dir, f"counter_{os.getpid()}.db")).close()
-        open(os.path.join(mp_dir, f"gauge_max_{os.getpid()}.db"), "ab").close()
-
-        metrics._clean_multiproc_dir(mp_dir)
-        print("PID", os.getpid())
-        print("FILES", " ".join(sorted(os.listdir(mp_dir))))
-        """,
-        tmp_path,
-    )
-
-    pid = out["PID"]
-    assert out["FILES"].split() == [f"gauge_all_{pid}.db", f"gauge_max_{pid}.db"]

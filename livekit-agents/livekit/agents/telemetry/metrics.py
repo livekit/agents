@@ -73,16 +73,25 @@ def _clean_multiproc_dir(path: str) -> None:
     after it is deleted, so the collector would lose every metric of that kind.
     The files of running processes stay.
 
-    In multiprocess mode, prometheus_client keeps every file it writes open, in
-    whichever directory PROMETHEUS_MULTIPROC_DIR named when it created the file,
-    and can create one on any thread at any time. A file with this process's pid
-    is deleted only when it was already initialized and this process does not
-    hold it open. prometheus_client sizes a new file only through the descriptor
-    it keeps, so a file that is not open yet is still empty and stays. Where the
-    platform does not list open files, every file of this process stays.
+    In multiprocess mode, prometheus_client creates a file on any thread at any
+    time, in the directory that PROMETHEUS_MULTIPROC_DIR names at that moment, and
+    keeps it open. If that is *path*, this process's files stay, and a stale file
+    from an earlier process with the same pid stays with them; clear the directory
+    before the process starts to drop it. In another directory, a file with this
+    process's pid is deleted only when it was already initialized and this process
+    does not hold it open. Where the platform does not list open files, it stays.
+    Call this before pointing PROMETHEUS_MULTIPROC_DIR at a new *path*.
     """
     own_pid = os.getpid()
     multiprocess_mode = values.ValueClass is not values.MutexValue
+    current_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
+        "prometheus_multiproc_dir"
+    )
+    keep_own = (
+        multiprocess_mode
+        and current_dir is not None
+        and os.path.realpath(current_dir) == os.path.realpath(path)
+    )
     to_remove: list[str] = []
     own_files: dict[str, tuple[int, int]] = {}
     for filename in os.listdir(path):
@@ -91,6 +100,8 @@ def _clean_multiproc_dir(path: str) -> None:
         if pid_str.isdigit():
             pid = int(pid_str)
             if pid == own_pid:
+                if keep_own:
+                    continue
                 if multiprocess_mode:
                     try:
                         st = os.stat(file_path)
