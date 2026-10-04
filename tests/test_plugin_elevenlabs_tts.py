@@ -165,6 +165,39 @@ async def test_option_update_during_connect_discards_stale_socket(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_prewarm_retries_with_exponential_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    delays: list[float] = []
+    ready = asyncio.Event()
+
+    async def _current_connection(
+        self: object,
+    ) -> tuple[SimpleNamespace, float, bool]:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 3:
+            raise ConnectionError("temporary failure")
+        ready.set()
+        return SimpleNamespace(_recv_task=None), 0.0, False
+
+    async def _sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr(elevenlabs_tts.TTS, "_current_connection", _current_connection)
+    monkeypatch.setattr(elevenlabs_tts.asyncio, "sleep", _sleep)
+
+    tts = elevenlabs_tts.TTS(api_key="test-key")
+    tts.prewarm()
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    await tts.aclose()
+
+    assert attempts == 4
+    assert delays == [1.0, 2.0, 4.0]
+
+
 async def test_dialogue_prewarm_reconnects_when_idle_socket_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
