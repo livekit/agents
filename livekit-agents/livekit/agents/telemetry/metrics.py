@@ -49,38 +49,66 @@ def _update_child_proc_count() -> None:
         pass
 
 
+def _open_files() -> set[tuple[int, int]] | None:
+    """Return (st_dev, st_ino) of every file this process holds open, or None
+    where the platform does not list them."""
+    try:
+        fds = os.listdir("/dev/fd")
+    except OSError:
+        return None
+    open_files = set()
+    for fd in fds:
+        try:
+            st = os.fstat(int(fd))
+        except (OSError, ValueError):
+            continue
+        open_files.add((st.st_dev, st.st_ino))
+    return open_files
+
+
 def _clean_multiproc_dir(path: str) -> None:
     """Remove the metric files of processes that no longer run.
 
     prometheus_client names each file ``<kind>_<pid>.db`` and keeps writing to it
     after it is deleted, so the collector would lose every metric of that kind.
-    The files of running processes stay. In multiprocess mode, prometheus_client
+    The files of running processes stay.
+
+    In multiprocess mode, prometheus_client keeps every file it writes open, and
     creates each new file on any thread at any time, in the directory that
-    PROMETHEUS_MULTIPROC_DIR names at that moment. If that is *path*, this
-    process's own files stay too, and a stale file from an earlier process with
-    the same pid stays with them; clear the directory before the process starts
-    to drop it. Otherwise this process writes no new file in *path*, so any file
-    with its pid is treated as stale. A process that moved
-    PROMETHEUS_MULTIPROC_DIR away from *path* still writes its earlier metrics
-    there, and loses them. Call this before pointing PROMETHEUS_MULTIPROC_DIR at
-    a new *path*.
+    PROMETHEUS_MULTIPROC_DIR names at that moment. If that is *path*, a file of
+    this process can appear while the cleanup runs, so this process's files stay,
+    and a stale file from an earlier process with the same pid stays with them;
+    clear the directory before the process starts to drop it. Otherwise no new
+    file of this process can appear in *path*, and a file with its pid is deleted
+    unless this process holds it open. Where the platform does not list open
+    files, it stays. Call this before pointing PROMETHEUS_MULTIPROC_DIR at a new
+    *path*.
     """
     own_pid = os.getpid()
-    current_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
-        "prometheus_multiproc_dir"
-    )
-    writes_files = (
-        values.ValueClass is not values.MutexValue
-        and current_dir is not None
-        and os.path.realpath(current_dir) == os.path.realpath(path)
-    )
+    # (st_dev, st_ino) of this process's files to keep; None keeps all of them
+    own_open: set[tuple[int, int]] | None = set()
+    if values.ValueClass is not values.MutexValue:
+        current_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get(
+            "prometheus_multiproc_dir"
+        )
+        if current_dir is not None and os.path.realpath(current_dir) == os.path.realpath(path):
+            own_open = None
+        else:
+            own_open = _open_files()
+
     for filename in os.listdir(path):
         file_path = os.path.join(path, filename)
         pid_str = filename.removesuffix(".db").rpartition("_")[2]
         if pid_str.isdigit():
             pid = int(pid_str)
             if pid == own_pid:
-                if writes_files:
+                if own_open is None:
+                    continue
+                try:
+                    st = os.stat(file_path)
+                except OSError:
+                    continue
+                if (st.st_dev, st.st_ino) in own_open:
                     continue
             elif psutil.pid_exists(pid):
                 # A live process that reused a dead process's pid keeps its stale
