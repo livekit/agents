@@ -12,7 +12,7 @@ from typing import Any
 import aiohttp
 import pytest
 
-from livekit.agents import APIConnectOptions, APIConnectionError, APIStatusError
+from livekit.agents import APIConnectionError, APIConnectOptions, APIStatusError
 from livekit.plugins.runway import AvatarSession
 
 pytestmark = pytest.mark.unit
@@ -31,7 +31,7 @@ class _Response:
     async def json(self) -> dict[str, Any]:
         return {"id": "realtime-session-1"}
 
-    async def __aenter__(self) -> "_Response":
+    async def __aenter__(self) -> _Response:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
