@@ -171,7 +171,14 @@ class InputDeltaScope:
         )
         self._tracker._instructions[site] = pending.instructions
 
-    def delta(self, site: str, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
+    def delta(
+        self,
+        site: str,
+        chat_ctx: ChatContext,
+        span: trace.Span,
+        *,
+        instructions_in_messages: bool = False,
+    ) -> InputDelta:
         from ..llm import ChatContext
 
         system = [item for item in chat_ctx.items if _is_system_message(item)]
@@ -202,6 +209,10 @@ class InputDeltaScope:
                 self._promote(site, pending)
 
         if messages_base is None and instructions_base is None:
+            return InputDelta(chat_ctx=chat_ctx)
+        if instructions_in_messages and (messages_base is None or instructions_base is None):
+            # system messages sit among the conversation here, so the record is either the
+            # full context or the base's followed by appended items, never a mix
             return InputDelta(chat_ctx=chat_ctx)
 
         items: list[ChatItem] = []
@@ -245,7 +256,13 @@ def input_delta_active() -> bool:
     return _input_delta_scope.get() is not None
 
 
-def input_delta(site: str, chat_ctx: ChatContext, span: trace.Span) -> InputDelta:
+def input_delta(
+    site: str,
+    chat_ctx: ChatContext,
+    span: trace.Span,
+    *,
+    instructions_in_messages: bool = False,
+) -> InputDelta:
     """Decide how much of ``chat_ctx`` the span records. The model always receives
     all of it; this only affects telemetry.
 
@@ -258,13 +275,18 @@ def input_delta(site: str, chat_ctx: ChatContext, span: trace.Span) -> InputDelt
       ``instructions_base`` to the span that recorded them;
     - anything else (an item edited, removed or reordered) keeps the full conversation.
 
+    Set ``instructions_in_messages`` when the span records system messages among the
+    conversation (``lk.pii.chat_ctx``) rather than in a separate attribute: the span then
+    records either the full context or only appended items, and changed instructions
+    make it record the full context.
+
     The span's own input is held as pending, and becomes the baseline for the next
     generation only once this one is committed. Without ``input_delta``, return all
     of ``chat_ctx``.
     """
     if (scope := _input_delta_scope.get()) is None:
         return InputDelta(chat_ctx=chat_ctx)
-    return scope.delta(site, chat_ctx, span)
+    return scope.delta(site, chat_ctx, span, instructions_in_messages=instructions_in_messages)
 
 
 def set_input_delta_attributes(span: trace.Span, delta: InputDelta) -> None:

@@ -252,6 +252,103 @@ def test_instructions_base_points_at_the_span_that_recorded_them(
     assert delta.instructions_base.span_context == span1.get_span_context()
 
 
+def test_rebuilt_input_matches_what_was_sent(span_exporter: InMemorySpanExporter) -> None:
+    """Following lk.input.* from each span back to a full one reproduces the input the
+    model received, for both gen_ai.* (instructions separate) and lk.pii.chat_ctx
+    (instructions among the conversation)."""
+    turns = [
+        _ctx(("sys", "system", "be brief"), ("u1", "user", "hi")),
+        _ctx(
+            ("sys", "system", "be brief"),
+            ("u1", "user", "hi"),
+            ("a1", "assistant", "hello"),
+            ("u2", "user", "weather?"),
+        ),
+        # update_instructions: same id, new text
+        _ctx(
+            ("sys", "system", "be detailed"),
+            ("u1", "user", "hi"),
+            ("a1", "assistant", "hello"),
+            ("u2", "user", "weather?"),
+            ("a2", "assistant", "sunny"),
+            ("u3", "user", "tomorrow?"),
+        ),
+        _ctx(
+            ("sys", "system", "be detailed"),
+            ("u1", "user", "hi"),
+            ("a1", "assistant", "hello"),
+            ("u2", "user", "weather?"),
+            ("a2", "assistant", "sunny"),
+            ("u3", "user", "tomorrow?"),
+            ("a3", "assistant", "rain"),
+            ("u4", "user", "thanks"),
+        ),
+        # an earlier message edited
+        _ctx(
+            ("sys", "system", "be detailed"),
+            ("u1", "user", "hey"),
+            ("a1", "assistant", "hello"),
+            ("u2", "user", "weather?"),
+            ("a2", "assistant", "sunny"),
+            ("u3", "user", "tomorrow?"),
+            ("a3", "assistant", "rain"),
+            ("u4", "user", "thanks"),
+            ("a4", "assistant", "bye"),
+            ("u5", "user", "bye"),
+        ),
+    ]
+
+    tracker = gen_ai.InputDeltaTracker()
+    recorded: dict[str, dict[int, gen_ai.InputDelta]] = {"gen_ai": {}, "chat_ctx": {}}
+    last: dict[str, int] = {}
+    for ctx in turns:
+        scope = tracker.begin()
+        for kind, site, in_messages in (
+            ("chat_ctx", gen_ai.INPUT_DELTA_SITE_LLM_NODE, True),
+            ("gen_ai", gen_ai.INPUT_DELTA_SITE_LLM_REQUEST, False),
+        ):
+            with tracer.start_as_current_span(site) as span:
+                delta = scope.delta(site, ctx, span, instructions_in_messages=in_messages)
+            span_id = span.get_span_context().span_id
+            recorded[kind][span_id] = delta
+            last[kind] = span_id
+        scope.commit()
+
+        def messages(span_id: int) -> list[Any]:
+            delta = recorded["gen_ai"][span_id]
+            base = delta.messages_base
+            head = messages(base.span_context.span_id) if base else []
+            return head + gen_ai.to_input_messages(delta.chat_ctx)
+
+        def instructions(span_id: int) -> list[Any]:
+            delta = recorded["gen_ai"][span_id]
+            if (base := delta.instructions_base) is not None:
+                return instructions(base.span_context.span_id)
+            return gen_ai.to_system_instructions(delta.chat_ctx)
+
+        def chat_items(span_id: int) -> list[Any]:
+            delta = recorded["chat_ctx"][span_id]
+            base = delta.messages_base
+            if base is not None:
+                # a delta never carries system messages; they are the base's
+                assert not any(gen_ai._is_system_message(i) for i in delta.chat_ctx.items)
+            head = chat_items(base.span_context.span_id) if base else []
+            return head + [(i.id, i._fingerprint()) for i in delta.chat_ctx.items]
+
+        assert messages(last["gen_ai"]) == gen_ai.to_input_messages(ctx)
+        assert instructions(last["gen_ai"]) == gen_ai.to_system_instructions(ctx)
+        assert chat_items(last["chat_ctx"]) == [(i.id, i._fingerprint()) for i in ctx.items]
+
+    # the deltas the scenario is meant to exercise actually happened
+    kinds = [
+        (d.messages_base is not None, d.instructions_base is not None)
+        for d in recorded["gen_ai"].values()
+    ]
+    assert kinds == [(False, False), (True, True), (True, False), (True, True), (False, True)]
+    chat_kinds = [d.messages_base is not None for d in recorded["chat_ctx"].values()]
+    assert chat_kinds == [False, True, False, True, False]
+
+
 # -- session ---------------------------------------------------------------------------
 
 

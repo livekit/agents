@@ -127,7 +127,9 @@ ATTR_RESPONSE_TTFT = "lk.response.ttft"
 ATTR_INPUT_DELTA = "lk.input.delta"
 """The span's lk.pii.chat_ctx / gen_ai.input.messages hold only the items added after the input
 recorded on ``lk.input.base_span_id``; the full conversation is the base's (resolved
-recursively) followed by this span's."""
+recursively) followed by this span's. lk.pii.chat_ctx is a delta only while the system
+instructions are unchanged, so it never holds system messages; gen_ai.system_instructions
+comes from this span when present, otherwise from ``lk.input.instructions_base_span_id``."""
 ATTR_INPUT_OMITTED_ITEMS = "lk.input.omitted_items"
 ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
 ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID = "lk.input.instructions_base_span_id"

@@ -193,9 +193,13 @@ async def _llm_inference_task(
     tools = tool_ctx.flatten()
 
     # the input as this span records it: the full context, or only what was added since
-    # the last committed generation when the session records with `input_delta`
+    # the last committed generation when the session records with `input_delta`.
+    # lk.pii.chat_ctx keeps the system messages among the conversation.
     delta = gen_ai_telemetry.input_delta(
-        gen_ai_telemetry.INPUT_DELTA_SITE_LLM_NODE, chat_ctx, current_span
+        gen_ai_telemetry.INPUT_DELTA_SITE_LLM_NODE,
+        chat_ctx,
+        current_span,
+        instructions_in_messages=True,
     )
     recorded_ctx = delta.chat_ctx
 
