@@ -54,7 +54,7 @@ MIN_SPEED = 0.7
 MAX_SPEED = 1.3
 KEEPALIVE_INTERVAL = 10  # seconds
 KEEPALIVE_MESSAGE = json.dumps({"keep_alive": True})
-# Must stay under Soniox's observed ~8-18s per-stream timeout (livekit/agents#6225).
+# livekit/agents#6225: Must stay under Soniox's observed ~8-18s per-stream timeout.
 DEFAULT_STREAM_IDLE_TIMEOUT = 5.0  # seconds
 # Rotate to a fresh stream at a sentence boundary
 # well before Soniox's fixed 2-minute per-stream cap.

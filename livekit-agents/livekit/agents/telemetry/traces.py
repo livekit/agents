@@ -728,12 +728,14 @@ class _AuthHeaderProvider:
 _TELEMETRY_SHUTDOWN_TIMEOUT = 10.0
 
 
+# open-telemetry/opentelemetry-python#4623: Daemon threads bound TracerProvider.shutdown(), which has no configurable timeout.
+# open-telemetry/opentelemetry-python#4636: logging.shutdown() can re-enter force_flush on a non-daemon thread.
 def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], timeout: float) -> None:
     """Run each target on its own daemon thread with a hard wall-clock bound.
 
     ``provider.shutdown()`` internally joins its exporter worker with a 30s
     default timeout per provider (and ``force_flush`` ignores its timeout arg
-    in the current SDK — see #4623). Across tracer/logger/meter that's up to
+    in the current SDK). Across tracer/logger/meter that's up to
     ~90s, enough to stall the caller's event loop past the supervisor's 60s
     ping/pong deadline when the OTLP endpoint is rate-limiting or unreachable.
 
@@ -745,15 +747,10 @@ def _run_bounded(action: str, targets: list[tuple[str, Callable[[], Any]]], time
          processor within milliseconds, even if one hangs in
          ``worker_thread.join``. Any later re-entry (e.g. Python's
          ``logging.shutdown()`` may spawn a *non-daemon* thread via
-         ``LoggingHandler.flush`` → ``force_flush`` — see opentelemetry-python
-         PR #4636) then short-circuits instead of hanging process exit.
+         ``LoggingHandler.flush`` → ``force_flush``) then short-circuits instead of hanging process exit.
 
     Any unfinished work stays on the daemon threads and is discarded at
     process exit.
-
-    Upstream context:
-    - https://github.com/open-telemetry/opentelemetry-python/issues/4623
-      (TracerProvider.shutdown() has no configurable timeout — still open)
     """
     if not targets:
         return

@@ -1058,7 +1058,8 @@ class AgentServer(utils.EventEmitter[EventTypes]):
             if self._api is not None:
                 await self._api.aclose()  # type: ignore[no-untyped-call, unused-ignore]
 
-            # await asyncio.sleep(0.25)  # see https://github.com/aio-libs/aiohttp/issues/1925
+            # aio-libs/aiohttp#1925: Sleep so connection_lost() runs before the transport closes.
+            # await asyncio.sleep(0.25)
             self._msg_chan.close()
 
             if not self._close_future.done():

@@ -9,9 +9,9 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.asyncio
 async def test_dob_two_digit_year_normalized() -> None:
-    # The prompt asks the model to normalize two-digit years, but smaller/faster
+    # livekit/agents#6067: The prompt asks the model to normalize two-digit years, but smaller/faster
     # models often pass the spoken value through literally. The tool layer must not
-    # accept "90" as year 90 AD. https://github.com/livekit/agents/issues/6067
+    # accept "90" as year 90 AD.
     task = beta.workflows.GetDOBTask(require_confirmation=True)
 
     await task._update_dob_impl(90, 5, 15, ctx=None)  # type: ignore[arg-type]

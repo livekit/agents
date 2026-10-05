@@ -5,12 +5,12 @@ from livekit.plugins.aws.experimental.realtime.realtime_model import (
 )
 
 
+# livekit/agents#6994: Regression for the realtime extra failing to import on newer bedrock SDKs.
 def test_realtime_package_imports_against_current_bedrock_sdk() -> None:
     """The realtime extra must import on aws-sdk-bedrock-runtime 0.10+ / 0.11.
 
     0.10 dropped ``Config`` and 0.11 dropped ``BedrockRuntimeClient``, so the old
-    top-level imports failed before a session was created. Regression for
-    https://github.com/livekit/agents/issues/6994.
+    top-level imports failed before a session was created.
     """
     from livekit.plugins.aws.experimental.realtime import RealtimeModel
 
