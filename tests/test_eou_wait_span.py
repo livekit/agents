@@ -76,6 +76,7 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ar._stt_pipeline = None
     ar._stt_model = None
     ar._stt_provider = None
+    ar._stt_metadata = None
     ar._vad = None
     ar._turn_detection_mode = "vad"
     ar._turn_detector = None

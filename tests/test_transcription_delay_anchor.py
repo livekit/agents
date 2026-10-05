@@ -93,6 +93,7 @@ def _make_recognition(
     ar._eou_detection_span = None
     ar._stt_model = None
     ar._stt_provider = None
+    ar._stt_metadata = None
     ar._vad_stream = None
     ar._vad_speech_started = False
     ar._run_eou_detection = MagicMock()  # type: ignore[method-assign]

@@ -11,6 +11,7 @@ from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
 
 if TYPE_CHECKING:
+    from ..llm.chat_context import MetricsMetadata
     from ..voice.events import ConversationItemAddedEvent
 
 # already a retry mechanism in STT.recognize, don't retry in stream adapter
@@ -47,6 +48,10 @@ class StreamAdapter(STT):
     @property
     def provider(self) -> str:
         return self._stt.provider
+
+    @property
+    def metrics_metadata(self) -> MetricsMetadata:
+        return self._stt.metrics_metadata
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)
