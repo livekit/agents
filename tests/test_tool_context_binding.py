@@ -63,6 +63,23 @@ class TestFunctionToolInstanceBinding:
         assert list(inspect.signature(bound).parameters) == ["order_id", "region"]
         assert _schema_params(bound) == ["order_id", "region"]
 
+    def test_real_method_with_a_non_self_receiver_still_binds(self) -> None:
+        """Any receiver name binds — the declaring class decides, not the parameter name."""
+
+        class Holder:
+            tag = "T1"
+
+            @function_tool
+            async def tool(this, order_id: str) -> str:
+                """Look up an order."""
+                return f"{this.tag}/{order_id}"
+
+        bound = Holder().tool
+
+        assert list(inspect.signature(bound).parameters) == ["order_id"]
+        assert _schema_params(bound) == ["order_id"]
+        assert asyncio.run(bound("A1")) == "T1/A1"
+
     def test_real_method_is_callable(self) -> None:
         class Holder:
             @function_tool
