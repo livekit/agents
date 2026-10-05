@@ -18,7 +18,7 @@ from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
 from ..log import logger
 from ..metrics import LLMMetrics
-from ..telemetry import gen_ai as gen_ai_telemetry, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
 from ..types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -292,23 +292,21 @@ class LLMStream(ABC):
             output_type=trace_types.GenAIOutputType.TEXT,
         )
         if self._record_content:
-            if self._genai_operation_name is None and gen_ai_telemetry.input_delta_active():
+            if self._genai_operation_name is None and input_delta.active():
                 # a delegating span (fallback) would only repeat the input its provider
                 # span records, and take that span's place as the next delta's base
                 gen_ai_telemetry.set_content_attributes(
                     span, tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools)
                 )
                 return
-            delta = gen_ai_telemetry.input_delta(
-                gen_ai_telemetry.INPUT_DELTA_SITE_LLM_REQUEST, self._chat_ctx, span
-            )
+            delta = input_delta.compute(input_delta.LLM_REQUEST, self._chat_ctx, span)
             gen_ai_telemetry.set_content_attributes(
                 span,
                 system_instructions=delta.system_instructions(),
                 input_messages=delta.input_messages(),
                 tool_definitions=gen_ai_telemetry.to_tool_definitions(self._tools),
             )
-            gen_ai_telemetry.set_input_delta_attributes(span, delta)
+            input_delta.set_attributes(span, delta)
 
     async def _main_task(self) -> None:
         self._llm_request_span = trace.get_current_span()

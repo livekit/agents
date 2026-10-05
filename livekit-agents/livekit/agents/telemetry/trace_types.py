@@ -125,15 +125,13 @@ ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # input delta (RecordingOptions.input_delta)
 ATTR_INPUT_DELTA = "lk.input.delta"
-"""The span's input continues the one recorded on its parent, ``lk.input.base_span_id`` (a
-span of the same name): it holds only what follows the prefix they share. Rebuild the
-parent first (recursively), then append."""
+"""The span's record (lk.pii.chat_ctx on llm_node, gen_ai.input.messages on llm_request)
+continues the one on its parent, ``lk.input.base_span_id``. See ``telemetry/input_delta.py``
+for the procedure and the rebuild rule."""
 ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
-ATTR_INPUT_BASE_ITEMS = "lk.input.base_items"
-"""lk.pii.chat_ctx is the parent's first N items followed by this span's."""
-ATTR_INPUT_BASE_MESSAGES = "lk.input.base_messages"
-"""gen_ai.input.messages is the parent's first N messages followed by this span's. Without
-gen_ai.system_instructions, the parent's apply."""
+ATTR_INPUT_DROPPED_FROM_BASE = "lk.input.dropped_from_base"
+"""Rebuild: the parent's full record without its last N entries, followed by this span's.
+Without gen_ai.system_instructions on an llm_request span, the parent's apply."""
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"

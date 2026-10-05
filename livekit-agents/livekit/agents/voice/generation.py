@@ -24,7 +24,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -194,9 +194,7 @@ async def _llm_inference_task(
 
     # the input as this span records it: the full context, or only what was added since
     # the last committed generation when the session records with `input_delta`
-    delta = gen_ai_telemetry.input_delta(
-        gen_ai_telemetry.INPUT_DELTA_SITE_LLM_NODE, chat_ctx, current_span
-    )
+    delta = input_delta.compute(input_delta.LLM_NODE, chat_ctx, current_span)
 
     if current_span.is_recording():
         attrs: dict[str, Any] = {
@@ -215,7 +213,7 @@ async def _llm_inference_task(
             trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
         current_span.set_attributes(attrs)
-        gen_ai_telemetry.set_input_delta_attributes(current_span, delta)
+        input_delta.set_attributes(current_span, delta)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
     # provider call the convention describes — setting them here as well would make a
@@ -356,7 +354,7 @@ async def _llm_inference_task(
 def _record_uninstrumented_inference(
     span: trace.Span,
     inference_recorded: list[bool],
-    delta: gen_ai_telemetry.InputDelta,
+    delta: input_delta.InputDelta,
     tools: list[llm.Tool],
     data: _LLMGenerationData,
     *,

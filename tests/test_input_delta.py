@@ -17,7 +17,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from livekit.agents import Agent, AgentSession, RunContext, function_tool, llm
 from livekit.agents.llm import FunctionToolCall
-from livekit.agents.telemetry import gen_ai, set_tracer_provider, trace_types, tracer
+from livekit.agents.telemetry import gen_ai, input_delta, set_tracer_provider, trace_types, tracer
 
 from .fake_session import FakeActions, create_session, run_session
 
@@ -38,8 +38,8 @@ def span_exporter() -> Iterator[InMemorySpanExporter]:
         provider.shutdown()
 
 
-NODE = gen_ai.INPUT_DELTA_SITE_LLM_NODE
-REQUEST = gen_ai.INPUT_DELTA_SITE_LLM_REQUEST
+NODE = input_delta.LLM_NODE
+REQUEST = input_delta.LLM_REQUEST
 INSTR_ID = "lk.agent_task.instructions"
 INSTR = (INSTR_ID, "system", "be brief")
 INSTR2 = (INSTR_ID, "system", "be detailed")
@@ -67,13 +67,15 @@ def _ctx(*items: tuple[str, str, str] | llm.ChatItem) -> llm.ChatContext:
 
 
 def _delta(
-    scope: gen_ai.InputDeltaScope, ctx: llm.ChatContext, site: gen_ai.InputDeltaSite = REQUEST
-) -> tuple[gen_ai.InputDelta, trace.Span]:
+    scope: input_delta.InputDeltaScope,
+    ctx: llm.ChatContext,
+    site: input_delta.InputDeltaSite = REQUEST,
+) -> tuple[input_delta.InputDelta, trace.Span]:
     with tracer.start_as_current_span(site.name) as span:
         return scope.delta(site, ctx, span), span
 
 
-def _committed(tracker: gen_ai.InputDeltaTracker, ctx: llm.ChatContext) -> dict[str, Any]:
+def _committed(tracker: input_delta.InputDeltaTracker, ctx: llm.ChatContext) -> dict[str, Any]:
     """Record ``ctx`` at both sites as one committed generation."""
     scope = tracker.begin()
     spans = {site.name: _delta(scope, ctx, site)[1] for site in (NODE, REQUEST)}
@@ -101,7 +103,7 @@ def test_instructions_are_only_the_instructions_message() -> None:
 
 
 def test_first_generation_is_full(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     ctx = _ctx(INSTR, ("u1", "user", "hi"))
     for site in (NODE, REQUEST):
         delta, _ = _delta(tracker.begin(), ctx, site)
@@ -111,32 +113,32 @@ def test_first_generation_is_full(span_exporter: InMemorySpanExporter) -> None:
 
 
 def test_appended_turn_continues_the_parent(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     parent = _committed(tracker, _ctx(INSTR, ("u1", "user", "hi")))
     ctx = _ctx(INSTR, ("u1", "user", "hi"), ("a1", "assistant", "hello"), ("u2", "user", "bye"))
 
     scope = tracker.begin()
     node, _ = _delta(scope, ctx, NODE)
     assert node.base == parent["llm_node"].get_span_context()
-    assert node.base_items == 2
+    assert node.dropped_from_base == 0
     assert _ids(node.chat_ctx.items) == ["a1", "u2"]
 
     request, _ = _delta(scope, ctx, REQUEST)
     assert request.base == parent["llm_request"].get_span_context()
-    assert request.base_messages == 1
+    assert request.dropped_from_base == 0
     assert request.instructions == []
     assert _ids(request.conversation) == ["a1", "u2"]
 
 
 def test_changed_instructions_are_recorded_again(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     _committed(tracker, _ctx(INSTR, ("u1", "user", "hi")))
     ctx = _ctx(INSTR2, ("u1", "user", "hi"), ("u2", "user", "bye"))
 
     scope = tracker.begin()
     # gen_ai keeps them apart: the messages still continue the parent
     request, _ = _delta(scope, ctx, REQUEST)
-    assert request.base is not None and request.base_messages == 1
+    assert request.base is not None and request.dropped_from_base == 0
     assert _ids(request.instructions) == [INSTR_ID]
     assert _ids(request.conversation) == ["u2"]
     # lk.pii.chat_ctx starts with them, so nothing is shared
@@ -146,18 +148,19 @@ def test_changed_instructions_are_recorded_again(span_exporter: InMemorySpanExpo
 
 
 def test_edit_records_from_the_edited_item(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     _committed(
         tracker, _ctx(INSTR, ("u1", "user", "hi"), ("a1", "assistant", "hey"), ("u2", "user", "x"))
     )
     ctx = _ctx(INSTR, ("u1", "user", "hi"), ("a1", "assistant", "HEY"), ("u2", "user", "x"))
     request, _ = _delta(tracker.begin(), ctx, REQUEST)
-    assert request.base_messages == 1
+    # the parent's "a1" and "u2" are dropped; this span records them again
+    assert request.dropped_from_base == 2
     assert _ids(request.conversation) == ["a1", "u2"]
 
 
 def test_tool_call_is_never_split_from_its_message(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     # the parent ended with an assistant message; this turn adds tool calls to it
     _committed(tracker, _ctx(INSTR, ("u1", "user", "hi"), ("a1", "assistant", "checking")))
     ctx = _ctx(
@@ -169,7 +172,7 @@ def test_tool_call_is_never_split_from_its_message(span_exporter: InMemorySpanEx
     )
     request, _ = _delta(tracker.begin(), ctx, REQUEST)
     # "a1" and its tool call are one gen_ai message, so the cut moves before "a1"
-    assert request.base_messages == 1
+    assert request.dropped_from_base == 1
     assert _ids(request.conversation) == ["a1", "fc", "fo"]
     assert [m["role"] for m in request.input_messages()] == ["assistant", "tool"]
 
@@ -177,7 +180,7 @@ def test_tool_call_is_never_split_from_its_message(span_exporter: InMemorySpanEx
 def test_uncommitted_generation_does_not_move_the_parent(
     span_exporter: InMemorySpanExporter,
 ) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     parent = _committed(tracker, _ctx(INSTR, ("u1", "user", "hi")))
     # a preemptive generation that gets discarded
     _delta(tracker.begin(), _ctx(INSTR, ("u1", "user", "hi"), ("p2", "user", "by")))
@@ -189,7 +192,7 @@ def test_uncommitted_generation_does_not_move_the_parent(
 
 
 def test_span_after_commit_becomes_the_parent(span_exporter: InMemorySpanExporter) -> None:
-    tracker = gen_ai.InputDeltaTracker()
+    tracker = input_delta.InputDeltaTracker()
     scope = tracker.begin()
     scope.commit()  # scheduled before the llm_request span started
     _, span1 = _delta(scope, _ctx(INSTR, ("u1", "user", "hi")))
@@ -199,10 +202,37 @@ def test_span_after_commit_becomes_the_parent(span_exporter: InMemorySpanExporte
 
 
 def test_trackers_are_independent(span_exporter: InMemorySpanExporter) -> None:
-    a, b = gen_ai.InputDeltaTracker(), gen_ai.InputDeltaTracker()
+    a, b = input_delta.InputDeltaTracker(), input_delta.InputDeltaTracker()
     _committed(a, _ctx(INSTR, ("u1", "user", "hi")))
     request, _ = _delta(b.begin(), _ctx(INSTR, ("u1", "user", "hi"), ("u2", "user", "x")))
     assert request.base is None
+
+
+def test_module_docstring_example(span_exporter: InMemorySpanExporter) -> None:
+    """The expressive-mode example in telemetry/input_delta.py is what actually happens."""
+    u1, a1, u2 = ("u1", "user", "hi"), ("a1", "assistant", "hello"), ("u2", "user", "x")
+    a2, u3 = ("a2", "assistant", "sure"), ("u3", "user", "weather?")
+    guide = ("G", "system", "markup guide")
+    tool = [_call("fc", "c1"), _output("fo", "c1")]
+    turns = [
+        _ctx(INSTR, u1, guide),
+        _ctx(INSTR, u1, a1, u2, guide),
+        _ctx(INSTR, u1, a1, u2, a2, u3, guide),
+        _ctx(INSTR, u1, a1, u2, a2, u3, guide, *tool),
+    ]
+    expected = [
+        ([INSTR_ID, "u1", "G"], None),
+        (["a1", "u2", "G"], 1),
+        (["a2", "u3", "G"], 1),
+        (["fc", "fo"], 0),
+    ]
+    tracker = input_delta.InputDeltaTracker()
+    for ctx, (recorded, dropped) in zip(turns, expected, strict=True):
+        scope = tracker.begin()
+        node, _ = _delta(scope, ctx, NODE)
+        scope.commit()
+        assert _ids(node.chat_ctx.items) == recorded
+        assert node.dropped_from_base == dropped
 
 
 def _turn(*items: tuple[str, str, str] | llm.ChatItem, guide: bool = True) -> llm.ChatContext:
@@ -241,12 +271,12 @@ def test_rebuilt_input_matches_what_was_sent(span_exporter: InMemorySpanExporter
         _ctx(("sp", "system", "you are a bot"), ("G", "system", "guide"), u1),
     ]
 
-    tracker = gen_ai.InputDeltaTracker()
-    recorded: dict[int, gen_ai.InputDelta] = {}
+    tracker = input_delta.InputDeltaTracker()
+    recorded: dict[int, input_delta.InputDelta] = {}
     shape: dict[str, list[tuple[bool, bool]]] = {"llm_node": [], "llm_request": []}
     for ctx in turns:
         scope = tracker.begin()
-        latest: dict[str, gen_ai.InputDelta] = {}
+        latest: dict[str, input_delta.InputDelta] = {}
         for site in (NODE, REQUEST):
             delta, span = _delta(scope, ctx, site)
             recorded[span.get_span_context().span_id] = delta
@@ -254,21 +284,26 @@ def test_rebuilt_input_matches_what_was_sent(span_exporter: InMemorySpanExporter
             shape[site.name].append((delta.base is not None, bool(delta.instructions)))
         scope.commit()
 
-        def parent(delta: gen_ai.InputDelta) -> gen_ai.InputDelta:
+        def parent(delta: input_delta.InputDelta) -> input_delta.InputDelta:
             assert delta.base is not None
             return recorded[delta.base.span_id]
 
-        def chat_items(delta: gen_ai.InputDelta) -> list[Any]:
-            if delta.base_items is None:
+        def kept(entries: list[Any], dropped: int) -> list[Any]:
+            return entries[: len(entries) - dropped]
+
+        def chat_items(delta: input_delta.InputDelta) -> list[Any]:
+            if delta.dropped_from_base is None:
                 return list(delta.chat_ctx.items)
-            return chat_items(parent(delta))[: delta.base_items] + list(delta.chat_ctx.items)
+            head = kept(chat_items(parent(delta)), delta.dropped_from_base)
+            return head + list(delta.chat_ctx.items)
 
-        def messages(delta: gen_ai.InputDelta) -> list[Any]:
-            if delta.base_messages is None:
+        def messages(delta: input_delta.InputDelta) -> list[Any]:
+            if delta.dropped_from_base is None:
                 return delta.input_messages()
-            return messages(parent(delta))[: delta.base_messages] + delta.input_messages()
+            head = kept(messages(parent(delta)), delta.dropped_from_base)
+            return head + delta.input_messages()
 
-        def instructions(delta: gen_ai.InputDelta) -> list[Any]:
+        def instructions(delta: input_delta.InputDelta) -> list[Any]:
             if delta.instructions or delta.base is None:
                 return delta.system_instructions()
             return instructions(parent(delta))
@@ -369,7 +404,7 @@ async def test_session_records_incremental_input(span_exporter: InMemorySpanExpo
     assert attrs[1][trace_types.ATTR_INPUT_BASE_SPAN_ID] == trace.format_span_id(
         first.context.span_id
     )
-    assert attrs[1][trace_types.ATTR_INPUT_BASE_MESSAGES] == 1
+    assert attrs[1][trace_types.ATTR_INPUT_DROPPED_FROM_BASE] == 0
     assert trace_types.ATTR_GEN_AI_SYSTEM_INSTRUCTIONS not in attrs[1]
     assert _input_texts(second) == [
         ("assistant", "Hi there"),
@@ -381,7 +416,7 @@ async def test_session_records_incremental_input(span_exporter: InMemorySpanExpo
     assert attrs[2][trace_types.ATTR_INPUT_BASE_SPAN_ID] == trace.format_span_id(
         second.context.span_id
     )
-    assert attrs[2][trace_types.ATTR_INPUT_BASE_MESSAGES] == 3
+    assert attrs[2][trace_types.ATTR_INPUT_DROPPED_FROM_BASE] == 0
     assert [role for role, _ in _input_texts(tool_step)] == ["assistant", "tool"]
 
 

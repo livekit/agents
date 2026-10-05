@@ -61,8 +61,7 @@ SAFE_KEYS = frozenset(
         # input delta markers: a flag, a count and span ids
         "lk.input.delta",
         "lk.input.base_span_id",
-        "lk.input.base_items",
-        "lk.input.base_messages",
+        "lk.input.dropped_from_base",
         "lk.generation_id",
         "lk.generation_count",
         "lk.parent_generation_id",
