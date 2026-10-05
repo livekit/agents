@@ -1,0 +1,1133 @@
+[
+  {
+    "name": "fixed holds delays",
+    "mode": "fixed",
+    "config": {
+      "min_delay": 0.5,
+      "max_delay": 3.0
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.5,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.5,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.5
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.5,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_ended",
+          "at": 3.0
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.5,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "options_updated",
+          "min_delay": 0.25,
+          "max_delay": null,
+          "alpha": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.25,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "options_updated",
+          "min_delay": null,
+          "max_delay": 1.0,
+          "alpha": 0.5
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.25,
+          "max_delay": 1.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "pause between utterances is learned",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.5,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": null
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "pause between utterances",
+            "prev": 0.4,
+            "new": 0.41000000000000003,
+            "pause": 0.5,
+            "max_delay": 3.0,
+            "turn_delay": null,
+            "interruption_delay": null
+          }
+        ],
+        "state": {
+          "min_delay": 0.41000000000000003,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "learning clamps at max_delay",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.25,
+      "max_delay": 0.5,
+      "alpha": 0.5
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.25,
+          "max_delay": 0.5,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.25,
+          "max_delay": 0.5,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 4.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.25,
+          "max_delay": 0.5,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 5.0,
+          "interruption": null
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "pause between utterances",
+            "prev": 0.25,
+            "new": 0.5,
+            "pause": 3.0,
+            "max_delay": 0.5,
+            "turn_delay": null,
+            "interruption_delay": null
+          }
+        ],
+        "state": {
+          "min_delay": 0.5,
+          "max_delay": 0.5,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "agent turn between utterances is not learned",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.5
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_ended",
+          "at": 3.0
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 4.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 5.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "immediate interruption is learned",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.25
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.5,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": true
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "immediate interruption",
+            "prev": 0.4,
+            "new": 0.41000000000000003,
+            "pause": 0.5,
+            "max_delay": 3.0,
+            "turn_delay": 0.25,
+            "interruption_delay": 0.25
+          }
+        ],
+        "state": {
+          "min_delay": 0.41000000000000003,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "backchannel is skipped",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.25
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 2.0,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 3.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 3.5,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 4.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 4.5,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "non-interruption within grace period is overridden",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.25
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.375,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": false
+        },
+        "outputs": [
+          {
+            "type": "non_interruption_overridden",
+            "gap": 0.125
+          },
+          {
+            "type": "min_delay_updated",
+            "reason": "immediate interruption",
+            "prev": 0.4,
+            "new": 0.4,
+            "pause": 0.375,
+            "max_delay": 3.0,
+            "turn_delay": 0.25,
+            "interruption_delay": 0.125
+          }
+        ],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "duplicate start while overlapping is ignored",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.25
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.5,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.75,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": true
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "immediate interruption",
+            "prev": 0.4,
+            "new": 0.41000000000000003,
+            "pause": 0.5,
+            "max_delay": 3.0,
+            "turn_delay": 0.25,
+            "interruption_delay": 0.25
+          }
+        ],
+        "state": {
+          "min_delay": 0.41000000000000003,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "agent speech during user speech adjusts utterance end",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 2.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 2.5
+        },
+        "outputs": [
+          {
+            "type": "utterance_end_adjusted",
+            "at": 2.499
+          }
+        ],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_ended",
+          "at": 3.0
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 3.5,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "options update resets the filter",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "options_updated",
+          "min_delay": 0.625,
+          "max_delay": null,
+          "alpha": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "options_updated",
+          "min_delay": null,
+          "max_delay": null,
+          "alpha": 0.5
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.75,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 3.0,
+          "interruption": null
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "pause between utterances",
+            "prev": 0.625,
+            "new": 0.6875,
+            "pause": 0.75,
+            "max_delay": 3.0,
+            "turn_delay": null,
+            "interruption_delay": null
+          }
+        ],
+        "state": {
+          "min_delay": 0.6875,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "options_updated",
+          "min_delay": null,
+          "max_delay": 0.625,
+          "alpha": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.625,
+          "max_delay": 0.625,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "late interruption is not learned",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 1.25
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 3.0,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 3.5,
+          "interruption": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "non-interruption verdict without overlap is learned as a pause",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.0,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": null
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 1.5,
+          "overlapping": false
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 2.5,
+          "interruption": false
+        },
+        "outputs": [
+          {
+            "type": "min_delay_updated",
+            "reason": "pause between utterances",
+            "prev": 0.4,
+            "new": 0.41000000000000003,
+            "pause": 0.5,
+            "max_delay": 3.0,
+            "turn_delay": null,
+            "interruption_delay": null
+          }
+        ],
+        "state": {
+          "min_delay": 0.41000000000000003,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "interruption with no prior utterance is not learned",
+    "mode": "dynamic",
+    "config": {
+      "min_delay": 0.4,
+      "max_delay": 3.0,
+      "alpha": 0.9
+    },
+    "steps": [
+      {
+        "event": {
+          "type": "agent_speech_started",
+          "at": 0.0
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_started",
+          "at": 0.5,
+          "overlapping": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": true
+        }
+      },
+      {
+        "event": {
+          "type": "user_speech_ended",
+          "at": 1.0,
+          "interruption": true
+        },
+        "outputs": [],
+        "state": {
+          "min_delay": 0.4,
+          "max_delay": 3.0,
+          "overlapping": false
+        }
+      }
+    ]
+  }
+]
