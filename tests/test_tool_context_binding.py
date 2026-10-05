@@ -108,6 +108,50 @@ class TestFunctionToolInstanceBinding:
 
         assert list(inspect.signature(Child().tool).parameters) == ["order_id"]
 
+    def test_find_function_tools_binds_custom_receiver_methods(self) -> None:
+        class Holder:
+            @function_tool
+            async def tool(this, order_id: str) -> str:  # noqa: ARG001
+                """Look up an order."""
+                return order_id
+
+        [tool] = find_function_tools(Holder())
+
+        assert list(inspect.signature(tool).parameters) == ["order_id"]
+        assert _schema_params(tool) == ["order_id"]
+        assert asyncio.run(tool("A1")) == "A1"
+
+    def test_find_function_tools_binds_inherited_custom_receiver_methods(self) -> None:
+        class Base:
+            @function_tool
+            async def tool(this, order_id: str) -> str:  # noqa: ARG001
+                """Look up an order."""
+                return order_id
+
+        class Child(Base):
+            pass
+
+        [tool] = find_function_tools(Child())
+
+        assert list(inspect.signature(tool).parameters) == ["order_id"]
+        assert _schema_params(tool) == ["order_id"]
+        assert asyncio.run(tool("A1")) == "A1"
+
+    def test_assigned_function_named_receiver_stays_a_tool_argument(self) -> None:
+        @function_tool
+        async def plain(this: str, order_id: str) -> str:
+            """Look up an order."""
+            return f"{this}/{order_id}"
+
+        class Holder:
+            tool = plain
+
+        [tool] = find_function_tools(Holder())
+
+        assert list(inspect.signature(tool).parameters) == ["this", "order_id"]
+        assert _schema_params(tool) == ["order_id", "this"]
+        assert asyncio.run(tool("source", "A1")) == "source/A1"
+
     def test_a_zero_argument_function_is_not_bound(self) -> None:
         @function_tool
         async def ping() -> str:
