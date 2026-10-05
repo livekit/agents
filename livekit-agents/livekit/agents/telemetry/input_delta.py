@@ -61,7 +61,8 @@ Rules
 - An edited, removed or moved item stops the shared prefix at that item. The span records
   the entries from that item. It does not record all of the input.
 - In ``gen_ai.input.messages``, consecutive tool calls of an assistant turn are one
-  message. The prefix never stops inside such a message.
+  message, also when a skipped item (for example, a config update) is between them. The
+  prefix never stops inside such a message.
 - On an ``llm_node`` span, the instructions are the first entry of ``lk.pii.chat_ctx``.
   Thus, a change of the instructions causes a full record of ``lk.pii.chat_ctx``.
 - The fingerprint does not include media data. It uses the image ID and the audio
@@ -242,12 +243,19 @@ def _shared_prefix(
             break
         n += 1
     if gen_ai_messages:
-        # never cut inside a message: a tool call folded into the previous one on either side
-        while n > 0 and any(
-            n < len(side.layout) and side.layout[n] == "merged" for side in (current, parent)
-        ):
+        # never cut inside a message, on either side
+        while n > 0 and (_inside_message(current.layout, n) or _inside_message(parent.layout, n)):
             n -= 1
     return n
+
+
+def _inside_message(layout: list[str], n: int) -> bool:
+    """Whether a cut before item ``n`` splits a message: the next item that lands in a
+    message is a tool call merged into the one before the cut (also across skipped items,
+    such as a config update)."""
+    while n < len(layout) and layout[n] == "skipped":
+        n += 1
+    return n < len(layout) and layout[n] == "merged"
 
 
 def _item_keys(items: Sequence[ChatItem]) -> list[tuple[str, bytes]]:

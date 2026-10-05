@@ -177,6 +177,27 @@ def test_tool_call_is_never_split_from_its_message(span_exporter: InMemorySpanEx
     assert [m["role"] for m in request.input_messages()] == ["assistant", "tool"]
 
 
+def test_tool_call_after_a_skipped_item_stays_in_its_message(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    tracker = input_delta.InputDeltaTracker()
+    cfg = llm.AgentConfigUpdate(id="cfg", tools_added=["f"])
+    # update_tools between the assistant reply and its tool call
+    parent_ctx = _ctx(INSTR, ("u1", "user", "hi"), ("a1", "assistant", "checking"), cfg)
+    parent = _committed(tracker, parent_ctx)
+    ctx = _ctx(*parent_ctx.items, _call("fc", "c1"), _output("fo", "c1"))
+
+    request, _ = _delta(tracker.begin(), ctx, REQUEST)
+    # the call still merges into "a1" across the config item, so the cut moves before "a1"
+    assert request.base == parent["llm_request"].get_span_context()
+    assert request.dropped_from_base == 1
+    assert _ids(request.conversation) == ["a1", "cfg", "fc", "fo"]
+
+    parent_messages = gen_ai.to_input_messages(parent_ctx)
+    rebuilt = parent_messages[: len(parent_messages) - 1] + request.input_messages()
+    assert rebuilt == gen_ai.to_input_messages(ctx)
+
+
 def test_uncommitted_generation_does_not_move_the_parent(
     span_exporter: InMemorySpanExporter,
 ) -> None:
