@@ -88,14 +88,20 @@ def _inject_running_tool_calls(
         if fnc_call.call_id in existing:
             continue
         existing.add(fnc_call.call_id)
-        # copy so the executor's live FunctionCall stays unflagged
+        # copy so the executor's live FunctionCall stays unflagged. The pair gets ids of its
+        # own, stable across turns: telemetry tells items apart by id, so the pair matches
+        # itself while the tool runs and is never mistaken for the real call once it ends
         call = fnc_call.model_copy(
-            update={"extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True}}
+            update={
+                "id": f"{fnc_call.id}_running",
+                "extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True},
+            }
         )
         chat_ctx.insert(
             [
                 call,
                 llm.FunctionCallOutput(
+                    id=f"{fnc_call.id}_running_output",
                     call_id=fnc_call.call_id,
                     name=fnc_call.name,
                     output=placeholder,

@@ -198,6 +198,62 @@ def test_tool_call_after_a_skipped_item_stays_in_its_message(
     assert rebuilt == gen_ai.to_input_messages(ctx)
 
 
+def test_running_tool_placeholder_is_shared_until_the_tool_ends(
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    from livekit.agents.voice.generation import (
+        _RUNNING_PLACEHOLDER_KEY,
+        _inject_running_tool_calls,
+    )
+
+    def msg(item_id: str, role: str, at: float) -> llm.ChatMessage:
+        return llm.ChatMessage(id=item_id, role=role, content=[item_id], created_at=at)  # type: ignore[arg-type]
+
+    running = llm.FunctionCall(id="rc", call_id="c1", name="f", arguments="{}", created_at=2.5)
+    history = [msg(INSTR_ID, "system", 0), msg("u1", "user", 2), msg("a1", "assistant", 3)]
+
+    def turn(*items: llm.ChatItem, still_running: bool) -> llm.ChatContext:
+        ctx = llm.ChatContext([*history, *items])
+        if still_running:
+            # as _pipeline_reply_task does for a tool still running from an earlier turn
+            _inject_running_tool_calls(ctx, [running])
+        return ctx
+
+    tracker = input_delta.InputDeltaTracker()
+    _committed(tracker, turn(msg("u2", "user", 4), still_running=True))
+
+    # the tool is still running: the placeholder pair matches itself
+    ctx = turn(
+        msg("u2", "user", 4), msg("a2", "assistant", 5), msg("u3", "user", 6), still_running=True
+    )
+    scope = tracker.begin()
+    node, _ = _delta(scope, ctx, NODE)
+    scope.commit()
+    assert node.dropped_from_base == 0
+    assert _ids(node.chat_ctx.items) == ["a2", "u3"]
+
+    # the tool finished: the real call and output replace the placeholder pair
+    output = llm.FunctionCallOutput(
+        id="ro", call_id="c1", name="f", output="done", is_error=False, created_at=2.6
+    )
+    ctx = turn(
+        running,
+        output,
+        msg("u2", "user", 4),
+        msg("a2", "assistant", 5),
+        msg("u3", "user", 6),
+        msg("u4", "user", 7),
+        still_running=False,
+    )
+    ctx.items.sort(key=lambda item: item.created_at)
+    node, _ = _delta(tracker.begin(), ctx, NODE)
+    assert node.chat_ctx.items[0].id == "rc"
+    assert not any(
+        item.type == "function_call" and item.extra.get(_RUNNING_PLACEHOLDER_KEY)
+        for item in node.chat_ctx.items
+    )
+
+
 def test_uncommitted_generation_does_not_move_the_parent(
     span_exporter: InMemorySpanExporter,
 ) -> None:
