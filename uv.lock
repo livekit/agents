@@ -86,6 +86,7 @@ members = [
     "livekit-plugins-slng",
     "livekit-plugins-smallestai",
     "livekit-plugins-soniox",
+    "livekit-plugins-spatialreal",
     "livekit-plugins-spatius",
     "livekit-plugins-speechify",
     "livekit-plugins-speechmatics",
@@ -3544,6 +3545,20 @@ dependencies = [
 requires-dist = [{ name = "livekit-agents", editable = "livekit-agents" }]
 
 [[package]]
+name = "livekit-plugins-spatialreal"
+source = { editable = "livekit-plugins/livekit-plugins-spatialreal" }
+dependencies = [
+    { name = "livekit-agents" },
+    { name = "spatialreal" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "livekit-agents", editable = "livekit-agents" },
+    { name = "spatialreal", specifier = ">=0.2.1" },
+]
+
+[[package]]
 name = "livekit-plugins-spatius"
 source = { editable = "livekit-plugins/livekit-plugins-spatius" }
 dependencies = [
@@ -5927,6 +5942,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/47/2c/0a5f6f8ee0d5589e48c7640213ed5175d52cf540a06725b628cc1a45d6ce/soupsieve-2.8.4.tar.gz", hash = "sha256:e121fd02e975c695e4e9e8774a5ee35d74714b59307868dcc5319ad2d9e3328e", size = 121110, upload-time = "2026-05-24T13:55:57.154Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5e/f5/0c41cb68dcae6b7de4fac4188a3a9589e21fb31df21ea3a2e888db95e6c9/soupsieve-2.8.4-py3-none-any.whl", hash = "sha256:e7e6b0769c8f51ed59acab6e994b00621096cfb1c640a7509295987388fbaf65", size = 37304, upload-time = "2026-05-24T13:55:55.406Z" },
+]
+
+[[package]]
+name = "spatialreal"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "nanoid" },
+    { name = "protobuf" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/76/80/befc4413f912dcdbace7a674a59cbb2b06940e3ff89a57b9e017b292d0b4/spatialreal-0.2.1.tar.gz", hash = "sha256:aaeb30b605c385bb94211ed819e337524ff0f2d94500fd164cb4d540c4a03c9c", size = 28588, upload-time = "2026-10-05T22:09:59.072Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4b/83/2f73821474fb2a4280e470a342fbb31f7f63d11987b97a98fc80dfd8238c/spatialreal-0.2.1-py3-none-any.whl", hash = "sha256:7bfbd5c6fb07795bc29313830cb92236a7b9ca46f22d3006e12a60cddff25fff", size = 28901, upload-time = "2026-10-05T22:09:57.86Z" },
 ]
 
 [[package]]
