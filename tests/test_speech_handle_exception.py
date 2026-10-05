@@ -1,8 +1,8 @@
+# livekit/agents#6224: A realtime generate_reply timeout must be recorded on the SpeechHandle.
 """
 Tests for SpeechHandle error reporting.
 
-When a generation fails (e.g. a realtime ``generate_reply`` timeout, see
-https://github.com/livekit/agents/issues/6224), the error is recorded on the
+When a generation fails (e.g. a realtime ``generate_reply`` timeout), the error is recorded on the
 SpeechHandle instead of being set on its done future: awaiting a handle never
 raises (most handles are never awaited, so a stored exception would trigger
 "Future exception was never retrieved" warnings). Users inspect failures with

@@ -1,8 +1,9 @@
+# livekit/agents#6083: The worker must not hang forever after exhausting max_retry.
 """Connection-failure propagation tests.
 
 When the worker's connection task exhausts ``max_retry`` it raises, and that
 failure must surface out of ``AgentServer.run()`` instead of leaving the worker
-hanging forever (https://github.com/livekit/agents/issues/6083).
+hanging forever.
 """
 
 from __future__ import annotations

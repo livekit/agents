@@ -71,7 +71,7 @@ STTs: list[Callable[[], stt.STT]] = [
         # rtzr,
         # TODO: only Business account allowed outside South Korea
         # clova,
-        # TODO: https://github.com/spi-tch/spitch-python/issues/162
+        # spi-tch/spitch-python#162: Re-enable spitch once its SDK supports httpx>=0.28.
         # spitch,
     ]
 ] + [

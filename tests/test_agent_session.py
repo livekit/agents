@@ -814,9 +814,9 @@ async def test_interruption_before_speaking(
     assert agent.chat_ctx.items[3].text_content == "Stop!"
 
 
+# livekit/agents#5509: Regression test for a stale reply promoting to speaking.
 async def test_interrupt_before_speaking_with_pausable_audio() -> None:
     """
-    Regression test for https://github.com/livekit/agents/issues/5509
     User turn starting while the agent is ``thinking`` must pause the
     pausable output so the stale reply never promotes to ``speaking``.
     """

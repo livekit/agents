@@ -337,7 +337,6 @@ class MCPServerHTTP(MCPServer):
         client_session_timeout_seconds: Client session timeout in seconds (default: 5)
 
     Note: SSE transport is being deprecated in favor of streamable HTTP transport.
-    See: https://github.com/modelcontextprotocol/modelcontextprotocol/pull/206
     """
 
     def __init__(

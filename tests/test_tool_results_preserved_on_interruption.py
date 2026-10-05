@@ -1,6 +1,5 @@
-"""Regression tests for https://github.com/livekit/agents/issues/3702
-
-Completed tool calls/outputs must survive interruption, or the next inference
+# livekit/agents#3702: Regression tests for tool results lost on interruption.
+"""Completed tool calls/outputs must survive interruption, or the next inference
 re-issues the call and duplicates side effects.
 """
 

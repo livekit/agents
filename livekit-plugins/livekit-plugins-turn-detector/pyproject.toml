@@ -22,7 +22,8 @@ classifiers = [
 ]
 dependencies = [
     "livekit-agents>=1.8.4",
-    "transformers>=4.47.1,!=4.57.2,!=4.57.3",  # 4.57.2-4.57.3 have a bug with local_files_only=True (huggingface/transformers#42369)
+    # huggingface/transformers#42369: 4.57.2-4.57.3 have a bug with local_files_only=True.
+    "transformers>=4.47.1,!=4.57.2,!=4.57.3",
     "numpy>=1.26",
     "onnxruntime>=1.18; python_version >= '3.11'",
     "onnxruntime>=1.18,<1.24; python_version < '3.11'",

@@ -605,6 +605,7 @@ class RealtimeSession(  # noqa: F811
             self.initialize_streams(), name="RealtimeSession.initialize_streams"
         )
 
+    # livekit/agents#6994: Keep both bedrock client construction paths so 0.7 and 0.11 both import.
     @utils.log_exceptions(logger=logger)
     async def _initialize_client(self) -> None:
         """Instantiate the Bedrock runtime client.
@@ -613,7 +614,6 @@ class RealtimeSession(  # noqa: F811
         to the async types and requires ``await AsyncBedrockRuntimeConfig.resolve``.
         0.11 then dropped the old names entirely. Keep both construction paths so
         the locked 0.7 extra and a fresh pip install of 0.11 both import.
-        See https://github.com/livekit/agents/issues/6994.
 
         Sonic streams bidirectionally, so the transport has to be the CRT client.
         0.11 defaults to aiohttp, which does not support duplex.

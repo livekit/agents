@@ -83,7 +83,7 @@ _TOOL_CHUNK = ChatChunk(
 )
 
 
-# Based on @dtran26's diagnosis and reproducer: livekit/agents-js#2477.
+# livekit/agents-js#2477: Based on @dtran26's diagnosis and reproducer.
 @pytest.mark.parametrize("chunk", [_TEXT_CHUNK, _TOOL_CHUNK], ids=["text", "tool"])
 @pytest.mark.parametrize("with_fallback", [False, True], ids=["outer", "fallback"])
 @pytest.mark.parametrize("error_kind", ["timeout", "status", "nonretryable", "unexpected"])

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# python/mypy#10600: .mypy_cache/missing_stubs stands in for a usable `mypy --install-types`.
 """Run mypy type checking on all livekit packages.
 
 Auto-discovers all plugin packages in livekit-plugins/ and runs mypy on them.
@@ -13,7 +14,6 @@ and requires a forward pass in most cases.
 When a dependency introduces a stub not declared yet, mypy records
 the complete set of stub packages it wants in `.mypy_cache/missing_stubs`,
 the same list `--install-types` consumes.
-See https://github.com/python/mypy/issues/10600#issuecomment-2481074163.
 
 We read that file for the full set, then fail with the
 exact `uv add` command to declare and lock them. The script never installs stubs

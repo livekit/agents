@@ -513,8 +513,7 @@ class LLMStream(llm.LLMStream):
     ) -> llm.ChatChunk | None:
         delta = choice.delta
 
-        # https://github.com/livekit/agents/issues/688
-        # the delta can be None when using Azure OpenAI (content filtering)
+        # livekit/agents#688: The delta can be None when using Azure OpenAI (content filtering).
         if delta is None:
             return None
 

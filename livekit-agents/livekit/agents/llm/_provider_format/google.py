@@ -147,8 +147,8 @@ def to_fnc_ctx(
         if use_parameters_json_schema:
             schema["parameters_json_schema"] = json_schema or None
         else:
-            # Gemini Live doesn't support parameters_json_schema, use the simplified JSON Schema
-            # instead, see: https://github.com/googleapis/python-genai/issues/1147
+            # googleapis/python-genai#1147: Gemini Live doesn't support parameters_json_schema,
+            # use the simplified JSON Schema instead.
             from livekit.plugins.google.utils import _GeminiJsonSchema
 
             schema["parameters"] = _GeminiJsonSchema(json_schema or {}).simplify() or None

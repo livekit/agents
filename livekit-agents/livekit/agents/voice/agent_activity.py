@@ -946,7 +946,7 @@ class AgentActivity(RecognitionHooks):
         This method must only be used for tasks that "could" create a new SpeechHandle.
         When draining, every task created with this method will be awaited.
         """
-        # https://github.com/python/cpython/pull/31837 alternative impl
+        # python/cpython#31837: Alternative to create_task(context=) until Python 3.10 is dropped.
         tk = _AgentActivityContextVar.set(self)
         tk1 = None
         if speech_handle is not None:
@@ -3152,7 +3152,7 @@ class AgentActivity(RecognitionHooks):
         )
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
 
-        # See discussion in https://github.com/livekit/agents/issues/4432
+        # livekit/agents#4432: Allow cancellation even when allow_interruptions is False.
         authorization_tasks: list[asyncio.Future[Any]] = [
             asyncio.ensure_future(speech_handle._wait_for_authorization()),
             asyncio.ensure_future(self._authorization_allowed.wait()),
