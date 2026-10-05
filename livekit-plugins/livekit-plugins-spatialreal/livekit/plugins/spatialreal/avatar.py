@@ -319,8 +319,8 @@ class AvatarSession(BaseAvatarSession):
             logger.warning("Avatar session already initialized")
             return
 
-        await super().start(agent_session, room)
-
+        # Validate before super().start(): it registers listeners and a join task, and a
+        # raise after that point would leave them behind with no session to clean them up.
         resolved_livekit_url = (
             livekit_url if utils.is_given(livekit_url) else os.getenv("LIVEKIT_URL")
         )
@@ -340,6 +340,8 @@ class AvatarSession(BaseAvatarSession):
             raise SpatialRealException(
                 "livekit_url, livekit_api_key, and livekit_api_secret must be set by arguments or environment variables"
             )
+
+        await super().start(agent_session, room)
 
         room_name = room.name
         local_participant_identity = self._resolve_local_participant_identity(room)
@@ -785,6 +787,10 @@ class AvatarSession(BaseAvatarSession):
         )
         # a server-side hold dies with its connection; fall back to duration completion
         self._release_native_hold()
+        # Audio already handed to the closed connection was never played out. Finish those
+        # segments as interrupted — the same treatment a forwarding error gets — so the
+        # framework is not told later that they played in full.
+        self._complete_all_segments(interrupted=True, reason="provider_closed")
         self._schedule_provider_recovery(reason="provider_closed")
 
     def _schedule_provider_recovery(self, *, reason: str) -> asyncio.Task[bool] | None:
@@ -1756,8 +1762,18 @@ class AvatarSession(BaseAvatarSession):
                     "SpatialReal avatar playback paused (server-side)", extra={"request_id": req_id}
                 )
             except Exception as e:
+                # Nothing is holding playback: fall back to the emulated path rather than
+                # letting frames keep flowing through the framework's interruption hold.
                 logger.warning(
-                    "Failed to pause SpatialReal avatar playback (server-side)", exc_info=e
+                    "Failed to pause SpatialReal avatar playback (server-side); "
+                    "falling back to local pause",
+                    exc_info=e,
+                )
+                self._pause_requested = True
+                self._pause_requested_at = time.time()
+                self._spawn_background_task(
+                    self._handle_pause(),
+                    name="spatialreal_avatar_pause_fallback",
                 )
                 return
             segment = self._segments.get(req_id) or self._segments.get(self._active_req_id or "")
@@ -1994,6 +2010,14 @@ class AvatarSession(BaseAvatarSession):
                         interrupted=False,
                         reason="resume_after_playback_complete",
                     )
+                else:
+                    # Everything buffered had already played, so there was nothing to
+                    # resend — but the turn is still open. Put the segment back in play so
+                    # the next frame continues it (or rolls it over) instead of leaving it
+                    # stranded beside a fresh request.
+                    self._segments[segment.req_id] = segment
+                    self._active_req_id = segment.req_id
+                    self._paused_segment = None
                 return
 
             # The provider can reuse request IDs. A delayed completion from the
@@ -2214,6 +2238,15 @@ class AvatarSession(BaseAvatarSession):
                     logger.warning("Error closing SpatialReal avatar session", exc_info=e)
                 finally:
                     self._avatarkit_session = None
+
+            # The base class owns what it registered in start(): removing the avatar
+            # participant from the room, unregistering its listeners and cancelling the
+            # join task. It reads _agent_session and _room, so it has to run before the
+            # fields below are cleared.
+            try:
+                await super().aclose()
+            except Exception as e:
+                logger.warning("Error in base avatar session close", exc_info=e)
 
             self._initialized = False
             self._agent_session = None
