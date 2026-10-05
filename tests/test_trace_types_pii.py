@@ -58,6 +58,10 @@ SAFE_KEYS = frozenset(
         "lk.agent_name",
         "lk.cloud_agent_id",
         "lk.deployment_id",
+        # input delta markers: a flag, a count and span ids
+        "lk.input.delta",
+        "lk.input.base_span_id",
+        "lk.input.dropped_from_base",
         "lk.generation_id",
         "lk.generation_count",
         "lk.parent_generation_id",
