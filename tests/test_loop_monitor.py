@@ -15,6 +15,7 @@ import threading
 import time
 import weakref
 from collections.abc import Iterator
+from traceback import FrameSummary
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +31,7 @@ from livekit.agents.telemetry.loop_monitor import (
     SPAN_NAME,
     BlockedReport,
     EventLoopMonitor,
+    _StackSample,
     LoopMonitorThresholds,
     _RateLimiter,
 )
@@ -853,13 +855,20 @@ def test_tick_waits_for_watchdog_sample() -> None:
         loop.close()
 
 
-def test_watchdog_keeps_incident_when_tick_sequence_advances() -> None:
+def test_watchdog_keeps_incident_when_tick_sequence_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     loop = asyncio.new_event_loop()
     monitor = EventLoopMonitor(loop, warn_threshold=WARN, error_threshold=ERROR, tick_interval=TICK)
     reports: list[BlockedReport] = []
     monitor._on_report = reports.append
     monitor._loop_thread_ident = threading.get_ident()
     monitor._last_tick_at = time.monotonic() - 0.15
+
+    def sample_loop_thread(lag: float) -> _StackSample:
+        return _StackSample(lag, "blocked_loop", [FrameSummary("<test>", 1, "blocked")])
+
+    monkeypatch.setattr(monitor, "_sample_loop_thread", sample_loop_thread)
     monitor._watchdog_check()
     assert monitor._incident is not None and monitor._incident.samples
 
