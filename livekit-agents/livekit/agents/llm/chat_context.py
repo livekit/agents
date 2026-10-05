@@ -380,7 +380,8 @@ class FunctionCallOutput(BaseModel):
     reply_required: bool = Field(default=True)
     """Whether the model should answer once it receives this output.
 
-    Only realtime models read it, since they answer a result on their own.
+    AgentSession uses it to decide whether to generate a follow-up reply.
+    Realtime models can also use it to schedule their response.
     """
 
 
@@ -522,6 +523,13 @@ class ChatContext:
                     continue
 
         valid_tools = set(get_tool_names(tools)) if tools else set()
+        # FunctionCallOutput.name is optional, so an output that has none is paired with its
+        # call by call_id instead
+        valid_call_ids = {
+            item.call_id
+            for item in self.items
+            if item.type == "function_call" and item.name in valid_tools
+        }
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -545,12 +553,16 @@ class ChatContext:
             if exclude_config_update and item.type == "agent_config_update":
                 continue
 
-            if (
-                is_given(tools)
-                and (item.type == "function_call" or item.type == "function_call_output")
-                and item.name not in valid_tools
-            ):
-                continue
+            if is_given(tools):
+                if item.type == "function_call" and item.name not in valid_tools:
+                    continue
+
+                if item.type == "function_call_output" and (
+                    item.name not in valid_tools
+                    if item.name
+                    else item.call_id not in valid_call_ids
+                ):
+                    continue
 
             items.append(item)
 
@@ -562,7 +574,13 @@ class ChatContext:
         Removes leading function calls to avoid partial function outputs.
         Preserves the first instruction message (system/developer) by adding it back
         to the beginning.
+
+        A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
+        items, so none are kept. A negative value is a programming error and raises ValueError.
         """
+
+        if max_items < 0:
+            raise ValueError("max_items must be non-negative")
 
         if len(self._items) <= max_items:
             return self
@@ -576,7 +594,9 @@ class ChatContext:
             None,
         )
 
-        new_items = self._items[-max_items:]
+        # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
+        # keep every item.
+        new_items = self._items[-max_items:] if max_items else []
 
         # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
@@ -970,7 +990,7 @@ class _ReadOnlyChatContext(ChatContext):
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
-        append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
+        append = extend = insert = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
         def copy(self) -> list[ChatItem]:
@@ -978,6 +998,15 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def items(self) -> list[ChatItem]:
+        return self._items
+
+    @items.setter
+    def items(self, items: list[ChatItem]) -> None:
+        logger.error(_ReadOnlyChatContext.error_msg)
+        raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
     @property
     def readonly(self) -> bool:

@@ -373,6 +373,16 @@ class SpeechStream(stt.RecognizeStream):
 
                     raise APIStatusError(message="xAI connection closed unexpectedly")
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if closing_ws or self._session.closed:
+                        return
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Raising a
+                    # retryable error here (instead of logging and waiting for the
+                    # CLOSED that follows) lets _main_task reconnect with the reason
+                    # attached; ws.exception() is the only place it survives.
+                    raise APIConnectionError("xAI connection lost") from ws.exception()
+
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     logger.warning("unexpected xAI message type %s", msg.type)
                     continue
@@ -441,6 +451,11 @@ class SpeechStream(stt.RecognizeStream):
                     XAI_WEBSOCKET_URL,
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     params=params,
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # retry in _main_task only runs when something raises. Matches the
+                    # Deepgram and Muse STT plugins.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )

@@ -21,19 +21,27 @@ To use the STT and TTS API, you'll need to enable the respective services for yo
 
 ## Live API model support
 
-LiveKit supports both Gemini Live API on both Gemini Developer API as well as Vertex AI. However, be aware they have slightly different behavior and use different model names.
+LiveKit supports the Gemini Live API through both the Gemini Developer API and Vertex AI. Model availability and behavior differ between APIs. Some models, such as `gemini-3.8-live`, are available on both.
+
+For model/API pairs that appear incompatible, the plugin logs a warning and lets the API decide whether the model is available.
 
 The following models are supported by Gemini Developer API:
 
+- gemini-3.8-live
+- gemini-3.8-live-extended-thinking
 - gemini-3.1-flash-live-preview
 - gemini-2.5-flash-native-audio-preview-09-2025
 - gemini-2.5-flash-native-audio-preview-12-2025
 
+On the Gemini Developer API, `gemini-3.8-live` does not support `thinking_config.thinking_level`. Use `gemini-3.8-live-extended-thinking` for configurable thinking.
+
 And these on Vertex AI:
 
+- gemini-3.8-live
 - gemini-live-2.5-flash-native-audio
 
 References:
 
 - [Gemini API Models](https://ai.google.dev/gemini-api/docs/models)
+- [Gemini Live API thinking](https://ai.google.dev/gemini-api/docs/live-api/thinking)
 - [Vertex Live API](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)
