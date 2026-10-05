@@ -727,3 +727,14 @@ class TestCreateEndpointing:
         assert not isinstance(ep, DynamicEndpointing)
         assert ep.min_delay == 0.5
         assert ep.max_delay == 3.0
+
+
+def test_explicit_none_interruption_is_a_non_interruption() -> None:
+    ep = DynamicEndpointing(min_delay=0.4, max_delay=3.0)
+    ep.on_start_of_speech(0.0)
+    ep.on_end_of_speech(1.0)
+    ep.on_start_of_agent_speech(1.25)
+    ep.on_start_of_speech(2.0, overlapping=True)
+    ep.on_end_of_speech(2.5, interruption=None)  # type: ignore[arg-type]
+    assert ep._utterance_started_at is None
+    assert ep._utterance_ended_at is None
