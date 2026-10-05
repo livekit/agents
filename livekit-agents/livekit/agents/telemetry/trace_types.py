@@ -125,17 +125,15 @@ ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
 # input delta (RecordingOptions.input_delta)
 ATTR_INPUT_DELTA = "lk.input.delta"
-"""The span's gen_ai.input.messages / lk.pii.chat_ctx hold only the conversation that follows
-the one recorded on ``lk.input.base_span_id``. To rebuild it, take the base's conversation
-(resolved recursively) without its system messages, which were for that turn only, followed
-by this span's. Instructions are not part of the conversation; see
-``lk.input.instructions_base_span_id``."""
-ATTR_INPUT_OMITTED_ITEMS = "lk.input.omitted_items"
+"""The span's input continues the one recorded on its parent, ``lk.input.base_span_id`` (a
+span of the same name): it holds only what follows the prefix they share. Rebuild the
+parent first (recursively), then append."""
 ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
-ATTR_INPUT_INSTRUCTIONS_BASE_SPAN_ID = "lk.input.instructions_base_span_id"
-"""The span's instructions (gen_ai.system_instructions, or the system messages lk.pii.chat_ctx
-starts with) were left out as identical to those recorded on this span. lk.pii.chat_ctx
-carries instructions only when it is the full context."""
+ATTR_INPUT_BASE_ITEMS = "lk.input.base_items"
+"""lk.pii.chat_ctx is the parent's first N items followed by this span's."""
+ATTR_INPUT_BASE_MESSAGES = "lk.input.base_messages"
+"""gen_ai.input.messages is the parent's first N messages followed by this span's. Without
+gen_ai.system_instructions, the parent's apply."""
 
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"

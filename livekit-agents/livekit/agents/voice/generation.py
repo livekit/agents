@@ -201,7 +201,7 @@ async def _llm_inference_task(
     if current_span.is_recording():
         attrs: dict[str, Any] = {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                delta.chat_ctx().to_dict(
+                delta.chat_ctx.to_dict(
                     exclude_audio=True,
                     exclude_image=True,
                     exclude_timestamp=True,

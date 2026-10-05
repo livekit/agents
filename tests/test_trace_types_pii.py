@@ -60,9 +60,9 @@ SAFE_KEYS = frozenset(
         "lk.deployment_id",
         # input delta markers: a flag, a count and span ids
         "lk.input.delta",
-        "lk.input.omitted_items",
         "lk.input.base_span_id",
-        "lk.input.instructions_base_span_id",
+        "lk.input.base_items",
+        "lk.input.base_messages",
         "lk.generation_id",
         "lk.generation_count",
         "lk.parent_generation_id",

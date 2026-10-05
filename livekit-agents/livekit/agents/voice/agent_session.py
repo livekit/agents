@@ -146,12 +146,11 @@ class RecordingOptions(TypedDict, total=False):
     """Record only what changed in LLM inputs on trace spans. Defaults to ``False``.
     The model always receives the full input; this only affects telemetry.
 
-    When the conversation only grew since the last committed generation, a span's
-    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold just the new items (the previous
-    agent turn and the new user turn), and ``gen_ai.system_instructions`` is left out while
-    unchanged. Any other change to the conversation (an item edited, removed or reordered)
-    makes the next span record it in full again.
-    Such spans carry ``lk.input.*`` attributes pointing at the span that holds the rest.
+    Each span continues the input recorded for the last committed generation: its
+    ``gen_ai.input.messages`` / ``lk.pii.chat_ctx`` hold what follows the longest prefix
+    they share (usually the previous agent turn and the new user turn), and
+    ``gen_ai.system_instructions`` is left out while unchanged. Such spans carry
+    ``lk.input.*`` attributes pointing at the span that holds the rest.
     """
 
 
