@@ -39,7 +39,7 @@ async def say_hello() -> str:
     return "hello"
 
 
-async def _sent_tool_schema(base_url: str) -> dict[str, Any]:
+async def _sent_tool_schema(base_url: str, tool: llm.Tool = say_hello) -> dict[str, Any]:
     requests: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -61,7 +61,7 @@ async def _sent_tool_schema(base_url: str) -> dict[str, Any]:
     chat_ctx.add_message(role="user", content="Say hello")
 
     try:
-        async with model.chat(chat_ctx=chat_ctx, tools=[say_hello]) as stream:
+        async with model.chat(chat_ctx=chat_ctx, tools=[tool]) as stream:
             async for _ in stream:
                 pass
     finally:
@@ -83,3 +83,24 @@ async def test_other_openai_compatible_endpoint_preserves_empty_tool_schema() ->
 
     assert parameters["properties"] == {}
     assert "required" not in parameters
+
+
+async def test_bedrock_mantle_does_not_mutate_a_reused_raw_tool_schema() -> None:
+    @llm.function_tool(
+        raw_schema={
+            "name": "raw_say_hello",
+            "description": "Return a greeting.",
+            "parameters": {"type": "object", "properties": {}},
+        }
+    )
+    async def raw_say_hello() -> str:
+        return "hello"
+
+    mantle_parameters = await _sent_tool_schema(
+        "https://bedrock-mantle.us-east-1.api.aws/openai/v1", raw_say_hello
+    )
+    groq_parameters = await _sent_tool_schema("https://api.groq.com/openai/v1", raw_say_hello)
+
+    assert mantle_parameters["required"] == []
+    assert "required" not in groq_parameters
+    assert "required" not in raw_say_hello.info.raw_schema["parameters"]

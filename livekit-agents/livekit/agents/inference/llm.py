@@ -83,7 +83,7 @@ _MODEL_THINK_TAGS = {
 def _apply_bedrock_mantle_tool_compatibility(
     tool_schemas: list[ChatCompletionToolParam], base_url: httpx.URL
 ) -> None:
-    """Add the empty required list that Mantle expects without changing other providers."""
+    """Adapt empty tool schemas for Mantle without mutating shared raw tools."""
     host = base_url.host
     if not host or not host.startswith("bedrock-mantle.") or not host.endswith(".api.aws"):
         return
@@ -98,7 +98,11 @@ def _apply_bedrock_mantle_tool_compatibility(
             and parameters.get("properties") == {}
             and "required" not in parameters
         ):
-            parameters["required"] = []
+            compatible_parameters = parameters.copy()
+            compatible_parameters["required"] = []
+            compatible_function = function.copy()
+            compatible_function["parameters"] = compatible_parameters
+            tool_schema["function"] = compatible_function
 
 
 def drop_unsupported_params(
