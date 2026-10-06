@@ -1276,7 +1276,7 @@ class AgentActivity(RecognitionHooks):
                 reset_chat_ctx = capabilities.mutable_chat_context
                 reset_tools = capabilities.mutable_tools
 
-            await self._rt_session._update_session(
+            await self._rt_session.initialize(
                 instructions=self._render_realtime_instructions(self._agent.instructions)
                 if reset_instructions
                 else NOT_GIVEN,
@@ -4135,10 +4135,10 @@ class AgentActivity(RecognitionHooks):
             return
 
         if user_input is not None:
-            chat_ctx = self._rt_session.chat_ctx.copy()
-            msg = chat_ctx.add_message(role="user", content=user_input)
+            # Keep a local item even when a legacy provider's history acknowledgment fails.
+            msg = llm.ChatMessage(role="user", content=[user_input])
             try:
-                await self._rt_session.update_chat_ctx(chat_ctx)
+                msg = await self._rt_session.set_input_text(user_input, message_id=msg.id)
             except llm.RealtimeError as e:
                 # the push is best-effort (the items were sent; only the ack timed out),
                 # so still generate the reply rather than dropping the whole turn
@@ -4195,7 +4195,20 @@ class AgentActivity(RecognitionHooks):
                     generate_reply_fut.cancel()
                 else:
                     # the response already landed, cancelling the future no longer reaches it
-                    self._rt_session.interrupt()
+                    if (
+                        not generate_reply_fut.cancelled()
+                        and generate_reply_fut.exception() is None
+                    ):
+                        accepted = generate_reply_fut.result()
+                        playback_session = accepted.playback_session or self._rt_session
+                        playback_session.interrupt()
+                        playback_session.playback_finished(
+                            response_id=accepted.response_id,
+                            message_id=None,
+                            audio_end_ms=0,
+                            interrupted=True,
+                            interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
+                        )
                 return
 
             try:
@@ -4217,6 +4230,10 @@ class AgentActivity(RecognitionHooks):
                 model_settings=model_settings,
                 instructions=instructions,
             )
+        except llm.RealtimeError as error:
+            logger.error("failed to configure realtime reply: %s", error)
+            speech_handle._mark_done(error=error)
+            self._session._update_agent_state("listening")
         finally:
             # reset tool_choice and tools
             if is_given(ori_tool_choice):
@@ -4276,6 +4293,7 @@ class AgentActivity(RecognitionHooks):
         assert self._rt_session is not None, "rt_session is not available"
         assert isinstance(self.llm, llm.RealtimeModel), "llm is not a realtime model"
 
+        playback_session = generation_ev.playback_session or self._rt_session
         audio_output = self._session.output.audio if self._session.output.audio_enabled else None
         text_output = (
             self._session.output.transcription
@@ -4350,13 +4368,20 @@ class AgentActivity(RecognitionHooks):
         if speech_handle.interrupted:
             # nothing was played, but the response may still be generating server-side
             if not generation_ended:
-                self._rt_session.interrupt()
+                playback_session.interrupt()
             await utils.aio.cancel_and_wait(*authorization_tasks, *tasks)
             for tee in tees:
                 await tee.aclose()
             current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, True)
             _record_interruption(speech_handle)
-            return  # TODO(theomonnom): remove the message from the serverside history
+            playback_session.playback_finished(
+                response_id=generation_ev.response_id,
+                message_id=None,
+                audio_end_ms=0,
+                interrupted=True,
+                interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
+            )
+            return
 
         started_speaking_at: float | None = None
         stopped_speaking_at: float | None = None
@@ -4491,8 +4516,9 @@ class AgentActivity(RecognitionHooks):
                         "audio output is enabled but neither tts nor realtime audio is available",
                     )
 
-            tr_node = self._agent.transcription_node(tr_text_input, model_settings)
-            text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
+            async def _discard_audio() -> None:
+                async for _ in msg.audio_stream:
+                    pass
 
             def _on_message_first_frame(
                 fut: asyncio.Future[float] | asyncio.Future[None],
@@ -4503,16 +4529,34 @@ class AgentActivity(RecognitionHooks):
                 if first_played_message_id is None and started_speaking_at is not None:
                     first_played_message_id = msg.message_id
 
-            out = await forward_generation(
-                speech_handle=speech_handle,
-                audio_output=audio_output,
-                text_output=text_output,
-                audio_source=audio_source,
-                text_source=text_source,
-                on_first_frame=_on_message_first_frame,
-                reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+            # Providers can have bounded output queues even when playback is disabled.
+            # Consume their audio alongside text so an unused stream cannot block generation.
+            discard_audio_task = (
+                asyncio.create_task(_discard_audio())
+                if audio_output is None and "audio" in msg_modalities
+                else None
             )
-            return _MsgOutput(msg=msg, out=out)
+            try:
+                tr_node = self._agent.transcription_node(tr_text_input, model_settings)
+                text_source = await tr_node if asyncio.iscoroutine(tr_node) else tr_node
+
+                out = await forward_generation(
+                    speech_handle=speech_handle,
+                    audio_output=audio_output,
+                    text_output=text_output,
+                    audio_source=audio_source,
+                    text_source=text_source,
+                    on_first_frame=_on_message_first_frame,
+                    reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                )
+                if discard_audio_task is not None:
+                    await speech_handle.wait_if_not_interrupted([discard_audio_task])
+                    if not speech_handle.interrupted:
+                        discard_audio_task.result()
+                return _MsgOutput(msg=msg, out=out)
+            finally:
+                if discard_audio_task is not None:
+                    await utils.aio.cancel_and_wait(discard_audio_task)
 
         @utils.log_exceptions(logger=logger)
         async def _process_messages() -> None:
@@ -4558,7 +4602,7 @@ class AgentActivity(RecognitionHooks):
 
         # the cancel is session-wide, so send it only while this response is still generating
         if speech_handle.interrupted and not generation_ended:
-            self._rt_session.interrupt()
+            playback_session.interrupt()
 
         current_span.set_attribute(trace_types.ATTR_SPEECH_INTERRUPTED, speech_handle.interrupted)
         _record_interruption(speech_handle)
@@ -4625,25 +4669,42 @@ class AgentActivity(RecognitionHooks):
                 "`use_tts_aligned_transcript` is enabled but no agent transcript was returned from tts"  # noqa: E501
             )
 
+        if speech_handle.interrupted and not message_outputs:
+            playback_session.playback_finished(
+                response_id=generation_ev.response_id,
+                message_id=None,
+                audio_end_ms=0,
+                interrupted=True,
+                interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
+            )
+
         # create assistant message per generated message
         trace_text_parts: list[str] = []
         any_skipped = False
         for entry in message_outputs:
             if entry.out.played == "skipped":
                 any_skipped = True
+                playback_session.playback_finished(
+                    response_id=generation_ev.response_id,
+                    message_id=entry.msg.message_id,
+                    audio_end_ms=0,
+                    interrupted=True,
+                    interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
+                )
                 continue
 
             msg_interrupted = entry.out.played == "partial"
             forwarded_text = entry.out.forwarded_text
 
-            if msg_interrupted and self.llm.capabilities.message_truncation:
-                msg_modalities = await entry.msg.modalities
-                self._rt_session.truncate(
-                    message_id=entry.msg.message_id,
-                    modalities=msg_modalities,
-                    audio_end_ms=int(entry.out.playback_position * 1000),
-                    audio_transcript=forwarded_text,
-                )
+            playback_session.playback_finished(
+                response_id=generation_ev.response_id,
+                message_id=entry.msg.message_id,
+                modalities=await entry.msg.modalities,
+                audio_end_ms=int(entry.out.playback_position * 1000),
+                audio_transcript=forwarded_text,
+                interrupted=msg_interrupted,
+                interrupted_by_user=speech_handle._interrupt_source == "audio_activity",
+            )
 
             if not forwarded_text:
                 continue
