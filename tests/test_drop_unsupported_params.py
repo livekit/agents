@@ -54,7 +54,7 @@ def test_gpt_5_6_strips_other_reasoning_params_even_at_effort_none() -> None:
     assert params == {"temperature": 0.2, "reasoning_effort": "none"}
 
 
-def test_gpt_5_original_still_strips_temperature_at_effort_none() -> None:
+def test_gpt_5_original_still_strips_temperature_at_lowest_effort() -> None:
     # gpt-5/mini/nano's lowest effort is "minimal", not "none" — the blanket
     # strip must stay for them.
     params = drop_unsupported_params(
@@ -106,3 +106,36 @@ def test_gpt_5_2_with_tools_strips_reasoning_effort() -> None:
         tools=[object()],
     )
     assert params == {}
+
+
+def test_gpt_5_2_with_tools_strips_temperature_even_at_effort_none() -> None:
+    # the tool strip removes reasoning_effort before the prefix loop runs, so
+    # temperature is stripped too — guards the loop-after-tool-strip ordering
+    # in drop_unsupported_params. Under the old order the bare temperature
+    # would survive and OpenAI would reject the request.
+    params = drop_unsupported_params(
+        "openai/gpt-5.2",
+        {"temperature": 0.2, "reasoning_effort": "none"},
+        tools=[object()],
+    )
+    assert params == {}
+
+
+def test_chat_latest_variants_still_strip_temperature_at_effort_none() -> None:
+    # chat-latest variants are not in _MIN_REASONING_EFFORT (exact-key lookup),
+    # so they keep the blanket strip even at effort "none".
+    params = drop_unsupported_params(
+        "openai/gpt-5.1-chat-latest",
+        {"temperature": 0.2, "reasoning_effort": "none"},
+    )
+    assert params == {"reasoning_effort": "none"}
+
+
+def test_grok_reasoning_model_keeps_sampling_params() -> None:
+    # xAI reasoning models support temperature/top_p; the effort-aware
+    # carve-out must not touch the xAI branch of _UNSUPPORTED_PARAMS.
+    params = drop_unsupported_params(
+        "grok-4.20-multi-agent",
+        {"temperature": 0.2, "top_p": 0.9, "frequency_penalty": 0.5},
+    )
+    assert params == {"temperature": 0.2, "top_p": 0.9}

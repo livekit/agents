@@ -72,8 +72,8 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
-# temperature/top_p are accepted by gpt-5.1+ only when reasoning is fully
-# disabled ("none"); OpenAI requires removing them at any other effort.
+# temperature/top_p are accepted by gpt-5.1+ only at reasoning_effort
+# "none"; see the note in drop_unsupported_params.
 _SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
 
 # models that don't support reasoning_effort when function tools are present
@@ -99,22 +99,22 @@ def drop_unsupported_params(
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
     for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
         if model_name.startswith(prefix):
-            if unsupported is _REASONING_UNSUPPORTED_PARAMS:
-                unsupported = _reasoning_unsupported_params_for(model_name, unsupported, params)
+            if (
+                unsupported is _REASONING_UNSUPPORTED_PARAMS
+                and min_reasoning_effort(model_name) == "none"
+                and params.get("reasoning_effort") == "none"
+            ):
+                # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
+                # reasoning_effort "none" (the model's lowest supported effort).
+                # Verified against the API on gpt-5.6-luna (2026-10): "none" +
+                # temperature -> 200, "low" + temperature -> 400. The reasoning
+                # guide no longer documents this restriction. Applies only to
+                # models in _MIN_REASONING_EFFORT — new gpt-5.1+ models must be
+                # added there or temperature stays stripped.
+                unsupported = unsupported - _SAMPLING_PARAMS
             params = {k: v for k, v in params.items() if k not in unsupported}
             break
     return params
-
-
-def _reasoning_unsupported_params_for(
-    model_name: str, unsupported: set[str], params: dict[str, Any]
-) -> set[str]:
-    # OpenAI accepts temperature/top_p on gpt-5.1+ models only when
-    # reasoning_effort is "none" (their lowest supported effort).
-    # https://platform.openai.com/docs/guides/reasoning
-    if min_reasoning_effort(model_name) == "none" and params.get("reasoning_effort") == "none":
-        return unsupported - _SAMPLING_PARAMS
-    return unsupported
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
