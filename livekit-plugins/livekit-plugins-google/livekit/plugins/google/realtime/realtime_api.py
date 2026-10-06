@@ -636,12 +636,7 @@ class RealtimeSession(llm.RealtimeSession):
             # no per-response tool_choice on Gemini; "none" is emulated by rejecting any tool
             # call emitted during the turn (see _reject_tool_calls).
             self._opts.tool_choice = tool_choice
-            if tool_choice == "none":
-                logger.warning(
-                    "the Google Realtime API has no tool_choice='none'; tool calls emitted "
-                    "this turn will be rejected so the model replies directly."
-                )
-            elif tool_choice not in (None, "auto"):
+            if tool_choice not in (None, "auto", "none"):
                 logger.warning(
                     f"tool_choice='{tool_choice}' is not supported by the Google Realtime API, "
                     "falling back to 'auto'."
