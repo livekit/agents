@@ -228,51 +228,36 @@ history. The DTMF tool is available only to IVR replies and their tool follow-up
 `uncertain` and `wait` are per-turn predictions, not stages. Each
 `amd_prediction` event carries both the `category` predicted for the turn and the
 `stage` AMD keeps after it. `state_changed` is true only when the stage changes.
-The stage constrains normal predictions for the next turn. An uncertain turn in
-voicemail keeps the voicemail stage; a later screening prediction requires an
-explicit correction.
+The stage recommends the predictions for the next turn. An uncertain turn in
+voicemail keeps the voicemail stage; a later screening prediction corrects it.
 
 Each classification request includes the retained `stage`, the last accepted
-prediction's turn ID, category, and reason, and two disjoint category lists:
-
-- `allowed_next_categories`: normal predictions permitted from the retained stage.
-  The model returns `corrects_stage=false`, which is also the default when omitted.
-- `allowed_correction_categories`: predictions permitted only when correcting an
-  earlier machine classification. The model must return `corrects_stage=true`
-  and a non-empty `correction_evidence` quote from the transcript.
+prediction's turn ID, category, and reason, and `recommended_next_categories`:
+the usual next predictions from the retained stage. The list guides the classifier
+but does not restrict it. The model returns only a `category`.
 
 The last accepted prediction can be `wait` or `uncertain` while the retained stage
 is still voicemail, screening, or IVR. Empty-turn reuse does not replace this
 prediction snapshot.
 
-| Retained stage | Categories requiring explicit correction |
+| Retained stage | Categories outside the recommendations |
 | --- | --- |
 | `machine-screening` | `machine-ivr` |
 | `machine-vm` | `machine-screening` |
 | `machine-ivr` | `machine-screening` |
 
-For example, after a mistaken voicemail classification, the model can return:
-
-```json
-{
-  "category": "machine-screening",
-  "corrects_stage": true,
-  "correction_evidence": "Please state your name and why you are calling."
-}
-```
-
-AMD validates the category against the selected list. A correction cannot use a
-normal-transition category. Invalid results use the existing inference-error
-fallback. Initial classification and terminal human or unavailable stages have
-no correction targets.
+A prediction outside the recommendations corrects an earlier machine
+classification. For example, after a mistaken voicemail classification, the model
+can return `machine-screening` for "Please state your name and why you are calling."
+AMD accepts it and sets `corrects_stage` on the `amd_prediction` event. The initial
+stage recommends every category, so the first classification never corrects a stage.
+Only output that does not parse as a category uses the inference-error fallback.
 
 Corrections apply to the current accepted turn and persist into later requests.
 They use the same inference deadline, silence wait, and stale-result checks as
 normal predictions. They do not create another turn, wait for late transcripts,
 rewrite earlier events, or reset delivered voicemail and sent DTMF.
-The `amd_prediction` event exposes `corrects_stage` and `correction_evidence`.
-Reused predictions keep the corrected stage without repeating the correction flag
-or evidence.
+Reused predictions keep the corrected stage without repeating `corrects_stage`.
 
 `wait` skips the current reply without a silence wait or menu extraction. While
 the latest prediction is `wait`, the idle timer is paused; the overall `timeout`
@@ -294,8 +279,9 @@ Interruption does not itself authorize a reply. AMD still checks the next turn.
 An uncertain prediction keeps the current stage and its reply rule. AMD
 classifies again on the next transcribed turn.
 
-The FSM accepts classification results and returns the next category and effects.
-Its normal transitions and explicit corrections constrain the classifier's output schema. AMD owns
+The FSM accepts any classification result and returns the next stage, its effects, and
+whether the result corrected the stage. Its recommended transitions guide the classifier
+but do not restrict its output. AMD owns
 turn IDs, inference, deadlines, counters, fallback, reply authorization, and playback.
 Timeouts and playback do not change the FSM. Repeated IVR predictions still request
 menu extraction.

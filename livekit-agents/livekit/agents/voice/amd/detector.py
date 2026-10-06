@@ -578,8 +578,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             request = self._chat_ctx.create_request(
                 turn,
                 stage=self._state,
-                allowed=sorted(_fsm.ALLOWED[self._state]),
-                corrections=sorted(_fsm.CORRECTIONS[self._state]),
+                recommended=sorted(_fsm.RECOMMENDED[self._state]),
                 previous_prediction=self._latest,
             )
             if self._menu_atask is not None:
@@ -630,7 +629,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         effects: tuple[_fsm.Effect, ...] = (),
         state_changed: bool = False,
         corrects_stage: bool = False,
-        correction_evidence: str | None = None,
     ) -> None:
         event = AMDPredictionEvent(
             turn_id=turn.turn_id,
@@ -638,7 +636,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             stage=self._state,
             state_changed=state_changed,
             corrects_stage=corrects_stage,
-            correction_evidence=correction_evidence,
             reason=reason,
             transcript=turn.transcript.transcript,
             speech_duration=turn.speech_duration,
@@ -663,7 +660,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     "reason": AMDReason.REUSED,
                     "state_changed": False,
                     "corrects_stage": False,
-                    "correction_evidence": None,
                     "transcript": later.transcript.transcript,
                     "speech_duration": later.speech_duration,
                     "delay": time.monotonic() - later.committed_at,
@@ -737,20 +733,13 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             self._timeout_inference()
             return
         self._cancel_classification()
-        allowed = (
-            _fsm.CORRECTIONS[self._state]
-            if response is not None and response.corrects_stage
-            else _fsm.ALLOWED[self._state]
-        )
-        if response is None or response.category not in allowed:
+        if response is None:
             self._record_prediction(turn, AMDReason.INFERENCE_ERROR)
         else:
 
             def _accept_prediction(turn: Turn, response: _inference.AMDResponse) -> None:
                 category = response.category
-                result = _fsm.transition(
-                    self._state, category, corrects_stage=response.corrects_stage
-                )
+                result = _fsm.transition(self._state, category)
                 state_changed = result.next_state != self._state
                 if state_changed:
                     self._previous_stage = self._state
@@ -768,10 +757,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
                     AMDReason.PREDICTION,
                     effects=result.effects,
                     state_changed=state_changed,
-                    corrects_stage=response.corrects_stage,
-                    correction_evidence=response.correction_evidence
-                    if response.corrects_stage
-                    else None,
+                    corrects_stage=result.corrects_stage,
                 )
 
             _accept_prediction(turn, response)

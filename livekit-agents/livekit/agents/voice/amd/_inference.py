@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -35,18 +35,15 @@ wait: an advertisement, promotion, or request to keep waiting that needs no resp
 A busy person is not automatically machine-unavailable. A screener is not an IVR menu.
 Menu instructions after voicemail can be machine-ivr. A person taking over can be human.
 
-Each request supplies the retained stage, the previous accepted prediction, and two lists:
-- allowed_next_categories: normal predictions permitted from the retained stage.
-  Choose one with corrects_stage=false for ordinary call progression.
-- allowed_correction_categories: categories permitted only as explicit corrections.
-  Choose one with corrects_stage=true only when the transcript shows the earlier stage
-  was misclassified. Include a short transcript quote in correction_evidence.
-The lists are disjoint. Never use corrects_stage=true for a normal prediction.
+Each request supplies the retained stage, the previous accepted prediction, and
+recommended_next_categories: the usual next predictions from the retained stage.
+Prefer one of them for ordinary call progression. Choose another category only when the
+transcript shows the earlier stage was misclassified.
 A correction changes the stage for the current turn and later turns. It does not rewrite
 earlier predictions or undo actions such as sending DTMF or delivering voicemail.
 The previous prediction can be uncertain or wait while a machine stage remains active.
-If new evidence is inconclusive, return uncertain with corrects_stage=false.
-Both uncertain and wait keep the current stage and its allowed next categories.
+If new evidence is inconclusive, return uncertain.
+Both uncertain and wait keep the current stage.
 Wait skips the current turn's reply and keeps listening.
 If the participant asks for a spoken answer or keypad choice, classify that prompt instead.
 Do not infer hold music from the transcript.
@@ -71,8 +68,7 @@ After screening: "Okay." then "They can't take the call." then "Feel free to lea
 "Please hold while I connect your call."
 -> wait.
 After an earlier machine-vm prediction: "Please state your name and why you are calling."
--> machine-screening with corrects_stage=true and a quote in correction_evidence.
-This corrects the earlier voicemail classification; it does not create another turn.
+-> machine-screening. This corrects the earlier voicemail classification.
 """
 
 MENU_PROMPT = """Extract observed IVR menu from current turn's transcript.
@@ -87,18 +83,6 @@ Use at most 20 options. Do not invent keys, spoken choices, or a menu tree.
 
 class AMDResponse(BaseModel):
     category: AMDCategory
-    corrects_stage: bool = Field(
-        default=False,
-        strict=True,
-        description=(
-            "False: category must be in allowed_next_categories. "
-            "True: category must be in allowed_correction_categories and correct an earlier mistake."
-        ),
-    )
-    correction_evidence: str = Field(
-        default="",
-        description="Short transcript quote supporting an explicit correction. Empty otherwise.",
-    )
 
 
 class AMDIVRMenuResponse(BaseModel):
@@ -115,14 +99,13 @@ async def _structured_response(
     schema: type[ResponseT],
     *,
     conn_options: APIConnectOptions,
-    parameters: dict[str, Any] | None = None,
 ) -> ResponseT:
     # use raw schema so all LLM can support this, response_format support is limited
     @llm.function_tool(
         raw_schema={
             "name": "record_result",
             "description": "Record the result using the supplied schema.",
-            "parameters": parameters if parameters is not None else schema.model_json_schema(),
+            "parameters": schema.model_json_schema(),
         }
     )
     async def record_result(raw_arguments: dict[str, object]) -> None:
@@ -161,33 +144,13 @@ async def classify(
                 )
                 if request.previous_prediction is not None
                 else None,
-                "allowed_next_categories": request.allowed_next_categories,
-                "allowed_correction_categories": request.allowed_correction_categories,
+                "recommended_next_categories": request.recommended_next_categories,
                 "speech_duration": request.speech_duration,
             }
         ),
     )
     chat_ctx.items.extend(request.chat_ctx.items)
-    parameters = AMDResponse.model_json_schema()
-    parameters["$defs"]["AMDCategory"]["enum"] = [
-        category.value
-        for category in sorted(
-            {*request.allowed_next_categories, *request.allowed_correction_categories}
-        )
-    ]
-    response = await _structured_response(
-        model, chat_ctx, AMDResponse, conn_options=conn_options, parameters=parameters
-    )
-    allowed = (
-        request.allowed_correction_categories
-        if response.corrects_stage
-        else request.allowed_next_categories
-    )
-    if response.category not in allowed:
-        raise ValueError(f"category {response.category} is not allowed from {request.stage}")
-    if response.corrects_stage and not response.correction_evidence.strip():
-        raise ValueError("amd stage corrections require transcript evidence")
-    return response
+    return await _structured_response(model, chat_ctx, AMDResponse, conn_options=conn_options)
 
 
 async def extract_ivr_menu(

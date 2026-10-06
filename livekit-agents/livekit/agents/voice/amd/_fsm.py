@@ -1,8 +1,8 @@
 """Call-category transitions. AMD executes effects and owns the run's lifecycle.
 
 ``uncertain`` and ``wait`` are per-turn predictions, not stages. They keep the
-current stage. Other machine stages require either a normal transition or an
-explicit correction of an earlier classification.
+current stage. ``RECOMMENDED`` lists the usual next predictions for each stage. It guides
+the classifier but does not restrict it: another category corrects an earlier stage.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from enum import Enum, auto
 from .events import AMDCategory
 
 # wait does not change the state
-ALLOWED = {
+RECOMMENDED = {
     AMDCategory.UNCERTAIN: frozenset(AMDCategory),
     AMDCategory.MACHINE_SCREENING: frozenset(
         {
@@ -47,14 +47,6 @@ ALLOWED = {
     AMDCategory.MACHINE_UNAVAILABLE: frozenset(),
 }
 
-_CORRECTABLE_STAGES = frozenset(
-    {AMDCategory.MACHINE_SCREENING, AMDCategory.MACHINE_VM, AMDCategory.MACHINE_IVR}
-)
-CORRECTIONS = {
-    state: _CORRECTABLE_STAGES - allowed if state in _CORRECTABLE_STAGES else frozenset()
-    for state, allowed in ALLOWED.items()
-}
-
 
 class Effect(Enum):
     EXTRACT_MENU = auto()
@@ -65,20 +57,21 @@ class Effect(Enum):
 class Transition:
     next_state: AMDCategory
     effects: tuple[Effect, ...] = ()
+    corrects_stage: bool = False
+    """Whether the prediction left the recommended transitions."""
 
 
-def transition(
-    state: AMDCategory, prediction: AMDCategory, *, corrects_stage: bool = False
-) -> Transition:
-    allowed = CORRECTIONS[state] if corrects_stage else ALLOWED[state]
-    if prediction not in allowed:
+def transition(state: AMDCategory, prediction: AMDCategory) -> Transition:
+    # terminal stages complete AMD, so nothing follows them
+    if not RECOMMENDED[state]:
         raise ValueError(f"invalid AMD transition: {state} -> {prediction}")
+    corrects_stage = prediction not in RECOMMENDED[state]
     match prediction:
         case AMDCategory.HUMAN | AMDCategory.MACHINE_UNAVAILABLE:
-            return Transition(prediction, (Effect.COMPLETE,))
+            return Transition(prediction, (Effect.COMPLETE,), corrects_stage)
         case AMDCategory.MACHINE_IVR:
-            return Transition(prediction, (Effect.EXTRACT_MENU,))
+            return Transition(prediction, (Effect.EXTRACT_MENU,), corrects_stage)
         case AMDCategory.UNCERTAIN | AMDCategory.WAIT:
             return Transition(state)
         case _:
-            return Transition(prediction)
+            return Transition(prediction, (), corrects_stage)

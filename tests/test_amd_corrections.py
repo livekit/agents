@@ -61,7 +61,7 @@ async def test_correction_uses_current_turn_and_persists(
         first = commit_turn(detector, end_of_turn("Please record your name."))
         request = await classifier.request()
         assert request.previous_prediction is None
-        assert request.allowed_correction_categories == []
+        assert set(request.recommended_next_categories) == set(AMDCategory)
         classifier.prediction(1, initial)
         assert await first.should_reply(llm.ChatContext())
         saved_prediction = detector._turns[1].prediction.model_copy(deep=True)
@@ -82,18 +82,14 @@ async def test_correction_uses_current_turn_and_persists(
             "category": bridge or initial,
             "reason": "prediction",
         }
-        assert corrected not in request.allowed_next_categories
-        assert request.allowed_correction_categories == [corrected]
-        classifier.prediction(
-            current_turn, corrected, corrects_stage=True, correction_evidence=transcript
-        )
+        assert corrected not in request.recommended_next_categories
+        classifier.prediction(current_turn, corrected)
         context = llm.ChatContext()
         assert await hooks.should_reply(context)
         assert context.items[-1].text_content == instructions
         prediction = detector._turns[current_turn].prediction
         assert prediction.reason == AMDReason.PREDICTION
         assert prediction.corrects_stage
-        assert prediction.correction_evidence == transcript
         assert prediction.state_changed
         assert prediction.prev_stage_category == initial
         assert prediction.inference_duration is not None
@@ -104,30 +100,30 @@ async def test_correction_uses_current_turn_and_persists(
         assert request.stage == corrected
         assert request.previous_prediction["category"] == corrected
         assert request.previous_prediction["turn_id"] == current_turn
-        assert AMDCategory.HUMAN in request.allowed_next_categories
-        assert AMDCategory.HUMAN not in request.allowed_correction_categories
+        assert AMDCategory.HUMAN in request.recommended_next_categories
         classifier.prediction(current_turn + 1, AMDCategory.HUMAN)
         assert await human.should_reply(llm.ChatContext())
         assert (await detector.execute()).category == AMDCategory.HUMAN
 
 
-@pytest.mark.parametrize("evidence", [None, "", "   "])
-async def test_correction_without_evidence_uses_the_existing_stage(evidence: str | None) -> None:
+@pytest.mark.parametrize(
+    "extra",
+    [{"corrects_stage": False}, {"corrects_stage": True}, {"correction_evidence": ""}],
+)
+async def test_correction_ignores_model_supplied_correction_fields(
+    extra: dict[str, object],
+) -> None:
     async with running() as (detector, session, classifier, _):
         first = await commit(detector, session, classifier)
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         assert await first.should_reply(llm.ChatContext())
         hooks = await commit(detector, session, classifier)
-        arguments = {"category": "machine-screening", "corrects_stage": True}
-        if evidence is not None:
-            arguments["correction_evidence"] = evidence
-        classifier.respond(2, json.dumps(arguments))
+        classifier.respond(2, json.dumps({"category": "machine-screening", **extra}))
         assert await hooks.should_reply(llm.ChatContext())
         prediction = detector._turns[2].prediction
-        assert prediction.reason == AMDReason.INFERENCE_ERROR
-        assert prediction.stage == AMDCategory.MACHINE_VM
-        assert not prediction.corrects_stage
-        assert prediction.correction_evidence is None
+        assert prediction.reason == AMDReason.PREDICTION
+        assert prediction.stage == AMDCategory.MACHINE_SCREENING
+        assert prediction.corrects_stage
         assert detector.lifecycle == AMDLifecycle.ACTIVE
 
 
@@ -138,12 +134,7 @@ async def test_reused_turns_do_not_repeat_a_correction() -> None:
         assert await first.should_reply(llm.ChatContext())
         correction = await commit(detector, session, classifier)
         empty = commit_turn(detector, end_of_turn(""))
-        classifier.prediction(
-            2,
-            AMDCategory.MACHINE_SCREENING,
-            corrects_stage=True,
-            correction_evidence="Please state your name.",
-        )
+        classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
         assert not await correction.should_reply(llm.ChatContext())
         assert await empty.should_reply(llm.ChatContext())
         assert detector._turns[2].prediction.corrects_stage
@@ -154,7 +145,6 @@ async def test_reused_turns_do_not_repeat_a_correction() -> None:
             assert prediction.reason == AMDReason.REUSED
             assert prediction.stage == AMDCategory.MACHINE_SCREENING
             assert not prediction.corrects_stage
-            assert prediction.correction_evidence is None
         assert classifier.requests.empty()
 
 
@@ -174,9 +164,7 @@ async def test_correction_preserves_delivered_voicemail_and_dtmf_history() -> No
         assert [json.loads(call.arguments) for call in dtmf_calls(request.chat_ctx)] == [
             {"events": ["1"]}
         ]
-        classifier.prediction(
-            2, AMDCategory.MACHINE_SCREENING, corrects_stage=True, correction_evidence=transcript
-        )
+        classifier.prediction(2, AMDCategory.MACHINE_SCREENING)
         call = await asyncio.wait_for(model.calls.get(), 2)
         assert call["chat_ctx"].items[-1].text_content == _DEFAULT_SCREENING_INSTRUCTIONS
         await eventually(lambda: activity._no_pending_speech)

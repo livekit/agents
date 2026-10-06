@@ -2026,7 +2026,7 @@ async def test_dtmf_on_an_empty_turn_is_context_not_an_inference_trigger() -> No
 
 
 @pytest.mark.asyncio
-async def test_invalid_transition_falls_back_and_uncertain_keeps_the_stage() -> None:
+async def test_inference_error_falls_back_and_uncertain_keeps_the_stage() -> None:
     async with running() as (detector, session, classifier, _):
         events = []
         detector.on("amd_prediction", events.append)
@@ -2034,13 +2034,13 @@ async def test_invalid_transition_falls_back_and_uncertain_keeps_the_stage() -> 
         classifier.prediction(1, AMDCategory.MACHINE_VM)
         await first.should_reply(llm.ChatContext())
         state = detector._state
-        for turn_id, category, reason in (
-            (2, AMDCategory.MACHINE_SCREENING, "inference_error"),
-            (3, AMDCategory.UNCERTAIN, "prediction"),
-            (4, AMDCategory.MACHINE_SCREENING, "inference_error"),
+        for turn_id, arguments, reason in (
+            (2, '{"category":"unknown"}', "inference_error"),
+            (3, '{"category":"uncertain"}', "prediction"),
+            (4, '{"category":"unknown"}', "inference_error"),
         ):
             hooks = await commit(detector, session, classifier)
-            classifier.prediction(turn_id, category)
+            classifier.respond(turn_id, arguments)
             ctx = llm.ChatContext()
             assert await hooks.should_reply(ctx)
             assert events[-1].reason == reason
@@ -2384,13 +2384,7 @@ async def test_classifier_that_ignores_cancellation_cannot_change_state(
         elif outcome == "wait":
             response.set_result(_inference.AMDResponse(category=AMDCategory.WAIT))
         elif outcome == "correction":
-            response.set_result(
-                _inference.AMDResponse(
-                    category=AMDCategory.MACHINE_SCREENING,
-                    corrects_stage=True,
-                    correction_evidence="Please state your name.",
-                )
-            )
+            response.set_result(_inference.AMDResponse(category=AMDCategory.MACHINE_SCREENING))
         elif outcome == "provider_error":
             response.set_result(APIConnectionError("stale provider failure"))
         else:
@@ -2711,7 +2705,7 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         assert not detector._reply_held_at(asyncio.get_running_loop().time())
         assert detector._voicemail_turn_id is None
         assert model.calls.empty()
-        transition.assert_called_once_with(previous, AMDCategory.WAIT, corrects_stage=False)
+        transition.assert_called_once_with(previous, AMDCategory.WAIT)
         await asyncio.sleep(1.6)
         assert model.calls.empty()
         assert detector.lifecycle is AMDLifecycle.ACTIVE
@@ -2719,7 +2713,7 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         activity.on_end_of_turn(end_of_turn())
         following = await classifier.request()
         assert following.stage == previous
-        assert set(following.allowed_next_categories) == set(_fsm.ALLOWED[previous])
+        assert set(following.recommended_next_categories) == set(_fsm.RECOMMENDED[previous])
         classifier.prediction(following.current_turn.extra["turn_id"], AMDCategory.UNCERTAIN)
         # a kept machine stage still waits for participant silence before replying
         await asyncio.wait_for(activity._user_turn_completed_atask, 2)
@@ -2727,7 +2721,7 @@ async def test_wait_skips_reply_and_allows_a_fresh_prediction(
         assert detector._state is previous
         await asyncio.wait_for(model.calls.get(), 2)
         assert transition.call_count == 2
-        transition.assert_called_with(previous, AMDCategory.UNCERTAIN, corrects_stage=False)
+        transition.assert_called_with(previous, AMDCategory.UNCERTAIN)
 
 
 @pytest.mark.asyncio

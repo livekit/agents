@@ -33,8 +33,7 @@ class AMDRequest:
     """Conversation snapshot and constraints for one classification."""
 
     stage: AMDCategory
-    allowed_next_categories: list[AMDCategory]
-    allowed_correction_categories: list[AMDCategory]
+    recommended_next_categories: list[AMDCategory]
     previous_prediction: AMDPredictionEvent | None
     chat_ctx: llm.ChatContext
     speech_duration: float
@@ -65,14 +64,12 @@ class AMDChatContext(llm.ChatContext):
         turn: Turn,
         *,
         stage: AMDCategory,
-        allowed: list[AMDCategory],
-        corrections: list[AMDCategory],
+        recommended: list[AMDCategory],
         previous_prediction: AMDPredictionEvent | None,
     ) -> AMDRequest:
         return AMDRequest(
             stage=stage,
-            allowed_next_categories=allowed,
-            allowed_correction_categories=corrections,
+            recommended_next_categories=recommended,
             previous_prediction=previous_prediction.model_copy() if previous_prediction else None,
             chat_ctx=self.truncate(max_items=_HISTORY_LIMIT).copy(),
             speech_duration=turn.speech_duration,

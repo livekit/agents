@@ -184,7 +184,7 @@ async def test_resumed_speech_invalidates_release_and_preserves_history() -> Non
         request = await classifier.request()
         assert request.earlier_turns[0].text_content == "hello"
         assert request.stage == AMDCategory.MACHINE_VM
-        assert AMDCategory.MACHINE_SCREENING not in request.allowed_next_categories
+        assert AMDCategory.MACHINE_SCREENING not in request.recommended_next_categories
         assert not await hooks.should_reply(llm.ChatContext())
         classifier.prediction(2, AMDCategory.HUMAN)
         assert (await detector.execute()).category == AMDCategory.HUMAN
