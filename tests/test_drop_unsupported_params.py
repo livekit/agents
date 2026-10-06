@@ -121,6 +121,16 @@ def test_gpt_5_2_with_tools_strips_temperature_even_at_effort_none() -> None:
     assert params == {}
 
 
+def test_gpt_5_4_nano_keeps_temperature_when_reasoning_effort_is_none() -> None:
+    # verified against the API 2026-10: gpt-5.4-nano accepts temperature at
+    # effort "none" and rejects it at "low", same as 5.4-mini
+    params = drop_unsupported_params(
+        "openai/gpt-5.4-nano",
+        {"temperature": 0.2, "reasoning_effort": "none"},
+    )
+    assert params == {"temperature": 0.2, "reasoning_effort": "none"}
+
+
 def test_chat_latest_variants_still_strip_temperature_at_effort_none() -> None:
     # chat-latest variants are not in _MIN_REASONING_EFFORT (exact-key lookup),
     # so they keep the blanket strip even at effort "none".
