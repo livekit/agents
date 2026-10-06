@@ -86,9 +86,14 @@ class _ProviderToolStream(llm.LLMStream):
 
 async def _collect_updates(
     calls: list[tuple[str, str, str]],
+    *,
+    use_fallback: bool,
 ) -> list[ProviderToolCallStarted | ProviderToolCallEnded]:
     updates: list[ProviderToolCallStarted | ProviderToolCallEnded] = []
-    async with AgentSession(llm=_ProviderToolLLM(calls=calls)) as session:
+    model: llm.LLM = _ProviderToolLLM(calls=calls)
+    if use_fallback:
+        model = llm.FallbackAdapter([model])
+    async with model, AgentSession(llm=model) as session:
         session.on("provider_tool_execution_updated", lambda ev: updates.append(ev.update))
         await session.start(Agent(instructions="You are a test agent."))
         await session.run(user_input="look it up")
@@ -96,8 +101,11 @@ async def _collect_updates(
 
 
 @pytest.mark.asyncio
-async def test_provider_tool_lifecycle_emits_start_then_end() -> None:
-    updates = await _collect_updates([("t1", "web_search", '{"q":"livekit"}')])
+@pytest.mark.parametrize("use_fallback", [False, True], ids=["direct", "fallback"])
+async def test_provider_tool_lifecycle_emits_start_then_end(use_fallback: bool) -> None:
+    updates = await _collect_updates(
+        [("t1", "web_search", '{"q":"livekit"}')], use_fallback=use_fallback
+    )
 
     assert len(updates) == 2
     started, ended = updates
@@ -116,8 +124,12 @@ async def test_provider_tool_lifecycle_emits_start_then_end() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multiple_provider_tools_tracked_in_order() -> None:
-    updates = await _collect_updates([("t1", "web_search", "{}"), ("t2", "code_interpreter", "{}")])
+@pytest.mark.parametrize("use_fallback", [False, True], ids=["direct", "fallback"])
+async def test_multiple_provider_tools_tracked_in_order(use_fallback: bool) -> None:
+    updates = await _collect_updates(
+        [("t1", "web_search", "{}"), ("t2", "code_interpreter", "{}")],
+        use_fallback=use_fallback,
+    )
 
     # each tool gets its own start/end pair, in call order — the dashboard worker
     # relies on this to bracket a "thinking" cue per provider tool
@@ -129,13 +141,16 @@ async def test_multiple_provider_tools_tracked_in_order() -> None:
     ]
 
 
-async def test_started_event_arrives_before_tool_finishes() -> None:
+@pytest.mark.parametrize("use_fallback", [False, True], ids=["direct", "fallback"])
+async def test_started_event_arrives_before_tool_finishes(use_fallback: bool) -> None:
     finish_tool = asyncio.Event()
     updates: asyncio.Queue[ProviderToolExecutionUpdatedEvent] = asyncio.Queue()
     local_updates: list[object] = []
-    model = _ProviderToolLLM(calls=[("t1", "web_search", "{}")], finish_tool=finish_tool)
+    model: llm.LLM = _ProviderToolLLM(calls=[("t1", "web_search", "{}")], finish_tool=finish_tool)
+    if use_fallback:
+        model = llm.FallbackAdapter([model])
 
-    async with AgentSession(llm=model) as session:
+    async with model, AgentSession(llm=model) as session:
         session.on("provider_tool_execution_updated", updates.put_nowait)
         session.on("tool_execution_updated", local_updates.append)
         session.on("function_tools_executed", local_updates.append)
