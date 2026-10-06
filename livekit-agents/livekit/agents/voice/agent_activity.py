@@ -4397,11 +4397,6 @@ class AgentActivity(RecognitionHooks):
                     )
                 elif self.llm.capabilities.audio_output:
                     unspoken_text_reply = True
-                    logger.error(
-                        "Text message received from Realtime API with audio modality. "
-                        "This usually happens when text chat context is synced to the API. "
-                        "Try to add a TTS model as fallback or use text modality with TTS instead."  # noqa: E501
-                    )
                 else:
                     logger.warning(
                         "audio output is enabled but neither tts nor realtime audio is available",
@@ -4776,6 +4771,11 @@ class AgentActivity(RecognitionHooks):
                 name="AgentActivity.realtime_respeak",
             )
             self._schedule_speech(speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True)
+        elif unspoken_text_reply:
+            logger.error(
+                "Text message received from Realtime API with audio modality and it was not "
+                "spoken. Try to add a TTS model as fallback or use text modality with TTS instead."
+            )
 
         # no reply follows, so nothing else clears the "thinking" the tool asserted
         if not tool_reply_expected and not respeak_expected and self._no_pending_speech:
