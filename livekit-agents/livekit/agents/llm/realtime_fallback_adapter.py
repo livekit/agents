@@ -5,7 +5,7 @@ import contextlib
 import time
 import weakref
 from collections.abc import AsyncIterable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
@@ -13,7 +13,7 @@ from livekit import rtc
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
-from .chat_context import ChatContext, MetricsMetadata
+from .chat_context import ChatContext, ChatMessage, MetricsMetadata
 from .realtime import (
     EventTypes,
     GenerationCreatedEvent,
@@ -178,6 +178,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         def _make_forwarder(event: EventTypes) -> Callable[[object], None]:
             # callbacks receive only the payload, so bind the event name per forwarder
             def _forward(ev: object) -> None:
+                if isinstance(ev, GenerationCreatedEvent):
+                    ev = self._track_generation(ev, self._active)
                 self.emit(event, ev)
 
             return _forward
@@ -257,7 +259,9 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
             ),
         )
 
-    def _next_available_index(self, *, exclude_current: bool = False) -> int | None:
+    def _next_available_index(
+        self, *, exclude_current: bool = False, exclude: set[int] | None = None
+    ) -> int | None:
         # re-enable models whose cooldown expired, then pick the first available (primary preferred)
         now = time.time()
         for i, deadline in enumerate(self._cooldown_deadline):
@@ -266,6 +270,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
 
         for i in range(len(self._adapter._models)):
             if exclude_current and i == self._active_index:
+                continue
+            if exclude is not None and i in exclude:
                 continue
             if self._available[i]:
                 return i
@@ -338,7 +344,7 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     )
                     self._active_index = index
                     self._bind(self._active)
-                    await self._active._update_session(
+                    await self._active.initialize(
                         instructions=self._instructions, chat_ctx=chat_ctx, tools=self._tools
                     )
                     if is_given(self._tool_choice):
@@ -361,11 +367,15 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
                     await self._active.aclose()
 
                 # cascade to further models if one fails to start
+                attempted = {target_index}
                 error = await _bring_up(target_index)
                 while error is not None:
-                    nxt = self._next_available_index()
+                    # Cooldown may expire during startup, or be zero. A failed
+                    # candidate is still tried only once during this swap.
+                    nxt = self._next_available_index(exclude=attempted)
                     if nxt is None:
                         break
+                    attempted.add(nxt)
                     error = await _bring_up(nxt)
             finally:
                 self._swapping = False
@@ -408,6 +418,95 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
     def tools(self) -> ToolContext:
         return self._active.tools
 
+    async def initialize(
+        self,
+        *,
+        instructions: NotGivenOr[str] = NOT_GIVEN,
+        chat_ctx: NotGivenOr[ChatContext] = NOT_GIVEN,
+        tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
+    ) -> None:
+        if is_given(instructions):
+            self._instructions = instructions
+        if is_given(tools):
+            self._tools = tools
+        await self._active.initialize(instructions=instructions, chat_ctx=chat_ctx, tools=tools)
+
+    async def set_input_text(
+        self, text: str, *, message_id: NotGivenOr[str] = NOT_GIVEN
+    ) -> ChatMessage:
+        # Unlike microphone frames, a typed turn must not be discarded during a swap.
+        async with self._swap_lock:
+            return await self._active.set_input_text(text, message_id=message_id)
+
+    def _track_generation(
+        self, event: GenerationCreatedEvent, child: RealtimeSession
+    ) -> GenerationCreatedEvent:
+        # The generation carries its owner across swaps, including nested fallback
+        # adapters. Provider response and message IDs stay unchanged.
+        return replace(event, playback_session=event.playback_session or child)
+
+    def _track_reply(
+        self, future: asyncio.Future[GenerationCreatedEvent], child: RealtimeSession
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        tracked: asyncio.Future[GenerationCreatedEvent] = future.get_loop().create_future()
+
+        def _complete(source: asyncio.Future[GenerationCreatedEvent]) -> None:
+            if source.cancelled():
+                tracked.cancel()
+            elif (error := source.exception()) is not None:
+                if not tracked.done():
+                    tracked.set_exception(error)
+            elif not tracked.done():
+                tracked.set_result(self._track_generation(source.result(), child))
+            elif tracked.cancelled():
+                # Acceptance can race cancellation before this callback runs. The
+                # caller never received the generation, so it cannot report skipped
+                # playback. Target its owning child and response explicitly.
+                try:
+                    accepted = source.result()
+                    owner = accepted.playback_session or child
+                    owner.interrupt()
+                    owner.playback_finished(
+                        response_id=accepted.response_id,
+                        message_id=None,
+                        audio_end_ms=0,
+                        interrupted=True,
+                        interrupted_by_user=False,
+                    )
+                except Exception:
+                    logger.exception("failed to report cancelled realtime reply playback")
+
+        def _cancel(source: asyncio.Future[GenerationCreatedEvent]) -> None:
+            if source.cancelled():
+                future.cancel()
+
+        future.add_done_callback(_complete)
+        tracked.add_done_callback(_cancel)
+        return tracked
+
+    def playback_finished(
+        self,
+        *,
+        response_id: str | None,
+        message_id: str | None,
+        audio_end_ms: int,
+        interrupted: bool,
+        interrupted_by_user: bool,
+        audio_transcript: NotGivenOr[str] = NOT_GIVEN,
+        modalities: list[Literal["text", "audio"]] | None = None,
+    ) -> None:
+        # Direct callers address the active session. AgentActivity instead uses
+        # GenerationCreatedEvent.playback_session to retain ownership across swaps.
+        self._active.playback_finished(
+            response_id=response_id,
+            message_id=message_id,
+            audio_end_ms=audio_end_ms,
+            interrupted=interrupted,
+            interrupted_by_user=interrupted_by_user,
+            audio_transcript=audio_transcript,
+            modalities=modalities,
+        )
+
     async def update_instructions(self, instructions: str) -> None:
         self._instructions = instructions
         await self._active.update_instructions(instructions)
@@ -444,8 +543,10 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.generate_reply(
-            instructions=instructions, tool_choice=tool_choice, tools=tools
+        child = self._active
+        return self._track_reply(
+            child.generate_reply(instructions=instructions, tool_choice=tool_choice, tools=tools),
+            child,
         )
 
     def commit_audio(self) -> None:
@@ -461,7 +562,8 @@ class _FallbackRealtimeSession(RealtimeSession[str]):
         self._active.start_user_activity()
 
     def say(self, text: str | AsyncIterable[str]) -> asyncio.Future[GenerationCreatedEvent]:
-        return self._active.say(text)
+        child = self._active
+        return self._track_reply(child.say(text), child)
 
     def truncate(
         self,

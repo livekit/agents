@@ -123,3 +123,85 @@ The v1 implementation has these limits:
 - The adapter reuses WebSocket connections between sequential LiveKit streams. It does not run
   concurrent contexts on one WebSocket. Concurrent LiveKit streams use separate pooled
   WebSocket connections.
+
+## Prism realtime
+
+Prism combines speech input, reasoning, tool calls, and speech output in one
+realtime model. The plugin calls the Python Rime SDK for all Prism protocol work.
+Use Python 3.11 or later for this feature. Existing TTS use still supports 3.10.
+
+```sh
+uv pip install 'livekit-plugins-rime[realtime]'
+```
+
+The realtime extra installs `rimelabs-sdk>=0.1.0a14` from PyPI. For source
+development, install this plugin with its realtime extra from the repository root:
+
+```sh
+uv sync --package livekit-plugins-rime --extra realtime --inexact
+```
+
+```python
+import os
+from livekit.agents import Agent, AgentSession
+from livekit.plugins import rime
+
+session = AgentSession(
+    llm=rime.RealtimeModel(
+        endpoint=os.environ["PRISM_URL"],
+        voice=os.environ["PRISM_VOICE"],
+    ),
+)
+await session.start(agent=Agent(instructions="Give short, clear answers."), room=ctx.room)
+session.generate_reply(user_input="Hello!")
+```
+
+Set `RIME_API_KEY`. The endpoint must accept the SDK's Bearer API-key handshake.
+Use the full `wss://.../v1/realtime` URL. Local development also accepts
+`ws://localhost/...`. You can pass `client=Rime(...)` to reuse credentials; the
+plugin does not close an injected client. Create one model per AgentSession.
+
+The adapter initializes instructions, tools, and text history before it sends
+input. `set_input_text` identifies a typed turn; `update_chat_ctx` appends history
+or tool results. No timer determines whether text is a history note or a turn.
+LiveKit's `playback_finished` hook reports the response ID, playback position,
+and stop cause, including skipped audio. Caller speech sends a truncate.
+Application stops send a playback receipt. Late transcripts keep the user's
+original position in history.
+
+Configuration changes, agent handoff, AgentTask, tool progress updates, video,
+manual audio commit, forced tool selection, per-reply tools, and disabling turn
+detection are unsupported. These operations emit an unrecoverable model error.
+Prism cannot enforce `tool_choice="none"`. LiveKit requests it when the tool-step
+limit is reached or while draining a tool reply; the session fails explicitly
+at that point instead of starting another tool round. Use a separate TTS model
+for `session.say`.
+
+Microphone input and output streams have bounded queues. A queue overflow ends
+the session. LiveKit drains unused audio when audio output is absent or disabled.
+There is no automatic reconnect or tool replay in the SDK or Prism adapter.
+An application can opt into LiveKit's realtime fallback adapter. It forwards
+initialization, typed turns, and playback reports. An explicit restart opens a
+new conversation with supported user/assistant text history; it cannot restore
+a pending tool round or replay tool history. Local configuration records are
+excluded from that history. Concurrent use of one Prism model remains unsupported.
+
+Each fallback generation carries its playback session. Reports reach that
+session even after a replacement, without relying on globally unique provider
+IDs or retaining an ID lookup table.
+Initialization preserves saved settings when a caller omits them. Explicit empty
+instructions or tools replace the saved values. If a reply is accepted just
+before wrapper cancellation, the wrapper interrupts its owning session and
+reports skipped playback.
+
+An SDK `RealtimeAdmissionTimeout` fails only the reply request. It does not close
+the conversation. Unknown request outcomes still fail the session.
+An SDK `ResponseAbandoned` notice identifies a late accepted reply whose caller
+was cancelled. The adapter discards its unused output and reports zero playback
+once the terminal response supplies a drain token.
+
+The local tests exercise the SDK through a WebSocket peer and AgentSession;
+they do not establish production endpoint compatibility.
+
+Protocol and mapping reference: rimelabs/sglang-omni at
+`bc8a500249536f369d20bc094baa9169e5986758`, Apache-2.0.
