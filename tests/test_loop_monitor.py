@@ -31,9 +31,9 @@ from livekit.agents.telemetry.loop_monitor import (
     SPAN_NAME,
     BlockedReport,
     EventLoopMonitor,
-    _StackSample,
     LoopMonitorThresholds,
     _RateLimiter,
+    _StackSample,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.no_concurrent]
