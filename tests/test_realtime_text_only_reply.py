@@ -105,6 +105,9 @@ async def test_text_only_reply_is_asked_aloud_once_without_tts() -> None:
         await _settle(rt)
         assert rt.generate_reply_calls == 2
         assert "speaking" in states
+        assert [m.id for m in session.history.messages() if m.role == "assistant"] == [
+            "r2-message"
+        ]
 
 
 async def test_text_only_retry_is_not_retried_again() -> None:

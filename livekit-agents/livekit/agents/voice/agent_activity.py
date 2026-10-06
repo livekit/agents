@@ -4333,7 +4333,7 @@ class AgentActivity(RecognitionHooks):
                 self._disable_vad_interruption_soon()
 
         read_transcript_from_tts = False
-        unspoken_text_reply = False
+        unspoken_text_msg_ids: set[str] = set()
 
         # multiple message items may be produced for a single realtime response
         # (e.g. GPT-Realtime-2.0). We process each one serially: push frames,
@@ -4347,7 +4347,7 @@ class AgentActivity(RecognitionHooks):
 
         async def _process_one_message(msg: MessageGeneration) -> _MsgOutput:
             """Resolve a message's audio/text sources, then forward and wait for playout."""
-            nonlocal read_transcript_from_tts, unspoken_text_reply
+            nonlocal read_transcript_from_tts
             assert isinstance(self.llm, llm.RealtimeModel)
 
             msg_modalities = await msg.modalities
@@ -4396,7 +4396,7 @@ class AgentActivity(RecognitionHooks):
                         else realtime_audio
                     )
                 elif self.llm.capabilities.audio_output:
-                    unspoken_text_reply = True
+                    unspoken_text_msg_ids.add(msg.message_id)
                 else:
                     logger.warning(
                         "audio output is enabled but neither tts nor realtime audio is available",
@@ -4485,6 +4485,14 @@ class AgentActivity(RecognitionHooks):
 
         stopped_speaking_at = time.time()
 
+        # the respeak carries the reply into the history, so the unspoken text is left out
+        respeak_expected = (
+            bool(unspoken_text_msg_ids)
+            and not speech_handle.interrupted
+            and not function_calls
+            and instructions != _RESPEAK_INSTRUCTIONS
+        )
+
         def _create_assistant_message(
             message_id: str, forwarded_text: str, interrupted: bool
         ) -> llm.ChatMessage:
@@ -4546,6 +4554,9 @@ class AgentActivity(RecognitionHooks):
                 )
 
             if not forwarded_text:
+                continue
+
+            if respeak_expected and entry.msg.message_id in unspoken_text_msg_ids:
                 continue
 
             trace_text_parts.append(forwarded_text)
@@ -4751,15 +4762,8 @@ class AgentActivity(RecognitionHooks):
                     speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True
                 )
 
-        respeak_expected = False
-        if (
-            unspoken_text_reply
-            and not tool_reply_expected
-            and not function_calls
-            and instructions != _RESPEAK_INSTRUCTIONS
-        ):
+        if respeak_expected:
             # nothing voiced the text reply; ask the model once for the same reply aloud
-            respeak_expected = True
             speech_handle._num_steps += 1
             self._create_speech_task(
                 self._realtime_reply_task(
@@ -4771,7 +4775,7 @@ class AgentActivity(RecognitionHooks):
                 name="AgentActivity.realtime_respeak",
             )
             self._schedule_speech(speech_handle, SpeechHandle.SPEECH_PRIORITY_NORMAL, force=True)
-        elif unspoken_text_reply:
+        elif unspoken_text_msg_ids:
             logger.error(
                 "Text message received from Realtime API with audio modality and it was not "
                 "spoken. Try to add a TTS model as fallback or use text modality with TTS instead."
