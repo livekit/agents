@@ -100,7 +100,7 @@ def _default_tool_result_resolver(ctx: MCPToolResultContext) -> str:
     if len(ctx.result.content) == 1:
         return str(ctx.result.content[0].model_dump_json())
     elif len(ctx.result.content) > 1:
-        return json.dumps([item.model_dump() for item in ctx.result.content])
+        return json.dumps([item.model_dump() for item in ctx.result.content], ensure_ascii=False)
 
     raise ToolError(
         f"Tool '{ctx.tool_name}' completed without producing a result. "
