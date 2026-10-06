@@ -102,19 +102,29 @@ def drop_unsupported_params(
             if (
                 unsupported is _REASONING_UNSUPPORTED_PARAMS
                 and min_reasoning_effort(model_name) == "none"
-                and params.get("reasoning_effort") == "none"
+                and _reasoning_effort_is_none(params)
             ):
                 # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
-                # reasoning_effort "none" (the model's lowest supported effort).
-                # Verified against the API on gpt-5.6-luna (2026-10): "none" +
-                # temperature -> 200, "low" + temperature -> 400. The reasoning
-                # guide no longer documents this restriction. Applies only to
-                # models in _MIN_REASONING_EFFORT — new gpt-5.1+ models must be
-                # added there or temperature stays stripped.
+                # effort "none" (the model's lowest supported effort). Verified
+                # against the API on gpt-5.6-luna (2026-10): "none" +
+                # temperature -> 200, "low" + temperature -> 400, on both the
+                # chat completions and responses APIs. The reasoning guide no
+                # longer documents this restriction. Applies only to models in
+                # _MIN_REASONING_EFFORT — new gpt-5.1+ models must be added
+                # there or temperature stays stripped.
                 unsupported = unsupported - _SAMPLING_PARAMS
             params = {k: v for k, v in params.items() if k not in unsupported}
             break
     return params
+
+
+def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
+    # chat completions sends effort as params["reasoning_effort"]; the
+    # responses plugin sends it as params["reasoning"], an openai Reasoning
+    # object with an .effort attribute
+    if params.get("reasoning_effort") == "none":
+        return True
+    return getattr(params.get("reasoning"), "effort", None) == "none"
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+

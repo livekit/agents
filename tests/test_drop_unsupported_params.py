@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from openai.types import Reasoning
 
 from livekit.agents.inference.llm import drop_unsupported_params
 
 pytestmark = pytest.mark.unit
+
+
+class _ReasoningShim:
+    """Mimics openai.types.Reasoning without a hard dependency in assertions."""
+
+    effort: str | None = None
 
 
 def test_gpt_5_6_keeps_temperature_when_reasoning_effort_is_none() -> None:
@@ -149,3 +158,47 @@ def test_grok_reasoning_model_keeps_sampling_params() -> None:
         {"temperature": 0.2, "top_p": 0.9, "frequency_penalty": 0.5},
     )
     assert params == {"temperature": 0.2, "top_p": 0.9}
+
+
+def _responses_effort(params: dict[str, Any]) -> str | None:
+    # the Responses API plugin sends effort as extra["reasoning"], an openai
+    # Reasoning object with an .effort attribute
+    reasoning = params.get("reasoning")
+    return getattr(reasoning, "effort", None)
+
+
+def test_gpt_5_6_responses_shape_keeps_temperature_at_effort_none() -> None:
+    # Responses plugin path: effort travels as Reasoning(effort="none"), not
+    # reasoning_effort. The carve-out must recognize both shapes.
+    params = drop_unsupported_params(
+        "gpt-5.6-luna",
+        {"temperature": 0.2, "top_p": 0.9, "reasoning": Reasoning(effort="none")},
+    )
+    assert params["temperature"] == 0.2
+    assert params["top_p"] == 0.9
+    assert _responses_effort(params) == "none"
+
+
+def test_gpt_5_6_responses_shape_strips_temperature_at_effort_low() -> None:
+    params = drop_unsupported_params(
+        "gpt-5.6-luna",
+        {"temperature": 0.2, "reasoning": Reasoning(effort="low")},
+    )
+    assert params == {"reasoning": Reasoning(effort="low")}
+
+
+def test_gpt_5_6_responses_shape_strips_temperature_when_reasoning_omitted() -> None:
+    params = drop_unsupported_params(
+        "gpt-5.6-luna",
+        {"temperature": 0.2, "reasoning": Reasoning()},
+    )
+    assert params == {"reasoning": Reasoning()}
+
+
+def test_gpt_5_responses_shape_strips_temperature_even_at_effort_none() -> None:
+    # gpt-5's floor is minimal; the Responses shape must not loosen that
+    params = drop_unsupported_params(
+        "gpt-5",
+        {"temperature": 0.2, "reasoning": Reasoning(effort="none")},
+    )
+    assert params == {"reasoning": Reasoning(effort="none")}
