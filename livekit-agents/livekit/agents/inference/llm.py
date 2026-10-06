@@ -72,6 +72,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
+# temperature/top_p are accepted by gpt-5.1+ only when reasoning is fully
+# disabled ("none"); OpenAI requires removing them at any other effort.
+_SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
+
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
@@ -89,15 +93,28 @@ def drop_unsupported_params(
     matching against known model prefixes.
     """
     model_name = model.split("/")[-1] if "/" in model else model
-    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
-        if model_name.startswith(prefix):
-            params = {k: v for k, v in params.items() if k not in unsupported}
-            break
     if tools and any(
         model_name.startswith(p) for p in _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES
     ):
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
+    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
+        if model_name.startswith(prefix):
+            if unsupported is _REASONING_UNSUPPORTED_PARAMS:
+                unsupported = _reasoning_unsupported_params_for(model_name, unsupported, params)
+            params = {k: v for k, v in params.items() if k not in unsupported}
+            break
     return params
+
+
+def _reasoning_unsupported_params_for(
+    model_name: str, unsupported: set[str], params: dict[str, Any]
+) -> set[str]:
+    # OpenAI accepts temperature/top_p on gpt-5.1+ models only when
+    # reasoning_effort is "none" (their lowest supported effort).
+    # https://platform.openai.com/docs/guides/reasoning
+    if min_reasoning_effort(model_name) == "none" and params.get("reasoning_effort") == "none":
+        return unsupported - _SAMPLING_PARAMS
+    return unsupported
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
