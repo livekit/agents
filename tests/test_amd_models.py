@@ -74,7 +74,7 @@ async def test_default_models_are_auto_selected_and_closed(
     try:
         async with AMD(session) as detector:
             await eventually(lambda: detector.lifecycle is AMDLifecycle.ACTIVE)
-            llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
+            llm_factory.assert_called_once_with("google/gemma-4-31b-it")
             stt_factory.assert_called_once_with("cartesia/ink-whisper")
             assert detector._llm is model
             assert detector._stt is stt
@@ -163,7 +163,7 @@ async def test_model_selection_is_independent_for_each_model(
                 stt_factory.assert_called_once_with("cartesia/ink-whisper")
                 assert detector._llm is None
             else:
-                llm_factory.assert_called_once_with("google/gemini-3.1-flash-lite")
+                llm_factory.assert_called_once_with("google/gemma-4-31b-it")
                 stt_factory.assert_not_called()
                 assert detector._stt is None
     finally:

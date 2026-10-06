@@ -169,7 +169,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     Args:
         session: Started session whose participant audio and client-side EOT to use.
         llm: Classification and menu model. When omitted, use
-            ``google/gemini-3.1-flash-lite`` if LiveKit Cloud credentials are
+            ``google/gemma-4-31b-it`` if LiveKit Cloud credentials are
             available; otherwise use the current Agent's LLM. Pass None to
             always use the current Agent's LLM. A string selects a LiveKit
             Inference model. Calls use ``session.conn_options.llm_conn_options``.
@@ -204,7 +204,7 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             prediction resets the count.
     """
 
-    _DEFAULT_LLM_MODEL: str = "google/gemini-3.1-flash-lite"
+    _DEFAULT_LLM_MODEL: str = "google/gemma-4-31b-it"
     _DEFAULT_STT_MODEL: str = "cartesia/ink-whisper"
 
     def __init__(

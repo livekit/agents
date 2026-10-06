@@ -118,7 +118,7 @@ The detection `timeout` starts when listening begins.
 ## Model selection and transcript race
 
 - `llm` accepts `str | LLM | None | NotGiven`. If omitted, AMD auto-selects
-  `google/gemini-3.1-flash-lite`. Pass `None` to use the active Agent's pipeline
+  `google/gemma-4-31b-it`. Pass `None` to use the active Agent's pipeline
   LLM. A model instance or string selects a different classification and menu model.
 - `stt` accepts `str | STT | None | NotGiven`. If omitted, AMD auto-selects
   `cartesia/ink-whisper`. Pass `None` to use only the session transcript.
@@ -201,7 +201,7 @@ await session.start(Agent(instructions="Call about an appointment."), room=ctx.r
 
 async with AMD(
     session,
-    llm="google/gemini-3.1-flash-lite",
+    llm="google/gemma-4-31b-it",
     stt="cartesia/ink-whisper",
     participant_identity=callee_identity,
 ) as detector:
