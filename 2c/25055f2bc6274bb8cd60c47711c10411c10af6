@@ -1,0 +1,25 @@
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_99a96c0300b011::t_5050fdff75c7c4 172,207
+examples/telephony/amd.md
+  s_99a96c0300b011::t_5050fdff75c7c4 121,204
+livekit-agents/livekit/agents/voice/amd/_inference.py
+  s_99a96c0300b011::t_5050fdff75c7c4 16-24,27-29,31-36,38-88,95,97-101,103-104
+tests/test_amd_models.py
+  s_99a96c0300b011::t_5050fdff75c7c4 77,166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2c25055f2bc6274bb8cd60c47711c10411c10af6",
+  "prompts": {},
+  "sessions": {
+    "s_99a96c0300b011": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7ef79335-abe6-428d-9434-175a63761940",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
