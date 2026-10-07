@@ -30,7 +30,7 @@ Transport retries keep the same request ID and exact WAV bytes. A `model_busy` r
 
 Call `await recognizer.aclose()` when using it outside an agent session. A supplied `httpx.AsyncClient` stays owned by the caller. This integration makes no latency or quality guarantee; use your own held-out recordings to measure the complete VAD, network, and inference path.
 
-## Native Realtime candidate (local, unqualified)
+## Native Realtime (proposed)
 
 `RealtimeSTT` is an additive candidate for the separate `oruk-realtime` WebSocket API. `STT` remains the batch default. The candidate is qualified only in offline tests using synthetic PCM, sockets and model stubs; it has not been published or qualified against a live provider.
 
@@ -44,6 +44,6 @@ The candidate bounds each turn to 60 audio seconds and a 20-second completion wa
 
 LiveKit 1.8.3 and 1.8.5 remove the STT request ID and alternative metadata on the normal path to `on_user_turn_completed`. `take_turn(request_id)` provides a single-use receipt, bounded to four cached turns with 30-second lookup validity per recognizer. Physical expiry is lazy on read/write; `aclose()` clears the cache. This is not a timed-deletion guarantee. It deliberately has no "latest emotion" or transcript-text lookup. Use one recognizer per agent session.
 
-`examples/other/oruk_bound_turn_hook.py` supplies the VAD streaming node and a bounded context-injection hook. It requires the **separate, unpublished STT turn-identity core candidate**, which propagates ordered distinct IDs from accepted final transcripts to `ChatMessage.extra["stt_request_ids"]`, with explicit identity completeness. The adapter package alone does not supply this core change. Stock LiveKit 1.8.3/1.8.5 lack that binding, so the hook adds no affect context there. The combined candidate has offline tests invoking the real AgentSession hook against its pinned core source; this does not establish live-provider acceptance or availability in a released package.
+`examples/other/oruk_bound_turn_hook.py` supplies the VAD streaming node and a bounded context-injection hook. It requires the **proposed STT turn-identity core changes in this checkout**, which propagate ordered distinct IDs from accepted final transcripts to `ChatMessage.extra["stt_request_ids"]`, with explicit identity completeness. The adapter package alone does not supply this core change. Stock LiveKit 1.8.3/1.8.5 lack that binding, so the hook adds no affect context there. The combined candidate has offline tests invoking the real AgentSession hook against its pinned core source; this does not establish live-provider acceptance or availability in a released package.
 
 The hook atomically consumes all exact receipts for the message (up to four provider turns), then checks the already-bound transcript for consistency. Missing, evicted, expired, incomplete, corrected or oversized results add no affect context. Receipt IDs never come from speaker IDs, language codes, transcript tokens, text matching or "latest result" state. The injected payload keeps observed phrase IDs, timings, scores and completion/failure types; it omits raw phrase text and arbitrary error strings, and remains bounded to 8 KiB. One recognizer belongs to one session. The application controls the resulting chat history; lookup expiry is not a promise to delete messages or model context.

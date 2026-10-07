@@ -1,7 +1,7 @@
 """Candidate VAD streaming agent and exact-ID affect hook.
 
-Requires the separately reviewed STT turn-identity core candidate; stock LiveKit
-1.8.3/1.8.5 omit these ChatMessage.extra fields and therefore add no affect context.
+Requires the proposed STT turn-identity core changes in this checkout. Stock
+LiveKit 1.8.3/1.8.5 omit these ChatMessage.extra fields and add no affect context.
 No audio, provider connections or models are created merely by importing this file.
 Supply one RealtimeSTT instance and an initialized compatible VAD per agent session,
 plus your application's LLM/TTS. Close the recognizer after the session ends.
