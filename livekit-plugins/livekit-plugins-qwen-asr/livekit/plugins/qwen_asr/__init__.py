@@ -17,10 +17,10 @@
 from livekit.agents import Plugin
 
 from .log import logger
-from .stt import STT
+from .stt import STT, SpeechStream
 from .version import __version__
 
-__all__ = ["STT", "__version__"]
+__all__ = ["STT", "SpeechStream", "__version__"]
 
 
 class QwenAsrPlugin(Plugin):
