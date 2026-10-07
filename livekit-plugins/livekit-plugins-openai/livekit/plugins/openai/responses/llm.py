@@ -80,6 +80,7 @@ class _ResponsesWebsocket:
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
+            connect_timeout=self._timeout,
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -176,7 +177,13 @@ class _ResponsesWebsocket:
         # a socket closed while idle surfaces only as a send failure on reuse
         last_exc: Exception | None = None
         for _ in range(_WS_SEND_MAX_ATTEMPTS):
-            ws = await self._pool.get(timeout=self._timeout)
+            try:
+                # Include waiting for a concurrent prewarm in the acquisition deadline.
+                ws = await asyncio.wait_for(
+                    self._pool.get(timeout=self._timeout), timeout=self._timeout
+                )
+            except asyncio.TimeoutError as e:
+                raise APIConnectionError("timed out acquiring OpenAI Responses WebSocket") from e
             reused = self._pool.last_connection_reused
             try:
                 await ws.send_str(data)
