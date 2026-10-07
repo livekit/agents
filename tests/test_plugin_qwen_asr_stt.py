@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+import json
+
+import aiohttp
+import pytest
+from aiohttp import web
+
+from livekit import rtc
+from livekit.agents.stt import SpeechEventType
+from livekit.plugins.qwen_asr import STT
+
+pytestmark = pytest.mark.unit
+
+
+async def _serve(app: web.Application) -> tuple[web.AppRunner, int]:
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets if site._server is not None else None
+    assert sockets
+    return runner, sockets[0].getsockname()[1]
+
+
+def _frame(samples: int = 1600) -> rtc.AudioFrame:
+    return rtc.AudioFrame(b"\x00\x01" * samples, 16000, 1, samples)
+
+
+@pytest.mark.asyncio
+async def test_batch_omits_prompt_and_language_when_unset() -> None:
+    seen: dict[str, object] = {}
+
+    async def transcribe(request: web.Request) -> web.Response:
+        form = await request.post()
+        seen["fields"] = set(form.keys())
+        return web.json_response({"text": "Evet buyurun."})
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/transcriptions", transcribe)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(base_url=f"http://127.0.0.1:{port}/v1", model="qwen3-asr-1.7b")
+        event = await stt.recognize(_frame())
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert event.alternatives[0].text == "Evet buyurun."
+    assert seen["fields"] == {"file", "model"}
+
+
+@pytest.mark.asyncio
+async def test_batch_sends_prompt_language_and_keyterms() -> None:
+    seen: dict[str, str] = {}
+
+    async def transcribe(request: web.Request) -> web.Response:
+        form = await request.post()
+        seen["language"] = form["language"]
+        seen["prompt"] = form["prompt"]
+        seen["model"] = form["model"]
+        return web.json_response({"text": "türevi alınmış"})
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/transcriptions", transcribe)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            language="tr",
+            prompt="Türkçe ders. Konu türev.",
+        )
+        stt._update_session_keyterms(["Fibabanka", "diferansiyel"])
+        event = await stt.recognize(_frame())
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert event.alternatives[0].text == "türevi alınmış"
+    assert seen["model"] == "qwen3-asr-1.7b"
+    assert seen["language"] == "tr"
+    assert "Türkçe ders. Konu türev." in seen["prompt"]
+    assert "Vocabulary: Fibabanka, diferansiyel" in seen["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_maps_delta_and_done() -> None:
+    seen: list[dict[str, object]] = []
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "session.created", "id": "sess-test"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            event = json.loads(msg.data)
+            seen.append(event)
+            if event.get("type") == "input_audio_buffer.commit" and event.get("final") is True:
+                await ws.send_json({"type": "transcription.delta", "delta": "Evet "})
+                await ws.send_json(
+                    {
+                        "type": "transcription.done",
+                        "text": "Evet buyurun.",
+                        "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+                    }
+                )
+                break
+        await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/realtime", realtime)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            language="tr",
+            prompt="Türkçe telefon.",
+            use_realtime=True,
+            vad=None,
+        )
+        stream = stt.stream()
+        stream.push_frame(_frame(800))
+        stream.end_input()
+        events = [event async for event in stream]
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert seen[0] == {
+        "type": "session.update",
+        "model": "qwen3-asr-1.7b",
+        "language": "tr",
+        "prompt": "Türkçe telefon.",
+    }
+    assert {"type": "input_audio_buffer.commit", "final": False} in seen
+    assert any(event.get("type") == "input_audio_buffer.append" for event in seen)
+    assert seen[-1] == {"type": "input_audio_buffer.commit", "final": True}
+
+    kinds = [event.type for event in events]
+    assert SpeechEventType.START_OF_SPEECH in kinds
+    assert SpeechEventType.INTERIM_TRANSCRIPT in kinds
+    assert SpeechEventType.FINAL_TRANSCRIPT in kinds
+    final = next(event for event in events if event.type == SpeechEventType.FINAL_TRANSCRIPT)
+    interim = next(event for event in events if event.type == SpeechEventType.INTERIM_TRANSCRIPT)
+    assert interim.alternatives[0].text == "Evet "
+    assert final.alternatives[0].text == "Evet buyurun."
+    usage = next(event for event in events if event.type == SpeechEventType.RECOGNITION_USAGE)
+    assert usage.recognition_usage is not None
+    assert usage.recognition_usage.input_tokens == 4
+    assert usage.recognition_usage.output_tokens == 2
