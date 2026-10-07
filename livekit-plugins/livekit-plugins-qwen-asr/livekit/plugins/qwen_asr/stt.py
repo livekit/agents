@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from typing import Any
 
 import aiohttp
 
@@ -41,10 +42,12 @@ from .log import logger
 REALTIME_SAMPLE_RATE = 16000
 _CHUNK_MS = 100
 _CHUNK_BYTES = REALTIME_SAMPLE_RATE * _CHUNK_MS // 1000 * 2
-_PREFIX_BYTES = REALTIME_SAMPLE_RATE // 2 * 2  # 500 ms kept before speech starts
+# Same horizon as Silero's default max_buffered_speech. A short ring drops the
+# start of the utterance when VAD classification lags behind the input loop.
+_HELD_BYTES = 60 * REALTIME_SAMPLE_RATE * 2
 
 
-class STT(stt.STT):
+class STT(stt.STT[Any]):
     """Qwen3-ASR on a self-hosted vLLM server.
 
     Batch recognition posts the utterance to ``/v1/audio/transcriptions``.
@@ -176,10 +179,11 @@ class STT(stt.STT):
             ) as resp:
                 body = await _read_body(resp)
                 if resp.status >= 400:
+                    # The server body can quote the prompt or the audio. The STT
+                    # retry logger prints the exception, so the message stays generic.
                     raise APIStatusError(
-                        _error_message(body, resp.reason or "transcription failed"),
+                        f"Qwen3-ASR transcription failed ({resp.status})",
                         status_code=resp.status,
-                        body=body,
                     )
         except (APIStatusError, APIConnectionError, APITimeoutError):
             raise
@@ -193,7 +197,6 @@ class STT(stt.STT):
             raise APIStatusError(
                 "Qwen3-ASR response did not include a transcript",
                 status_code=500,
-                body=body,
             )
 
         return stt.SpeechEvent(
@@ -298,7 +301,7 @@ class SpeechStream(stt.SpeechStream):
             raise APIConnectionError("Qwen3-ASR realtime closed before session.created")
         event = json.loads(msg.data)
         if event.get("type") == "error":
-            raise APIError(_event_error(event), body=event, retryable=False)
+            raise APIError("Qwen3-ASR realtime request failed", retryable=False)
         if event.get("type") != "session.created":
             raise APIError(
                 f"expected session.created, got {event.get('type')}",
@@ -317,7 +320,7 @@ class SpeechStream(stt.SpeechStream):
         async def send_audio() -> None:
             vad_stream = self._stt._vad.stream() if self._stt._vad is not None else None
             vad_events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
-            prefix = bytearray()
+            held = bytearray()
             tail = bytearray()
             speaking = vad_stream is None
 
@@ -362,14 +365,20 @@ class SpeechStream(stt.SpeechStream):
 
             async def apply_vad(event: vad.VADEvent) -> None:
                 nonlocal speaking
-                if event.type == vad.VADEventType.START_OF_SPEECH:
+                if event.type == vad.VADEventType.START_OF_SPEECH and not speaking:
                     speaking = True
                     await open_turn()
-                    if prefix:
-                        await append(bytes(prefix))
-                        prefix.clear()
+                    # START frames are the speech Silero buffered, including its
+                    # prefix. Audio that arrived after that snapshot is still in
+                    # `held` and has to follow the snapshot without a second copy.
+                    onset = b"".join(bytes(frame.data) for frame in event.frames)
+                    audio = _audio_from_start(onset, bytes(held))
+                    held.clear()
+                    if audio:
+                        await append(audio)
                 elif event.type == vad.VADEventType.END_OF_SPEECH and speaking:
                     speaking = False
+                    held.clear()
                     if state.active:
                         await close_turn()
 
@@ -386,18 +395,20 @@ class SpeechStream(stt.SpeechStream):
                             if not state.active:
                                 await open_turn()
                             await append(pcm)
-                        elif speaking:
-                            await append(pcm)
                         else:
-                            prefix.extend(pcm)
-                            overflow = len(prefix) - _PREFIX_BYTES
-                            if overflow > 0:
-                                del prefix[:overflow]
-                        if vad_stream is not None:
+                            if speaking:
+                                await append(pcm)
+                            else:
+                                held.extend(pcm)
+                                overflow = len(held) - _HELD_BYTES
+                                if overflow > 0:
+                                    del held[:overflow]
                             vad_stream.push_frame(data)
                     elif vad_stream is None and state.active:
                         await close_turn()
                     elif vad_stream is not None:
+                        # end_input() flushes before the VAD task catches up.
+                        # Keep `held` so a late START can still see the onset.
                         vad_stream.flush()
                 if vad_stream is not None:
                     vad_stream.end_input()
@@ -470,7 +481,7 @@ class SpeechStream(stt.SpeechStream):
                     turn_idle.set()
                 elif kind == "error":
                     turn_idle.set()
-                    raise APIError(_event_error(event), body=event, retryable=False)
+                    raise APIError("Qwen3-ASR realtime request failed", retryable=False)
 
         send_task = asyncio.create_task(send_audio())
         recv_task = asyncio.create_task(receive())
@@ -507,6 +518,23 @@ class _RealtimeTurn:
     def __init__(self) -> None:
         self.active = False
         self.samples = 0
+
+
+def _audio_from_start(onset: bytes, unsent: bytes) -> bytes:
+    """Speech to send when VAD reports the start of a turn.
+
+    ``onset`` is the VAD speech buffer. ``unsent`` is everything the input loop
+    held while classification lagged. The snapshot is a slice of that audio;
+    bytes after it still have to be sent, and bytes before it are silence.
+    """
+    if not onset:
+        return unsent
+    at = unsent.rfind(onset)
+    if at >= 0:
+        return unsent[at:]
+    if unsent and onset.endswith(unsent):
+        return onset
+    return onset + unsent
 
 
 async def _send_audio(ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
@@ -557,33 +585,8 @@ def _visible_transcript(text: str, *, partial: bool = False) -> str:
     return text
 
 
-def _event_error(event: dict[str, object]) -> str:
-    error = event.get("error")
-    if isinstance(error, dict):
-        message = error.get("message")
-        if isinstance(message, str) and message:
-            return message
-    if isinstance(error, str) and error:
-        return error
-    return "Qwen3-ASR realtime failed"
-
-
 async def _read_body(resp: aiohttp.ClientResponse) -> object:
     try:
         return await resp.json(content_type=None)
     except (aiohttp.ContentTypeError, ValueError):
         return await resp.text()
-
-
-def _error_message(body: object, fallback: str) -> str:
-    if isinstance(body, dict):
-        error = body.get("error", body.get("message"))
-        if isinstance(error, dict):
-            message = error.get("message")
-            if isinstance(message, str) and message:
-                return message
-        if isinstance(error, str) and error:
-            return error
-    if isinstance(body, str) and body:
-        return body
-    return fallback

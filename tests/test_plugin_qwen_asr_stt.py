@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 
 import aiohttp
@@ -7,6 +9,7 @@ import pytest
 from aiohttp import web
 
 from livekit import rtc
+from livekit.agents import APIStatusError, vad
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.qwen_asr import STT
 
@@ -203,3 +206,133 @@ async def test_realtime_hides_language_preamble() -> None:
     assert texts
     assert all("<asr_text>" not in text and not text.startswith("language") for text in texts)
     assert texts[-1] == "Evet"
+
+
+@pytest.mark.asyncio
+async def test_batch_error_omits_response_body() -> None:
+    secret = "müşteri Ayşe, prompt: Fibabanka kredisi"
+
+    async def transcribe(_request: web.Request) -> web.Response:
+        return web.json_response({"error": {"message": secret}}, status=400)
+
+    app = web.Application()
+    app.router.add_post("/v1/audio/transcriptions", transcribe)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(base_url=f"http://127.0.0.1:{port}/v1", model="qwen3-asr-1.7b")
+        with pytest.raises(APIStatusError) as caught:
+            await stt.recognize(_frame())
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert caught.value.status_code == 400
+    assert caught.value.body is None
+    assert secret not in str(caught.value)
+    assert secret not in repr(caught.value)
+
+
+class _LateSpeech:
+    """VAD that classifies only after the input loop has finished."""
+
+    def stream(self) -> _LateSpeechStream:
+        return _LateSpeechStream()
+
+
+class _LateSpeechStream:
+    def __init__(self) -> None:
+        self._pcm = bytearray()
+        self._events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self._pcm.extend(bytes(frame.data))
+
+    def flush(self) -> None:
+        # RecognizeStream.end_input() flushes before the VAD task runs.
+        # Queued audio has to stay available for the late start event.
+        return None
+
+    def end_input(self) -> None:
+        # Snapshot ends before the last half-second, which the input loop has
+        # already buffered. Both pieces must reach the server.
+        consumed = max(0, len(self._pcm) // 2 - 8000)
+        onset = bytes(self._pcm[: consumed * 2])
+        self._events.put_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=consumed,
+                timestamp=0.0,
+                speech_duration=consumed / 16000,
+                silence_duration=0.0,
+                frames=[rtc.AudioFrame(onset, 16000, 1, consumed)] if onset else [],
+            )
+        )
+        self._events.put_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=len(self._pcm) // 2,
+                timestamp=0.0,
+                speech_duration=len(self._pcm) / 2 / 16000,
+                silence_duration=0.2,
+                frames=[],
+            )
+        )
+        self._events.put_nowait(None)
+
+    async def aclose(self) -> None:
+        return None
+
+    def __aiter__(self) -> _LateSpeechStream:
+        return self
+
+    async def __anext__(self) -> vad.VADEvent:
+        event = await self._events.get()
+        if event is None:
+            raise StopAsyncIteration
+        return event
+
+
+@pytest.mark.asyncio
+async def test_realtime_keeps_speech_when_vad_lags() -> None:
+    audio = bytearray()
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "session.created", "id": "sess-test"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            event = json.loads(msg.data)
+            if event.get("type") == "input_audio_buffer.append":
+                audio.extend(base64.b64decode(event["audio"]))
+            if event.get("type") == "input_audio_buffer.commit" and event.get("final") is True:
+                await ws.send_json({"type": "transcription.done", "text": "tamamı"})
+                break
+        await ws.close()
+        return ws
+
+    spoken = b"\x11\x22" * 16000 + b"\x33\x44" * 16000
+    app = web.Application()
+    app.router.add_get("/v1/realtime", realtime)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            use_realtime=True,
+            vad=_LateSpeech(),  # type: ignore[arg-type]
+        )
+        stream = stt.stream()
+        for start in range(0, len(spoken), 3200):
+            chunk = spoken[start : start + 3200]
+            stream.push_frame(rtc.AudioFrame(chunk, 16000, 1, len(chunk) // 2))
+        stream.end_input()
+        events = [event async for event in stream]
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert bytes(audio) == spoken
+    final = next(event for event in events if event.type == SpeechEventType.FINAL_TRANSCRIPT)
+    assert final.alternatives[0].text == "tamamı"
