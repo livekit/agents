@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "livekit-plugins-qwen-asr"
 dynamic = ["version"]
 description = "Agent Framework plugin for self-hosted Qwen3-ASR on vLLM."
+readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "support@livekit.io" }]
