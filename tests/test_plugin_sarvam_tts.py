@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import json
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, get_args
+from unittest.mock import MagicMock
 
+import aiohttp
 import pytest
 
 from livekit.agents import APIStatusError
+from livekit.agents.tts import AudioEmitter
 from livekit.agents.types import APIConnectOptions
 from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
 
@@ -215,49 +222,156 @@ def test_update_options_invalidates_the_pool_only_for_handshake_fields() -> None
     assert invalidated == [True, True]
 
 
-def test_stream_config_follows_the_socket_it_was_handed() -> None:
-    """A stream created before update_options must not send its old model's config."""
-    tts = _make_tts(model="bulbul:v3", speaker="shubh", temperature=1.5)
+class _FakeSocket:
+    """A Sarvam TTS websocket that records the frames sent to it and answers each flush."""
 
+    def __init__(self, url: str) -> None:
+        self.url = url
+        self.frames: list[dict[str, Any]] = []
+        self.closed = False
+        self.close_code: int | None = None
+        self._replies: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def send_str(self, data: str) -> None:
+        frame = json.loads(data)
+        self.frames.append(frame)
+        if frame["type"] == "flush":
+            self._replies.put_nowait({"type": "audio", "data": {"audio": "AAAA"}})
+            self._replies.put_nowait({"type": "event", "data": {"event_type": "final"}})
+
+    async def receive(self, timeout: float | None = None) -> SimpleNamespace:
+        # between requests this blocks like an idle socket, which is what a keepalive sees
+        reply = await self._replies.get()
+        return SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=json.dumps(reply), extra=None)
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def configs(self) -> list[dict[str, Any]]:
+        return [frame["data"] for frame in self.frames if frame["type"] == "config"]
+
+
+class _FakeSession:
+    """Opens a `_FakeSocket` for every websocket handshake."""
+
+    def __init__(self) -> None:
+        self.sockets: list[_FakeSocket] = []
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> _FakeSocket:
+        self.sockets.append(_FakeSocket(url))
+        return self.sockets[-1]
+
+
+_SocketTTS = Callable[..., tuple[sarvam_tts.TTS, _FakeSession]]
+
+
+@pytest.fixture
+async def socket_tts() -> AsyncIterator[_SocketTTS]:
+    """Build TTS instances over a `_FakeSession`, closing them even if the test fails."""
+    made: list[sarvam_tts.TTS] = []
+
+    def make(**kwargs: Any) -> tuple[sarvam_tts.TTS, _FakeSession]:
+        session = _FakeSession()
+        made.append(sarvam_tts.TTS(api_key="sk_test", http_session=session, **kwargs))  # type: ignore[arg-type]
+        return made[-1], session
+
+    yield make
+    for instance in made:
+        await instance.aclose()
+
+
+def _ws_stream(tts: sarvam_tts.TTS) -> sarvam_tts.SynthesizeStream:
+    """A SynthesizeStream carrying what `_run_ws` reads, without the task `__init__` starts."""
     stream = object.__new__(sarvam_tts.SynthesizeStream)
     stream._tts = tts
     stream._opts = replace(tts._opts)
-
-    tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical", temperature=0.6)
-
-    # stand in for the socket the pool would hand over after the switch
-    ws = object()
-    tts._ws_handshake_opts[id(ws)] = replace(tts._opts)
-    stream._adopt_handshake_opts(ws)  # type: ignore[arg-type]
-
-    assert (stream._opts.model, stream._opts.speaker) == ("bulbul:v4-flash", "ritu_hi_medical")
-    # the emitter was already initialized from these, so they stay snapshotted
-    assert stream._opts.speech_sample_rate == tts._opts.speech_sample_rate
-    assert stream._opts.output_audio_codec == tts._opts.output_audio_codec
-
-    # an untracked socket leaves the snapshot alone rather than guessing
-    before = replace(stream._opts)
-    stream._adopt_handshake_opts(object())  # type: ignore[arg-type]
-    assert stream._opts == before
+    stream._conn_options = APIConnectOptions(max_retry=0, timeout=5.0)
+    stream._session_id = 0
+    stream._connection_state = sarvam_tts.ConnectionState.DISCONNECTED
+    stream._client_request_id = None
+    stream._server_request_id = None
+    stream._send_task = None
+    stream._recv_task = None
+    stream._ws_conn = None
+    stream._mark_started = lambda: None  # type: ignore[method-assign]
+    return stream
 
 
-def test_config_only_update_survives_a_reused_socket() -> None:
-    """Speaker and tuning ride in the config frame, so the socket must not revert them."""
-    tts = _make_tts(model="bulbul:v3", speaker="shubh", pace=1.0)
+async def _speak(stream: sarvam_tts.SynthesizeStream) -> None:
+    async def sentences() -> AsyncIterator[SimpleNamespace]:
+        yield SimpleNamespace(token="Namaste.")
 
-    # a socket handshaken before the update; its model is unchanged, so the pool
-    # legitimately keeps reusing it
-    ws = object()
-    tts._ws_handshake_opts[id(ws)] = replace(tts._opts)
+    await stream._run_ws(sentences(), MagicMock(spec=AudioEmitter))  # type: ignore[arg-type]
 
+
+async def test_stream_created_before_a_model_switch_keeps_its_model(
+    socket_tts: _SocketTTS,
+) -> None:
+    """update_options must not move a stream that already exists onto another model.
+
+    Its speaker, language and format were chosen together for the model it was
+    created with. Assamese, for one, is a bulbul:v4-flash language that bulbul:v3
+    does not offer, so this stream cannot be spoken by v3.
+    """
+    tts, session = socket_tts(
+        model="bulbul:v4-flash",
+        target_language_code="as-IN",
+        speaker="kangkana_as_conversational",
+    )
+    stream = _ws_stream(tts)
+
+    tts.update_options(model="bulbul:v3", speaker="shubh", target_language_code="hi-IN")
+    await _speak(stream)
+
+    (ws,) = session.sockets
+    assert ws.url == (
+        "wss://api.sarvam.ai/text-to-speech/ws/v2?model=bulbul:v4-flash&send_completion_event=True"
+    )
+    (config,) = ws.configs()
+    assert (config["model"], config["speaker"], config["target_language_code"]) == (
+        "bulbul:v4-flash",
+        "kangkana_as_conversational",
+        "as-IN",
+    )
+    # no later stream can use a socket opened for the old model
+    assert ws.closed
+
+
+async def test_model_switch_during_the_pool_handshake_still_gets_a_matching_socket(
+    socket_tts: _SocketTTS,
+) -> None:
+    """update_options can land while the pool is connecting for a stream."""
+    tts, session = socket_tts()
+    stream = _ws_stream(tts)
+    connect = session.ws_connect
+
+    async def connect_then_switch(url: str, **kwargs: Any) -> _FakeSocket:
+        ws = await connect(url, **kwargs)
+        if len(session.sockets) == 1:
+            tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+        return ws
+
+    session.ws_connect = connect_then_switch  # type: ignore[method-assign]
+    await _speak(stream)
+
+    (used,) = [ws for ws in session.sockets if ws.frames]
+    assert "?model=bulbul:v3&" in used.url
+    assert [config["model"] for config in used.configs()] == ["bulbul:v3"]
+
+
+async def test_config_only_update_reuses_the_pooled_socket(socket_tts: _SocketTTS) -> None:
+    """Speaker and tuning ride in the config frame, so changing them keeps the socket."""
+    tts, session = socket_tts()
+
+    await _speak(_ws_stream(tts))
     tts.update_options(speaker="ritu", pace=1.2)
-    stream = object.__new__(sarvam_tts.SynthesizeStream)
-    stream._tts = tts
-    stream._opts = replace(tts._opts)
+    await _speak(_ws_stream(tts))
 
-    stream._adopt_handshake_opts(ws)  # type: ignore[arg-type]
-
-    assert (stream._opts.speaker, stream._opts.pace) == ("ritu", 1.2)
+    (ws,) = session.sockets
+    assert [(config["speaker"], config["pace"]) for config in ws.configs()] == [
+        ("shubh", 1.0),
+        ("ritu", 1.2),
+    ]
 
 
 def _error_stream() -> sarvam_tts.SynthesizeStream:
