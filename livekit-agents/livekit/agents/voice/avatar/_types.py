@@ -14,7 +14,7 @@ from ...job import get_job_context
 from ...log import logger
 from ...metrics.base import AvatarMetrics, Metadata
 from ..events import ConversationItemAddedEvent, MetricsCollectedEvent
-from ..io import AudioOutput
+from ..io import AudioOutput, _AudioSinkProxy
 
 if TYPE_CHECKING:
     from ..agent_session import AgentSession
@@ -168,7 +168,15 @@ class AvatarSession(ABC, rtc.EventEmitter[Literal["metrics_collected"] | TEvent]
     def _replace_audio_tail(self, sink: AudioOutput) -> None:
         assert self._agent_session is not None
         if self._previous_audio_output is None:
-            self._previous_audio_output = self._agent_session.output.audio
+            output = self._agent_session.output
+            cur = getattr(output, "audio", None)
+            while cur is not None:
+                if isinstance(cur, _AudioSinkProxy):
+                    self._previous_audio_output = cur.next_in_chain
+                    break
+                cur = getattr(cur, "next_in_chain", None)
+            else:
+                self._previous_audio_output = getattr(output, "audio", None)
         self._agent_session.output.replace_audio_tail(sink)
 
     async def _wait_avatar_join(self) -> None:
