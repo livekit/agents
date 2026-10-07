@@ -99,7 +99,10 @@ class _EUORunnerBase(_InferenceRunner):
             def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return not msg.startswith(
-                    "None of PyTorch, TensorFlow >= 2.0, or Flax have been found."
+                    (
+                        "None of PyTorch, TensorFlow >= 2.0, or Flax have been found.",
+                        "PyTorch was not found.",  # transformers >= 5
+                    )
                 )
 
         filt = _SuppressSpecific()
