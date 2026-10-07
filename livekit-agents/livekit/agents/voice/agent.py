@@ -525,20 +525,27 @@ class Agent:
             try:
                 conn_options = activity.session.conn_options.stt_conn_options
                 async with wrapped_stt.stream(conn_options=conn_options) as stream:
-                    _audio_input_started_at: float = (
+                    # `start_time_offset` has to be measured from the same anchor
+                    # the recognition loop adds back: it turns a word timestamp into
+                    # wall clock as `input_started_at + end_time`, where
+                    # `input_started_at` is stamped on the first frame to reach the
+                    # STT pipeline. When this pipeline has no anchor yet -- a new
+                    # pipeline, which happens on every handoff to an agent that
+                    # overrides `stt_node` -- that frame is the one about to arrive,
+                    # so the offset is zero. Falling back to the recording or session
+                    # start instead counted the time since then twice, putting every
+                    # timestamp on such a stream in the future, where it was clamped
+                    # to `now` and reported the arrival time of the event.
+                    _audio_input_started_at: float | None = (
                         activity._audio_recognition._input_started_at
                         if activity._audio_recognition is not None
-                        and activity._audio_recognition._input_started_at is not None
-                        else (
-                            activity.session._recorder_io.recording_started_at
-                            if activity.session._recorder_io
-                            and activity.session._recorder_io.recording_started_at
-                            else activity.session._started_at
-                            if activity.session._started_at
-                            else time.time()
-                        )
+                        else None
                     )
-                    stream.start_time_offset = time.time() - _audio_input_started_at
+                    stream.start_time_offset = (
+                        time.time() - _audio_input_started_at
+                        if _audio_input_started_at is not None
+                        else 0.0
+                    )
 
                     @utils.log_exceptions(logger=logger)
                     async def _forward_input() -> None:

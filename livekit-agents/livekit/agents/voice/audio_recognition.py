@@ -283,6 +283,10 @@ class AudioRecognition:
 
         self._last_final_transcript_time: float | None = None
         self._last_speaking_time: float | None = None
+        # newest word-timestamp-derived end of speech seen in the current turn.
+        # END_OF_SPEECH arrives with no alternatives, so this is the only way to
+        # keep the provider's own timing instead of the arrival time.
+        self._last_stt_word_end_time: float | None = None
         self._speech_start_time: float | None = None
 
         # used for manual commit_user_turn
@@ -1010,6 +1014,7 @@ class AudioRecognition:
         self._last_final_transcript_time = None
         self._speech_start_time = None
         self._last_speaking_time = None
+        self._last_stt_word_end_time = None
         self._vad_speech_started = False
         self._user_turn_committed = False
         self._last_emitted_prediction = None
@@ -1217,6 +1222,16 @@ class AudioRecognition:
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
+        if has_stt_end_time:
+            # Keep the newest word end for the turn. Providers send END_OF_SPEECH
+            # with no alternatives, and the fallback below is `now`, so without
+            # this the anchor would regress from the word timestamp to the moment
+            # END_OF_SPEECH arrived.
+            self._last_stt_word_end_time = (
+                stt_last_speaking_time
+                if self._last_stt_word_end_time is None
+                else max(self._last_stt_word_end_time, stt_last_speaking_time)
+            )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1365,6 +1380,14 @@ class AudioRecognition:
                 # otherwise push the anchor into the future and extend `extra_sleep`,
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
+            elif self._last_stt_word_end_time is not None:
+                # Soniox, Deepgram and AssemblyAI send END_OF_SPEECH with no
+                # alternatives and no speech_end_time, so stt_last_speaking_time
+                # collapses to `now` -- late by the provider's endpointing delay,
+                # and by the whole pause if the mic went quiet after the last word.
+                # The transcript for this turn already carried word timestamps,
+                # so use that rather than when the message happened to arrive.
+                self._last_speaking_time = self._last_stt_word_end_time
             else:
                 # use an implied version computed based on either word timestamps or current time
                 self._last_speaking_time = stt_last_speaking_time
@@ -1387,6 +1410,9 @@ class AudioRecognition:
 
             self._speaking = True
             self._last_speaking_time = stt_last_speaking_time
+            # a turn that produces no timestamped transcript must not fall back
+            # on the previous turn's word end, which is already in the past
+            self._last_stt_word_end_time = None if not has_stt_end_time else stt_last_speaking_time
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
