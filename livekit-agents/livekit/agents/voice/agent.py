@@ -348,6 +348,16 @@ class Agent:
 
         This is a good opportunity to update the chat context or edit the new message before it is
         sent to the LLM.
+
+        For STT input, ``new_message.extra["stt_request_ids"]`` contains the ordered,
+        distinct provider request IDs contributing accepted final transcript text.
+        ``stt_request_ids_complete`` is true only when every accepted segment has
+        an ID and no identity limit was exceeded (128 IDs, 256 characters each).
+        Promoted interim text makes coverage incomplete. These IDs are scoped to
+        the recognizer, are not quality/confidence signals, and describe the input
+        before this hook edits it. Text/realtime-model input may omit these fields.
+        Provider-specific metadata must be retrieved by exact ID; never infer an
+        association from matching transcript text or the latest provider result.
         """
         pass
 

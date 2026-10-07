@@ -2602,6 +2602,7 @@ class AgentActivity(RecognitionHooks):
             role="user",
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
+            extra=info.transcript_source.as_extra(),
         )
 
         chat_ctx = self._agent.chat_ctx.copy()
@@ -2657,6 +2658,7 @@ class AgentActivity(RecognitionHooks):
                     role="user",
                     content=[info.new_transcript],
                     transcript_confidence=info.transcript_confidence,
+                    extra=info.transcript_source.as_extra(),
                 )
                 user_message.metrics = self._init_metrics_from_end_of_turn(info)
                 self._agent._chat_ctx.items.append(user_message)
@@ -2748,6 +2750,7 @@ class AgentActivity(RecognitionHooks):
             role="user",
             content=[info.new_transcript],
             transcript_confidence=info.transcript_confidence,
+            extra=info.transcript_source.as_extra(),
         )
 
         metrics_report: llm.MetricsReport = self._init_metrics_from_end_of_turn(info)
@@ -2869,6 +2872,7 @@ class AgentActivity(RecognitionHooks):
                 # history keeps the final transcript and on_user_turn_completed edits.
                 preemptive.user_message.content = user_message.content.copy()
                 preemptive.user_message.transcript_confidence = user_message.transcript_confidence
+                preemptive.user_message.extra = user_message.extra.copy()
                 preemptive.user_message.metrics = metrics_report
                 self._schedule_speech(speech_handle, priority=SpeechHandle.SPEECH_PRIORITY_NORMAL)
                 logger.debug(
