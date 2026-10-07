@@ -3342,12 +3342,15 @@ provides-extras = ["vertex"]
 name = "livekit-plugins-oruk"
 source = { editable = "livekit-plugins/livekit-plugins-oruk" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "httpx" },
     { name = "livekit-agents" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10,<4" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4,<6" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "livekit-agents", editable = "livekit-agents" },
 ]

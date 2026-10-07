@@ -10,7 +10,12 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10.0"
 authors = [{ name = "LiveKit", email = "hello@livekit.io" }]
-dependencies = ["livekit-agents>=1.8.3", "httpx>=0.28,<1"]
+dependencies = [
+    "livekit-agents>=1.8.3",
+    "httpx>=0.28,<1",
+    "aiohttp>=3.10,<4",
+    "async-timeout>=4,<6; python_version < '3.11'",
+]
 
 [project.urls]
 Documentation = "https://oruk.ai/docs"
