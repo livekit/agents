@@ -374,6 +374,45 @@ async def test_config_only_update_reuses_the_pooled_socket(socket_tts: _SocketTT
     ]
 
 
+@pytest.mark.parametrize(
+    ("switch_mid_utterance", "pinged_while_idle"),
+    [
+        # the pool hands this socket out again, so it is kept alive meanwhile
+        (False, True),
+        # the switch retired it; pinging would only hold it open until the next request
+        (True, False),
+    ],
+)
+async def test_keepalive_resumes_only_on_sockets_the_pool_will_reuse(
+    socket_tts: _SocketTTS,
+    monkeypatch: pytest.MonkeyPatch,
+    switch_mid_utterance: bool,
+    pinged_while_idle: bool,
+) -> None:
+    monkeypatch.setattr(sarvam_tts, "_KEEPALIVE_INTERVAL", 0.01)
+    tts, session = socket_tts()
+    connect = session.ws_connect
+
+    async def connect_and_switch_on_flush(url: str, **kwargs: Any) -> _FakeSocket:
+        ws = await connect(url, **kwargs)
+        send_str = ws.send_str
+
+        async def send_and_maybe_switch(data: str) -> None:
+            await send_str(data)
+            if switch_mid_utterance and json.loads(data)["type"] == "flush":
+                tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+
+        ws.send_str = send_and_maybe_switch  # type: ignore[method-assign]
+        return ws
+
+    session.ws_connect = connect_and_switch_on_flush  # type: ignore[method-assign]
+    await _speak(_ws_stream(tts))
+    await asyncio.sleep(0.05)
+
+    (ws,) = session.sockets
+    assert any(frame["type"] == "ping" for frame in ws.frames) is pinged_while_idle
+
+
 def _error_stream() -> sarvam_tts.SynthesizeStream:
     """A SynthesizeStream carrying only the attributes `_handle_error_message` reads.
 

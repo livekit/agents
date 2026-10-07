@@ -570,6 +570,14 @@ class TTS(tts.TTS):
         self._ws_handshakes.pop(id(ws), None)
         await ws.close()
 
+    def _socket_matches(self, ws: aiohttp.ClientWebSocketResponse, opts: SarvamTTSOptions) -> bool:
+        """Whether ``ws`` was opened with the handshake options in ``opts``.
+
+        A socket this TTS did not open is assumed to match.
+        """
+        key = _handshake_key(opts)
+        return self._ws_handshakes.get(id(ws), key) == key
+
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Spawn a background task that keeps ``ws`` alive with periodic pings.
 
@@ -991,11 +999,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         would put this stream on a model those may not stream with, so the stream
         opens a socket of its own instead and closes it when done.
         """
-        key = _handshake_key(self._opts)
-        if key == _handshake_key(self._tts._opts):
+        if _handshake_key(self._opts) == _handshake_key(self._tts._opts):
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
                 # update_options can also land while the pool is connecting
-                if self._tts._ws_handshakes.get(id(ws), key) == key:
+                if self._tts._socket_matches(ws, self._opts):
                     self._acquire_time = self._tts._pool.last_acquire_time
                     self._connection_reused = self._tts._pool.last_connection_reused
                     yield ws
@@ -1211,11 +1218,13 @@ class SynthesizeStream(tts.SynthesizeStream):
                         self._recv_task = None
                 finally:
                     # Resume the keepalive only when the session completed
-                    # cleanly. On exception the pool will discard the
-                    # connection via ``remove(conn)`` and ``_close_ws`` will
-                    # run, so restarting here would be wasted work (and the
-                    # task would be cancelled immediately anyway).
-                    if keepalive_should_resume:
+                    # cleanly and the pool will hand this connection out again.
+                    # On exception the pool discards it via ``remove(conn)``, and
+                    # one whose handshake no longer matches the TTS's options was
+                    # retired by update_options (or opened for this stream alone)
+                    # and is closed instead of reused. Pinging either would only
+                    # hold it open.
+                    if keepalive_should_resume and self._tts._socket_matches(ws, self._tts._opts):
                         self._tts._start_keepalive(ws)
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
