@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from types import SimpleNamespace
@@ -552,6 +553,118 @@ async def test_error_frame_forwards_request_id() -> None:
         )
 
     assert exc.value.request_id == "20260918_abc"
+
+
+# ---------------------------------------------------------------------------
+# Models and options removed with bulbul:v2 warn instead of breaking callers
+# ---------------------------------------------------------------------------
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == sarvam_tts.logger.name and r.levelno == logging.WARNING
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "replacement"),
+    [("bulbul:v2", "bulbul:v4-flash"), ("bulbul:v3-beta", "bulbul:v3")],
+)
+def test_removed_model_warns_with_its_replacement(
+    model: str, replacement: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model=model)
+
+    assert any(model in w and f"'{replacement}'" in w for w in _warnings(caplog))
+    # sent as given rather than swapped for the replacement; the Sarvam API has the last word
+    assert tts._opts.model == model
+
+
+def test_update_options_to_removed_model_warns(caplog: pytest.LogCaptureFixture) -> None:
+    tts = _make_tts(model="bulbul:v3")
+
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts.update_options(model="bulbul:v2")
+
+    assert any("'bulbul:v4-flash'" in w for w in _warnings(caplog))
+    assert tts._opts.model == "bulbul:v2"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("pitch", 0.5), ("loudness", 1.5), ("enable_preprocessing", True)],
+)
+def test_v4_flash_only_arg_on_v3_warns_instead_of_failing(
+    name: str, value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A bulbul:v2 config moved to bulbul:v3 may still set these."""
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model="bulbul:v3", **{name: value})
+
+    assert any(f"`{name}`" in w and "bulbul:v4-flash" in w for w in _warnings(caplog))
+    assert name not in sarvam_tts._model_extra_fields(tts._opts)
+
+
+def test_update_options_v4_flash_only_arg_on_v3_warns(caplog: pytest.LogCaptureFixture) -> None:
+    tts = _make_tts(model="bulbul:v3")
+
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts.update_options(loudness=1.5)
+
+    assert any("`loudness`" in w for w in _warnings(caplog))
+
+
+def test_v3_defaults_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        _make_tts(model="bulbul:v3")
+
+    assert _warnings(caplog) == []
+
+
+def test_v4_flash_applies_its_args_without_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        tts = _make_tts(model="bulbul:v4-flash", pitch=0.3, loudness=1.5, enable_preprocessing=True)
+
+    assert _warnings(caplog) == []
+    fields = sarvam_tts._model_extra_fields(tts._opts)
+    assert (fields["pitch"], fields["loudness"], fields["enable_preprocessing"]) == (
+        0.3,
+        1.5,
+        True,
+    )
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _make_tts(enable_cached_responses=True),
+        lambda: _make_tts().update_options(enable_cached_responses=True),
+    ],
+    ids=["init", "update_options"],
+)
+def test_enable_cached_responses_warns_instead_of_raising(
+    call: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=sarvam_tts.logger.name):
+        call()
+
+    assert any("`enable_cached_responses`" in w for w in _warnings(caplog))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _make_tts(pich=0.2),
+        lambda: _make_tts().update_options(pich=0.2),
+    ],
+    ids=["init", "update_options"],
+)
+def test_unknown_argument_still_raises(call: Any) -> None:
+    with pytest.raises(TypeError, match="pich"):
+        call()
 
 
 # ---------------------------------------------------------------------------

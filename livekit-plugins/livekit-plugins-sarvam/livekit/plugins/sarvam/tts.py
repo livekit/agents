@@ -29,6 +29,7 @@ import platform
 import re
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 import numpy as np
@@ -232,6 +233,49 @@ def _clamp_pitch(model: str, pitch: float) -> float:
     return pitch
 
 
+# Models removed from this plugin, mapped to the one to move to. They are still sent as
+# given rather than swapped, so the Sarvam API decides (it answers bulbul:v2 with a 400).
+_REMOVED_MODELS: dict[str, str] = {
+    "bulbul:v2": "bulbul:v4-flash",
+    "bulbul:v3-beta": "bulbul:v3",
+}
+
+# Arguments earlier versions accepted that no remaining model reads.
+_DEPRECATED_ARGS: dict[str, str] = {
+    "enable_cached_responses": "response caching was a bulbul:v2 feature",
+}
+
+
+def _check_deprecated_args(kwargs: dict[str, Any], *, caller: str) -> None:
+    """Warn about arguments no remaining model reads, and raise on unknown ones."""
+    for name, reason in _DEPRECATED_ARGS.items():
+        if name in kwargs:
+            logger.warning(f"`{name}` is deprecated and no longer used ({reason})")
+
+    unknown = set(kwargs) - _DEPRECATED_ARGS.keys()
+    if unknown:
+        raise TypeError(
+            f"{caller}() got unexpected keyword argument(s): {', '.join(sorted(unknown))}"
+        )
+
+
+def _warn_if_removed(model: str) -> None:
+    replacement = _REMOVED_MODELS.get(model)
+    if replacement is not None:
+        logger.warning(f"'{model}' is deprecated, upgrade to '{replacement}'")
+
+
+def _warn_ignored_v4_flash_args(model: str, **args: object) -> None:
+    """Warn about bulbul:v4-flash-only arguments the caller set for another model."""
+    if model == "bulbul:v4-flash":
+        return
+    for name, value in args.items():
+        if value is not None:
+            logger.warning(
+                f"`{name}` is only supported by bulbul:v4-flash and is ignored for '{model}'"
+            )
+
+
 @dataclass
 class SarvamTTSOptions:
     """Options for the Sarvam.ai TTS service.
@@ -358,9 +402,11 @@ class TTS(tts.TTS):
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-0.5 to 0.5), bulbul:v4-flash only
+        pitch: Voice pitch adjustment (-0.5 to 0.5, default 0.0). bulbul:v4-flash only;
+            other models log a warning and ignore it.
         pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
-        loudness: Volume multiplier (0.1 to 2.5), bulbul:v4-flash only
+        loudness: Volume multiplier (0.1 to 2.5, default 1.0). bulbul:v4-flash only;
+            other models log a warning and ignore it.
         temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash).
             bulbul:v4-flash accepts the value then forces it to 0.6 server-side, so
             setting it there has no effect.
@@ -368,13 +414,16 @@ class TTS(tts.TTS):
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
-        enable_preprocessing: Whether to use text preprocessing, bulbul:v4-flash only (which
-            forces it on server-side regardless of this value)
+        enable_preprocessing: Whether to use text preprocessing (default False).
+            bulbul:v4-flash only, and it forces preprocessing on server-side regardless
+            of this value; other models log a warning and ignore it.
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
         http_session: Optional aiohttp session to use
         output_audio_codec: Optionally choose the output codec format (mp3)
+        **kwargs: Catches arguments earlier versions accepted (``enable_cached_responses``).
+            A warning is logged and the value is ignored.
     """
 
     def __init__(
@@ -385,14 +434,14 @@ class TTS(tts.TTS):
         speaker: SarvamTTSSpeakers | str | None = None,
         speech_sample_rate: int = 22050,
         num_channels: int = 1,  # Sarvam output is mono WAV
-        pitch: float = 0.0,
+        pitch: float | None = None,
         pace: float = 1.0,
-        loudness: float = 1.0,
+        loudness: float | None = None,
         temperature: float = 0.6,
         output_audio_bitrate: SarvamTTSOutputAudioBitrate | str = "128k",
         min_buffer_size: int = 50,
         max_chunk_length: int = 150,
-        enable_preprocessing: bool = False,
+        enable_preprocessing: bool | None = None,
         dict_id: str | None = None,
         api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
@@ -400,7 +449,10 @@ class TTS(tts.TTS):
         http_session: aiohttp.ClientSession | None = None,
         send_completion_event: bool = True,
         output_audio_codec: str = "mp3",
+        **kwargs: Any,
     ) -> None:
+        _check_deprecated_args(kwargs, caller="TTS.__init__")
+
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=True),
             sample_rate=speech_sample_rate,
@@ -418,6 +470,13 @@ class TTS(tts.TTS):
             raise ValueError("Target language code is required and cannot be empty")
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
+        _warn_if_removed(model)
+        _warn_ignored_v4_flash_args(
+            model, pitch=pitch, loudness=loudness, enable_preprocessing=enable_preprocessing
+        )
+        pitch = 0.0 if pitch is None else pitch
+        loudness = 1.0 if loudness is None else loudness
+        enable_preprocessing = bool(enable_preprocessing)
         if speaker is None:
             speaker = "shubh_en_narration_gentle" if model == "bulbul:v4-flash" else "shubh"
 
@@ -664,6 +723,7 @@ class TTS(tts.TTS):
         dict_id: str | None = None,
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
+        **kwargs: Any,
     ) -> None:
         """Update TTS options with validation.
 
@@ -672,6 +732,7 @@ class TTS(tts.TTS):
         leaves the live options untouched, and switching models cannot carry over
         a speaker or a pitch/pace/loudness/temperature the new model refuses.
         """
+        _check_deprecated_args(kwargs, caller="TTS.update_options")
         opts = replace(self._opts)
 
         if target_language_code is not None:
@@ -751,6 +812,12 @@ class TTS(tts.TTS):
         _validate_param(opts.model, "loudness", opts.loudness)
         _validate_param(opts.model, "temperature", opts.temperature)
         opts.pitch = _clamp_pitch(opts.model, opts.pitch)
+
+        if model is not None:
+            _warn_if_removed(model)
+        _warn_ignored_v4_flash_args(
+            opts.model, pitch=pitch, loudness=loudness, enable_preprocessing=enable_preprocessing
+        )
 
         # model and send_completion_event are pinned in the handshake URL (and v4-flash
         # is served on a different path), so a pooled socket would keep synthesising
