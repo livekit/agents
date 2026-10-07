@@ -327,14 +327,15 @@ def _websocket_url(opts: SarvamTTSOptions) -> str:
 
 
 _MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
+_CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
 
 
 def _error_status_code(error_data: object) -> int:
     """Extract the HTTP-equivalent status code from a Sarvam websocket error frame.
 
-    Schema rejections carry an integer ``code`` (e.g. 422). Others omit it and prefix
-    the message instead, as in ``"400: Speaker '...' is not compatible with model
-    bulbul:v4-flash"``. Returns -1 when neither form is present.
+    Schema rejections carry ``code`` (e.g. 422, or the string ``"422"``). Others omit
+    it and prefix the message instead, as in ``"400: Speaker '...' is not compatible
+    with model bulbul:v4-flash"``. Returns -1 when neither form is present.
     """
     if not isinstance(error_data, dict):
         return -1
@@ -344,6 +345,8 @@ def _error_status_code(error_data: object) -> int:
         return -1
     if isinstance(code, int):
         return code
+    if isinstance(code, str) and _CODE_STATUS_RE.fullmatch(code):
+        return int(code)
 
     match = _MESSAGE_STATUS_RE.match(str(error_data.get("message", "")))
     return int(match.group(1)) if match else -1

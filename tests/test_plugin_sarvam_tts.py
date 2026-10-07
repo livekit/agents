@@ -291,11 +291,14 @@ def _error_stream() -> sarvam_tts.SynthesizeStream:
             400,
             False,
         ),
+        # a status sent as a digit string is still a status
+        ({"code": "400", "message": "invalid speaker"}, 400, False),
         # transient failures stay retryable
         ({"code": 429, "message": "rate limit exceeded"}, 429, True),
         ({"code": 503, "message": "model unavailable"}, 503, True),
         # an unrecognized frame keeps the previous retry-by-default behaviour
         ({"message": "something we cannot classify"}, -1, True),
+        ({"code": "invalid_request_error", "message": "bad input"}, -1, True),
     ],
 )
 async def test_error_frame_status_code_drives_retryability(
