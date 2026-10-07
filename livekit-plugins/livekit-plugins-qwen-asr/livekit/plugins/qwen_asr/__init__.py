@@ -17,9 +17,10 @@
 from livekit.agents import Plugin
 
 from .log import logger
+from .stt import STT
 from .version import __version__
 
-__all__ = ["__version__"]
+__all__ = ["STT", "__version__"]
 
 
 class QwenAsrPlugin(Plugin):
