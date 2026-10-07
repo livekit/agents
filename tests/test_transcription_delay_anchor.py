@@ -76,6 +76,7 @@ def _make_recognition(
     ar._last_final_transcript_time = None
     ar._turn_tracker = MagicMock()
     ar._last_speaking_time = None
+    ar._last_stt_word_end_time = None
     ar._sample_rate = None
     ar._vad_ch = None
     ar._interruption_ch = None
@@ -296,6 +297,11 @@ async def test_stt_end_of_speech_without_timestamps_still_anchors_the_turn() -> 
     Contrast ``test_vad_anchor_survives_a_transcript_without_timestamps[stt]``,
     where the same missing ``end_time`` on a FINAL_TRANSCRIPT keeps the VAD anchor:
     there the provider said nothing about the boundary, here it said "now".
+
+    "Arrival time is the only estimate" is what makes this case different from
+    #7651: no transcript in this turn carried a word ``end_time``, so there is
+    nothing better to fall back on. When one did, that word end is preferred over
+    the arrival time — see ``tests/test_stt_turn_speaking_time.py``.
     """
     now = time.time()
     ar = _make_recognition(vad=MagicMock(), input_started_at=now - 10.0, mode="stt")
