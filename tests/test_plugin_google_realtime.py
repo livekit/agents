@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import pytest
+from google.auth.credentials import AnonymousCredentials
 from google.genai import types
 
 from livekit.agents import llm, utils
@@ -16,6 +17,139 @@ from livekit.plugins.google.realtime.realtime_api import RealtimeModel, Realtime
 from livekit.plugins.google.utils import create_function_response
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", False),
+        ("gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", False),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("future-live-model", False),
+        ("future-live-model", True),
+    ],
+)
+def test_model_api_compatibility(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live-extended-thinking", True),
+        ("gemini-3.1-flash-live-preview", True),
+        ("gemini-2.5-flash-native-audio-preview-12-2025", True),
+        ("gemini-live-2.5-flash-native-audio", False),
+    ],
+)
+def test_model_api_mismatch_warns(
+    model: str, vertexai: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        realtime_model = RealtimeModel(
+            model=model,
+            vertexai=vertexai,
+            api_key="fake-key",
+            project="test-project",
+            location="eu",
+        )
+    assert realtime_model.model == model
+    assert realtime_model.provider == ("Vertex AI" if vertexai else "Gemini")
+    assert len(caplog.records) == 1
+    warning = caplog.records[0]
+    assert warning.name == "livekit.plugins.google"
+    assert warning.levelno == logging.WARNING
+    assert f"Model '{model}' may not be available" in warning.message
+    assert f"vertexai={vertexai}" in warning.message
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_shared_model_api_from_environment(monkeypatch: pytest.MonkeyPatch, vertexai: bool) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", str(vertexai))
+    model = RealtimeModel(
+        model="gemini-3.8-live", api_key="fake-key", project="test-project", location="eu"
+    )
+    assert model.provider == ("Vertex AI" if vertexai else "Gemini")
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-live", "models/gemini-3.8-live"])
+def test_gemini_3_8_live_rejects_thinking_level(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    with pytest.raises(ValueError, match="does not support thinking_level on the Gemini API"):
+        RealtimeModel(
+            model=model,
+            vertexai=False,
+            api_key="fake-key",
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model", "vertexai"),
+    [
+        ("gemini-3.8-live", True),
+        ("publishers/google/models/gemini-3.8-live", True),
+        ("gemini-3.8-live-extended-thinking", False),
+        ("models/gemini-3.8-live-extended-thinking", False),
+        ("gemini-3.1-flash-live-preview", False),
+    ],
+)
+async def test_thinking_level_reaches_connect_config(
+    monkeypatch: pytest.MonkeyPatch, model: str, vertexai: bool
+) -> None:
+    thinking_config = types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
+    async with _make_configured_session(
+        monkeypatch,
+        model=model,
+        vertexai=vertexai,
+        project="test-project",
+        location="eu",
+        credentials=AnonymousCredentials() if vertexai else None,
+        thinking_config=thinking_config,
+    ) as session:
+        config = session._build_connect_config()
+        assert config.generation_config is not None
+        assert config.generation_config.thinking_config == thinking_config
+
+
+def test_gemini_3_8_live_allows_empty_thinking_config() -> None:
+    RealtimeModel(
+        model="gemini-3.8-live",
+        vertexai=False,
+        api_key="fake-key",
+        thinking_config=types.ThinkingConfig(),
+    )
+
+
+def test_gemini_3_8_live_thinking_with_vertex_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    model = RealtimeModel(
+        model="gemini-3.8-live",
+        project="test-project",
+        location="eu",
+        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+    )
+    assert model.provider == "Vertex AI"
 
 
 def _is_genai_client_teardown(task: asyncio.Task[Any]) -> bool:
@@ -369,7 +503,7 @@ async def test_session_close_releases_the_genai_client(
     assert closed
 
 
-def _tool_call(call_id: str = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
+def _tool_call(call_id: str | None = "fc_1", name: str = "lookup") -> types.LiveServerToolCall:
     return types.LiveServerToolCall(
         function_calls=[types.FunctionCall(id=call_id, name=name, args={})]
     )
@@ -486,7 +620,7 @@ async def test_blocking_tools_send_the_response_and_warn_it_cannot_be_silent(
 
 @pytest.mark.parametrize("vertexai", [False, True])
 def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> None:
-    """Vertex AI rejects `scheduling` (and `id`), so neither is set for it."""
+    """Vertex AI rejects `scheduling`, so it is set only for the Gemini API."""
     res = create_function_response(
         _tool_output(),
         vertexai=vertexai,
@@ -495,10 +629,74 @@ def test_function_response_scheduling_only_for_gemini_api(vertexai: bool) -> Non
 
     if vertexai:
         assert res.scheduling is None
-        assert res.id is None
     else:
         assert res.scheduling == types.FunctionResponseScheduling.SILENT
-        assert res.id == "fc_1"
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+async def test_tool_response_carries_the_call_id(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool
+) -> None:
+    """The response names the call it answers on both APIs.
+
+    gemini-3.8-live on Vertex AI drops a response to a BLOCKING call that has no id and never
+    replies, so the turn stalls after the first tool call.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        session._opts.tool_behavior = types.Behavior.BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call())
+        await _drain_sent(session)
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output())
+        await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].id == "fc_1"
+
+
+@pytest.mark.parametrize("vertexai", [False, True])
+async def test_tool_response_omits_a_locally_made_call_id(
+    monkeypatch: pytest.MonkeyPatch, vertexai: bool
+) -> None:
+    """A call the server sent without an id is answered without one.
+
+    The id we make up to track the call locally names nothing on the server.
+    """
+    async with _make_connected_session(monkeypatch) as session:
+        session._opts.vertexai = vertexai
+        session._opts.tool_behavior = types.Behavior.BLOCKING
+        session._start_new_generation()
+        session._handle_tool_calls(_tool_call(call_id=None))
+        await _drain_sent(session)
+        assert len(session._synthetic_call_ids) == 1
+        (call_id,) = session._synthetic_call_ids
+
+        chat_ctx = session.chat_ctx.copy()
+        chat_ctx.items.append(_tool_output(call_id=call_id))
+        await session.update_chat_ctx(chat_ctx)
+
+        responses = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(responses) == 1
+        assert responses[0].function_responses is not None
+        assert responses[0].function_responses[0].id is None
+
+        # a resumption replays the response from the chat context; it still carries no id
+        session._sync_chat_ctx(chat_ctx, known=llm.ChatContext.empty())
+        replayed = [
+            m for m in await _drain_sent(session) if isinstance(m, types.LiveClientToolResponse)
+        ]
+        assert len(replayed) == 1
+        assert replayed[0].function_responses is not None
+        assert replayed[0].function_responses[0].id is None
 
 
 def test_vertex_scheduling_warns(

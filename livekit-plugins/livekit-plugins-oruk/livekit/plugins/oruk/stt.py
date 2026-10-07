@@ -27,6 +27,7 @@ from livekit.agents.utils import AudioBuffer, is_given
 @dataclass
 class _Request:
     id: str
+    conn_options: APIConnectOptions
     retry_after: float = 0
 
 
@@ -78,30 +79,41 @@ class STT(stt.STT):
         language: NotGivenOr[str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> stt.SpeechEvent:
-        request = _Request(str(uuid.uuid4()))
+        request = _Request(str(uuid.uuid4()), conn_options)
         token = self._request.set(request)
         try:
-            # The base batch loop retries all APIErrors. Respect retryable here,
-            # so auth failures and uncertain/completed request IDs do not replay.
-            for attempt in range(conn_options.max_retry + 1):
-                try:
-                    return await super().recognize(
-                        buffer,
-                        language=language,
-                        conn_options=replace(conn_options, max_retry=0),
-                    )
-                except APIError as exc:
-                    if not exc.retryable or attempt == conn_options.max_retry:
-                        raise
-                    await asyncio.sleep(
-                        max(request.retry_after, conn_options._interval_for_retry(attempt))
-                    )
-                    request.retry_after = 0
-            raise RuntimeError("unreachable")
+            # Keep one framework call per utterance so a retryable HTTP attempt
+            # cannot emit a terminal STT error before our retries finish. This
+            # also preserves retryable handling with the supported 1.8.3 floor.
+            return await super().recognize(
+                buffer,
+                language=language,
+                conn_options=replace(conn_options, max_retry=0),
+            )
         finally:
             self._request.reset(token)
 
     async def _recognize_impl(
+        self,
+        buffer: AudioBuffer,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions,
+    ) -> stt.SpeechEvent:
+        request = self._request.get()
+        options = request.conn_options
+        for attempt in range(options.max_retry + 1):
+            try:
+                return await self._recognize_once(buffer, language=language, conn_options=options)
+            except APIError as exc:
+                if not exc.retryable or attempt == options.max_retry:
+                    raise
+                self._emit_error(exc, recoverable=True)
+                await asyncio.sleep(max(request.retry_after, options._interval_for_retry(attempt)))
+                request.retry_after = 0
+        raise RuntimeError("unreachable")
+
+    async def _recognize_once(
         self,
         buffer: AudioBuffer,
         *,

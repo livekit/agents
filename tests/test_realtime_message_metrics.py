@@ -189,10 +189,9 @@ async def test_realtime_user_turn_is_ordered_before_the_reply_it_prompted() -> N
         agent = Agent(instructions="test")
         await session.start(agent)
 
-        reply = agent.chat_ctx.add_message(
+        agent._chat_ctx.add_message(
             role="assistant", content="answering", id="reply", created_at=1_000_500.0
         )
-        agent._chat_ctx.insert(reply)
 
         model.active_session.emit(
             "input_audio_transcription_completed",

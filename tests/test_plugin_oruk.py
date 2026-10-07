@@ -158,3 +158,105 @@ def test_missing_key(monkeypatch):
     monkeypatch.delenv("ORUK_API_KEY", raising=False)
     with pytest.raises(ValueError, match="ORUK_API_KEY"):
         STT()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["network", "server", "model_busy"])
+async def test_recovered_attempt_is_not_a_terminal_error(failure):
+    requests = []
+    errors = []
+    metrics = []
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            if failure == "network":
+                raise httpx.ReadError("connection lost", request=request)
+            return httpx.Response(
+                429 if failure == "model_busy" else 500,
+                json={"error": {"code": failure}},
+            )
+        return httpx.Response(200, json={"text": "recovered"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        plugin = STT(api_key="test", http_client=client)
+        plugin.on("error", errors.append)
+        plugin.on("metrics_collected", metrics.append)
+        with patch("livekit.plugins.oruk.stt.asyncio.sleep", new_callable=AsyncMock):
+            event = await plugin.recognize(audio(), conn_options=OPTIONS)
+        assert event.alternatives[0].text == "recovered"
+        assert [error.recoverable for error in errors] == [True]
+        assert len(metrics) == 1
+        assert metrics[0].request_id == event.request_id
+        assert metrics[0].audio_duration == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,max_retry", [(503, 2), (503, 0), (401, 2)])
+async def test_only_exhausted_or_permanent_failure_emits_terminal_error(status, max_retry):
+    requests = []
+    errors = []
+    metrics = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(status, json={"error": {"code": "unavailable"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        plugin = STT(api_key="test", http_client=client)
+        plugin.on("error", errors.append)
+        plugin.on("metrics_collected", metrics.append)
+        with patch("livekit.plugins.oruk.stt.asyncio.sleep", new_callable=AsyncMock):
+            with pytest.raises(APIStatusError) as caught:
+                await plugin.recognize(
+                    audio(),
+                    conn_options=APIConnectOptions(
+                        max_retry=max_retry, retry_interval=0, timeout=1
+                    ),
+                )
+        attempts = max_retry + 1 if status == 503 else 1
+        assert len(requests) == attempts
+        assert [error.recoverable for error in errors] == [True] * (attempts - 1) + [False]
+        assert errors[-1].error is caught.value
+        assert metrics == []
+        assert len({request.headers["X-Request-ID"] for request in requests}) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_backoff_does_not_replay_audio_or_reuse_request_id():
+    requests = []
+    errors = []
+    metrics = []
+    backing_off = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def backoff(_delay):
+        backing_off.set()
+        await resume.wait()
+
+    def handler(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"text": "new utterance"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        plugin = STT(api_key="test", http_client=client)
+        plugin.on("error", errors.append)
+        plugin.on("metrics_collected", metrics.append)
+        with patch("livekit.plugins.oruk.stt.asyncio.sleep", side_effect=backoff):
+            task = asyncio.create_task(plugin.recognize(audio(), conn_options=OPTIONS))
+            try:
+                await asyncio.wait_for(backing_off.wait(), timeout=1)
+            finally:
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+        assert len(requests) == 1
+        assert [error.recoverable for error in errors] == [True]
+        assert metrics == []
+        event = await plugin.recognize(audio(), conn_options=OPTIONS)
+        assert event.alternatives[0].text == "new utterance"
+        assert len(requests) == 2
+        assert requests[0].headers["X-Request-ID"] != requests[1].headers["X-Request-ID"]
+        assert len(metrics) == 1

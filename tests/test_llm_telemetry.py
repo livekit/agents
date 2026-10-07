@@ -170,6 +170,12 @@ async def test_llm_span_reports_cached_input_tokens(
         if (span.attributes or {}).get(trace_types.ATTR_GEN_AI_OPERATION_NAME) == "chat"
     ]
     assert [span.name for span in inference_spans] == ["llm_request"]
+    usage_spans = [
+        span
+        for span in finished_spans
+        if any(key.startswith("gen_ai.usage.") for key in (span.attributes or {}))
+    ]
+    assert usage_spans == inference_spans
     spans = [span for span in finished_spans if span.name == "llm_request"]
     assert len(spans) == 1
     assert spans[0].attributes["gen_ai.usage.input_tokens"] == 100
