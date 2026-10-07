@@ -549,6 +549,132 @@ async def test_realtime_streams_audio_after_speech_starts() -> None:
     assert bytes(audio) == spoken
 
 
+class _LateEnd:
+    """START is early. END for the midpoint arrives only after later audio is queued."""
+
+    def stream(self) -> _LateEndStream:
+        return _LateEndStream()
+
+
+class _LateEndStream:
+    def __init__(self) -> None:
+        self._pcm = bytearray()
+        self._started = False
+        self._events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
+
+    def push_frame(self, frame: rtc.AudioFrame) -> None:
+        self._pcm.extend(bytes(frame.data))
+        if not self._started:
+            self._started = True
+            samples = len(self._pcm) // 2
+            self._events.put_nowait(
+                vad.VADEvent(
+                    type=vad.VADEventType.START_OF_SPEECH,
+                    samples_index=samples,
+                    timestamp=0.0,
+                    speech_duration=samples / 16000,
+                    silence_duration=0.0,
+                    frames=[rtc.AudioFrame(bytes(self._pcm), 16000, 1, samples)],
+                )
+            )
+
+    def flush(self) -> None:
+        return None
+
+    def end_input(self) -> None:
+        midpoint = 3200
+        second = bytes(self._pcm[midpoint * 2 :])
+        self._events.put_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=midpoint,
+                timestamp=0.0,
+                speech_duration=midpoint / 16000,
+                silence_duration=0.25,
+                frames=[],
+            )
+        )
+        self._events.put_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.START_OF_SPEECH,
+                samples_index=len(self._pcm) // 2,
+                timestamp=0.0,
+                speech_duration=len(second) / 2 / 16000,
+                silence_duration=0.0,
+                frames=[rtc.AudioFrame(second, 16000, 1, len(second) // 2)],
+            )
+        )
+        self._events.put_nowait(
+            vad.VADEvent(
+                type=vad.VADEventType.END_OF_SPEECH,
+                samples_index=len(self._pcm) // 2,
+                timestamp=0.0,
+                speech_duration=len(second) / 2 / 16000,
+                silence_duration=0.25,
+                frames=[],
+            )
+        )
+        self._events.put_nowait(None)
+
+    async def aclose(self) -> None:
+        return None
+
+    def __aiter__(self) -> _LateEndStream:
+        return self
+
+    async def __anext__(self) -> vad.VADEvent:
+        event = await self._events.get()
+        if event is None:
+            raise StopAsyncIteration
+        return event
+
+
+@pytest.mark.asyncio
+async def test_realtime_does_not_merge_audio_before_end() -> None:
+    turns: list[bytes] = []
+    current = bytearray()
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "session.created", "id": "sess-test"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            event = json.loads(msg.data)
+            if event.get("type") == "input_audio_buffer.append":
+                current.extend(base64.b64decode(event["audio"]))
+            if event.get("type") == "input_audio_buffer.commit" and event.get("final") is True:
+                turns.append(bytes(current))
+                current.clear()
+                await ws.send_json({"type": "transcription.done", "text": f"t{len(turns)}"})
+        return ws
+
+    first = b"\x11\x22" * 3200
+    second = b"\x33\x44" * 3200
+    app = web.Application()
+    app.router.add_get("/v1/realtime", realtime)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            use_realtime=True,
+            vad=_LateEnd(),  # type: ignore[arg-type]
+        )
+        stream = stt.stream()
+        for start in range(0, len(first + second), 3200):
+            chunk = (first + second)[start : start + 3200]
+            stream.push_frame(rtc.AudioFrame(chunk, 16000, 1, len(chunk) // 2))
+        stream.end_input()
+        _events = [event async for event in stream]
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert turns == [first, second]
+
+
 class _FlushBoundary:
     def stream(self) -> _FlushBoundaryStream:
         return _FlushBoundaryStream()

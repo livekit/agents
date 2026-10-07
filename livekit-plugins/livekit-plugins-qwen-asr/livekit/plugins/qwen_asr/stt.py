@@ -45,6 +45,9 @@ _CHUNK_BYTES = REALTIME_SAMPLE_RATE * _CHUNK_MS // 1000 * 2
 # Same horizon as Silero's default max_buffered_speech. A short ring drops the
 # start of the utterance when VAD classification lags behind the input loop.
 _HELD_BYTES = 60 * REALTIME_SAMPLE_RATE * 2
+# Audio newer than this may still contain the silence that ends the turn.
+# It stays buffered until END, so the next utterance is not committed early.
+_UNCONFIRMED_SAMPLES = int(0.5 * REALTIME_SAMPLE_RATE)
 
 
 class STT(stt.STT[Any]):
@@ -327,6 +330,7 @@ class SpeechStream(stt.SpeechStream):
             index_base = 0
             last_raw = -1
             pending_flush: list[int] = []
+            confirmed = 0
             speaking = vad_stream is None
 
             async def read_vad() -> None:
@@ -335,6 +339,7 @@ class SpeechStream(stt.SpeechStream):
                     if event.type in (
                         vad.VADEventType.START_OF_SPEECH,
                         vad.VADEventType.END_OF_SPEECH,
+                        vad.VADEventType.INFERENCE_DONE,
                     ):
                         vad_events.put_nowait(event)
                 vad_events.put_nowait(None)
@@ -389,14 +394,22 @@ class SpeechStream(stt.SpeechStream):
                 held_origin += count
                 return chunk
 
+            async def release_confirmed() -> None:
+                # The newest half-second can still hold the silence that ends
+                # the turn. END assigns that tail; it is not sent early.
+                chunk = take_before(confirmed - _UNCONFIRMED_SAMPLES)
+                if chunk:
+                    await append(chunk)
+
             async def apply_vad(event: vad.VADEvent) -> None:
-                nonlocal speaking
+                nonlocal speaking, confirmed
                 boundary = absolute(int(event.samples_index))
+                confirmed = max(confirmed, boundary)
                 if event.type == vad.VADEventType.START_OF_SPEECH and not speaking:
                     speaking = True
                     await open_turn()
-                    # The start frames are this utterance's onset. Later audio stays
-                    # in `held` until END names the sample where the turn stops.
+                    # Frames are this utterance's onset. Audio past the index stays
+                    # buffered so a later utterance is not committed with this one.
                     onset = b"".join(bytes(frame.data) for frame in event.frames)
                     take_before(boundary)
                     if onset:
@@ -408,6 +421,9 @@ class SpeechStream(stt.SpeechStream):
                         await append(rest)
                     if state.active:
                         await close_turn()
+                    return
+                if speaking:
+                    await release_confirmed()
 
             try:
                 async for data in self._input_ch:
@@ -423,19 +439,15 @@ class SpeechStream(stt.SpeechStream):
                                 await open_turn()
                             await append(pcm)
                         else:
-                            samples = data.samples_per_channel
-                            # Once VAD has caught up, send speech as it arrives so
-                            # a long turn is not trimmed and interim text can move.
-                            if speaking and vad_events.empty():
-                                await append(pcm)
-                            else:
-                                held.extend(pcm)
-                                if not speaking:
-                                    overflow = len(held) - _HELD_BYTES
-                                    if overflow > 0:
-                                        del held[:overflow]
-                                        held_origin += overflow // 2
-                            pushed += samples
+                            held.extend(pcm)
+                            pushed += data.samples_per_channel
+                            # Only unanswered silence is capped. Speech already
+                            # inside a turn stays until the VAD index releases it.
+                            if not speaking:
+                                overflow = len(held) - _HELD_BYTES
+                                if overflow > 0:
+                                    del held[:overflow]
+                                    held_origin += overflow // 2
                             vad_stream.push_frame(data)
                     elif vad_stream is None and state.active:
                         await close_turn()
