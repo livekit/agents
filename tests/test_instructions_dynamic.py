@@ -478,3 +478,12 @@ async def test_per_reply_instructions_render_dynamic_inline():
     assert sent[0] == (INSTRUCTIONS_MESSAGE_ID, "system", [COMMON, CacheBreakpoint()])
     assert sent[1][1:] == ("system", ["Greet the caller.\nIt is 09:01."])
     assert capturing.seen[-1].get_by_id(DYNAMIC_INSTRUCTIONS_MESSAGE_ID) is None
+
+
+def test_truncate_to_zero_keeps_both_instruction_messages():
+    ctx = _dynamic_ctx()
+    ctx.add_message(role="assistant", content="Sure, what day?")
+
+    ctx.truncate(max_items=0)
+
+    assert [m.id for m in ctx.items] == [INSTRUCTIONS_MESSAGE_ID, DYNAMIC_INSTRUCTIONS_MESSAGE_ID]
