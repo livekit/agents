@@ -571,6 +571,8 @@ class RealtimeSession(llm.RealtimeSession):
         self._unsent_item_ids: set[str] = set()
 
         self._in_user_activity = False
+        self._user_audio_since_generation = False
+        self._programmatic_interrupt_pending = False
         self._session_lock = asyncio.Lock()
         self._num_retries = 0
         # error recorded by the recv/send tasks so _main_task can bound retries
@@ -909,6 +911,10 @@ class RealtimeSession(llm.RealtimeSession):
         if not self._manual_activity_detection:
             return
 
+        self._user_audio_since_generation = True
+        self._start_user_activity()
+
+    def _start_user_activity(self) -> None:
         if not self._in_user_activity:
             self._in_user_activity = True
             self._send_client_event(
@@ -918,15 +924,18 @@ class RealtimeSession(llm.RealtimeSession):
             )
 
     def interrupt(self) -> None:
-        # Gemini Live treats activity start as interruption, so we rely on start_user_activity
-        # notifications to handle it
+        # Gemini Live treats activity start as interruption. This does not imply
+        # that new user audio was received.
         if (
             self._opts.realtime_input_config
             and self._opts.realtime_input_config.activity_handling
             == types.ActivityHandling.NO_INTERRUPTION
         ):
             return
-        self.start_user_activity()
+        if self._manual_activity_detection:
+            if not self._in_user_activity:
+                self._programmatic_interrupt_pending = True
+            self._start_user_activity()
 
     def truncate(
         self,
@@ -1206,6 +1215,7 @@ class RealtimeSession(llm.RealtimeSession):
                         self._reject_tool_calls(response.tool_call.function_calls or [])
                         continue
 
+                    self._note_user_audio_transcription(response)
                     if not self._current_generation or self._current_generation._done:
                         if (sc := response.server_content) and sc.interrupted:
                             # two cases an interrupted event is sent without an active generation
@@ -1362,10 +1372,17 @@ class RealtimeSession(llm.RealtimeSession):
             )
         )
 
+        responds_to_user_audio = self._user_audio_since_generation or not (
+            is_given(self._opts.proactivity) and self._opts.proactivity
+        )
+        self._user_audio_since_generation = False
+        self._programmatic_interrupt_pending = False
         generation_event = llm.GenerationCreatedEvent(
             message_stream=self._current_generation.message_ch,
             function_stream=self._current_generation.function_ch,
             user_initiated=False,
+            # Proactivity permits unsolicited output, but does not make every turn unsolicited.
+            responds_to_user_audio=responds_to_user_audio,
             response_id=self._current_generation.response_id,
         )
 
@@ -1376,7 +1393,7 @@ class RealtimeSession(llm.RealtimeSession):
         else:
             # emit input_speech_started event before starting an agent initiated generation
             # to interrupt the previous audio playout if any
-            self._handle_input_speech_started()
+            self._handle_input_speech_started(is_synthetic=True)
 
         self.emit("generation_created", generation_event)
 
@@ -1477,7 +1494,7 @@ class RealtimeSession(llm.RealtimeSession):
             return
 
         # emit input_speech_stopped event after the generation is done
-        self._handle_input_speech_stopped()
+        self._handle_input_speech_stopped(is_synthetic=True)
 
         gen = self._current_generation
 
@@ -1528,13 +1545,15 @@ class RealtimeSession(llm.RealtimeSession):
         if not gen.audio_ch.closed:
             gen.audio_ch.close()
 
-    def _handle_input_speech_started(self) -> None:
-        self.emit("input_speech_started", llm.InputSpeechStartedEvent())
+    def _handle_input_speech_started(self, *, is_synthetic: bool = False) -> None:
+        self.emit("input_speech_started", llm.InputSpeechStartedEvent(is_synthetic=is_synthetic))
 
-    def _handle_input_speech_stopped(self) -> None:
+    def _handle_input_speech_stopped(self, *, is_synthetic: bool = False) -> None:
         self.emit(
             "input_speech_stopped",
-            llm.InputSpeechStoppedEvent(user_transcription_enabled=False),
+            llm.InputSpeechStoppedEvent(
+                user_transcription_enabled=False, is_synthetic=is_synthetic
+            ),
         )
 
     def _reject_tool_calls(self, function_calls: list[types.FunctionCall]) -> None:
@@ -1714,6 +1733,29 @@ class RealtimeSession(llm.RealtimeSession):
                 recoverable=recoverable,
             ),
         )
+
+    def _note_user_audio_transcription(self, response: types.LiveServerMessage) -> None:
+        if not (sc := response.server_content):
+            return
+
+        if sc.interrupted:
+            # The server can interrupt active output for a new user turn. An
+            # activity_start sent by interrupt() is not evidence of user audio.
+            if not self._programmatic_interrupt_pending:
+                self._user_audio_since_generation = True
+            self._programmatic_interrupt_pending = False
+
+        if sc.interim_input_transcription and sc.interim_input_transcription.text:
+            # Interim text reports live input, including barge-ins during output.
+            self._user_audio_since_generation = True
+        elif (
+            sc.input_transcription
+            and sc.input_transcription.text
+            and (not self._current_generation or self._current_generation._done)
+        ):
+            # Final transcript chunks during active output may belong to its
+            # original input, so they must not arm a later generation.
+            self._user_audio_since_generation = True
 
     def _is_new_generation(self, resp: types.LiveServerMessage) -> bool:
         if resp.tool_call:
