@@ -12,10 +12,11 @@ from google.genai import types
 # Additional references:
 # 1. https://github.com/kazunori279/adk-streaming-test/blob/main/test_report.md
 LiveAPIModels = Literal[
+    # Models available on both APIs
+    "gemini-3.8-live",
     # VertexAI models
     "gemini-live-2.5-flash-native-audio",  # GA https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/2-5-flash-live-api#live-2.5-flash
     # Gemini API models
-    "gemini-3.8-live",
     "gemini-3.8-live-extended-thinking",
     "gemini-3.1-flash-live-preview",
     "gemini-2.5-flash-native-audio-preview-12-2025",  # https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live
