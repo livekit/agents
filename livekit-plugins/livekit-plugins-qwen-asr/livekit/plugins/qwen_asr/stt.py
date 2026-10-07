@@ -322,6 +322,9 @@ class SpeechStream(stt.SpeechStream):
             vad_events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
             held = bytearray()
             tail = bytearray()
+            pushed = 0
+            index_base = 0
+            last_raw = -1
             speaking = vad_stream is None
 
             async def read_vad() -> None:
@@ -363,22 +366,40 @@ class SpeechStream(stt.SpeechStream):
                 state.active = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
+            def origin() -> int:
+                return pushed - len(held) // 2
+
+            def absolute(raw: int) -> int:
+                nonlocal index_base, last_raw
+                # Silero's sample counter restarts after flush. A drop means a new epoch.
+                if last_raw >= 0 and raw < last_raw:
+                    index_base += last_raw
+                last_raw = raw
+                return index_base + raw
+
+            def take_before(sample: int) -> bytes:
+                count = min(len(held) // 2, max(0, sample - origin()))
+                chunk = bytes(held[: count * 2])
+                del held[: count * 2]
+                return chunk
+
             async def apply_vad(event: vad.VADEvent) -> None:
                 nonlocal speaking
+                boundary = absolute(int(event.samples_index))
                 if event.type == vad.VADEventType.START_OF_SPEECH and not speaking:
                     speaking = True
                     await open_turn()
-                    # START frames are the speech Silero buffered, including its
-                    # prefix. Audio that arrived after that snapshot is still in
-                    # `held` and has to follow the snapshot without a second copy.
+                    # The start frames are this utterance's onset. Later audio stays
+                    # in `held` until END names the sample where the turn stops.
                     onset = b"".join(bytes(frame.data) for frame in event.frames)
-                    audio = _audio_from_start(onset, bytes(held))
-                    held.clear()
-                    if audio:
-                        await append(audio)
+                    take_before(boundary)
+                    if onset:
+                        await append(onset)
                 elif event.type == vad.VADEventType.END_OF_SPEECH and speaking:
                     speaking = False
-                    held.clear()
+                    rest = take_before(boundary)
+                    if rest:
+                        await append(rest)
                     if state.active:
                         await close_turn()
 
@@ -396,13 +417,11 @@ class SpeechStream(stt.SpeechStream):
                                 await open_turn()
                             await append(pcm)
                         else:
-                            if speaking:
-                                await append(pcm)
-                            else:
-                                held.extend(pcm)
-                                overflow = len(held) - _HELD_BYTES
-                                if overflow > 0:
-                                    del held[:overflow]
+                            held.extend(pcm)
+                            pushed += data.samples_per_channel
+                            overflow = len(held) - _HELD_BYTES
+                            if overflow > 0:
+                                del held[:overflow]
                             vad_stream.push_frame(data)
                     elif vad_stream is None and state.active:
                         await close_turn()
@@ -518,23 +537,6 @@ class _RealtimeTurn:
     def __init__(self) -> None:
         self.active = False
         self.samples = 0
-
-
-def _audio_from_start(onset: bytes, unsent: bytes) -> bytes:
-    """Speech to send when VAD reports the start of a turn.
-
-    ``onset`` is the VAD speech buffer. ``unsent`` is everything the input loop
-    held while classification lagged. The snapshot is a slice of that audio;
-    bytes after it still have to be sent, and bytes before it are silence.
-    """
-    if not onset:
-        return unsent
-    at = unsent.rfind(onset)
-    if at >= 0:
-        return unsent[at:]
-    if unsent and onset.endswith(unsent):
-        return onset
-    return onset + unsent
 
 
 async def _send_audio(ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:

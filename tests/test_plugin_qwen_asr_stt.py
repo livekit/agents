@@ -336,3 +336,111 @@ async def test_realtime_keeps_speech_when_vad_lags() -> None:
     assert bytes(audio) == spoken
     final = next(event for event in events if event.type == SpeechEventType.FINAL_TRANSCRIPT)
     assert final.alternatives[0].text == "tamamı"
+
+
+class _TwoTurnVAD:
+    """Two utterances already buffered before either VAD event is delivered."""
+
+    def __init__(self, first: bytes, second: bytes) -> None:
+        self._first = first
+        self._second = second
+
+    def stream(self) -> _TwoTurnStream:
+        return _TwoTurnStream(self._first, self._second)
+
+
+class _TwoTurnStream:
+    def __init__(self, first: bytes, second: bytes) -> None:
+        self._first = first
+        self._second = second
+        self._events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
+
+    def push_frame(self, _frame: rtc.AudioFrame) -> None:
+        return None
+
+    def flush(self) -> None:
+        return None
+
+    def end_input(self) -> None:
+        cuts = (len(self._first) // 2, (len(self._first) + len(self._second)) // 2)
+        pieces = (self._first, self._second)
+        for end, piece in zip(cuts, pieces, strict=True):
+            self._events.put_nowait(
+                vad.VADEvent(
+                    type=vad.VADEventType.START_OF_SPEECH,
+                    samples_index=end,
+                    timestamp=0.0,
+                    speech_duration=len(piece) / 2 / 16000,
+                    silence_duration=0.0,
+                    frames=[rtc.AudioFrame(piece, 16000, 1, len(piece) // 2)],
+                )
+            )
+            self._events.put_nowait(
+                vad.VADEvent(
+                    type=vad.VADEventType.END_OF_SPEECH,
+                    samples_index=end,
+                    timestamp=0.0,
+                    speech_duration=len(piece) / 2 / 16000,
+                    silence_duration=0.2,
+                    frames=[],
+                )
+            )
+        self._events.put_nowait(None)
+
+    async def aclose(self) -> None:
+        return None
+
+    def __aiter__(self) -> _TwoTurnStream:
+        return self
+
+    async def __anext__(self) -> vad.VADEvent:
+        event = await self._events.get()
+        if event is None:
+            raise StopAsyncIteration
+        return event
+
+
+@pytest.mark.asyncio
+async def test_realtime_keeps_queued_turns_separate() -> None:
+    turns: list[bytes] = []
+    current = bytearray()
+
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "session.created", "id": "sess-test"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            event = json.loads(msg.data)
+            if event.get("type") == "input_audio_buffer.append":
+                current.extend(base64.b64decode(event["audio"]))
+            if event.get("type") == "input_audio_buffer.commit" and event.get("final") is True:
+                turns.append(bytes(current))
+                current.clear()
+                await ws.send_json({"type": "transcription.done", "text": f"t{len(turns)}"})
+        return ws
+
+    # Identical PCM: a byte search would keep the later copy and drop the first.
+    phrase = b"\x11\x22" * 16000
+    app = web.Application()
+    app.router.add_get("/v1/realtime", realtime)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            use_realtime=True,
+            vad=_TwoTurnVAD(phrase, phrase),  # type: ignore[arg-type]
+        )
+        stream = stt.stream()
+        for start in range(0, len(phrase) * 2, 3200):
+            chunk = (phrase + phrase)[start : start + 3200]
+            stream.push_frame(rtc.AudioFrame(chunk, 16000, 1, len(chunk) // 2))
+        stream.end_input()
+        _events = [event async for event in stream]
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    assert turns == [phrase, phrase]
