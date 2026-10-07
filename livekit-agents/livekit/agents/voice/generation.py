@@ -24,7 +24,7 @@ from ..llm import (
 )
 from ..llm.chat_context import Instructions
 from ..log import logger
-from ..telemetry import gen_ai as gen_ai_telemetry, otel_metrics, trace_types, tracer
+from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, otel_metrics, trace_types, tracer
 from ..types import (
     USERDATA_TIMED_TRANSCRIPT,
     USERDATA_TTS_STARTED_TIME,
@@ -88,14 +88,20 @@ def _inject_running_tool_calls(
         if fnc_call.call_id in existing:
             continue
         existing.add(fnc_call.call_id)
-        # copy so the executor's live FunctionCall stays unflagged
+        # copy so the executor's live FunctionCall stays unflagged. The pair gets ids of its
+        # own, stable across turns: telemetry tells items apart by id, so the pair matches
+        # itself while the tool runs and is never mistaken for the real call once it ends
         call = fnc_call.model_copy(
-            update={"extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True}}
+            update={
+                "id": f"{fnc_call.id}_running",
+                "extra": {**fnc_call.extra, _RUNNING_PLACEHOLDER_KEY: True},
+            }
         )
         chat_ctx.insert(
             [
                 call,
                 llm.FunctionCallOutput(
+                    id=f"{fnc_call.id}_running_output",
                     call_id=fnc_call.call_id,
                     name=fnc_call.name,
                     output=placeholder,
@@ -192,10 +198,14 @@ async def _llm_inference_task(
     text_ch, function_ch = data.text_ch, data.function_ch
     tools = tool_ctx.flatten()
 
+    # the input as this span records it: the full context, or only what was added since
+    # the last committed generation when the session records with `input_delta`
+    delta = input_delta.compute(input_delta.LLM_NODE, chat_ctx, current_span)
+
     if current_span.is_recording():
         attrs: dict[str, Any] = {
             trace_types.ATTR_CHAT_CTX: json.dumps(
-                chat_ctx.to_dict(
+                delta.chat_ctx.to_dict(
                     exclude_audio=True,
                     exclude_image=True,
                     exclude_timestamp=True,
@@ -209,12 +219,13 @@ async def _llm_inference_task(
             trace_types.ATTR_TOOL_SETS: [type(tool_set).__name__ for tool_set in tool_ctx.toolsets],
         }
         current_span.set_attributes(attrs)
+        input_delta.set_attributes(current_span, delta)
 
     # the GenAI inference attributes belong to the nested `llm_request` span, which is the
     # provider call the convention describes — setting them here as well would make a
     # backend summing gen_ai.usage.* report twice the calls and tokens. A custom node that
     # never builds an LLMStream has no such span, and records them here instead.
-    inference_recorded = gen_ai_telemetry.track_inference_span()
+    inference_recorded = gen_ai_telemetry.track_inference_span(model=model, provider=provider)
 
     llm_node = node(chat_ctx, tools, model_settings)
     if asyncio.iscoroutine(llm_node):
@@ -235,11 +246,9 @@ async def _llm_inference_task(
         _record_uninstrumented_inference(
             current_span,
             inference_recorded,
-            chat_ctx,
+            delta,
             tools,
             data,
-            model,
-            provider,
             streaming=False,
         )
         return True
@@ -319,7 +328,7 @@ async def _llm_inference_task(
     except BaseException as exc:
         # a node that raises still made a request; without this it leaves no inference span
         _record_uninstrumented_inference(
-            current_span, inference_recorded, chat_ctx, tools, data, model, provider, error=exc
+            current_span, inference_recorded, delta, tools, data, error=exc
         )
         raise
     finally:
@@ -343,7 +352,7 @@ async def _llm_inference_task(
     if data.ttft is not None:
         current_span.set_attribute(trace_types.ATTR_RESPONSE_TTFT, data.ttft)
     _record_uninstrumented_inference(
-        current_span, inference_recorded, chat_ctx, tools, data, model, provider, usage=usage
+        current_span, inference_recorded, delta, tools, data, usage=usage
     )
     return True
 
@@ -351,11 +360,9 @@ async def _llm_inference_task(
 def _record_uninstrumented_inference(
     span: trace.Span,
     inference_recorded: list[bool],
-    chat_ctx: ChatContext,
+    delta: input_delta.InputDelta,
     tools: list[llm.Tool],
     data: _LLMGenerationData,
-    model: str | None,
-    provider: str | None,
     *,
     usage: CompletionUsage | None = None,
     streaming: bool = True,
@@ -368,16 +375,9 @@ def _record_uninstrumented_inference(
     nested ``llm_request`` span to carry the convention's attributes. When one was created,
     this stands down so the counts are not reported twice.
 
-    The configured model and provider are only reported when that LLM served the request.
-    Reaching here means it did not, so a third-party engine is left unattributed rather
-    than credited to the model the agent happens to be configured with.
+    Custom nodes without an LLMStream are left unattributed to the configured model.
     """
     if inference_recorded:
-        # the configured LLM served this, so its identity describes the call
-        if model:
-            span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
-        if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
-            span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
         return
 
     gen_ai_telemetry.set_request_attributes(
@@ -397,8 +397,8 @@ def _record_uninstrumented_inference(
     if span.is_recording() and gen_ai_telemetry.capture_content_enabled():
         gen_ai_telemetry.set_content_attributes(
             span,
-            system_instructions=gen_ai_telemetry.to_system_instructions(chat_ctx),
-            input_messages=gen_ai_telemetry.to_input_messages(chat_ctx),
+            system_instructions=delta.system_instructions(),
+            input_messages=delta.input_messages(),
             tool_definitions=gen_ai_telemetry.to_tool_definitions(tools),
             output_messages=gen_ai_telemetry.to_output_messages(
                 text=data.generated_text,
@@ -1198,8 +1198,9 @@ def make_tool_output(
     base_result = llm_utils.make_function_call_output(
         fnc_call=fnc_call, output=fnc_out, exception=None
     )
-    # a tool with nothing to say, such as a bare handoff, expects no reply
-    base_result.fnc_call_out.reply_required = fnc_out is not None
+    if not isinstance(fnc_out, llm.ToolResult):
+        # a tool with nothing to say, such as a bare handoff, expects no reply
+        base_result.fnc_call_out.reply_required = fnc_out is not None
 
     return ToolExecutionOutput(
         fnc_call=fnc_call.model_copy(),

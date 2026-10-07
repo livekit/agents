@@ -31,7 +31,7 @@ from livekit.agents import (
     APIStatusError,
     APITimeoutError,
 )
-from livekit.agents.telemetry import trace_types
+from livekit.agents.telemetry import trace_types, utils as telemetry_utils
 from livekit.agents.telemetry.traces import _DynamicTracer
 from livekit.agents.tts import tts as tts_module
 from livekit.plugins.rime import TTS
@@ -2758,7 +2758,7 @@ async def test_rime_errors_do_not_expose_provider_or_transport_details(
     tracer.set_provider(provider)
     monkeypatch.setattr(tts_module, "tracer", tracer)
     # The plugin must produce safe exceptions even when telemetry redaction is off.
-    monkeypatch.setattr(tts_module.telemetry_utils, "redaction_enabled", lambda *_: False)
+    monkeypatch.setattr(telemetry_utils, "redaction_enabled", lambda *_: False)
     caplog.set_level(logging.WARNING, logger="livekit.agents")
 
     app = web.Application()

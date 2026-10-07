@@ -15,6 +15,7 @@ livekit-plugins-baseten = { workspace = true }
 livekit-plugins-bey = { workspace = true }
 livekit-plugins-bithuman = { workspace = true }
 livekit-plugins-bland = { workspace = true }
+livekit-plugins-boson-avatar = { workspace = true }
 livekit-plugins-cambai = { workspace = true }
 livekit-plugins-cartesia = { workspace = true }
 livekit-plugins-cerebras = { workspace = true }
@@ -38,6 +39,7 @@ livekit-plugins-lemonslice = { workspace = true }
 livekit-plugins-liveavatar = { workspace = true }
 livekit-plugins-lmnt = { workspace = true }
 livekit-plugins-meta = { workspace = true }
+livekit-plugins-microsoft-ai = { workspace = true }
 livekit-plugins-minimax-ai = { workspace = true }
 livekit-plugins-mistralai = { workspace = true }
 livekit-plugins-murf = { workspace = true }

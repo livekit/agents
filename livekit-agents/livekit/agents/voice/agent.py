@@ -29,7 +29,7 @@ from .tool_executor import ToolHandlingOptions
 from .turn import TurnHandlingOptions, _migrate_turn_handling
 
 if TYPE_CHECKING:
-    from ..inference import LLMModels, STTModels, TTSModels
+    from ..inference import LLMModels, RealtimeModels, STTModels, TTSModels
     from ..llm import mcp
     from .agent_activity import AgentActivity
     from .agent_session import AgentSession, ExpressiveOptions
@@ -57,7 +57,7 @@ class Agent:
         turn_handling: NotGivenOr[TurnHandlingOptions] = NOT_GIVEN,
         tool_handling: NotGivenOr[ToolHandlingOptions] = NOT_GIVEN,
         llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
         ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
@@ -96,7 +96,7 @@ class Agent:
             stt = inference.STT.from_model_string(stt)
 
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
 
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
@@ -281,7 +281,7 @@ class Agent:
         stt: NotGivenOr[stt.STT | STTModels | str | None] = NOT_GIVEN,
         vad: NotGivenOr[vad.VAD | None] = NOT_GIVEN,
         llm: NotGivenOr[
-            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | str | None
+            llm.LLM | llm.RealtimeModel | llm.DuplexModel | LLMModels | RealtimeModels | str | None
         ] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS | TTSModels | str | None] = NOT_GIVEN,
         expressive: NotGivenOr[bool | ExpressiveOptions] = NOT_GIVEN,
@@ -302,7 +302,7 @@ class Agent:
         if isinstance(stt, str):
             stt = inference.STT.from_model_string(stt)
         if isinstance(llm, str):
-            llm = inference.LLM.from_model_string(llm)
+            llm = inference.llm_from_model_string(llm)
         if isinstance(tts, str):
             tts = inference.TTS.from_model_string(tts)
 
@@ -1071,7 +1071,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 # re-watch the suspended handles so the resumed parent activity
                 # is tracked by the current RunResult again
                 if run_state and not run_state.done():
-                    for handle in suspended_handles:
+                    for handle in [*suspended_handles, current_task]:
                         run_state._watch_handle(handle)
 
                 if pending_on_enter_task:
@@ -1091,7 +1091,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     )
                     await old_activity.aclose()
                 else:
-                    merged_chat_ctx = old_agent.chat_ctx.merge(
+                    merged_chat_ctx = old_agent.chat_ctx.copy().merge(
                         self.chat_ctx,
                         exclude_function_call=not self._preserve_function_call_history,
                         exclude_instructions=True,

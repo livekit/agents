@@ -307,6 +307,7 @@ class LLM(OpenAILLM):
         * Strips ``reasoning_effort`` for models that don't support it.
         * Rejects images sent to non-vision models (client-side ``ValueError``).
         * Rejects ``tool_choice`` without a non-empty ``tools`` array.
+        * Strips function calls from the history when the turn declares no tools.
         """
         model = self._opts.model
 
@@ -329,6 +330,14 @@ class LLM(OpenAILLM):
                     "tool_choice requires a non-empty tools array. "
                     "Provide tools or set tool_choice to 'none' or 'auto'."
                 )
+
+        # --- Orphan tool history when this turn declares no tools ---
+        # Sarvam rejects tool messages that no `tools` array can match ("Tool messages
+        # found but no tools provided"), and a call the agent never registered stays in
+        # chat_ctx for the life of the session, so every later turn 400s until restart.
+        # Same guard the AWS plugin applies for Bedrock.
+        if not effective_tools:
+            chat_ctx = chat_ctx.copy(exclude_function_call=True)
 
         # --- Strip unsupported fields from caller-provided extra_kwargs ---
         merged_extra: dict[str, Any] = {}

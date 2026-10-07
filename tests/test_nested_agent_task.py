@@ -365,3 +365,69 @@ async def test_nested_agent_task_from_a_later_turn() -> None:
         # the close waiting on it - bounded so a regression reports the assertion above
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(sess.aclose(), timeout=30.0)
+
+
+class HolderCheckTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="holder check")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="ask_holder")
+
+    @function_tool
+    async def is_holder(self, ctx: RunContext) -> None:
+        """The caller is the account holder."""
+        self.complete(None)
+
+
+class VerifyIdTask(AgentTask):
+    def __init__(self) -> None:
+        super().__init__(instructions="verify id")
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="ask_id")
+
+
+class SequentialTasksAgent(Agent):
+    """Runs its tasks back to back from on_enter, which predates any session.run()."""
+
+    def __init__(self) -> None:
+        super().__init__(instructions="root agent")
+
+    async def on_enter(self) -> None:
+        await HolderCheckTask()
+        await VerifyIdTask()
+
+
+@pytest.mark.asyncio
+async def test_run_includes_next_task_reply_after_task_completes():
+    """When a run's tool completes an AgentTask and the awaiting code starts the next
+    task, that task's on_enter reply answers the run and must be part of its result."""
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="ask_holder", content="am I speaking with Dana?", ttft=0, duration=0
+            ),
+            FakeLLMResponse(
+                input="yes",
+                content="",
+                ttft=0,
+                duration=0,
+                tool_calls=[FunctionToolCall(name="is_holder", arguments="{}", call_id="call_1")],
+            ),
+            FakeLLMResponse(input="ask_id", content="what is your ID number?", ttft=0, duration=0),
+        ]
+    )
+    async with AgentSession(llm=llm) as sess:
+        await sess.start(SequentialTasksAgent())
+        # the caller answers the greeting, so the first task must already be speaking
+        await asyncio.sleep(1)
+        assert isinstance(sess.current_agent, HolderCheckTask)
+
+        result = await asyncio.wait_for(sess.run(user_input="yes"), timeout=5.0)
+
+        assert isinstance(sess.current_agent, VerifyIdTask)
+        assert any(
+            ev.type == "message" and ev.item.text_content == "what is your ID number?"
+            for ev in result.events
+        )
