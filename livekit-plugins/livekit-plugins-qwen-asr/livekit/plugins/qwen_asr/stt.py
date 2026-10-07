@@ -415,7 +415,9 @@ class SpeechStream(stt.SpeechStream):
                     await asyncio.gather(vad_task, return_exceptions=True)
 
         async def receive() -> None:
-            current = ""
+            # vLLM 0.30 streams the raw "language Turkish<asr_text>..." preamble.
+            # Hold it back until the transcript after the tag is known.
+            cleaner = _AsrText()
             while True:
                 msg = await ws.receive()
                 if msg.type in (
@@ -433,17 +435,19 @@ class SpeechStream(stt.SpeechStream):
                     delta = event.get("delta") or ""
                     if not isinstance(delta, str) or not delta:
                         continue
-                    current += delta
+                    visible = cleaner.push(delta)
+                    if not visible:
+                        continue
                     self._event_ch.send_nowait(
                         stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
-                            alternatives=[self._speech(current)],
+                            alternatives=[self._speech(cleaner.emitted)],
                         )
                     )
                 elif kind == "transcription.done":
                     text = event.get("text")
-                    transcript = text if isinstance(text, str) else current
-                    current = ""
+                    transcript = _visible_transcript(text if isinstance(text, str) else cleaner.raw)
+                    cleaner.reset()
                     if transcript:
                         self._event_ch.send_nowait(
                             stt.SpeechEvent(
@@ -512,6 +516,45 @@ async def _send_audio(ws: aiohttp.ClientWebSocketResponse, pcm: bytes) -> None:
             "audio": base64.b64encode(pcm).decode("ascii"),
         }
     )
+
+
+_ASR_TAG = "<asr_text>"
+_LANGUAGE_PREFIX = "language "
+
+
+class _AsrText:
+    """Drop Qwen's ``language …<asr_text>`` preamble from a realtime stream."""
+
+    def __init__(self) -> None:
+        self.raw = ""
+        self.emitted = ""
+
+    def reset(self) -> None:
+        self.raw = ""
+        self.emitted = ""
+
+    def push(self, delta: str) -> str:
+        self.raw += delta
+        visible = _visible_transcript(self.raw, partial=True)
+        if len(visible) < len(self.emitted):
+            self.emitted = ""
+        chunk = visible[len(self.emitted) :]
+        self.emitted = visible
+        return chunk
+
+
+def _visible_transcript(text: str, *, partial: bool = False) -> str:
+    if _ASR_TAG in text:
+        return text.rsplit(_ASR_TAG, 1)[1]
+    stripped = text.lstrip()
+    holding_preamble = (
+        stripped == ""
+        or _LANGUAGE_PREFIX.startswith(stripped)
+        or (stripped.startswith(_LANGUAGE_PREFIX) and len(stripped) < 50 and "\n" not in stripped)
+    )
+    if partial and holding_preamble:
+        return ""
+    return text
 
 
 def _event_error(event: dict[str, object]) -> str:

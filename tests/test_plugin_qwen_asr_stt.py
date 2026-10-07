@@ -152,3 +152,54 @@ async def test_realtime_maps_delta_and_done() -> None:
     assert usage.recognition_usage is not None
     assert usage.recognition_usage.input_tokens == 4
     assert usage.recognition_usage.output_tokens == 2
+
+
+@pytest.mark.asyncio
+async def test_realtime_hides_language_preamble() -> None:
+    async def realtime(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "session.created", "id": "sess-test"})
+        async for msg in ws:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            event = json.loads(msg.data)
+            if event.get("type") == "input_audio_buffer.commit" and event.get("final") is True:
+                for delta in ("language Turkish", "<asr_text>", "Evet"):
+                    await ws.send_json({"type": "transcription.delta", "delta": delta})
+                await ws.send_json(
+                    {
+                        "type": "transcription.done",
+                        "text": "language Turkish<asr_text>Evet",
+                    }
+                )
+                break
+        await ws.close()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/v1/realtime", realtime)
+    runner, port = await _serve(app)
+    try:
+        stt = STT(
+            base_url=f"http://127.0.0.1:{port}/v1",
+            model="qwen3-asr-1.7b",
+            use_realtime=True,
+            vad=None,
+        )
+        stream = stt.stream()
+        stream.push_frame(_frame(800))
+        stream.end_input()
+        events = [event async for event in stream]
+        await stt.aclose()
+    finally:
+        await runner.cleanup()
+
+    texts = [
+        event.alternatives[0].text
+        for event in events
+        if event.type in (SpeechEventType.INTERIM_TRANSCRIPT, SpeechEventType.FINAL_TRANSCRIPT)
+    ]
+    assert texts
+    assert all("<asr_text>" not in text and not text.startswith("language") for text in texts)
+    assert texts[-1] == "Evet"
