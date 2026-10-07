@@ -1222,16 +1222,6 @@ class AudioRecognition:
             or self._last_speaking_time is None
             or (self._turn_detection_mode == "stt" and has_stt_end_time)
         )
-        if has_stt_end_time:
-            # Keep the newest word end for the turn. Providers send END_OF_SPEECH
-            # with no alternatives, and the fallback below is `now`, so without
-            # this the anchor would regress from the word timestamp to the moment
-            # END_OF_SPEECH arrived.
-            self._last_stt_word_end_time = (
-                stt_last_speaking_time
-                if self._last_stt_word_end_time is None
-                else max(self._last_stt_word_end_time, stt_last_speaking_time)
-            )
         if ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
             transcript = ev.alternatives[0].text
             language = ev.alternatives[0].language
@@ -1270,6 +1260,23 @@ class AudioRecognition:
 
             if use_stt_speaking_time:
                 self._last_speaking_time = stt_last_speaking_time
+
+            if has_stt_end_time:
+                # Keep the newest word end for the turn. Providers send
+                # END_OF_SPEECH with no alternatives, and the fallback there is
+                # `now`, so without this the anchor would regress from the word
+                # timestamp to the moment END_OF_SPEECH arrived.
+                #
+                # Finals only, deliberately: an interim or preflight word can be
+                # revised, and taking the max over those would keep a retracted
+                # later timestamp. Finals are additive segments of the same turn,
+                # so the max is also the newest -- it is here to tolerate
+                # out-of-order delivery, not to merge guesses.
+                self._last_stt_word_end_time = (
+                    stt_last_speaking_time
+                    if self._last_stt_word_end_time is None
+                    else max(self._last_stt_word_end_time, stt_last_speaking_time)
+                )
 
             # check user turn limit after accumulating transcript
             self._check_user_turn_limit(transcript)
@@ -1380,13 +1387,23 @@ class AudioRecognition:
                 # otherwise push the anchor into the future and extend `extra_sleep`,
                 # delaying the turn commit by the skew
                 self._last_speaking_time = min(ev.speech_end_time, now)
-            elif self._last_stt_word_end_time is not None:
+            elif self._last_stt_word_end_time is not None and (
+                self._speech_start_time is None
+                or self._last_stt_word_end_time >= self._speech_start_time
+            ):
                 # Soniox, Deepgram and AssemblyAI send END_OF_SPEECH with no
                 # alternatives and no speech_end_time, so stt_last_speaking_time
                 # collapses to `now` -- late by the provider's endpointing delay,
                 # and by the whole pause if the mic went quiet after the last word.
                 # The transcript for this turn already carried word timestamps,
                 # so use that rather than when the message happened to arrive.
+                #
+                # Unless it predates the turn's own onset, which means provider
+                # time and wall clock have drifted apart -- the audio input had a
+                # gap, so the stream's clock is behind by its length. Falling back
+                # to `now` keeps a usable anchor; preferring the word end would
+                # make _compute_end_of_turn_metrics drop all four metrics for
+                # predating the turn start, which is worse than it was before.
                 self._last_speaking_time = self._last_stt_word_end_time
             else:
                 # use an implied version computed based on either word timestamps or current time
@@ -1412,7 +1429,7 @@ class AudioRecognition:
             self._last_speaking_time = stt_last_speaking_time
             # a turn that produces no timestamped transcript must not fall back
             # on the previous turn's word end, which is already in the past
-            self._last_stt_word_end_time = None if not has_stt_end_time else stt_last_speaking_time
+            self._last_stt_word_end_time = None
 
             if self._end_of_turn_task is not None:
                 self._end_of_turn_task.cancel()
