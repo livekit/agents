@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeAlias, cast
 
 import httpx
 import openai
@@ -213,11 +213,7 @@ XAIModels = Literal[
 LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModels | XAIModels
 
 
-class PromptCacheOptions(TypedDict, total=False):
-    """OpenAI ``prompt_cache_options`` (GPT-5.6 and later)."""
-
-    mode: Literal["implicit", "explicit"]
-    ttl: str
+PromptCacheOptions: TypeAlias = completion_create_params.PromptCacheOptions
 
 
 class ChatCompletionOptions(TypedDict, total=False):
