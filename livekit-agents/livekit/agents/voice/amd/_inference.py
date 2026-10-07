@@ -24,11 +24,10 @@ Do not assume what a digit means. A send does not prove the system processed it 
 that a human answered: decide from the participant's next words.
 
 uncertain: insufficient evidence, silence, partial speech, or an ambiguous greeting.
-human: a live person is ready to converse, at any stage, including a person who picks
-up after a screener, a voicemail greeting, or an IVR.
+human: a live person is ready to converse.
 machine-screening: an automated call screener asks who is calling or why.
 machine-vm: a voicemail greeting asks the caller to leave or record a message.
-machine-ivr: an automated menu asks the caller to press keys or say a choice.
+machine-ivr: an automated menu asks for a spoken choice or DTMF.
 machine-unavailable: the call cannot be completed, such as a disconnected, invalid, or
 out-of-service number, or a message that ends the call without offering voicemail.
 wait: speech that asks nothing while the call continues: a hold, transfer, or connection
@@ -43,6 +42,7 @@ someone or for a business and asks who is calling, what it is about, or how to h
 with no sign of automation, is human. A greeting that only says who was reached, such
 as "you've reached" or "this is" a name, and asks nothing is uncertain, or machine-vm if
 it asks for a message; it is not human. A busy person is human, not machine-unavailable.
+A person taking over from a machine is human.
 A "not available", "cannot be reached", "switched off", or "out of the coverage area"
 announcement in any language, or a phone number read aloud, is not enough for
 machine-unavailable: return machine-vm if it invites a message, otherwise
@@ -50,42 +50,23 @@ uncertain until the next words decide.
 
 Your prediction decides whether the agent speaks. Only wait keeps the agent silent while
 the call continues; machine-unavailable ends the call.
-Before any machine stage, use wait only for an unmistakable hold, advertisement, or
-recording notice. A greeting, welcome, or thanks for calling, with or without a business
-name, is uncertain, not wait, even if a menu seems likely to follow.
+Return machine-screening, machine-vm, or machine-ivr only when an automated system asks
+the caller for something: a name or reason, a message, or a menu choice. Menu
+instructions after voicemail can be machine-ivr. A turn that asks for a name or reason
+is machine-screening, even if it says record or says it will check whether the person
+is available; only a request to leave a message is machine-vm.
+When the latest words ask nothing, such as one moment, please hold, stay on the line,
+let me check, a thank you or confirmation after a sent digit, a recording notice, or
+routing, return wait inside a machine stage, not machine-screening or machine-ivr. Before any machine stage, use wait only for an unmistakable
+hold, advertisement, or recording notice; a greeting that asks nothing is uncertain.
 An announcement naming a screening or voicemail service is stage evidence, not a hold.
-
-Return machine-screening or machine-ivr only when the current turn itself contains the
-request: a name or reason, or keys to press or a choice to say. The retained stage alone
-never justifies these categories. A turn that asks for a name or reason is
-machine-screening, even if it says record or says it will check whether the person is
-available; only a request to leave a message is machine-vm. Inside machine-screening, a
-further question only about the caller's name, reason, or urgency, with no sign of a
-person, is still machine-screening.
-Inside machine-screening or machine-ivr, uncertain repeats the stage reply, so when the
-latest words ask nothing, return wait: one moment, please hold, stay on the line, let me
-check, a thank you or confirmation after a sent digit, a recording notice, or routing.
-Inside machine-ivr, a turn with no key and no spoken choice is wait, not machine-ivr
-and not uncertain: information, advice to contact someone else, a thank you, a closing
-line, or a partial sentence.
-Inside machine-vm, the rest of the voicemail greeting keeps machine-vm: the tone, how
-to end or hang up, and a key option the caller may ignore, such as more options.
-Return machine-ivr inside machine-vm only when a key or spoken choice is required to
-continue, such as to send or re-record a message.
-
-A person can take over at any stage: after a screener checks availability, after an
-IVR hold or transfer, or during a voicemail greeting. Signs of a person: a plain hello
-or hi, a casual or conversational reply, or an offer to help. Return human if the
-person is ready to converse, otherwise uncertain. A plain hello alone is uncertain or
-human at any stage; it is never wait and never a machine category.
 
 Each request supplies the retained stage, the previous accepted prediction (it can be
 uncertain or wait while a machine stage remains active), recommended_next_categories
-(the usual next predictions from the stage), and speech_duration. Prefer a recommended
-category for ordinary call progression, but only when the current turn supports it.
-Choose a category outside the recommendations only when the transcript shows the
-earlier stage was misclassified; that correction changes the stage for this and later
-turns. uncertain and wait keep the current stage.
+(the usual next predictions from the stage), and speech_duration. Prefer a recommended category for ordinary call
+progression. Choose another category only when the transcript shows the earlier stage
+was misclassified; that correction changes the stage for this and later turns.
+uncertain and wait keep the current stage.
 
 Examples:
 "Hi, this is Call Assist by Google. Please state your name and why you're calling."
@@ -95,13 +76,10 @@ Examples:
 After the caller answered a screener: "Hang on, checking now." -> wait.
 After screening: "Okay." then "They can't take the call." then "Feel free to leave a message."
 -> machine-vm.
-Inside any machine stage: "Speaking, go ahead." -> human, not the stage.
 "The person you are trying to reach is not available." -> uncertain, or machine-vm;
 never machine-unavailable.
 "Hi, you've got Jordan at Lakeside Realty. Who am I speaking with?"
 -> human.
-First turn: "Welcome to Northwind Clinic." -> uncertain, not wait.
-Inside machine-ivr: "Office hours are nine to five." -> wait, not machine-ivr.
 """
 
 MENU_PROMPT = """Extract observed IVR menu from current turn's transcript.
