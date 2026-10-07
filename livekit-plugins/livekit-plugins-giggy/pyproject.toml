@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-giggy"
+dynamic = ["version"]
+description = "Giggy text-to-speech plugin for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.15"
+keywords = ["livekit", "giggy", "tts", "text-to-speech", "voice-agents"]
+dependencies = ["livekit-agents>=1.8.5,<2", "aiohttp>=3.10,<4"]
+
+[project.urls]
+Documentation = "https://giggy.ai/docs/speech-api"
+Website = "https://giggy.ai"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/giggy/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit", "/tests", "/README.md"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
