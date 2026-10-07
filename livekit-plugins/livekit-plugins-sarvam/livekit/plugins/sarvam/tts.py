@@ -75,10 +75,6 @@ SARVAM_TTS_WS_URL = "wss://api.sarvam.ai/text-to-speech/ws"
 _WS_HEARTBEAT_INTERVAL: float = 20.0
 _KEEPALIVE_INTERVAL: float = 30.0
 
-# bulbul:v4-flash rides the same pipeline as v3/v3-beta: temperature and the websocket
-# buffering knobs apply to all three.
-_V3_PIPELINE_MODELS = ("bulbul:v3", "bulbul:v3-beta", "bulbul:v4-flash")
-
 ALLOWED_OUTPUT_AUDIO_BITRATES: set[str] = {"32k", "64k", "96k", "128k", "192k"}
 ALLOWED_OUTPUT_AUDIO_CODECS: set[str] = {
     "mp3",
@@ -189,11 +185,10 @@ def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     return True
 
 
-# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v2/v3.
+# Accepted [min, max] per synthesis parameter. bulbul:v4-flash is stricter than v3, and it is
+# the only model that applies pitch and loudness, so other models place no bound on them.
 _PARAM_BOUNDS: dict[str, tuple[float, float]] = {
-    "pitch": (-0.75, 0.75),
     "pace": (0.3, 3.0),
-    "loudness": (0.5, 2.0),
     "temperature": (0.01, 2.0),
 }
 _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
@@ -204,20 +199,26 @@ _V4_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
 }
 
 
-def _param_bounds(model: str, param: str) -> tuple[float, float]:
-    """Accepted range for a synthesis parameter on the given model."""
-    return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS)[param]
+def _param_bounds(model: str, param: str) -> tuple[float, float] | None:
+    """Accepted range for a synthesis parameter on the given model, or None if it ignores it."""
+    return (_V4_PARAM_BOUNDS if model == "bulbul:v4-flash" else _PARAM_BOUNDS).get(param)
 
 
 def _validate_param(model: str, param: str, value: float) -> None:
     """Raise if a synthesis parameter is outside the range the model accepts."""
-    low, high = _param_bounds(model, param)
+    bounds = _param_bounds(model, param)
+    if bounds is None:
+        return
+    low, high = bounds
     if not low <= value <= high:
         raise ValueError(f"{param} must be between {low} and {high} for model '{model}'")
 
 
 def _clamp_pitch(model: str, pitch: float) -> float:
-    low, high = _param_bounds(model, "pitch")
+    bounds = _param_bounds(model, "pitch")
+    if bounds is None:
+        return pitch
+    low, high = bounds
     if not low <= pitch <= high:
         logger.warning(
             "pitch value %.2f is outside the Sarvam API accepted range [%s, %s] for %s; "
@@ -240,21 +241,20 @@ class SarvamTTSOptions:
         api_key: Sarvam.ai API key
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
-        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash)
+        pitch: Voice pitch adjustment (-0.5 to 0.5), bulbul:v4-flash only
         pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
-        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash)
-        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
-            used for v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
-            forces it to 0.6 server-side, so setting it there has no effect.
+        loudness: Volume multiplier (0.1 to 2.5), bulbul:v4-flash only
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash).
+            bulbul:v4-flash accepts the value then forces it to 0.6 server-side, so
+            setting it there has no effect.
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
         speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000;
             streaming bulbul:v4-flash is limited to 8000, 16000, 22050 or 24000)
-        enable_preprocessing: Whether to use text preprocessing (bulbul:v2 and bulbul:v4-flash;
-            bulbul:v4-flash forces it on server-side regardless of this value)
+        enable_preprocessing: Whether to use text preprocessing, bulbul:v4-flash only (which
+            forces it on server-side regardless of this value)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
-        enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         model: The Sarvam TTS model to use
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
@@ -274,9 +274,8 @@ class SarvamTTSOptions:
     max_chunk_length: int = 150
     speech_sample_rate: int = 22050  # Default 22050 Hz
     enable_preprocessing: bool = False
-    dict_id: str | None = None  # Custom pronunciation dictionary (bulbul:v3 only)
-    enable_cached_responses: bool | None = None  # Response caching beta (bulbul:v1/v2 only)
-    model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
+    dict_id: str | None = None  # Custom pronunciation dictionary
+    model: SarvamTTSModels | str = "bulbul:v3"
     base_url: str = SARVAM_TTS_BASE_URL
     ws_url: str = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
@@ -291,17 +290,12 @@ _V4_STREAM_OPUS_SAMPLE_RATES = (8000, 16000, 24000)
 
 def _model_extra_fields(opts: SarvamTTSOptions) -> dict[str, object]:
     """Model-specific fields shared by the REST body and the websocket config."""
-    extra: dict[str, object] = {}
-    if opts.model in ("bulbul:v2", "bulbul:v4-flash"):
+    extra: dict[str, object] = {"temperature": opts.temperature}
+    if opts.model == "bulbul:v4-flash":
         extra["pitch"] = opts.pitch
         extra["loudness"] = opts.loudness
         extra["enable_preprocessing"] = opts.enable_preprocessing
-    # v3 and v4 silently ignore caching, so it is only ever sent for v2
-    if opts.model == "bulbul:v2" and opts.enable_cached_responses is not None:
-        extra["enable_cached_responses"] = opts.enable_cached_responses
-    if opts.model in _V3_PIPELINE_MODELS:
-        extra["temperature"] = opts.temperature
-    if opts.model in ("bulbul:v3", "bulbul:v4-flash") and opts.dict_id is not None:
+    if opts.dict_id is not None:
         extra["dict_id"] = opts.dict_id
     return extra
 
@@ -360,25 +354,22 @@ class TTS(tts.TTS):
 
     Args:
         target_language_code: BCP-47 language code for supported Indian languages
-        model: Sarvam TTS model to use (bulbul:v2)
+        model: Sarvam TTS model to use (bulbul:v3 or bulbul:v4-flash)
         speaker: Voice to use for synthesis
         speech_sample_rate: Audio sample rate in Hz
         num_channels: Number of audio channels (Sarvam outputs mono)
-        pitch: Voice pitch adjustment (-0.75 to 0.75; -0.5 to 0.5 for bulbul:v4-flash) -
-            only supported in v2 and v4-flash
+        pitch: Voice pitch adjustment (-0.5 to 0.5), bulbul:v4-flash only
         pace: Speech rate multiplier (0.3 to 3.0; 0.5 to 2.0 for bulbul:v4-flash)
-        loudness: Volume multiplier (0.5 to 2.0; 0.1 to 2.5 for bulbul:v4-flash) -
-            only supported in v2 and v4-flash
-        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash),
-            only used in v3, v3-beta and v4-flash. bulbul:v4-flash accepts the value then
-            forces it to 0.6 server-side, so setting it there has no effect.
+        loudness: Volume multiplier (0.1 to 2.5), bulbul:v4-flash only
+        temperature: Sampling temperature (0.01 to 2.0; 0.01 to 1.0 for bulbul:v4-flash).
+            bulbul:v4-flash accepts the value then forces it to 0.6 server-side, so
+            setting it there has no effect.
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 and bulbul:v4-flash)
-        enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
         output_audio_bitrate: Output audio bitrate (default 128k)
         min_buffer_size: Minimum character length for flushing (30 to 200)
         max_chunk_length: Maximum chunk length for sentence splitting (50 to 500)
-        enable_preprocessing: Whether to use text preprocessing (bulbul:v4-flash forces it
-            on server-side regardless of this value)
+        enable_preprocessing: Whether to use text preprocessing, bulbul:v4-flash only (which
+            forces it on server-side regardless of this value)
         api_key: Sarvam.ai API key (required)
         base_url: API endpoint URL
         ws_url: WebSocket endpoint URL
@@ -403,7 +394,6 @@ class TTS(tts.TTS):
         max_chunk_length: int = 150,
         enable_preprocessing: bool = False,
         dict_id: str | None = None,
-        enable_cached_responses: bool | None = None,
         api_key: str | None = None,
         base_url: str = SARVAM_TTS_BASE_URL,
         ws_url: str = SARVAM_TTS_WS_URL,
@@ -429,13 +419,7 @@ class TTS(tts.TTS):
         if not model or not model.strip():
             raise ValueError("Model is required and cannot be empty")
         if speaker is None:
-            # speaker = "shubh"
-            if model == "bulbul:v4-flash":
-                speaker = "shubh_en_narration_gentle"
-            elif model == "bulbul:v3-beta" or model == "bulbul:v3":
-                speaker = "shubh"
-            else:
-                speaker = "anushka"
+            speaker = "shubh_en_narration_gentle" if model == "bulbul:v4-flash" else "shubh"
 
         # Validate parameter ranges
         pitch = _clamp_pitch(model, pitch)
@@ -484,7 +468,6 @@ class TTS(tts.TTS):
             max_chunk_length=max_chunk_length,
             enable_preprocessing=enable_preprocessing,
             dict_id=dict_id,
-            enable_cached_responses=enable_cached_responses,
             api_key=self._api_key,
             base_url=base_url,
             ws_url=ws_url,
@@ -679,7 +662,6 @@ class TTS(tts.TTS):
         max_chunk_length: int | None = None,
         enable_preprocessing: bool | None = None,
         dict_id: str | None = None,
-        enable_cached_responses: bool | None = None,
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
@@ -742,9 +724,6 @@ class TTS(tts.TTS):
 
         if dict_id is not None:
             opts.dict_id = dict_id
-
-        if enable_cached_responses is not None:
-            opts.enable_cached_responses = enable_cached_responses
 
         if send_completion_event is not None:
             opts.send_completion_event = send_completion_event
@@ -991,12 +970,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     "model": self._opts.model,
                     "speech_sample_rate": self._opts.speech_sample_rate,
                     "output_audio_codec": self._opts.output_audio_codec,
+                    "output_audio_bitrate": self._opts.output_audio_bitrate,
+                    "min_buffer_size": self._opts.min_buffer_size,
+                    "max_chunk_length": self._opts.max_chunk_length,
                 }
                 data.update(_model_extra_fields(self._opts))
-                if self._opts.model in _V3_PIPELINE_MODELS:
-                    data["output_audio_bitrate"] = self._opts.output_audio_bitrate
-                    data["min_buffer_size"] = self._opts.min_buffer_size
-                    data["max_chunk_length"] = self._opts.max_chunk_length
                 config_msg = {"type": "config", "data": data}
                 logger.debug(
                     "Sending TTS config",
