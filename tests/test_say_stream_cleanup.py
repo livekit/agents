@@ -30,22 +30,36 @@ class _TextSource:
 
 
 @pytest.mark.parametrize("audio_enabled", [False, True])
+@pytest.mark.parametrize("synthesize_audio", [False, True])
 @pytest.mark.parametrize("outcome", ["complete", "error", "cancel"])
-async def test_say_closes_text_source(outcome: str, audio_enabled: bool) -> None:
+async def test_say_closes_text_source(
+    outcome: str, audio_enabled: bool, synthesize_audio: bool
+) -> None:
     started = asyncio.Event()
     source = _TextSource()
+    tts_started = asyncio.Event()
 
     class TestAgent(Agent):
         async def transcription_node(
             self, text: AsyncIterable[str], model_settings: ModelSettings
         ) -> AsyncIterator[str]:
             async for chunk in text:
+                if audio_enabled and synthesize_audio:
+                    await tts_started.wait()
                 started.set()
                 if outcome == "error":
                     raise RuntimeError("transcription failed")
                 if outcome == "cancel":
                     await asyncio.Future()
                 yield chunk
+
+        async def tts_node(
+            self, text: AsyncIterable[str], model_settings: ModelSettings
+        ) -> AsyncIterator[rtc.AudioFrame]:
+            async for _ in text:
+                tts_started.set()
+            if False:
+                yield rtc.AudioFrame.create(16000, 1, 160)
 
     session = AgentSession(vad=None, turn_handling={"turn_detection": None})
     audio_output = FakeAudioOutput()
@@ -59,7 +73,7 @@ async def test_say_closes_text_source(outcome: str, audio_enabled: bool) -> None
 
     await session.start(TestAgent(instructions="test"))
     try:
-        handle = session.say(source, audio=audio())
+        handle = session.say(source, audio=None if synthesize_audio else audio())
         await asyncio.wait_for(started.wait(), timeout=5)
         if outcome == "cancel":
             for task in handle._tasks:
