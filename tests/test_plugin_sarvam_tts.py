@@ -7,7 +7,7 @@ import pytest
 
 from livekit.agents import APIStatusError
 from livekit.agents.types import APIConnectOptions
-from livekit.plugins.sarvam import tts as sarvam_tts
+from livekit.plugins.sarvam import models as sarvam_models, tts as sarvam_tts
 
 pytestmark = pytest.mark.unit
 
@@ -144,15 +144,27 @@ def test_v4_streaming_sample_rate_limits() -> None:
 
 def test_v4_flash_is_the_only_accepted_v4_wire_name() -> None:
     """The API rejects `bulbul:v4` with a 400; `bulbul:v4-flash` is the only valid spelling."""
-    accepted = set(get_args(sarvam_tts.SarvamTTSModels))
+    accepted = set(get_args(sarvam_models.SarvamTTSModels))
     assert "bulbul:v4-flash" in accepted
     assert "bulbul:v4" not in accepted
-    assert "bulbul:v4" not in sarvam_tts.MODEL_SPEAKER_COMPATIBILITY
+    assert "bulbul:v4" not in sarvam_models.MODEL_SPEAKER_COMPATIBILITY
 
     tts = _make_tts(model="bulbul:v4-flash")
     # `_opts.model` is the value sent as the REST body's "model" field
     assert tts._opts.model == "bulbul:v4-flash"
     assert "model=bulbul:v4-flash&" in sarvam_tts._websocket_url(tts._opts)
+
+
+def test_model_types_stay_importable_from_tts() -> None:
+    """These were public in `tts` before moving to `models`, so callers may import them there."""
+    for name in (
+        "SarvamTTSModels",
+        "SarvamTTSOutputAudioBitrate",
+        "SarvamTTSLanguages",
+        "SarvamTTSSpeakers",
+        "MODEL_SPEAKER_COMPATIBILITY",
+    ):
+        assert getattr(sarvam_tts, name) is getattr(sarvam_models, name)
 
 
 def test_rejected_update_options_leaves_live_options_untouched() -> None:
