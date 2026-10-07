@@ -64,6 +64,8 @@ def _make_recognition(*, min_delay: float, with_detector: bool = False) -> Audio
     ``_hooks.on_end_of_turn`` commits by default. VAD-only turn detection unless
     ``with_detector`` wires the streaming turn-detector mocks (for ``eou_detection``)."""
     ar = AudioRecognition.__new__(AudioRecognition)
+    ar._transcript_request_ids = []
+    ar._transcript_request_ids_complete = True
     ar._session = MagicMock()
     ar._session._root_span_context = None
     ar._session._room_io = None  # keep participant attributes off the user_turn span
