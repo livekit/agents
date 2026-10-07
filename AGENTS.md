@@ -11,6 +11,7 @@ make install          # Install all dependencies with dev extras (uv sync --all-
 
 ### Versioning
 
+- Versions change only in release PRs (`livekit-agents@X.Y.Z`). Other PRs never edit `version.py` files or the `livekit-agents` version floor in plugin `pyproject.toml` files.
 - Use a `patch` version bump by default.
 - Do not use a `minor` or `major` version bump unless a human explicitly confirms the bump level.
 

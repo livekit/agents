@@ -1071,7 +1071,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                 # re-watch the suspended handles so the resumed parent activity
                 # is tracked by the current RunResult again
                 if run_state and not run_state.done():
-                    for handle in suspended_handles:
+                    for handle in [*suspended_handles, current_task]:
                         run_state._watch_handle(handle)
 
                 if pending_on_enter_task:
@@ -1091,7 +1091,7 @@ class AgentTask(Agent, Generic[TaskResult_T]):
                     )
                     await old_activity.aclose()
                 else:
-                    merged_chat_ctx = old_agent.chat_ctx.merge(
+                    merged_chat_ctx = old_agent.chat_ctx.copy().merge(
                         self.chat_ctx,
                         exclude_function_call=not self._preserve_function_call_history,
                         exclude_instructions=True,
