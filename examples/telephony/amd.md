@@ -292,6 +292,8 @@ menu extraction.
 Accepted predictions update the category and emit an event immediately. Replies
 to screening, voicemail, and IVR wait for 1.5 seconds of continuous participant
 silence. Silence before EOT and during classification counts toward the threshold.
+Reply generation starts when the prediction arrives. Playback and tool execution
+wait for the silence. A newer committed turn cancels a reply that still waits.
 Human and initial `uncertain` replies use normal EOT timing. An unavailable result ends AMD.
 Before reply authorization, new speech restarts the silence wait for the committed
 turn, even if the new speech produces no accepted turn. After authorization,

@@ -141,6 +141,8 @@ class _AMDTurnHooks:
         return decision.allow
 
     def on_agent_turn_committed(self, handle: SpeechHandle) -> None:
+        if self._turn_id is not None and self._turn_id == self._amd._held_turn_id:
+            self._amd._held_reply = handle
         if self._track_voicemail:
             assert self._turn_id is not None
             self._amd._track_voicemail(self._turn_id, handle)
@@ -195,7 +197,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         timeout: Hard limit from the start of listening.
         inference_timeout: Prediction deadline per committed turn. Late results are ignored.
         machine_silence_threshold: Continuous participant silence before a machine
-            reply is authorized. Includes silence before and during classification.
+            reply plays. Includes silence before and during classification. Reply
+            generation starts before the silence ends.
             Predictions update the category immediately. Replies outside a machine
             stage do not wait. Set to zero to disable the extra silence wait.
         max_uncertain_turns: Consecutive uncertain predictions before completion
@@ -302,6 +305,8 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         self._latest: AMDPredictionEvent | None = None
         self._run: _AMDResources | None = None
         self._speeches: set[SpeechHandle] = set()
+        self._held_turn_id: int | None = None
+        self._held_reply: SpeechHandle | None = None
 
         self._session_id = uuid.uuid4().hex
         self._control_prefix = f"amd_{uuid.uuid4().hex}_"
@@ -550,6 +555,9 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return self._turn_hooks
         if activity := self._session._activity:
             activity._pause_authorization()
+        if self._held_reply is not None:
+            self._held_reply._cancel()
+        self._held_turn_id = self._held_reply = None
         turn_transcript = self._resources.stt.end_turn(transcript)
         now = time.monotonic()
         speaking = self._session.user_state == "speaking"
@@ -798,15 +806,16 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
     # region: reply controls and hooks
 
     async def _should_reply(self, turn_id: int, chat_ctx: llm.ChatContext) -> ReplyDecision:
-        """Wait for the turn's prediction, then add stage instructions when a reply is allowed."""
+        """Wait for the turn's prediction, then add stage instructions when a reply is allowed.
+
+        Generation starts at once. Playback waits until the machine silence hold ends.
+        """
         if turn_id in self._turns:
             # wait for the prediction for the given turn
             while (
                 turn_id == self._turn_id
                 and self.lifecycle is not AMDLifecycle.FINISHED
-                and (
-                    self._turns[turn_id].prediction is None or self._reply_held_at(time.monotonic())
-                )
+                and self._turns[turn_id].prediction is None
             ):
                 self._prediction_changed.clear()
                 await self._prediction_changed.wait()
@@ -838,7 +847,10 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             and self.lifecycle is AMDLifecycle.ACTIVE
             and (activity := self._session._activity)
         ):
-            activity._resume_authorization()
+            if self._reply_held_at(time.monotonic()):
+                self._held_turn_id = turn_id
+            else:
+                activity._resume_authorization()
         return reply_decision
 
     def _authorize_reply(self, turn_id: int) -> ReplyDecision:
@@ -977,6 +989,11 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
             return
         now = time.monotonic()
         reply_held = self._reply_held_at(now)
+        activity = self._session._activity
+        if self._held_turn_id is not None and not reply_held:
+            self._held_turn_id = self._held_reply = None
+            if activity is not None:
+                activity._resume_authorization()
         if (
             self._inference_timeouts >= self._options.max_inference_timeouts
             and self._pending_turn is None
@@ -984,7 +1001,6 @@ class AMD(EventEmitter[Literal["amd_prediction", "amd_completed", "amd_menu_obse
         ):
             self._finish(AMDReason.INFERENCE_TIMEOUT)
             return
-        activity = self._session._activity
         busy = (
             self._pending_turn is not None
             or self._should_wait  # hold music or an advertisement; the hard timeout still applies
