@@ -472,6 +472,50 @@ class RealtimeModel(llm.RealtimeModel):
             generate_reply_timeout=generate_reply_timeout,
         )
 
+    @classmethod
+    def with_nova_sonic_2_5(
+        cls,
+        *,
+        voice: NotGivenOr[SONIC2_VOICES | str] = NOT_GIVEN,
+        temperature: NotGivenOr[float] = NOT_GIVEN,
+        top_p: NotGivenOr[float] = NOT_GIVEN,
+        max_tokens: NotGivenOr[int] = NOT_GIVEN,
+        tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN,
+        region: NotGivenOr[str] = NOT_GIVEN,
+        turn_detection: TURN_DETECTION = "MEDIUM",
+        generate_reply_timeout: float = 10.0,
+    ) -> RealtimeModel:
+        """Create a RealtimeModel configured for Nova Sonic 2.5 (audio + text input).
+
+        Args:
+            voice (SONIC2_VOICES | str | NotGiven): Voice id for TTS output. Import SONIC2_VOICES from livekit.plugins.aws.experimental.realtime for supported values. Defaults to "tiffany".
+            temperature (float | NotGiven): Sampling temperature (0-1). Defaults to DEFAULT_TEMPERATURE.
+            top_p (float | NotGiven): Nucleus sampling probability mass. Defaults to DEFAULT_TOP_P.
+            max_tokens (int | NotGiven): Upper bound for tokens emitted. Defaults to DEFAULT_MAX_TOKENS.
+            tool_choice (llm.ToolChoice | None | NotGiven): Strategy for tool invocation.
+            region (str | NotGiven): AWS region. Defaults to "us-east-1".
+            turn_detection (TURN_DETECTION): Turn-taking sensitivity. Defaults to "MEDIUM".
+            generate_reply_timeout (float): Timeout for generate_reply() calls. Defaults to 10.0.
+
+        Returns:
+            RealtimeModel: Configured for Nova Sonic 2.5 with mixed modalities (audio + text input).
+
+        Example:
+            model = RealtimeModel.with_nova_sonic_2_5(voice="tiffany", max_tokens=10_000)
+        """
+        return cls(
+            model="amazon.nova-2-5-sonic",
+            modalities="mixed",
+            voice=voice,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            tool_choice=tool_choice,
+            region=region,
+            turn_detection=turn_detection,
+            generate_reply_timeout=generate_reply_timeout,
+        )
+
     @property
     def model(self) -> str:
         return self._model
@@ -1701,7 +1745,10 @@ class RealtimeSession(  # noqa: F811
 
         finally:
             logger.info("main output response stream processing task exiting")
-            self._is_sess_active.clear()
+            # A retry can replace this task before the old task reaches its
+            # cleanup block. Keep the session active for the replacement task.
+            if asyncio.current_task() is self._response_task:
+                self._is_sess_active.clear()
 
     async def _restart_session(self, ex: Exception) -> None:
         # Get restart attempts from current generation, or 0 if no generation

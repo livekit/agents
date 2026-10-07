@@ -82,6 +82,7 @@ def test_exported_spans_keep_provider_metadata(
             "langfuse.session.id": "customer-session",
             "job_id": "provider-job" if state == "outside" else "job-a",
             "room_id": "provider-room" if state == "outside" else "room-a",
+            **({"gen_ai.conversation.id": "room-a"} if state != "outside" else {}),
         }
 
 
@@ -107,6 +108,7 @@ def test_job_fallback_metadata_does_not_cross_jobs(
         "langfuse.session.id": "customer-session",
         "job_id": "job-a",
         "room_id": "room-a",
+        "gen_ai.conversation.id": "room-a",
     }
 
     with tracer.start_as_current_span("worker"):

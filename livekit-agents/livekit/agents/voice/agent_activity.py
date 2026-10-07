@@ -36,6 +36,7 @@ from ..metrics import (
 )
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
+    input_delta,
     otel_metrics,
     trace_types,
     tracer,
@@ -367,6 +368,8 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
         self._preemptive_generation_count: int = 0
+        # LLM input recorded for the last committed generation (RecordingOptions.input_delta)
+        self._input_delta = input_delta.InputDeltaTracker()
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
@@ -3512,14 +3515,24 @@ class AgentActivity(RecognitionHooks):
         )
 
         tasks: list[asyncio.Task[Any]] = []
-        llm_task, llm_gen_data = perform_llm_inference(
-            node=self._agent.llm_node,
-            chat_ctx=chat_ctx,
-            tool_ctx=tool_ctx,
-            model_settings=model_settings,
-            model=self.llm.model if self.llm else None,
-            provider=self.llm.provider if self.llm else None,
+        # the spans of this generation record their input against the last committed one
+        delta_scope = (
+            self._input_delta.begin()
+            if self._session.options.recording_options.get("input_delta")
+            else None
         )
+        input_token = input_delta.set_scope(delta_scope)
+        try:
+            llm_task, llm_gen_data = perform_llm_inference(
+                node=self._agent.llm_node,
+                chat_ctx=chat_ctx,
+                tool_ctx=tool_ctx,
+                model_settings=model_settings,
+                model=self.llm.model if self.llm else None,
+                provider=self.llm.provider if self.llm else None,
+            )
+        finally:
+            input_delta.reset_scope(input_token)
         tasks.append(llm_task)
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
@@ -3614,6 +3627,11 @@ class AgentActivity(RecognitionHooks):
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+
+        # a scheduled generation is the one the conversation continues from (a discarded
+        # preemptive generation never gets here)
+        if delta_scope is not None and speech_handle.scheduled:
+            delta_scope.commit()
 
         # add new message to chat context if the speech is scheduled
 
