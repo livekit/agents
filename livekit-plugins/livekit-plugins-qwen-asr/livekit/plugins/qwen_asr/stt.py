@@ -321,10 +321,12 @@ class SpeechStream(stt.SpeechStream):
             vad_stream = self._stt._vad.stream() if self._stt._vad is not None else None
             vad_events: asyncio.Queue[vad.VADEvent | None] = asyncio.Queue()
             held = bytearray()
+            held_origin = 0
             tail = bytearray()
             pushed = 0
             index_base = 0
             last_raw = -1
+            pending_flush: list[int] = []
             speaking = vad_stream is None
 
             async def read_vad() -> None:
@@ -366,21 +368,25 @@ class SpeechStream(stt.SpeechStream):
                 state.active = False
                 self._event_ch.send_nowait(stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH))
 
-            def origin() -> int:
-                return pushed - len(held) // 2
-
             def absolute(raw: int) -> int:
                 nonlocal index_base, last_raw
-                # Silero's sample counter restarts after flush. A drop means a new epoch.
-                if last_raw >= 0 and raw < last_raw:
-                    index_base += last_raw
+                # Flush restarts Silero's counter. The new epoch begins at the
+                # pushed-sample count recorded with the flush, which can sit
+                # past the last event index.
+                if pending_flush and last_raw >= 0:
+                    epoch_len = pending_flush[0] - index_base
+                    if raw < last_raw or raw > epoch_len:
+                        index_base = pending_flush.pop(0)
+                        last_raw = -1
                 last_raw = raw
                 return index_base + raw
 
             def take_before(sample: int) -> bytes:
-                count = min(len(held) // 2, max(0, sample - origin()))
+                nonlocal held_origin
+                count = min(len(held) // 2, max(0, sample - held_origin))
                 chunk = bytes(held[: count * 2])
                 del held[: count * 2]
+                held_origin += count
                 return chunk
 
             async def apply_vad(event: vad.VADEvent) -> None:
@@ -417,17 +423,24 @@ class SpeechStream(stt.SpeechStream):
                                 await open_turn()
                             await append(pcm)
                         else:
-                            held.extend(pcm)
-                            pushed += data.samples_per_channel
-                            overflow = len(held) - _HELD_BYTES
-                            if overflow > 0:
-                                del held[:overflow]
+                            samples = data.samples_per_channel
+                            # Once VAD has caught up, send speech as it arrives so
+                            # a long turn is not trimmed and interim text can move.
+                            if speaking and vad_events.empty():
+                                await append(pcm)
+                            else:
+                                held.extend(pcm)
+                                if not speaking:
+                                    overflow = len(held) - _HELD_BYTES
+                                    if overflow > 0:
+                                        del held[:overflow]
+                                        held_origin += overflow // 2
+                            pushed += samples
                             vad_stream.push_frame(data)
                     elif vad_stream is None and state.active:
                         await close_turn()
                     elif vad_stream is not None:
-                        # end_input() flushes before the VAD task catches up.
-                        # Keep `held` so a late START can still see the onset.
+                        pending_flush.append(pushed)
                         vad_stream.flush()
                 if vad_stream is not None:
                     vad_stream.end_input()
