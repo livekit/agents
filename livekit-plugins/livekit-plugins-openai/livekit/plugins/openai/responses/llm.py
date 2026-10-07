@@ -54,7 +54,8 @@ from ..tools import OpenAITool
 ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
 
-OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
+_OPENAI_HOST = "api.openai.com"
+OPENAI_RESPONSES_WS_URL = f"wss://{_OPENAI_HOST}/v1/responses"
 
 # ws ping interval; keeps idle pooled sockets warm and lets aiohttp detect dead peers
 _WS_HEARTBEAT = 30.0
@@ -71,7 +72,7 @@ class _ResponsesWebsocket:
         url = URL(base_url if base_url else OPENAI_RESPONSES_WS_URL)
         if url.scheme in ("http", "https"):
             url = url.with_scheme("ws" if url.scheme == "http" else "wss")
-        if url.host != "api.openai.com":
+        if url.host != _OPENAI_HOST:
             # OpenAI's native endpoint takes the model in the response.create
             # payload; gateways need it on the upgrade URL to route the
             # connection before the first frame.
@@ -248,8 +249,13 @@ class LLM(llm.LLM):
         ``OPENAI_API_KEY`` environmental variable.
 
         ``prompt_cache_breakpoints`` sends each :class:`livekit.agents.llm.CacheBreakpoint` in the
-        chat context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` does so against
-        api.openai.com for GPT-5.6 and later; other hosts and models need ``True``.
+        chat context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` sends them only against
+        api.openai.com and only for GPT-5.6 and later. ``True`` sends them anyway, for a custom host
+        that accepts the field; ``False`` never sends them. Models before GPT-5.6 reject the field
+        with HTTP 400, so ``True`` cannot add support to them.
+
+        ``prompt_cache_options`` is forwarded as given on every request; it is not gated like the
+        breakpoints, and models before GPT-5.6 reject it the same way.
         """
         super().__init__()
 
@@ -445,9 +451,19 @@ class LLM(llm.LLM):
         if isinstance(setting, bool):
             return setting
         # subclasses (xAI) and custom base URLs reach hosts not verified to accept the field
-        return self.provider == "api.openai.com" and supports_prompt_cache_breakpoints(
+        return self._host() == _OPENAI_HOST and supports_prompt_cache_breakpoints(
             str(self._opts.model)
         )
+
+    def _host(self) -> str:
+        # the hostname, not the netloc: an explicit port or a trailing dot is still OpenAI
+        if self._opts.use_websocket and self._ws is not None:
+            host = URL(self._ws._base_url).host
+        elif self._client is not None:
+            host = self._client._base_url.host
+        else:
+            host = None
+        return (host or "").rstrip(".").lower()
 
     def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
         if not self._pending_tool_calls:
@@ -472,7 +488,7 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         full_chat_ctx: llm.ChatContext,
-        prompt_cache_breakpoints: bool = False,
+        prompt_cache_breakpoints: bool,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
         self._prompt_cache_breakpoints = prompt_cache_breakpoints
