@@ -3,7 +3,10 @@ from collections.abc import AsyncIterable, AsyncIterator
 
 import pytest
 
+from livekit import rtc
 from livekit.agents import Agent, AgentSession, ModelSettings
+
+from .fake_io import FakeAudioOutput
 
 pytestmark = pytest.mark.unit
 
@@ -26,8 +29,9 @@ class _TextSource:
         self.close_count += 1
 
 
+@pytest.mark.parametrize("audio_enabled", [False, True])
 @pytest.mark.parametrize("outcome", ["complete", "error", "cancel"])
-async def test_say_closes_text_source(outcome: str) -> None:
+async def test_say_closes_text_source(outcome: str, audio_enabled: bool) -> None:
     started = asyncio.Event()
     source = _TextSource()
 
@@ -44,10 +48,18 @@ async def test_say_closes_text_source(outcome: str) -> None:
                 yield chunk
 
     session = AgentSession(vad=None, turn_handling={"turn_detection": None})
-    session.output.set_audio_enabled(False)
+    audio_output = FakeAudioOutput()
+    session.output.audio = audio_output
+    session.output.set_audio_enabled(audio_enabled)
+    baseline_listeners = len(audio_output._events.get("playback_started", set()))
+
+    async def audio() -> AsyncIterator[rtc.AudioFrame]:
+        if False:
+            yield rtc.AudioFrame.create(16000, 1, 160)
+
     await session.start(TestAgent(instructions="test"))
     try:
-        handle = session.say(source)
+        handle = session.say(source, audio=audio())
         await asyncio.wait_for(started.wait(), timeout=5)
         if outcome == "cancel":
             for task in handle._tasks:
@@ -60,6 +72,8 @@ async def test_say_closes_text_source(outcome: str) -> None:
         elif outcome == "cancel":
             assert any(isinstance(result, asyncio.CancelledError) for result in results)
         assert source.close_count == 1
+        await asyncio.sleep(0)
+        assert len(audio_output._events.get("playback_started", set())) == baseline_listeners
     finally:
         await session.aclose()
         await source.aclose()

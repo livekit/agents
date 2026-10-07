@@ -3298,6 +3298,8 @@ class AgentActivity(RecognitionHooks):
 
         finally:
             await utils.aio.cancel_and_wait(*all_tasks)
+            if audio_out is not None:
+                audio_out.first_frame_fut.cancel()
             if tee is not None:
                 await tee.aclose()
 
