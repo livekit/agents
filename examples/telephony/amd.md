@@ -168,7 +168,10 @@ AMD keeps its selected transcripts in an independent chat context. The next requ
 includes those transcripts and successful DTMF tool calls and results.
 An empty EOT keeps useful pending classification for the latest turn. Older AMD
 reply waits exit immediately. Reusing a prediction emits an `amd_prediction`
-event with `reason="reused"`, so every committed turn produces one event.
+event with `reason="reused"`. AMD emits one `amd_prediction` event for each
+committed turn, except a turn whose classification a newer non-empty turn cancels.
+The cancelled turn's transcript stays in AMD's context, so the next prediction
+covers it. `turn_id` values can therefore skip numbers.
 
 ## Realtime models
 
