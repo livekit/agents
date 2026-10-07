@@ -92,6 +92,42 @@ def convert_mid_conversation_instructions(
     return llm.ChatContext(items)
 
 
+def merge_consecutive_user_messages(chat_ctx: llm.ChatContext) -> llm.ChatContext:
+    """Merge user messages with no assistant message or tool call between them into one.
+
+    Nothing answered the earlier ones, so together they are one user turn; sent apart,
+    models answer only the last (a request then "Thanks." gets "You're welcome!"). The
+    Anthropic, Google, and AWS formats already send consecutive same-role items as one turn.
+
+    Only the payload is merged, the same way on every request, so the chat context is
+    untouched and the prompt prefix stays stable across turns.
+    """
+    items: list[llm.ChatItem] = []
+    last_turn = -1  # index in items of the last message or tool item
+    for item in chat_ctx.items:
+        prev = items[last_turn] if last_turn >= 0 else None
+        if (
+            item.type == "message"
+            and item.role == "user"
+            and prev is not None
+            and prev.type == "message"
+            and prev.role == "user"
+        ):
+            items[last_turn] = prev.model_copy(
+                update={
+                    "content": [*prev.content, *item.content],
+                    "extra": {**prev.extra, **item.extra},
+                }
+            )
+            continue
+
+        items.append(item)
+        if item.type in ("message", "function_call", "function_call_output"):
+            last_turn = len(items) - 1
+
+    return llm.ChatContext(items)
+
+
 def group_tool_calls(chat_ctx: llm.ChatContext) -> list[_ChatItemGroup]:
     """Group chat items (messages, function calls, and function outputs)
     into coherent groups based on their item IDs and call IDs.

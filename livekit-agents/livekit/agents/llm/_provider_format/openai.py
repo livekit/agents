@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from livekit.agents import llm
 
-from .utils import group_tool_calls
+from .utils import group_tool_calls, merge_consecutive_user_messages
 
 _EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
 
@@ -17,7 +17,7 @@ def _filter_extra(extra: dict[str, Any]) -> dict[str, Any]:
 def to_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], Literal[None]]:
-    item_groups = group_tool_calls(chat_ctx)
+    item_groups = group_tool_calls(merge_consecutive_user_messages(chat_ctx))
     messages = []
     for group in item_groups:
         if not group.message and not group.tool_calls and not group.tool_outputs:
@@ -144,7 +144,7 @@ def _to_responses_image_content(image: llm.ImageContent) -> dict[str, Any]:
 def to_responses_chat_ctx(
     chat_ctx: llm.ChatContext, *, inject_dummy_user_message: bool = True
 ) -> tuple[list[dict], Literal[None]]:
-    item_groups = group_tool_calls(chat_ctx)
+    item_groups = group_tool_calls(merge_consecutive_user_messages(chat_ctx))
     items = []
     for group in item_groups:
         if not group.message and not group.tool_calls and not group.tool_outputs:
