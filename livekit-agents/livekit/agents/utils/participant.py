@@ -136,6 +136,7 @@ async def wait_for_participant(
     *,
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
+    wait_for_attributes: list[str] | None = None,
     include_local: Literal[False] = False,
 ) -> rtc.RemoteParticipant: ...
 
@@ -146,6 +147,7 @@ async def wait_for_participant(
     *,
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
+    wait_for_attributes: list[str] | None = None,
     include_local: Literal[True],
 ) -> rtc.Participant: ...
 
@@ -155,12 +157,16 @@ async def wait_for_participant(
     *,
     identity: str | None = None,
     kind: list[rtc.ParticipantKind.ValueType] | rtc.ParticipantKind.ValueType | None = None,
+    wait_for_attributes: list[str] | None = None,
     include_local: bool = False,
 ) -> rtc.Participant:
     """
     Returns a participant that matches the given identity. If identity is None, the first
     participant that joins the room will be returned.
     If the participant has already joined, the function will return immediately.
+
+    When `wait_for_attributes` is set, only a participant that has all of the given attribute
+    keys (with any value) matches, so this also waits for attributes set after joining.
 
     When `include_local` is True, the local participant is also considered.
     """
@@ -178,22 +184,36 @@ async def wait_for_participant(
 
         return p.kind == kind
 
+    def is_match(p: rtc.Participant) -> bool:
+        return (
+            (identity is None or p.identity == identity)
+            and kind_match(p)
+            and all(key in p.attributes for key in wait_for_attributes or ())
+        )
+
     def _on_participant_active(p: rtc.RemoteParticipant) -> None:
-        if (identity is None or p.identity == identity) and kind_match(p):
-            if not fut.done():
-                fut.set_result(p)
+        if is_match(p) and not fut.done():
+            fut.set_result(p)
+
+    def _on_attributes_changed(_changed: list[str], p: rtc.Participant) -> None:
+        if (
+            isinstance(p, rtc.RemoteParticipant)
+            and p.state == rtc.ParticipantState.PARTICIPANT_STATE_ACTIVE
+        ):
+            _on_participant_active(p)
 
     def _on_connection_state_changed(state: int) -> None:
         if state == rtc.ConnectionState.CONN_DISCONNECTED and not fut.done():
             fut.set_exception(RuntimeError("room disconnected while waiting for participant"))
 
     room.on("participant_active", _on_participant_active)
+    room.on("participant_attributes_changed", _on_attributes_changed)
     room.on("connection_state_changed", _on_connection_state_changed)
 
     try:
         if include_local:
             local = room.local_participant
-            if (identity is None or local.identity == identity) and kind_match(local):
+            if is_match(local):
                 return local
 
         for p in room.remote_participants.values():
@@ -205,6 +225,7 @@ async def wait_for_participant(
         return await fut
     finally:
         room.off("participant_active", _on_participant_active)
+        room.off("participant_attributes_changed", _on_attributes_changed)
         room.off("connection_state_changed", _on_connection_state_changed)
 
 

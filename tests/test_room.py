@@ -56,6 +56,7 @@ def _make_token(
                 can_publish=True,
                 can_subscribe=True,
                 agent=agent,
+                can_update_own_metadata=True,
             )
         )
     )
@@ -163,6 +164,37 @@ class TestWaitForParticipant:
                 async with connect_room("agent-p", name, kind="agent", agent=True):
                     result = await asyncio.wait_for(task, timeout=TIMEOUT)
                     assert result.identity == "agent-p"
+
+    async def test_with_attributes(self):
+        """Only returns a participant once it has every requested attribute key."""
+        name = _room_name()
+        async with connect_room("observer", name) as room_a:
+            task = asyncio.ensure_future(
+                wait_for_participant(room_a, wait_for_attributes=["sip.phoneNumber", "x-id"])
+            )
+            await asyncio.sleep(0.3)
+
+            async with connect_room("caller", name) as room_b:
+                await room_b.local_participant.set_attributes({"sip.phoneNumber": "+15550100"})
+                await asyncio.sleep(0.3)
+                assert not task.done()
+
+                await room_b.local_participant.set_attributes({"x-id": "42"})
+                result = await asyncio.wait_for(task, timeout=TIMEOUT)
+                assert result.identity == "caller"
+
+    async def test_with_attributes_already_set(self):
+        """Participant already has the attributes when wait is called -> returns immediately."""
+        name = _room_name()
+        async with connect_room("caller", name) as room_b:
+            await room_b.local_participant.set_attributes({"sip.phoneNumber": "+15550100"})
+            async with connect_room("observer", name) as room_a:
+                await asyncio.sleep(0.5)
+                result = await asyncio.wait_for(
+                    wait_for_participant(room_a, wait_for_attributes=["sip.phoneNumber"]),
+                    timeout=TIMEOUT,
+                )
+                assert result.identity == "caller"
 
     async def test_disconnect(self):
         """Room disconnects while waiting -> RuntimeError raised."""

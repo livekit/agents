@@ -648,11 +648,15 @@ class JobContext:
         identity: str | None = None,
         kind: list[rtc.ParticipantKind.ValueType]
         | rtc.ParticipantKind.ValueType = DEFAULT_PARTICIPANT_KINDS,
+        wait_for_attributes: list[str] | None = None,
     ) -> rtc.RemoteParticipant:
         """
         Returns a participant that matches the given identity. If identity is None, the first
         participant that joins the room will be returned.
         If the participant has already joined, the function will return immediately.
+
+        When `wait_for_attributes` is set, only a participant that has all of the given attribute
+        keys (with any value) matches, so this also waits for attributes set after joining.
         """
 
         # handle connection automatically, otherwise wait_for_participant will raise an error
@@ -665,7 +669,9 @@ class JobContext:
             attributes={trace_types.ATTR_ROOM_IO_PARTICIPANT_FILTER: identity is not None},
             job_ctx=self,
         ) as span:
-            participant = await wait_for_participant(self._room, identity=identity, kind=kind)
+            participant = await wait_for_participant(
+                self._room, identity=identity, kind=kind, wait_for_attributes=wait_for_attributes
+            )
             span.set_attributes(telemetry_utils.participant_attributes(participant))
             return participant
 
