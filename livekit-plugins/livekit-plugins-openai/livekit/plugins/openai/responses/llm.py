@@ -13,7 +13,11 @@ from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
-from livekit.agents.inference.llm import drop_unsupported_params
+from livekit.agents.inference.llm import (
+    PromptCacheOptions,
+    drop_unsupported_params,
+    supports_prompt_cache_breakpoints,
+)
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
 from livekit.agents.llm.tool_context import (
@@ -206,6 +210,8 @@ class _LLMOptions:
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
     use_websocket: bool
+    prompt_cache_options: NotGivenOr[PromptCacheOptions]
+    prompt_cache_breakpoints: bool | Literal["auto"]
 
 
 class LLM(llm.LLM):
@@ -232,12 +238,18 @@ class LLM(llm.LLM):
         verbosity: NotGivenOr[Verbosity] = NOT_GIVEN,
         max_output_tokens: NotGivenOr[int] = NOT_GIVEN,
         timeout: httpx.Timeout | None = None,
+        prompt_cache_options: NotGivenOr[PromptCacheOptions] = NOT_GIVEN,
+        prompt_cache_breakpoints: bool | Literal["auto"] = "auto",
     ) -> None:
         """
         Create a new instance of OpenAI Responses LLM.
 
         ``api_key`` must be set to your OpenAI API key, either using the argument or by setting the
         ``OPENAI_API_KEY`` environmental variable.
+
+        ``prompt_cache_breakpoints`` sends each :class:`livekit.agents.llm.CacheBreakpoint` in the
+        chat context as an OpenAI ``prompt_cache_breakpoint``. ``"auto"`` does so against
+        api.openai.com for GPT-5.6 and later; other hosts and models need ``True``.
         """
         super().__init__()
 
@@ -264,6 +276,8 @@ class LLM(llm.LLM):
             verbosity=verbosity,
             max_output_tokens=max_output_tokens,
             use_websocket=use_websocket,
+            prompt_cache_options=prompt_cache_options,
+            prompt_cache_breakpoints=prompt_cache_breakpoints,
         )
         self._client = client
         self._owns_client = client is None
@@ -367,6 +381,9 @@ class LLM(llm.LLM):
         if is_given(self._opts.max_output_tokens):
             extra["max_output_tokens"] = self._opts.max_output_tokens
 
+        if is_given(self._opts.prompt_cache_options):
+            extra["prompt_cache_options"] = self._opts.prompt_cache_options
+
         parallel_tool_calls = (
             parallel_tool_calls if is_given(parallel_tool_calls) else self._opts.parallel_tool_calls
         )
@@ -411,6 +428,16 @@ class LLM(llm.LLM):
             conn_options=conn_options,
             extra_kwargs=extra,
             full_chat_ctx=chat_ctx,
+            prompt_cache_breakpoints=self._resolve_prompt_cache_breakpoints(),
+        )
+
+    def _resolve_prompt_cache_breakpoints(self) -> bool:
+        setting = self._opts.prompt_cache_breakpoints
+        if isinstance(setting, bool):
+            return setting
+        # subclasses (xAI) and custom base URLs reach hosts not verified to accept the field
+        return self.provider == "api.openai.com" and supports_prompt_cache_breakpoints(
+            str(self._opts.model)
         )
 
     def _pending_tool_calls_completed(self, items: list[ChatItem]) -> bool:
@@ -436,8 +463,10 @@ class LLMStream(llm.LLMStream):
         conn_options: APIConnectOptions,
         extra_kwargs: dict[str, Any],
         full_chat_ctx: llm.ChatContext,
+        prompt_cache_breakpoints: bool = False,
     ) -> None:
         super().__init__(llm, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._prompt_cache_breakpoints = prompt_cache_breakpoints
         self._model = model
         self._strict_tool_schema = strict_tool_schema
         self._response_id: str = ""
@@ -464,7 +493,9 @@ class LLMStream(llm.LLMStream):
 
     async def _run_impl(self) -> None:
         self._response_completed = False
-        chat_ctx, _ = self._chat_ctx.to_provider_format(format="openai.responses")
+        chat_ctx, _ = self._chat_ctx.to_provider_format(
+            format="openai.responses", prompt_cache_breakpoints=self._prompt_cache_breakpoints
+        )
         self._tool_ctx = llm.ToolContext(self.tools)
         tool_schemas = cast(
             list[ToolParam],
