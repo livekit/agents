@@ -84,6 +84,8 @@ IntelligenceLevel = Literal["standard", "high"]
 
 ObservabilityIntegration = Literal["braintrust"]
 
+PhonicModel = Literal["phonic_v0_5", "phonic_v1", "phonic_v1_1"]
+
 
 class PronunciationEntry(TypedDict):
     """A single ``{ word, pronunciation }`` entry of ``pronunciation_dictionary``."""
@@ -148,6 +150,7 @@ class _RealtimeOptions:
     no_input_end_conversation_sec: NotGivenOr[float]
     websocket_timeout_sec: NotGivenOr[int]
     intelligence_level: NotGivenOr[IntelligenceLevel]
+    phonic_model: NotGivenOr[PhonicModel]
     is_welcome_message_interruptible: NotGivenOr[bool]
     vad_prebuffer_duration_ms: NotGivenOr[int]
     vad_min_speech_duration_ms: NotGivenOr[int]
@@ -222,6 +225,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
         websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
         intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        phonic_model: NotGivenOr[PhonicModel] = NOT_GIVEN,
         is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
         vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -272,7 +276,9 @@ class RealtimeModel(llm.RealtimeModel):
                 ``generate_no_input_poke_text`` is True.
             no_input_end_conversation_sec: Seconds of silence before ending the conversation.
             websocket_timeout_sec: Seconds of inactivity before the Phonic websocket is closed.
-            intelligence_level: LLM intelligence level, ``"standard"`` or ``"high"``.
+            intelligence_level: Model intelligence level, ``"standard"`` or ``"high"``.
+            phonic_model: Phonic model version to use, one of ``"phonic_v0_5"``,
+                ``"phonic_v1"`` or ``"phonic_v1_1"``.
             is_welcome_message_interruptible: When False, the welcome message cannot be
                 interrupted by the user.
             vad_prebuffer_duration_ms: Voice-activity-detection prebuffer duration, in milliseconds.
@@ -362,6 +368,7 @@ class RealtimeModel(llm.RealtimeModel):
             no_input_end_conversation_sec=no_input_end_conversation_sec,
             websocket_timeout_sec=websocket_timeout_sec,
             intelligence_level=intelligence_level,
+            phonic_model=phonic_model,
             is_welcome_message_interruptible=is_welcome_message_interruptible,
             vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
             vad_min_speech_duration_ms=vad_min_speech_duration_ms,
@@ -426,6 +433,7 @@ class RealtimeModel(llm.RealtimeModel):
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
         websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
         intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        phonic_model: NotGivenOr[PhonicModel] = NOT_GIVEN,
         is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
         vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -471,6 +479,7 @@ class RealtimeModel(llm.RealtimeModel):
                 no_input_end_conversation_sec=no_input_end_conversation_sec,
                 websocket_timeout_sec=websocket_timeout_sec,
                 intelligence_level=intelligence_level,
+                phonic_model=phonic_model,
                 is_welcome_message_interruptible=is_welcome_message_interruptible,
                 vad_prebuffer_duration_ms=vad_prebuffer_duration_ms,
                 vad_min_speech_duration_ms=vad_min_speech_duration_ms,
@@ -837,6 +846,7 @@ class RealtimeSession(llm.RealtimeSession):
             "no_input_end_conversation_sec": self._opts.no_input_end_conversation_sec,
             "websocket_timeout_sec": self._opts.websocket_timeout_sec,
             "intelligence_level": self._opts.intelligence_level,
+            "phonic_model": self._opts.phonic_model,
             "is_welcome_message_interruptible": self._opts.is_welcome_message_interruptible,
             "vad_prebuffer_duration_ms": self._opts.vad_prebuffer_duration_ms,
             "vad_min_speech_duration_ms": self._opts.vad_min_speech_duration_ms,
@@ -878,6 +888,7 @@ class RealtimeSession(llm.RealtimeSession):
         no_input_end_conversation_sec: NotGivenOr[float] = NOT_GIVEN,
         websocket_timeout_sec: NotGivenOr[int] = NOT_GIVEN,
         intelligence_level: NotGivenOr[IntelligenceLevel] = NOT_GIVEN,
+        phonic_model: NotGivenOr[PhonicModel] = NOT_GIVEN,
         is_welcome_message_interruptible: NotGivenOr[bool] = NOT_GIVEN,
         vad_prebuffer_duration_ms: NotGivenOr[int] = NOT_GIVEN,
         vad_min_speech_duration_ms: NotGivenOr[int] = NOT_GIVEN,
@@ -919,6 +930,7 @@ class RealtimeSession(llm.RealtimeSession):
                 ("no_input_end_conversation_sec", no_input_end_conversation_sec),
                 ("websocket_timeout_sec", websocket_timeout_sec),
                 ("intelligence_level", intelligence_level),
+                ("phonic_model", phonic_model),
                 ("is_welcome_message_interruptible", is_welcome_message_interruptible),
                 ("vad_prebuffer_duration_ms", vad_prebuffer_duration_ms),
                 ("vad_min_speech_duration_ms", vad_min_speech_duration_ms),
