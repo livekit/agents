@@ -510,6 +510,10 @@ class TTS(tts.TTS):
         # each stream synthesizes with the options it was created with, so a stream
         # checks this before using a pooled socket.
         self._ws_handshakes: dict[int, tuple[str, bool]] = {}
+        # ids of sockets that were open when update_options last changed a handshake
+        # option. The pool will not hand them out again but only closes them on its
+        # next acquisition, so a stream returning one closes it instead.
+        self._retired_ws: set[int] = set()
 
         self._pool = utils.ConnectionPool[aiohttp.ClientWebSocketResponse](
             connect_cb=self._connect_ws,
@@ -568,6 +572,7 @@ class TTS(tts.TTS):
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._stop_keepalive(ws)
         self._ws_handshakes.pop(id(ws), None)
+        self._retired_ws.discard(id(ws))
         await ws.close()
 
     def _socket_matches(self, ws: aiohttp.ClientWebSocketResponse, opts: SarvamTTSOptions) -> bool:
@@ -802,6 +807,7 @@ class TTS(tts.TTS):
         )
         self._opts = opts
         if reconnect:
+            self._retired_ws.update(self._ws_handshakes)
             self._pool.invalidate()
 
     # Implement the abstract synthesize method
@@ -998,6 +1004,11 @@ class SynthesizeStream(tts.SynthesizeStream):
         from them. Once update_options changes a handshake option, a pooled socket
         would put this stream on a model those may not stream with, so the stream
         opens a socket of its own instead and closes it when done.
+
+        A pooled socket's keepalive is paused while the stream holds it, so its pings
+        don't interleave with config, text and flush frames, and resumes once the
+        stream returns it cleanly. A socket update_options retired in the meantime is
+        closed at that point instead.
         """
         if _handshake_key(self._opts) == _handshake_key(self._tts._opts):
             async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
@@ -1005,7 +1016,14 @@ class SynthesizeStream(tts.SynthesizeStream):
                 if self._tts._socket_matches(ws, self._opts):
                     self._acquire_time = self._tts._pool.last_acquire_time
                     self._connection_reused = self._tts._pool.last_connection_reused
+                    await self._tts._stop_keepalive(ws)
                     yield ws
+                    # only reached when the stream finished cleanly; on an exception
+                    # the pool removes the socket and closes it with its next drain
+                    if id(ws) in self._tts._retired_ws:
+                        await self._tts._close_ws(ws)
+                    else:
+                        self._tts._start_keepalive(ws)
                     return
 
         started = time.perf_counter()
@@ -1185,47 +1203,27 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         try:
             async with self._connection() as ws:
-                # Pause the keepalive task while we own the connection so its
-                # ping frames don't interleave with config / text / flush
-                # traffic. The task was started either by ``_connect_ws`` (for
-                # a fresh connection) or by the previous ``_run_ws`` invocation
-                # that returned this connection to the pool.
-                await self._tts._stop_keepalive(ws)
-                keepalive_should_resume = False
+                self._ws_conn = ws
+                self._connection_state = ConnectionState.CONNECTED
+
+                logger.info("WebSocket connected successfully", extra=self._build_log_context())
+
+                self._send_task = asyncio.create_task(send_task(ws))
+                self._recv_task = asyncio.create_task(recv_task(ws))
+
+                tasks = [self._send_task, self._recv_task]
 
                 try:
-                    self._ws_conn = ws
-                    self._connection_state = ConnectionState.CONNECTED
-
-                    logger.info("WebSocket connected successfully", extra=self._build_log_context())
-
-                    self._send_task = asyncio.create_task(send_task(ws))
-                    self._recv_task = asyncio.create_task(recv_task(ws))
-
-                    tasks = [self._send_task, self._recv_task]
-
-                    try:
-                        await asyncio.gather(*tasks)
-                        logger.info(
-                            "WebSocket session completed successfully",
-                            extra=self._build_log_context(),
-                        )
-                        keepalive_should_resume = True
-                    finally:
-                        input_sent_event.set()
-                        await utils.aio.gracefully_cancel(*tasks)
-                        self._send_task = None
-                        self._recv_task = None
+                    await asyncio.gather(*tasks)
+                    logger.info(
+                        "WebSocket session completed successfully",
+                        extra=self._build_log_context(),
+                    )
                 finally:
-                    # Resume the keepalive only when the session completed
-                    # cleanly and the pool will hand this connection out again.
-                    # On exception the pool discards it via ``remove(conn)``, and
-                    # one whose handshake no longer matches the TTS's options was
-                    # retired by update_options (or opened for this stream alone)
-                    # and is closed instead of reused. Pinging either would only
-                    # hold it open.
-                    if keepalive_should_resume and self._tts._socket_matches(ws, self._tts._opts):
-                        self._tts._start_keepalive(ws)
+                    input_sent_event.set()
+                    await utils.aio.gracefully_cancel(*tasks)
+                    self._send_task = None
+                    self._recv_task = None
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED

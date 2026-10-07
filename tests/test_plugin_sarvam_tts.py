@@ -374,21 +374,27 @@ async def test_config_only_update_reuses_the_pooled_socket(socket_tts: _SocketTT
     ]
 
 
+_TO_V4_FLASH = {"model": "bulbul:v4-flash", "speaker": "ritu_hi_medical"}
+_BACK_TO_V3 = {"model": "bulbul:v3", "speaker": "shubh"}
+
+
 @pytest.mark.parametrize(
-    ("switch_mid_utterance", "pinged_while_idle"),
+    "switches",
     [
-        # the pool hands this socket out again, so it is kept alive meanwhile
-        (False, True),
-        # the switch retired it; pinging would only hold it open until the next request
-        (True, False),
+        # nothing changed, so the pool hands this socket out again and keeps it alive
+        [],
+        [_TO_V4_FLASH],
+        # the handshake matches the TTS again, but the pool still retired this socket
+        [_TO_V4_FLASH, _BACK_TO_V3],
     ],
+    ids=["unchanged", "switched", "switched-and-back"],
 )
-async def test_keepalive_resumes_only_on_sockets_the_pool_will_reuse(
+async def test_socket_retired_mid_utterance_is_closed_when_returned(
     socket_tts: _SocketTTS,
     monkeypatch: pytest.MonkeyPatch,
-    switch_mid_utterance: bool,
-    pinged_while_idle: bool,
+    switches: list[dict[str, str]],
 ) -> None:
+    """The pool only closes a retired socket on its next acquisition, which may not come."""
     monkeypatch.setattr(sarvam_tts, "_KEEPALIVE_INTERVAL", 0.01)
     tts, session = socket_tts()
     connect = session.ws_connect
@@ -397,12 +403,13 @@ async def test_keepalive_resumes_only_on_sockets_the_pool_will_reuse(
         ws = await connect(url, **kwargs)
         send_str = ws.send_str
 
-        async def send_and_maybe_switch(data: str) -> None:
+        async def send_and_switch(data: str) -> None:
             await send_str(data)
-            if switch_mid_utterance and json.loads(data)["type"] == "flush":
-                tts.update_options(model="bulbul:v4-flash", speaker="ritu_hi_medical")
+            if json.loads(data)["type"] == "flush":
+                for switch in switches:
+                    tts.update_options(**switch)
 
-        ws.send_str = send_and_maybe_switch  # type: ignore[method-assign]
+        ws.send_str = send_and_switch  # type: ignore[method-assign]
         return ws
 
     session.ws_connect = connect_and_switch_on_flush  # type: ignore[method-assign]
@@ -410,7 +417,9 @@ async def test_keepalive_resumes_only_on_sockets_the_pool_will_reuse(
     await asyncio.sleep(0.05)
 
     (ws,) = session.sockets
-    assert any(frame["type"] == "ping" for frame in ws.frames) is pinged_while_idle
+    reused = not switches
+    assert ws.closed is not reused
+    assert any(frame["type"] == "ping" for frame in ws.frames) is reused
 
 
 def _error_stream() -> sarvam_tts.SynthesizeStream:
