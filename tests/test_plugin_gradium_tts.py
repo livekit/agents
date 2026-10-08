@@ -12,7 +12,8 @@ import pytest
 
 from livekit.agents import APIConnectOptions, APIError, APIStatusError, APITimeoutError
 
-pytestmark = pytest.mark.plugin("gradium")
+# hermetic: every test talks to a scripted fake websocket, so this is a unit module
+pytestmark = pytest.mark.unit
 
 # no retries: the tests assert on the error of the single attempt
 CONN_OPTS = APIConnectOptions(max_retry=0, timeout=5)
