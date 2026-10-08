@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from livekit.agents import tokenize
@@ -263,6 +265,54 @@ def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[
     assert tokenizer.tokenize(text=text) == expected
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("好的，我可以帮您。需要提醒吗？", ["好的，", "我可以帮您。", "需要提醒吗？"]),
+        ("はい、できます。", ["はい、", "できます。"]),
+        # spaces still split, and a mark followed by a space adds no empty word
+        (
+            "LiveKit是一个平台， 用于 voice agents",
+            ["LiveKit是一个平台，", "用于", "voice", "agents"],
+        ),
+    ],
+)
+def test_word_tokenizer_splits_cjk_at_clause_punctuation(text: str, expected: list[str]):
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False)
+    assert tokenizer.tokenize(text=text) == expected
+
+
+async def test_streamed_word_tokenizer_releases_cjk_before_end_of_input():
+    # TTS plugins such as Deepgram send the LLM text through this stream. A CJK reply has
+    # no spaces, so it used to come out as a single word once the whole reply had arrived
+    text = "好的，我可以帮您处理。您的航班明天九点起飞。需要我提醒您吗？"
+    stream = basic.WordTokenizer(ignore_punctuation=False).stream()
+    pushed = 0
+    released: list[tuple[int, str]] = []
+
+    async def _consume() -> None:
+        async for ev in stream:
+            released.append((pushed, ev.token))
+
+    consumer = asyncio.create_task(_consume())
+    for i in range(0, len(text), 2):
+        stream.push_text(text[i : i + 2])
+        pushed = i + 2
+        await asyncio.sleep(0)
+
+    stream.end_input()
+    await consumer
+
+    # like an English word after its space, a clause is out once the next text arrives
+    assert released[0] == (4, "好的，")
+    assert [token for _, token in released] == [
+        "好的，",
+        "我可以帮您处理。",
+        "您的航班明天九点起飞。",
+        "需要我提醒您吗？",
+    ]
+
+
 HYPHENATOR_TEXT = [
     "Segment",
     "expected",
@@ -353,6 +403,26 @@ async def test_replace_words_async():
 
     replaced = "".join(replaced_chunks)
     assert replaced == REPLACE_EXPECTED
+
+
+async def test_replace_words_async_releases_cjk_before_end_of_input():
+    # tts_text_transforms run replace_words on the LLM stream before the TTS, so it has to
+    # release a CJK clause as soon as it is complete, not once the whole reply is in
+    text = "好的，我可以帮您处理。需要我提醒您吗？"
+    pushed = 0
+
+    async def _chunks():
+        nonlocal pushed
+        for i in range(0, len(text), 2):
+            pushed = i + 2
+            yield text[i : i + 2]
+
+    released: list[tuple[int, str]] = []
+    async for chunk in tokenize.utils.replace_words(text=_chunks(), replacements={"好的": "好啊"}):
+        released.append((pushed, chunk))
+
+    assert released[0] == (4, "好啊，")
+    assert "".join(chunk for _, chunk in released) == "好啊，我可以帮您处理。需要我提醒您吗？"
 
 
 PARAGRAPH_TEST_CASES = [
