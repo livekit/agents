@@ -32,8 +32,8 @@ logger = logging.getLogger("assemblyai-stt-tts")
 
 load_dotenv()
 
-# AssemblyAI's server-side VAD and the local Silero VAD (used for barge-in) should agree,
-# or there is a window where one has heard speech and the other has not.
+# AssemblyAI recommends matching Silero's activation threshold (used here for barge-in)
+# to the STT's vad_threshold, its default on Universal-3.6 Pro.
 VAD_THRESHOLD = 0.2
 
 

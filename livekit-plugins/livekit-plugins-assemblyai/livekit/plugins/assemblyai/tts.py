@@ -12,20 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AssemblyAI Streaming TTS.
+"""AssemblyAI Streaming TTS, see https://www.assemblyai.com/docs/tts/message-frames.
 
-The service is WebSocket-only: a session is configured entirely through the
-connect URL, the server answers with a ``Begin`` frame, and text is sent as
-``Generate`` frames that are concluded with ``Flush``. Every ``Flush`` is
-answered by exactly one ``FlushDone`` and the requests are numbered by
-``flush_id``, which the server advances on every ``FlushDone`` or ``Cancelled``.
-
-Opening a session is the expensive part and new sessions per minute are
-rate limited, so sockets are pooled and reused across streams. Each pooled
-socket owns a reader task that keeps draining it, routes frames to the stream
-currently holding it, and drops whatever belongs to an earlier stream (the
-tail of a cancelled request, or a ``WordBoundaries`` frame that trails its
-``FlushDone``).
+Sessions are pooled and reused across streams, since opening one costs a handshake and
+new sessions per minute are rate limited. Each pooled socket owns a reader that keeps
+draining it and drops frames left over from an earlier holder.
 """
 
 from __future__ import annotations
@@ -86,10 +77,8 @@ TTSLanguages = Literal["english", "spanish", "german", "italian", "portuguese", 
 DEFAULT_BASE_URL = "wss://streaming-tts.assemblyai.com"
 SUPPORTED_SAMPLE_RATES = (8000, 16000, 22050, 24000, 44100, 48000)
 
-# The catalog published at https://www.assemblyai.com/docs/tts/voices. There is no
-# voice-list endpoint, and every voice belongs to exactly one language: a voice sent
-# with any other `language` passes the handshake and the session dies ~0.5s after
-# `Begin` with a 3006, so the language is derived from the voice whenever possible.
+# https://www.assemblyai.com/docs/tts/voices. Each voice speaks one language, and a
+# mismatch only fails ~0.5s after `Begin`, so the language is derived from the voice.
 VOICE_LANGUAGES: dict[str, str] = {
     "alba": "english",
     "anna": "english",
@@ -128,26 +117,21 @@ _ISO_LANGUAGES = {
     "fr": "french",
 }
 
-# A single Generate frame carries at most 2000 Unicode code points (3006 above that).
+# Generate's limit, in code points. A longer sentence becomes several requests rather
+# than several Generates under one Flush: together with _MAX_IN_FLIGHT_REQUESTS that
+# keeps the unsynthesized backlog under the 8000 chars that close the session (3010).
 _MAX_REQUEST_CHARS = 2000
-
-# Flushes sent but not yet answered with FlushDone. The server works through them one
-# at a time, so a couple queued keeps it busy, and bounding the queue keeps the
-# unsynthesized backlog (3 x 2000 chars) under the 8000-char limit that closes with 3010.
 _MAX_IN_FLIGHT_REQUESTS = 3
 
-# Stop handing out a socket this close to its `expires_at`, so a reply never starts on
-# a session that is about to be closed with 3008.
+# don't start a reply on a session about to be closed at its `expires_at` (3008)
 _EXPIRY_MARGIN = 60.0
 
-# WordBoundaries trails its FlushDone, usually by tens of milliseconds. How long the
-# last request of a segment waits for it before its text is pushed without timings.
+# how long the end of a segment waits for the WordBoundaries trailing its FlushDone
 _WORD_BOUNDARIES_GRACE = 0.5
 
-# 1008: the credential was rejected. 3006: a bad parameter, frame, or voice.
-# Retrying either unchanged fails the same way.
+# a rejected credential, or a bad parameter, frame or voice: retrying can't help
 _NON_RETRYABLE_CODES = (1008, 3006)
-# A 3006 that is really the inactivity timeout, which is routine rather than a bad request.
+# ...except a 3006 from the inactivity timeout
 _INACTIVITY_PREFIX = "No message received"
 
 _FLUSH_FRAME = json.dumps({"type": "Flush"})
@@ -367,13 +351,10 @@ class TTS(tts.TTS):
                 message=e.message, status_code=e.status, request_id=None, body=None
             ) from None
         except Exception as e:
-            raise APIConnectionError(
-                f"failed to connect to AssemblyAI TTS: {type(e).__name__}"
-            ) from None
+            raise APIConnectionError("failed to connect to AssemblyAI TTS") from e
 
-        # The upgrade succeeding proves nothing: credentials, parameters and the session
-        # allowance are checked afterwards, and a failure arrives as an Error frame
-        # followed by a close instead of Begin.
+        # credentials and parameters are checked after the upgrade: a failure arrives as
+        # an Error frame in place of Begin
         try:
             try:
                 msg = await ws.receive(timeout=timeout)
@@ -453,35 +434,28 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
-        segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
+        sent_stream = self._tts._sentence_tokenizer.stream()
+        if self._tts._stream_pacer:
+            sent_stream = self._tts._stream_pacer.wrap(
+                sent_stream=sent_stream, audio_emitter=output_emitter
+            )
 
-        async def _tokenize_input() -> None:
-            sent_stream: tokenize.SentenceStream | None = None
+        async def _input_task() -> None:
             async for data in self._input_ch:
-                if isinstance(data, str):
-                    if sent_stream is None:
-                        sent_stream = self._tts._sentence_tokenizer.stream()
-                        if self._tts._stream_pacer:
-                            sent_stream = self._tts._stream_pacer.wrap(
-                                sent_stream=sent_stream, audio_emitter=output_emitter
-                            )
-                        segments_ch.send_nowait(sent_stream)
+                if isinstance(data, self._FlushSentinel):
+                    sent_stream.flush()
+                else:
                     sent_stream.push_text(data)
-                elif isinstance(data, self._FlushSentinel):
-                    if sent_stream is not None:
-                        sent_stream.end_input()
-                    sent_stream = None
-
-            if sent_stream is not None:
-                sent_stream.end_input()
-            segments_ch.close()
+            sent_stream.end_input()
 
         # Acquire before any text arrives, so the handshake overlaps the LLM's first token.
         try:
             conn = await self._tts._acquire(timeout=self._conn_options.timeout)
         except APIError:
+            await sent_stream.aclose()
             raise
         except Exception as e:
+            await sent_stream.aclose()
             raise APIConnectionError("failed to acquire an AssemblyAI TTS connection") from e
 
         self._acquire_time = self._tts._pool.last_acquire_time
@@ -489,23 +463,10 @@ class SynthesizeStream(tts.SynthesizeStream):
         if conn.session_id:
             output_emitter._note_provider_request_id(conn.session_id)
 
-        run = _StreamRun(
-            conn=conn,
-            listener=conn.attach(),
-            emitter=output_emitter,
-            stream=self,
-        )
-
-        async def _run_segments() -> None:
-            async for sent_stream in segments_ch:
-                try:
-                    await run.run_segment(sent_stream)
-                finally:
-                    await sent_stream.aclose()
-
+        run = _StreamRun(conn=conn, listener=conn.attach(), emitter=output_emitter, stream=self)
         tasks = [
-            asyncio.create_task(_tokenize_input()),
-            asyncio.create_task(_run_segments()),
+            asyncio.create_task(_input_task()),
+            asyncio.create_task(run.run(sent_stream)),
         ]
         discard = True
         try:
@@ -529,6 +490,7 @@ class SynthesizeStream(tts.SynthesizeStream):
             ) from e
         finally:
             await utils.aio.gracefully_cancel(*tasks)
+            await sent_stream.aclose()
             conn.detach(run.listener)
             self._tts._release(conn, discard=discard)
 
@@ -536,7 +498,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 @dataclass(eq=False)
 class _Request:
     text: str
-    # where this request's audio starts within the segment, set by its first Audio frame
+    # where this request's audio starts in the stream, set by its first Audio frame
     segment_offset: float | None = None
     duration: float = 0.0
     done: bool = False
@@ -570,9 +532,8 @@ class _StreamRun:
     def has_outstanding(self) -> bool:
         return self._num_done < len(self._requests)
 
-    async def run_segment(self, sent_stream: tokenize.SentenceStream) -> None:
+    async def run(self, sent_stream: tokenize.SentenceStream) -> None:
         segment_id = utils.shortuuid()
-        first_index = len(self._requests)
         segment_bytes = 0
         in_flight = asyncio.Semaphore(_MAX_IN_FLIGHT_REQUESTS)
         input_done = False
@@ -638,7 +599,10 @@ class _StreamRun:
                 elif kind == "WordBoundaries":
                     self._push_word_boundaries(request, item)
 
-            await self._await_word_boundaries(first_index)
+            if started:
+                # release the buffered audio now; only the end of the segment waits for timings
+                self._emitter.flush()
+            await self._await_word_boundaries()
             if started:
                 self._emitter.end_segment()
 
@@ -662,13 +626,13 @@ class _StreamRun:
             return None
         return self._requests[index]
 
-    async def _await_word_boundaries(self, first_index: int) -> None:
+    async def _await_word_boundaries(self) -> None:
         """Give the trailing WordBoundaries frames a moment before the segment ends."""
         if not self._word_timings:
             return
 
         deadline = time.monotonic() + _WORD_BOUNDARIES_GRACE
-        while any(self._awaiting_words(r) for r in self._requests[first_index:]):
+        while any(self._awaiting_words(r) for r in self._requests):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -683,7 +647,7 @@ class _StreamRun:
             if item.get("type") == "WordBoundaries" and (request := self._request_for(item)):
                 self._push_word_boundaries(request, item)
 
-        for request in self._requests[first_index:]:
+        for request in self._requests:
             self._push_untimed(request)
 
     @staticmethod
@@ -695,16 +659,14 @@ class _StreamRun:
         if request.transcript_pushed or request.segment_offset is None:
             return
 
-        # timings arrive in request order, but one can be missing (they are best-effort):
-        # earlier requests that still have none get their text without timings, so the
-        # transcript keeps its order
+        # timings are best-effort: earlier requests still without any get their text
+        # untimed now, so the transcript keeps its order
         index = self._requests.index(request)
         for earlier in self._requests[:index]:
             self._push_untimed(earlier)
 
-        # `start`/`end` are on the session's audio timeline and `audio_start_ms` is where
-        # this request begins on it; anchor on the request's own position in the segment,
-        # which stays right after a cancel even though the server's timeline does not
+        # `start`/`end` are on the session timeline, where this request begins at
+        # `audio_start_ms`; re-anchor them on the request's position in this segment
         audio_start = (item.get("audio_start_ms") or 0) / 1000
         offset = request.segment_offset - audio_start
         words: list[TimedString] = []
@@ -849,10 +811,11 @@ class _Connection:
         await self._ws.close()
 
     def _fail(self, error: APIError) -> None:
-        if self._error is None:
-            self._error = error
+        if self._error is not None:
+            return
+        self._error = error
         if self._listener is not None:
-            self._listener.push(self._error)
+            self._listener.push(error)
 
     async def _send_loop(self, *, keepalive_interval: float | None) -> None:
         try:
@@ -937,10 +900,6 @@ class _Connection:
 
         if kind not in ("Audio", "FlushDone", "WordBoundaries"):
             return  # Begin, Termination, and frame types added later
-
-        if self._cancels_pending:
-            # everything before `Cancelled` belongs to the stream that cancelled
-            return
 
         listener = self._listener
         flush_id = data.get("flush_id")
