@@ -61,6 +61,8 @@ _STT_RECONNECT_INTERVAL = 0.5
 # one, so an untranscribed segment (breath, cough, line noise) that opened the user turn
 # earlier is not reported as the start of the speech that was transcribed.
 _UTTERANCE_MAX_PAUSE = 2.0
+# utterances kept for an open turn; a transcript timed before them uses the current one
+_MAX_TURN_UTTERANCES = 32
 
 
 @dataclass
@@ -1429,6 +1431,7 @@ class AudioRecognition:
                 last.end is not None and speech_start_time - last.end >= _UTTERANCE_MAX_PAUSE
             ):
                 self._utterances.append(_Utterance(start=speech_start_time))
+                del self._utterances[:-_MAX_TURN_UTTERANCES]
             else:
                 last.end = None
 
