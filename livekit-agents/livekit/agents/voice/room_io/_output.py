@@ -343,20 +343,13 @@ def _legacy_transcription_needed(room: rtc.Room) -> bool:
     reach ``remote_participants``.
     """
     local_identity = room.local_participant.identity
-    for p in room.remote_participants.values():
-        if p.kind != rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD:
-            continue
-
-        # an out-of-repo avatar worker that joined as STANDARD rather than AGENT. Note this
-        # must not be `_is_local_proxy_participant`, which also matches the participant the
-        # output is attributed to -- for the user output that is the user themselves.
-        if p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) == local_identity:
-            continue
-
-        if p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS:
-            return True
-
-    return False
+   return any(
+    p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    and p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS
+    # not an avatar worker of ours that joined as STANDARD rather than AGENT
+    and p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) != local_identity
+    for p in room.remote_participants.values()
+)
 
 
 class _ParticipantLegacyTranscriptionOutput:
