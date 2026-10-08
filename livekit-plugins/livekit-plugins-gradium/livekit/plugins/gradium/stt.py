@@ -398,7 +398,7 @@ class SpeechStream(stt.SpeechStream):
                     elif type_ == "step":
                         if not speaking:
                             continue
-                        if vad_bucket := self._opts.vad_bucket:
+                        if (vad_bucket := self._opts.vad_bucket) is not None:
                             positive_vad = (
                                 data["vad"][vad_bucket]["inactivity_prob"]
                                 > self._opts.vad_threshold

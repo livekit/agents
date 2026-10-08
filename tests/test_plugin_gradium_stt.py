@@ -357,3 +357,21 @@ async def test_interim_transcripts_are_cumulative():
     assert [alt.text for alt in interims] == ["hello", "hello world"]
     # both carry the start of the utterance, not of the latest word
     assert [alt.start_time for alt in interims] == pytest.approx([0.1, 0.1], abs=0.05)
+
+
+async def test_vad_bucket_zero_is_honored():
+    """Bucket 0 (the 0.5s horizon) is a valid choice, not "VAD disabled"."""
+    only_first_head = (0.99, 0.01, 0.01, 0.01)
+    frames = [READY, _text("hello", 0.1)] + [_step(i, only_first_head) for i in range(4)]
+    stt, _, _ = _make_stt(frames, vad_bucket=0)
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream, lambda ev: ev.type == SpeechEventType.FINAL_TRANSCRIPT
+        )
+    finally:
+        await stream.aclose()
+
+    assert events[-1].alternatives[0].text == "hello"
