@@ -375,3 +375,27 @@ async def test_vad_bucket_zero_is_honored():
         await stream.aclose()
 
     assert events[-1].alternatives[0].text == "hello"
+
+
+from livekit.agents import APIConnectOptions, APIError, APITimeoutError
+
+
+class HangingSession:
+    """A server that never completes the websocket handshake."""
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def test_stream_times_out_on_hung_connect():
+    from livekit.plugins.gradium import STT
+
+    stt = STT(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APITimeoutError):
+            await _collect_until(stream, lambda ev: False)
+    finally:
+        await stream.aclose()

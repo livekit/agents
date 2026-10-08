@@ -31,6 +31,7 @@ from livekit.agents import (
     APIConnectOptions,
     APIError,
     APIStatusError,
+    APITimeoutError,
     LanguageCode,
     stt,
     utils,
@@ -469,7 +470,19 @@ class SpeechStream(stt.SpeechStream):
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
         headers = {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
-        ws = await self._session.ws_connect(self._model_endpoint, headers=headers)
+        # The shared aiohttp session has no connect timeout of its own, so bound the
+        # handshake here and map its failures to API errors the base class can retry.
+        try:
+            ws = await asyncio.wait_for(
+                self._session.ws_connect(self._model_endpoint, headers=headers),
+                self._conn_options.timeout,
+            )
+        except asyncio.TimeoutError:
+            raise APITimeoutError() from None
+        except aiohttp.ClientResponseError as e:
+            raise APIStatusError(
+                message=e.message, status_code=e.status, request_id=None, body=None
+            ) from None
 
         # Build and send the setup payload as the first message
         setup_msg: dict[str, Any] = {
