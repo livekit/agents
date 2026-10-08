@@ -739,30 +739,27 @@ async def test_tool_response_omits_a_locally_made_call_id(
         assert replayed[0].function_responses[0].id is None
 
 
-def test_vertex_scheduling_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize("vertexai", [False, True])
+def test_scheduling_is_not_reported_as_unsupported(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, vertexai: bool
 ) -> None:
-    """An explicitly set scheduling is dropped on Vertex AI, so say so instead of ignoring it."""
+    """Neither API warns that scheduling is ignored, because neither ignores it.
+
+    This replaces test_vertex_scheduling_warns, which asserted the opposite. The
+    warning told Vertex AI callers their setting would be dropped; it is now sent,
+    so saying so would be the one thing worse than silence -- telling them the
+    opposite of what the session does.
+    """
     monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    kwargs: dict[str, object] = (
+        {"vertexai": True, "project": "p", "location": "us-central1"} if vertexai else {}
+    )
 
     with caplog.at_level(logging.WARNING):
         RealtimeModel(
-            vertexai=True,
-            project="p",
-            location="us-central1",
             tool_response_scheduling=types.FunctionResponseScheduling.SILENT,
+            **kwargs,  # type: ignore[arg-type]
         )
-
-    assert any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
-
-
-def test_gemini_api_scheduling_does_not_warn(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
-
-    with caplog.at_level(logging.WARNING):
-        RealtimeModel(tool_response_scheduling=types.FunctionResponseScheduling.SILENT)
 
     assert not any("tool_response_scheduling is not supported" in r.message for r in caplog.records)
 
