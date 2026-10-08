@@ -270,6 +270,7 @@ def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[
     [
         ("好的，我可以帮您。需要提醒吗？", ["好的，", "我可以帮您。", "需要提醒吗？"]),
         ("はい、できます。", ["はい、", "できます。"]),
+        ("「はい」。わかりました。", ["「はい」。", "わかりました。"]),
         # spaces still split, and a mark followed by a space adds no empty word
         (
             "LiveKit是一个平台， 用于 voice agents",
@@ -280,6 +281,16 @@ def test_word_tokenizer_ignores_non_ascii_punctuation(text: str, expected: list[
 def test_word_tokenizer_splits_cjk_at_clause_punctuation(text: str, expected: list[str]):
     tokenizer = basic.WordTokenizer(ignore_punctuation=False)
     assert tokenizer.tokenize(text=text) == expected
+
+
+def test_word_tokenizer_keeps_markup_with_full_width_punctuation():
+    # ElevenLabs rejoins the words of an SSML tag with spaces, so a full-width mark that
+    # does not follow CJK text, e.g. inside an attribute, must not end a word
+    text = 'Say <phoneme alphabet="ipa" ph="ni，hao">hello</phoneme> now'
+    tokenizer = basic.WordTokenizer(ignore_punctuation=False)
+    words = tokenizer.tokenize(text=text)
+    assert words == ["Say", "<phoneme", 'alphabet="ipa"', 'ph="ni，hao">hello</phoneme>', "now"]
+    assert tokenizer.format_words(words) == text
 
 
 async def test_streamed_word_tokenizer_releases_cjk_before_end_of_input():

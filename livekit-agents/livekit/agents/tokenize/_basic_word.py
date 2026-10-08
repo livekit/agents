@@ -5,6 +5,15 @@ from . import tokenizer
 # full-width clause and sentence punctuation. CJK text has no spaces, so these are
 # the only word boundaries a run of it has unless split_character is set
 _CJK_CLAUSE_PUNCTUATION = frozenset("，。！？；：、")
+# such a mark only ends a word after CJK text, so it never splits markup that a TTS
+# rejoins with spaces, e.g. an SSML attribute like ph="..."
+_CJK_TEXT = re.compile(
+    r"[　-〿"  # cjk symbols and punctuation, e.g. 」
+    r"぀-ヿ"  # hiragana, katakana
+    r"㐀-䶿一-鿿豈-﫿"  # cjk ideographs
+    r"가-힯"  # hangul syllables
+    r"＀-￯]"  # halfwidth and fullwidth forms
+)
 
 
 def split_words(
@@ -19,8 +28,9 @@ def split_words(
     and character-based languages (like Chinese, Japanese, Korean, Thai).
 
     For non-spaced scripts, each character is treated as a separate word if split_character is True.
-    Otherwise a run of CJK text ends a word at full-width punctuation such as "，" or "。",
-    which stays on the word. For other languages, words are split by whitespace.
+    Otherwise a run of CJK text ends a word at full-width punctuation such as "，" or "。"
+    that follows it, and the mark stays on the word. For other languages, words are split
+    by whitespace.
 
     Returns a list of words with their start and end indices of the original text.
     """
@@ -65,7 +75,7 @@ def split_words(
             _add_current_word(pos, pos + 1)
             word_start = pos + 1
 
-        elif char in _CJK_CLAUSE_PUNCTUATION:
+        elif char in _CJK_CLAUSE_PUNCTUATION and pos > 0 and _CJK_TEXT.match(text[pos - 1]):
             # commit the word with its punctuation, otherwise a CJK reply is a single
             # word and a word stream (e.g. a TTS input) holds it until the end
             _add_current_word(word_start, pos + 1)
