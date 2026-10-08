@@ -167,6 +167,14 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Bland"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "expressiveness": self._opts.expressiveness,
+            "stability": self._opts.stability,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

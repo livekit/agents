@@ -19,7 +19,7 @@ import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import onnxruntime  # type: ignore
@@ -158,6 +158,19 @@ class VAD(agents.vad.VAD):
     @property
     def provider(self) -> str:
         return "ONNX"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "provider": self.provider,
+            "sample_rate": self._opts.sample_rate,
+            "min_speech_duration": self._opts.min_speech_duration,
+            "min_silence_duration": self._opts.min_silence_duration,
+            "prefix_padding_duration": self._opts.prefix_padding_duration,
+            "max_buffered_speech": self._opts.max_buffered_speech,
+            "activation_threshold": self._opts.activation_threshold,
+            "deactivation_threshold": self._opts.deactivation_threshold,
+        }
 
     def stream(self) -> VADStream:
         """

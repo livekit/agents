@@ -4,6 +4,7 @@ import os
 import queue
 import threading
 from dataclasses import dataclass
+from typing import Any
 
 import riva.client
 from riva.client.proto.riva_audio_pb2 import AudioEncoding
@@ -69,6 +70,15 @@ class TTS(tts.TTS):
             word_tokenizer=tokenize.blingfire.SentenceTokenizer(),
         )
         self._tts_service = None
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "function_id": self._opts.function_id,
+            "use_ssl": self._opts.use_ssl,
+            "language_code": self._opts.language_code,
+        }
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:
         if not self._tts_service:

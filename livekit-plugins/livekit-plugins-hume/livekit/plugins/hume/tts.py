@@ -183,6 +183,17 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Hume"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "model_version": self._opts.model_version,
+            "speed": self._opts.speed,
+            "trailing_silence": self._opts.trailing_silence,
+            "instant_mode": self._opts.instant_mode,
+            "audio_format": self._opts.audio_format,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

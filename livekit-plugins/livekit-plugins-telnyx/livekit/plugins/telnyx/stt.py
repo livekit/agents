@@ -10,7 +10,7 @@ import json
 import struct
 import weakref
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 
@@ -79,6 +79,15 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "telnyx"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "transcription_engine": self._opts.transcription_engine,
+            "interim_results": self._opts.interim_results,
+            "sample_rate": self._opts.sample_rate,
+        }
 
     async def _recognize_impl(
         self,

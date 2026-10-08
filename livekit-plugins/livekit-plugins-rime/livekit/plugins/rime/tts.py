@@ -18,8 +18,8 @@ import asyncio
 import copy
 import os
 import weakref
-from dataclasses import dataclass
-from typing import overload
+from dataclasses import asdict, dataclass
+from typing import Any, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -399,6 +399,21 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Rime"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "speaker": self._opts.speaker,
+            "language": self._opts.language,
+            "audio_format": self._opts.audio_format,
+            "time_scale_factor": self._opts.time_scale_factor,
+            "coda_options": asdict(self._opts.coda_options)
+            if is_given(self._opts.coda_options) and self._opts.coda_options is not None
+            else None,
+            "mist_options": asdict(self._opts.mist_options)
+            if is_given(self._opts.mist_options) and self._opts.mist_options is not None
+            else None,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

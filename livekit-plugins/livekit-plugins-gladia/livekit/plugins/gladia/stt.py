@@ -20,7 +20,7 @@ import dataclasses
 import json
 import os
 import weakref
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -337,6 +337,35 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Gladia"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language_config": asdict(self._opts.language_config)
+            if is_given(self._opts.language_config) and self._opts.language_config is not None
+            else None,
+            "interim_results": self._opts.interim_results,
+            "sample_rate": self._opts.sample_rate,
+            "bit_depth": self._opts.bit_depth,
+            "channels": self._opts.channels,
+            "endpointing": self._opts.endpointing,
+            "maximum_duration_without_endpointing": self._opts.maximum_duration_without_endpointing,
+            "region": self._opts.region,
+            "encoding": self._opts.encoding,
+            "translation_config": {
+                "enabled": self._opts.translation_config.enabled,
+                "target_languages": self._opts.translation_config.target_languages,
+                "model": self._opts.translation_config.model,
+                "match_original_utterances": self._opts.translation_config.match_original_utterances,
+                "lipsync": self._opts.translation_config.lipsync,
+                "context_adaptation": self._opts.translation_config.context_adaptation,
+                "informal": self._opts.translation_config.informal,
+            },
+            "energy_filter": bool(self._opts.energy_filter),
+            "pre_processing": asdict(self._opts.pre_processing)
+            if is_given(self._opts.pre_processing) and self._opts.pre_processing is not None
+            else None,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

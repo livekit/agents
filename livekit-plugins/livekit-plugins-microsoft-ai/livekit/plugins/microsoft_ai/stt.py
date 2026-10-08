@@ -26,7 +26,7 @@ from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import aiohttp
 
@@ -203,6 +203,13 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Microsoft AI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._language,
+            "max_buffered_audio": self._max_buffered_audio,
+        }
 
     async def _recognize_impl(
         self,

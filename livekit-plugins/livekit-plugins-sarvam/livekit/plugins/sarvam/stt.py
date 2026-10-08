@@ -543,6 +543,27 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Sarvam"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "mode": self._opts.mode,
+            "high_vad_sensitivity": self._opts.high_vad_sensitivity,
+            "sample_rate": self._opts.sample_rate,
+            "flush_signal": self._opts.flush_signal,
+            "input_audio_codec": self._opts.input_audio_codec,
+            "positive_speech_threshold": self._opts.positive_speech_threshold,
+            "negative_speech_threshold": self._opts.negative_speech_threshold,
+            "min_speech_frames": self._opts.min_speech_frames,
+            "first_turn_min_speech_frames": self._opts.first_turn_min_speech_frames,
+            "negative_frames_count": self._opts.negative_frames_count,
+            "negative_frames_window": self._opts.negative_frames_window,
+            "start_speech_volume_threshold": self._opts.start_speech_volume_threshold,
+            "interrupt_min_speech_frames": self._opts.interrupt_min_speech_frames,
+            "pre_speech_pad_frames": self._opts.pre_speech_pad_frames,
+            "num_initial_ignored_frames": self._opts.num_initial_ignored_frames,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

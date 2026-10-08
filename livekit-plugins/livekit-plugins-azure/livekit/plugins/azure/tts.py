@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import dataclass, replace
-from typing import Literal
+from dataclasses import asdict, dataclass, replace
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import aiohttp
@@ -216,6 +216,21 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Azure TTS"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "region": self._opts.region,
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "deployment_id": self._opts.deployment_id,
+            "prosody": asdict(self._opts.prosody)
+            if is_given(self._opts.prosody) and self._opts.prosody is not None
+            else None,
+            "style": asdict(self._opts.style)
+            if is_given(self._opts.style) and self._opts.style is not None
+            else None,
+        }
 
     def update_options(
         self,

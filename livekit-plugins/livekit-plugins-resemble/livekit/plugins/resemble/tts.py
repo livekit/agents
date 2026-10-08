@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -118,6 +119,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Resemble"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_uuid": self._opts.voice_uuid,
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(

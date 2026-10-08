@@ -23,6 +23,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -332,6 +333,18 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "languages": self._opts.languages,
+            "detect_language": self._opts.detect_language,
+            "turn_detection": self._opts.turn_detection.model_dump(exclude_none=True)
+            if self._opts.turn_detection is not None
+            else None,
+            "noise_reduction_type": self._opts.noise_reduction_type,
+            "temperature": self._opts.temperature,
+        }
 
     @staticmethod
     def with_azure(

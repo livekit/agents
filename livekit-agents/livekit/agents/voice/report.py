@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from ..llm import ChatContext
 from ..metrics import ModelUsage
@@ -31,6 +32,8 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+    components: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Session VAD, STT, and TTS settings captured when the report is created."""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
@@ -69,6 +72,7 @@ class SessionReport:
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,
             "sdk_version": self.sdk_version,
+            "components": self.components,
         }
 
     def _usage_to_dict(self) -> list[dict] | None:

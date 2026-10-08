@@ -173,6 +173,18 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gnani"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "encoding": self._opts.encoding,
+            "container": self._opts.container,
+            "sample_width": self._opts.sample_width,
+            "bitrate": self._opts.bitrate,
+            "synthesize_method": self._opts.synthesize_method,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

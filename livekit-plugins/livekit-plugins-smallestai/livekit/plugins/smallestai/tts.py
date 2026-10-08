@@ -185,6 +185,19 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "SmallestAI"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "speed": self._opts.speed,
+            "language": self._opts.language,
+            "output_format": self._opts.output_format,
+            "word_timestamps": self._opts.word_timestamps,
+            "max_buffer_flush_ms": self._opts.max_buffer_flush_ms,
+            "use_continuations": self._opts.use_continuations,
+            "max_buffer_delay_ms": self._opts.max_buffer_delay_ms,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

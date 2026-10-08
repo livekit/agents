@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -44,6 +45,13 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Spitch"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "voice": self._opts.voice,
+        }
 
     def synthesize(
         self,

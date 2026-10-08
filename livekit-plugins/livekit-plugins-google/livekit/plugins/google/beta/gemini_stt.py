@@ -145,6 +145,16 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "google"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "language_codes": self._opts.language_codes,
+            "sample_rate": self._opts.sample_rate,
+            "vertexai": self._opts.vertexai,
+            "location": self._opts.location,
+        }
+
     def stream(
         self,
         *,

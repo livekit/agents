@@ -19,6 +19,7 @@ import json
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Any
 
 import aiohttp
 
@@ -120,6 +121,20 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "RTZR"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "model_name": self._params.model_name,
+            "language": self._params.language,
+            "sample_rate": self._params.sample_rate,
+            "encoding": self._params.encoding,
+            "domain": self._params.domain,
+            "epd_time": self._params.epd_time,
+            "noise_threshold": self._params.noise_threshold,
+            "active_threshold": self._params.active_threshold,
+            "use_punctuation": self._params.use_punctuation,
+        }
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

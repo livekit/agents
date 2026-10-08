@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -130,6 +131,16 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "xAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "optimize_streaming_latency": self._opts.optimize_streaming_latency,
+            "speed": self._opts.speed,
+            "text_normalization": self._opts.text_normalization,
+        }
 
     async def _connect_ws(
         self, timeout: float, opts: _TTSOptions

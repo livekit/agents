@@ -415,6 +415,68 @@ class STTOptions:
     conn_options: NotGivenOr[APIConnectOptions]
 
 
+_REPORTABLE_EXTRA_OPTIONS = frozenset(
+    {
+        "audio_encoding",
+        "channels",
+        "detect_language",
+        "diarization",
+        "diarize",
+        "dictation",
+        "domain",
+        "eager_eot_threshold",
+        "enable_entities",
+        "enable_partials",
+        "enable_voice_profile",
+        "end_of_turn_confidence_threshold",
+        "end_of_utterance_silence_trigger",
+        "endpointing",
+        "eot_threshold",
+        "eot_timeout_ms",
+        "filler_words",
+        "format",
+        "format_turns",
+        "inactivity_timeout",
+        "inactivity_timeout_seconds",
+        "include_word_timestamps",
+        "interim_results",
+        "language_codes",
+        "language_detection",
+        "max_delay",
+        "max_delay_mode",
+        "max_silence_duration_secs",
+        "max_speakers",
+        "max_turn_silence",
+        "min_end_of_turn_silence_when_confident",
+        "min_volume",
+        "mip_opt_out",
+        "mode",
+        "no_delay",
+        "numerals",
+        "output_locale",
+        "prefer_current_speaker",
+        "previous_context_n_turns",
+        "profanity_filter",
+        "punctuate",
+        "redact",
+        "smart_format",
+        "speaker_labels",
+        "speaker_sensitivity",
+        "turn_eager_end_threshold",
+        "turn_end_threshold",
+        "turn_end_timeout_ms",
+        "turn_start_threshold",
+        "utterance_end",
+        "vad_events",
+        "vad_threshold",
+        "version",
+        "voice_focus",
+        "voice_focus_threshold",
+        "voice_profile_top_n",
+    }
+)
+
+
 class STT(stt.STT):
     @overload
     def __init__(
@@ -715,6 +777,33 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "provider": self.provider,
+            "language": self._opts.language,
+            "encoding": self._opts.encoding,
+            "sample_rate": self._opts.sample_rate,
+            "extra_kwargs": {
+                key: value
+                for key, value in self._opts.extra_kwargs.items()
+                if key in _REPORTABLE_EXTRA_OPTIONS
+            },
+            "fallback": [
+                {
+                    "model": item["model"],
+                    "extra_kwargs": {
+                        key: value
+                        for key, value in item.get("extra_kwargs", {}).items()
+                        if key in _REPORTABLE_EXTRA_OPTIONS
+                    },
+                }
+                for item in self._opts.fallback
+            ]
+            if is_given(self._opts.fallback)
+            else NOT_GIVEN,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

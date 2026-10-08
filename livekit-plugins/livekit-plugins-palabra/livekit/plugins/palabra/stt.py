@@ -27,6 +27,7 @@ import contextlib
 import os
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 
 from palabra_ai import (
     AuthError,
@@ -147,6 +148,15 @@ class STT(stt.STT):
     def provider(self) -> str:
         """Provider display name used in metrics."""
         return "Palabra"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "translate_languages": self._opts.translate_languages,
+            "filler_filter": self._opts.filler_filter,
+            "sample_rate": self._opts.sample_rate,
+        }
 
     def update_options(
         self,

@@ -144,6 +144,19 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Inworld"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "sample_rate": self._opts.sample_rate,
+            "num_channels": self._opts.num_channels,
+            "enable_voice_profile": self._opts.enable_voice_profile,
+            "voice_profile_top_n": self._opts.voice_profile_top_n,
+            "vad_threshold": self._opts.vad_threshold,
+            "min_end_of_turn_silence_when_confident": self._opts.min_end_of_turn_silence_when_confident,
+            "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold,
+        }
+
     def update_options(
         self,
         *,

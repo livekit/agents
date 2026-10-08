@@ -40,6 +40,7 @@ from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
 )
+from livekit.agents.utils import is_given
 
 from .log import logger
 
@@ -205,6 +206,23 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Soniox"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language_hints": self._params.language_hints,
+            "language_hints_strict": self._params.language_hints_strict,
+            "num_channels": self._params.num_channels,
+            "sample_rate": self._params.sample_rate,
+            "enable_speaker_diarization": self._params.enable_speaker_diarization,
+            "enable_language_identification": self._params.enable_language_identification,
+            "max_endpoint_delay_ms": self._params.max_endpoint_delay_ms,
+            "endpoint_sensitivity": self._params.endpoint_sensitivity,
+            "endpoint_latency_adjustment_level": self._params.endpoint_latency_adjustment_level,
+            "translation": asdict(self._params.translation)
+            if is_given(self._params.translation) and self._params.translation is not None
+            else None,
+        }
 
     async def _recognize_impl(
         self,

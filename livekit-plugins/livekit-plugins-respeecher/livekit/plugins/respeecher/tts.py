@@ -20,6 +20,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -171,6 +172,13 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Respeecher"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "encoding": self._opts.encoding,
+            "voice_id": self._opts.voice_id,
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

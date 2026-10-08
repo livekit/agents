@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -48,6 +49,12 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Spitch"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+        }
 
     def update_options(self, language: str) -> None:
         self._opts.language = LanguageCode(language) if language else self._opts.language

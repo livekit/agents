@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
+from typing import Any
 
 import aiohttp
 
@@ -130,6 +131,16 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Camb.ai"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "language": self._opts.language,
+            "speech_model": self._opts.speech_model,
+            "output_format": self._opts.output_format,
+            "enhance_named_entities": self._opts.enhance_named_entities,
+        }
 
     def update_options(
         self,

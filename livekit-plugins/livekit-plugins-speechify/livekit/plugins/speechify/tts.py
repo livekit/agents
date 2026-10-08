@@ -203,6 +203,15 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Speechify"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "language": self._opts.language,
+            "loudness_normalization": self._opts.loudness_normalization,
+            "text_normalization": self._opts.text_normalization,
+        }
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self._httpx_client.aclose()

@@ -364,6 +364,22 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Speechmatics"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._stt_options.language,
+            "output_locale": self._stt_options.output_locale,
+            "domain": self._stt_options.domain,
+            "turn_detection_mode": self._stt_options.turn_detection_mode,
+            "include_partials": self._stt_options.include_partials,
+            "enable_diarization": self._stt_options.enable_diarization,
+            "speaker_sensitivity": self._stt_options.speaker_sensitivity,
+            "max_speakers": self._stt_options.max_speakers,
+            "prefer_current_speaker": self._stt_options.prefer_current_speaker,
+            "sample_rate": self._sample_rate,
+            "encoding": self._audio_encoding,
+        }
+
     @property
     def model(self) -> str:
         return self._stt_options.model

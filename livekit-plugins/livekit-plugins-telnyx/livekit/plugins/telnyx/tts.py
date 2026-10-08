@@ -10,6 +10,7 @@ import base64
 import json
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -64,6 +65,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "telnyx"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+        }
 
     def synthesize(
         self,

@@ -119,6 +119,14 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "voice_id": self._opts.voice_id,
+            "pronunciation_id": self._opts.pronunciation_id,
+        }
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(
             self._ensure_session().ws_connect(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -91,6 +92,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Speechmatics"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

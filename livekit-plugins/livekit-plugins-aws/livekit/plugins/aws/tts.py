@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import botocore  # type: ignore
 import botocore.exceptions  # type: ignore
@@ -120,6 +120,16 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Amazon Polly"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "speech_engine": self._opts.speech_engine,
+            "region": self._opts.region,
+            "language": self._opts.language,
+            "text_type": self._opts.text_type,
+        }
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

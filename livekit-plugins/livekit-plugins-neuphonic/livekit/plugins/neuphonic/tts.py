@@ -14,6 +14,8 @@
 
 from __future__ import annotations  # noqa: I001
 
+from typing import Any
+
 import asyncio
 import base64
 import json
@@ -168,6 +170,15 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Neuphonic"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "lang_code": self._opts.lang_code,
+            "encoding": self._opts.encoding,
+            "voice_id": self._opts.voice_id,
+            "speed": self._opts.speed,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

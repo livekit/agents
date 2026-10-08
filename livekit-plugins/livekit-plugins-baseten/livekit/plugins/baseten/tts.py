@@ -206,6 +206,16 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Baseten"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "voice": self._opts.voice,
+            "temperature": self._opts.temperature,
+            "max_tokens": self._opts.max_tokens,
+            "buffer_size": self._opts.buffer_size,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

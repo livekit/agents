@@ -170,6 +170,21 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Azure STT"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "speech_region": self._config.speech_region,
+            "sample_rate": self._config.sample_rate,
+            "num_channels": self._config.num_channels,
+            "segmentation_silence_timeout_ms": self._config.segmentation_silence_timeout_ms,
+            "segmentation_max_time_ms": self._config.segmentation_max_time_ms,
+            "segmentation_strategy": self._config.segmentation_strategy,
+            "language": self._config.language,
+            "profanity": self._config.profanity.name if is_given(self._config.profanity) else None,
+            "explicit_punctuation": self._config.explicit_punctuation,
+            "true_text_post_processing": self._config.true_text_post_processing,
+        }
+
     async def _recognize_impl(
         self,
         buffer: utils.AudioBuffer,

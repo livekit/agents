@@ -165,6 +165,17 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Soniox"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "voice": self._opts.voice,
+            "audio_format": self._opts.audio_format,
+            "bitrate": self._opts.bitrate,
+            "speed": self._opts.speed,
+            "stream_idle_timeout": self._opts.stream_idle_timeout,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

@@ -233,6 +233,30 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Deepgram"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "detect_language": self._opts.detect_language,
+            "interim_results": self._opts.interim_results,
+            "punctuate": self._opts.punctuate,
+            "smart_format": self._opts.smart_format,
+            "no_delay": self._opts.no_delay,
+            "endpointing_ms": self._opts.endpointing_ms,
+            "enable_diarization": self._opts.enable_diarization,
+            "filler_words": self._opts.filler_words,
+            "sample_rate": self._opts.sample_rate,
+            "num_channels": self._opts.num_channels,
+            "profanity_filter": self._opts.profanity_filter,
+            "redact": self._opts.redact,
+            "vad_events": self._opts.vad_events,
+            "numerals": self._opts.numerals,
+            "mip_opt_out": self._opts.mip_opt_out,
+            "tags": self._opts.tags,
+            "utterance_end_ms": self._opts.utterance_end_ms,
+            "dictation": self._opts.dictation,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

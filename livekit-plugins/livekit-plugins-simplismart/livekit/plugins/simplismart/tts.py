@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import traceback
-from dataclasses import dataclass, replace
-from typing import cast
+from dataclasses import asdict, dataclass, replace
+from typing import Any, cast
 
 import aiohttp
 
@@ -17,6 +17,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents.utils import is_given
 
 from .log import logger
 from .models import TTSModels
@@ -142,6 +143,19 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "SimpliSmart"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "simplismart_options": asdict(self._opts.simplismart_options)
+            if is_given(self._opts.simplismart_options)
+            and self._opts.simplismart_options is not None
+            else None,
+            "qwen_options": asdict(self._opts.qwen_options)
+            if is_given(self._opts.qwen_options) and self._opts.qwen_options is not None
+            else None,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

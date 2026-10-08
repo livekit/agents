@@ -5,6 +5,7 @@ import json
 import os
 import weakref
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -147,6 +148,14 @@ class TTSv2(tts.TTS):
     @property
     def provider(self) -> str:
         return "Deepgram"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "encoding": self._opts.encoding,
+            "mip_opt_out": self._opts.mip_opt_out,
+            "bit_rate": self._opts.bit_rate,
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

@@ -21,6 +21,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -180,6 +181,18 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "FireworksAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "sample_rate": self._opts.sample_rate,
+            "language": self._opts.language,
+            "temperature": self._opts.temperature,
+            "skip_vad": self._opts.skip_vad,
+            "text_timeout_seconds": self._opts.text_timeout_seconds,
+            "response_format": self._opts.response_format,
+            "timestamp_granularities": self._opts.timestamp_granularities,
+        }
 
     @property
     def session(self) -> aiohttp.ClientSession:

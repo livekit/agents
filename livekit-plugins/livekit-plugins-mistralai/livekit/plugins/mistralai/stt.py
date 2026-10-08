@@ -4,6 +4,7 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -162,6 +163,13 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "target_streaming_delay_ms": self._opts.target_streaming_delay_ms,
+        }
 
     def update_options(
         self,

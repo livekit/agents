@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
-from typing import Final
+from typing import Any, Final
 
 import aiohttp
 
@@ -141,6 +141,16 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "LMNT"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "format": self._opts.format,
+            "language": self._opts.language,
+            "voice": self._opts.voice,
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+        }
 
     def synthesize(
         self,

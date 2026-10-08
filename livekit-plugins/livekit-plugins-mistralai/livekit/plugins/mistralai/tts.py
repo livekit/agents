@@ -6,7 +6,7 @@ import os
 import struct
 import uuid
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -99,6 +99,13 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "response_format": self._opts.response_format,
+        }
 
     def update_options(
         self,

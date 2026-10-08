@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 import weakref
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 import socketio  # type: ignore[import-not-found]
@@ -169,6 +169,15 @@ class TTS(tts.TTS):
 
         self._client: WebSocketClient | None = None
         self._streams = weakref.WeakSet[SynthesizeStream]()
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_settings": asdict(self._opts.voice_settings)
+            if is_given(self._opts.voice_settings) and self._opts.voice_settings is not None
+            else None,
+            "phrase_replacement_config_id": self._opts.phrase_replacement_config_id,
+        }
 
     def update_options(
         self,

@@ -13,6 +13,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import aiofiles
@@ -78,7 +79,7 @@ from . import gen_ai, pii, trace_types, utils as telemetry_utils
 if TYPE_CHECKING:
     from ..llm import ChatItem
     from ..observability import Tagger
-    from ..voice.agent_session import AgentSessionOptions
+    from ..voice.agent_session import AgentSession, AgentSessionOptions
     from ..voice.report import SessionReport
 
 
@@ -142,13 +143,15 @@ def _describe_option_object(obj: object) -> str:
 
 
 def _serialize_option_value(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return _serialize_option_value(value.value)
     if value is None or isinstance(value, _OPTION_PRIMITIVES):
         return value
     if isinstance(value, Mapping):
         return {
             _SESSION_OPTION_KEY_ALIASES.get(k, k): _serialize_option_value(v)
             for k, v in value.items()
-            if k not in _SESSION_OPTION_OMITTED_KEYS
+            if k not in _SESSION_OPTION_OMITTED_KEYS and is_given(v)
         }
     if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
         # any Sequence is a valid option value (tts_text_transforms accepts one), so
@@ -162,6 +165,32 @@ def _serialize_session_options(options: AgentSessionOptions) -> dict[str, Any]:
     serialized = _serialize_option_value(vars(options))
     assert isinstance(serialized, dict)
     return serialized
+
+
+def _serialize_session_components(session: AgentSession) -> dict[str, dict[str, Any]]:
+    components: dict[str, dict[str, Any]] = {}
+    for name, component in (("vad", session.vad), ("stt", session.stt), ("tts", session.tts)):
+        if component is None:
+            continue
+
+        cls = type(component)
+        options: dict[str, Any] = {"model": component.model, "provider": component.provider}
+        try:
+            described = component.describe_options()
+            options.update(
+                _serialize_option_value(
+                    {
+                        key: value
+                        for key, value in described.items()
+                        if value is not None and is_given(value)
+                    }
+                )
+            )
+        except Exception:
+            logger.debug("describe_options() failed on %s", cls.__name__, exc_info=True)
+
+        components[name] = {**options, "type": f"{cls.__module__}.{cls.__name__}"}
+    return components
 
 
 _USE_SPAN_SIGNATURE = inspect.signature(trace_api.use_span)
@@ -1310,6 +1339,7 @@ async def _upload_session_report(
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
                 "session.options": _serialize_session_options(report.options),
+                "session.components": report.components,
                 "session.report_timestamp": report.timestamp,
                 "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,

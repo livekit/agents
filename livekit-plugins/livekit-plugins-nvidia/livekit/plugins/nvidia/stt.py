@@ -6,6 +6,7 @@ import threading
 from collections import Counter
 from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any
 
 import riva.client
 from riva.client.proto.riva_asr_pb2 import SpeakerDiarizationConfig
@@ -97,6 +98,19 @@ class STT(stt.STT):
             enable_diarization=enable_diarization,
             max_speaker_count=max_speaker_count,
         )
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "model": self._opts.model,
+            "function_id": self._opts.function_id,
+            "punctuate": self._opts.punctuate,
+            "language_code": self._opts.language_code,
+            "sample_rate": self._opts.sample_rate,
+            "use_ssl": self._opts.use_ssl,
+            "enable_diarization": self._opts.enable_diarization,
+            "max_speaker_count": self._opts.max_speaker_count,
+        }
 
     def _recognize_impl(
         self,

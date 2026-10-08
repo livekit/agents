@@ -291,6 +291,22 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "MiniMax"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "bitrate": self._opts.bitrate,
+            "emotion": self._opts.emotion,
+            "speed": self._opts.speed,
+            "vol": self._opts.vol,
+            "pitch": self._opts.pitch,
+            "text_normalization": self._opts.text_normalization,
+            "language_boost": self._opts.language_boost,
+            "intensity": self._opts.intensity,
+            "timbre": self._opts.timbre,
+            "audio_format": self._opts.audio_format,
+        }
+
     def update_options(
         self,
         *,

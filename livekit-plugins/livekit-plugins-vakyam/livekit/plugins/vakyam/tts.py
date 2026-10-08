@@ -26,6 +26,7 @@ import os
 import weakref
 from contextlib import suppress
 from dataclasses import dataclass, replace
+from typing import Any
 
 import aiohttp
 
@@ -166,6 +167,14 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Vakyam"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "speed": self._opts.speed,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

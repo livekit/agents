@@ -238,6 +238,27 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "FishAudio"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "output_format": self._opts.output_format,
+            "voice_id": self._opts.voice_id,
+            "latency_mode": self._opts.latency_mode,
+            "chunk_length": self._opts.chunk_length,
+            "speed": self._opts.speed,
+            "volume": self._opts.volume,
+            "temperature": self._opts.temperature,
+            "top_p": self._opts.top_p,
+            "mp3_bitrate": self._opts.mp3_bitrate,
+            "opus_bitrate": self._opts.opus_bitrate,
+            "normalize": self._opts.normalize,
+            "normalize_loudness": self._opts.normalize_loudness,
+            "max_new_tokens": self._opts.max_new_tokens,
+            "min_chunk_length": self._opts.min_chunk_length,
+            "condition_on_previous_chunks": self._opts.condition_on_previous_chunks,
+            "early_stop_threshold": self._opts.early_stop_threshold,
+        }
+
     @property
     def output_format(self) -> OutputFormat:
         return self._opts.output_format

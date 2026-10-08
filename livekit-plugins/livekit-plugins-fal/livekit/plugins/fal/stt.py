@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import fal_client
 
@@ -50,6 +51,15 @@ class WizperSTT(stt.STT):
     @property
     def provider(self) -> str:
         return "Fal"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "task": self._opts.task,
+            "chunk_level": self._opts.chunk_level,
+            "version": self._opts.version,
+        }
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

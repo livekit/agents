@@ -28,7 +28,7 @@ import os
 import platform
 import weakref
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
 import numpy as np
@@ -727,6 +727,26 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Sarvam"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "target_language_code": self._opts.target_language_code,
+            "speaker": self._opts.speaker,
+            "pitch": self._opts.pitch,
+            "pace": self._opts.pace,
+            "loudness": self._opts.loudness,
+            "temperature": self._opts.temperature,
+            "output_audio_bitrate": self._opts.output_audio_bitrate,
+            "min_buffer_size": self._opts.min_buffer_size,
+            "max_chunk_length": self._opts.max_chunk_length,
+            "speech_sample_rate": self._opts.speech_sample_rate,
+            "enable_preprocessing": self._opts.enable_preprocessing,
+            "dict_id": self._opts.dict_id,
+            "enable_cached_responses": self._opts.enable_cached_responses,
+            "send_completion_event": self._opts.send_completion_event,
+            "output_audio_codec": self._opts.output_audio_codec,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

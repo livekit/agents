@@ -236,6 +236,15 @@ class TTS(tts.TTS):
         else:
             return "Gemini"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_name": self._opts.voice_name,
+            "vertexai": self._opts.vertexai,
+            "location": self._opts.location,
+            "speaker": self._opts.speaker,
+        }
+
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> ChunkedStream:

@@ -26,6 +26,7 @@ import contextlib
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 from palabra_ai import (
     AuthError,
@@ -181,6 +182,15 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         """Provider display name used in metrics."""
         return "Palabra"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "voice_id": self._opts.voice_id,
+            "speed": self._opts.speed,
+            "deaccent_strength": self._opts.deaccent_strength,
+        }
 
     def _new_tts(self) -> TtsSession:
         return self._client.tts(

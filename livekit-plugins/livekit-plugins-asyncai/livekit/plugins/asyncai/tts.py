@@ -22,7 +22,7 @@ import uuid
 import weakref
 from collections import deque
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import aiohttp
@@ -144,6 +144,14 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "AsyncAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "encoding": self._opts.encoding,
+            "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
+            "language": self._opts.language,
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

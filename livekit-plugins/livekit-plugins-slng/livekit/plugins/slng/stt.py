@@ -349,6 +349,22 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "SLNG"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "sample_rate": self._opts.sample_rate,
+            "buffer_size_seconds": self._opts.buffer_size_seconds,
+            "encoding": self._opts.encoding,
+            "enable_partial_transcripts": self._opts.enable_partial_transcripts,
+            "vad_threshold": self._opts.vad_threshold,
+            "vad_min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
+            "vad_speech_pad_ms": self._opts.vad_speech_pad_ms,
+            "enable_diarization": self._opts.enable_diarization,
+            "min_speakers": self._opts.min_speakers,
+            "max_speakers": self._opts.max_speakers,
+            "language": self._opts.language,
+        }
+
     @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:

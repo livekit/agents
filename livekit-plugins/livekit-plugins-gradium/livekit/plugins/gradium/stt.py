@@ -138,6 +138,19 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Gradium"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "sample_rate": self._opts.sample_rate,
+            "buffer_size_seconds": self._opts.buffer_size_seconds,
+            "encoding": self._opts.encoding,
+            "temperature": self._opts.temperature,
+            "language": self._opts.language,
+            "vad_threshold": self._opts.vad_threshold,
+            "vad_bucket": self._opts.vad_bucket,
+            "vad_flush": self._opts.vad_flush,
+        }
+
     @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:

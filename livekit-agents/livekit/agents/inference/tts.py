@@ -229,6 +229,42 @@ class _TTSConnection:
     session_id: str | None
 
 
+_REPORTABLE_EXTRA_OPTIONS = frozenset(
+    {
+        "add_phoneme_timestamps",
+        "add_timestamps",
+        "apply_text_normalization",
+        "bit_rate",
+        "chunk_length",
+        "condition_on_previous_chunks",
+        "delivery_mode",
+        "duration",
+        "early_stop_threshold",
+        "emotion",
+        "inline_speed_alpha",
+        "latency",
+        "max_buffer_delay_ms",
+        "max_new_tokens",
+        "min_chunk_length",
+        "mip_opt_out",
+        "no_text_normalization",
+        "normalize",
+        "normalize_loudness",
+        "optimize_streaming_latency",
+        "pause_between_brackets",
+        "phonemize_between_brackets",
+        "speaking_rate",
+        "speed",
+        "speed_alpha",
+        "temperature",
+        "timestamp_type",
+        "top_p",
+        "use_normalized_timestamps",
+        "volume",
+    }
+)
+
+
 class TTS(tts.TTS):
     @overload
     def __init__(
@@ -508,6 +544,36 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "provider": self.provider,
+            "voice": self._opts.voice,
+            "language": self._opts.language,
+            "encoding": self._opts.encoding,
+            "sample_rate": self.sample_rate,
+            "num_channels": self.num_channels,
+            "extra_kwargs": {
+                key: value
+                for key, value in self._opts.extra_kwargs.items()
+                if key in _REPORTABLE_EXTRA_OPTIONS
+            },
+            "fallback": [
+                {
+                    "model": item["model"],
+                    "voice": item["voice"],
+                    "extra_kwargs": {
+                        key: value
+                        for key, value in item.get("extra_kwargs", {}).items()
+                        if key in _REPORTABLE_EXTRA_OPTIONS
+                    },
+                }
+                for item in self._opts.fallback
+            ]
+            if is_given(self._opts.fallback)
+            else NOT_GIVEN,
+        }
 
     async def _connect_ws(self, timeout: float) -> _TTSConnection:
         session = self._ensure_session()

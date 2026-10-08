@@ -208,6 +208,24 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Google Cloud Platform"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice": {
+                "name": self._opts.voice.name,
+                "language_code": self._opts.voice.language_code,
+                "ssml_gender": self._opts.voice.ssml_gender.name,
+            },
+            "encoding": self._opts.encoding.name,
+            "pitch": self._opts.pitch,
+            "effects_profile_id": self._opts.effects_profile_id,
+            "speaking_rate": self._opts.speaking_rate,
+            "volume_gain_db": self._opts.volume_gain_db,
+            "enable_ssml": self._opts.enable_ssml,
+            "use_markup": self._opts.use_markup,
+            "model_name": self._opts.model_name,
+        }
+
     def update_options(
         self,
         *,

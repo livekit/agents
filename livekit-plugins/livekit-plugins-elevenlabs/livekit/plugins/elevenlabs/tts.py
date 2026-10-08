@@ -22,7 +22,7 @@ import json
 import os
 import time
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from functools import cached_property
 from typing import Any, Literal
 
@@ -228,6 +228,32 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "ElevenLabs"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "voice_id": self._opts.voice_id,
+            "voice_settings": asdict(self._opts.voice_settings)
+            if is_given(self._opts.voice_settings) and self._opts.voice_settings is not None
+            else None,
+            "language": self._opts.language,
+            "encoding": self._opts.encoding,
+            "streaming_latency": self._opts.streaming_latency,
+            "chunk_length_schedule": self._opts.chunk_length_schedule,
+            "enable_ssml_parsing": self._opts.enable_ssml_parsing,
+            "enable_logging": self._opts.enable_logging,
+            "inactivity_timeout": self._opts.inactivity_timeout,
+            "sync_alignment": self._opts.sync_alignment,
+            "apply_text_normalization": self._opts.apply_text_normalization,
+            "apply_language_text_normalization": self._opts.apply_language_text_normalization,
+            "preferred_alignment": self._opts.preferred_alignment,
+            "auto_mode": self._opts.auto_mode,
+            "pronunciation_dictionary_locators": [
+                asdict(locator) for locator in self._opts.pronunciation_dictionary_locators
+            ]
+            if is_given(self._opts.pronunciation_dictionary_locators)
+            else None,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

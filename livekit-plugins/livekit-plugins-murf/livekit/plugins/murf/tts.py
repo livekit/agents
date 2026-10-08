@@ -169,6 +169,19 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Murf"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "locale": self._opts.locale,
+            "voice": self._opts.voice,
+            "style": self._opts.style,
+            "speed": self._opts.speed,
+            "pitch": self._opts.pitch,
+            "encoding": self._opts.encoding,
+            "min_buffer_size": self._opts.min_buffer_size,
+            "max_buffer_delay_in_ms": self._opts.max_buffer_delay_in_ms,
+        }
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(

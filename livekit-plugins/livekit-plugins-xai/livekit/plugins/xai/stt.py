@@ -21,6 +21,7 @@ import os
 import uuid
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -130,6 +131,19 @@ class STT(stt.STT):
         )
         self._session = http_session
         self._streams = weakref.WeakSet[SpeechStream]()
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "enable_interim_results": self._opts.enable_interim_results,
+            "sample_rate": self._opts.sample_rate,
+            "enable_diarization": self._opts.enable_diarization,
+            "language": self._opts.language,
+            "endpointing": self._opts.endpointing,
+            "vad_threshold": self._opts.vad_threshold,
+            "smart_turn": self._opts.smart_turn,
+            "smart_turn_timeout": self._opts.smart_turn_timeout,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

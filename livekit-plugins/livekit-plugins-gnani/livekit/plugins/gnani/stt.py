@@ -168,6 +168,17 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Gnani"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "sample_rate": self._opts.sample_rate,
+            "preferred_language": self._opts.preferred_language,
+            "format": self._opts.format,
+            "itn_native_numerals": self._opts.itn_native_numerals,
+            "use_streaming": self._opts.use_streaming,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

@@ -52,6 +52,7 @@ from .telemetry.traces import (
     _discard_cloud_tracer,
     _JobTelemetry,
     _prepare_cloud_tracer,
+    _serialize_session_components,
     _setup_cloud_tracer,
     _shutdown_telemetry,
 )
@@ -464,6 +465,7 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            components=_serialize_session_components(session),
         )
 
         if recorder_io:

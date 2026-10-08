@@ -292,6 +292,30 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "SmallestAI"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "language": self._opts.language,
+            "sample_rate": self._opts.sample_rate,
+            "encoding": self._opts.encoding,
+            "word_timestamps": self._opts.word_timestamps,
+            "diarize": self._opts.diarize,
+            "format": self._opts.format,
+            "itn_normalize": self._opts.itn_normalize,
+            "numerals": self._opts.numerals,
+            "sentence_timestamps": self._opts.sentence_timestamps,
+            "redact_pii": self._opts.redact_pii,
+            "redact_pci": self._opts.redact_pci,
+            "endpointing": self._opts.endpointing,
+            "endpointing_timeout_ms": self._opts.endpointing_timeout_ms,
+            "eou_timeout_ms": self._opts.eou_timeout_ms,
+            "vad_events": self._opts.vad_events,
+            "finalize_on_flush": self._opts.finalize_on_flush,
+            "finalize_on_words": self._opts.finalize_on_words,
+            "max_words": self._opts.max_words,
+            "keepalive_interval": self._opts.keepalive_interval,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()

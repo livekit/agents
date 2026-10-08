@@ -211,6 +211,20 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Cartesia"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "encoding": self._opts.encoding,
+            "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
+            "speed": self._opts.speed,
+            "emotion": self._opts.emotion,
+            "volume": self._opts.volume,
+            "word_timestamps": self._opts.word_timestamps,
+            "language": self._opts.language,
+            "api_version": self._opts.api_version,
+            "pronunciation_dict_id": self._opts.pronunciation_dict_id,
+        }
+
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         url = self._opts.get_ws_url(f"/tts/websocket?cartesia_version={self._opts.api_version}")

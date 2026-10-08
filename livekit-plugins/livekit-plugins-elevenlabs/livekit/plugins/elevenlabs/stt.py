@@ -270,6 +270,22 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "ElevenLabs"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "model_id": self._opts.model_id,
+            "language_code": self._opts.language_code,
+            "secondary_languages": self._opts.secondary_languages,
+            "include_language_detection": self._opts.include_language_detection,
+            "tag_audio_events": self._opts.tag_audio_events,
+            "include_timestamps": self._opts.include_timestamps,
+            "sample_rate": self._opts.sample_rate,
+            "server_vad": self._opts.server_vad,
+            "no_verbatim": self._opts.no_verbatim,
+            "enable_logging": self._opts.enable_logging,
+            "audio_chunk_duration_ms": self._opts.audio_chunk_duration_ms,
+        }
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = http_context.http_session()

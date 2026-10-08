@@ -277,6 +277,23 @@ class STT(stt.STT):
     def provider(self) -> str:
         return "Baseten"
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "sample_rate": self._opts.sample_rate,
+            "buffer_size_seconds": self._opts.buffer_size_seconds,
+            "encoding": self._opts.encoding,
+            "language": self._opts.language,
+            "language_options": self._opts.language_options,
+            "enable_partial_transcripts": self._opts.enable_partial_transcripts,
+            "partial_transcript_interval_s": self._opts.partial_transcript_interval_s,
+            "final_transcript_max_duration_s": self._opts.final_transcript_max_duration_s,
+            "show_word_timestamps": self._opts.show_word_timestamps,
+            "vad_threshold": self._opts.vad_threshold,
+            "vad_min_silence_duration_ms": self._opts.vad_min_silence_duration_ms,
+            "vad_speech_pad_ms": self._opts.vad_speech_pad_ms,
+        }
+
     @property
     def session(self) -> aiohttp.ClientSession:
         if not self._session:
