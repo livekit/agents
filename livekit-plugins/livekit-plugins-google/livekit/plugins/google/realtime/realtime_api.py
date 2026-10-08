@@ -726,10 +726,9 @@ class RealtimeSession(llm.RealtimeSession):
                 append_ctx.items.append(item)
 
         if append_ctx.items:
-            # vertex drops `scheduling`, and Gemini reads it only on NON_BLOCKING tools
-            supports_silent_scheduling = (
-                not self._opts.vertexai and self._opts.tool_behavior == types.Behavior.NON_BLOCKING
-            )
+            # Both APIs read `scheduling`, and only on NON_BLOCKING tools. Vertex AI
+            # used to drop it (#3784); it no longer does (#7660).
+            supports_silent_scheduling = self._opts.tool_behavior == types.Behavior.NON_BLOCKING
             if not supports_silent_scheduling and (
                 silenced := [
                     item.name

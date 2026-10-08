@@ -66,7 +66,7 @@ def create_tools_config(
 def create_function_response(
     output: llm.FunctionCallOutput,
     *,
-    vertexai: bool = False,
+    vertexai: bool = False,  # kept for callers; both APIs behave the same now
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     send_id: bool = True,
 ) -> types.FunctionResponse:
@@ -78,8 +78,14 @@ def create_function_response(
         name=output.name,
         response={"error": output.output} if output.is_error else {"output": output.output},
     )
-    # vertexai does not support scheduling; the gemini api defaults it to WHEN_IDLE
-    if not vertexai and is_given(tool_response_scheduling):
+    # Sent on both APIs. Vertex AI was excluded because of #3784, where
+    # gemini-live-2.5-flash-preview-native-audio-09-2025 closed the session with
+    # 1007 Unknown name "scheduling" (#3793 added the exclusion, #6785 then
+    # claimed SILENT on the Gemini API only). That model is gone from Vertex AI,
+    # the field is in the Vertex AI Live API reference, and gemini-3.8-live and
+    # gemini-live-2.5-flash-native-audio both accept it there (#7660). The
+    # gemini api defaults it to WHEN_IDLE when absent.
+    if is_given(tool_response_scheduling):
         res.scheduling = tool_response_scheduling
     return res
 
