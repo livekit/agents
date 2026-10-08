@@ -283,7 +283,7 @@ def test_mistralai_format_folds_dynamic_into_the_instructions():
 
 def test_google_format_can_keep_dynamic_as_a_turn_for_cached_content():
     # Gemini cached_content requests carry no system_instruction at all
-    turns, extra = _dynamic_ctx().to_provider_format("google", fold_dynamic_instructions=False)
+    turns, extra = _dynamic_ctx().to_provider_format("google", merge_dynamic_instructions=False)
 
     assert extra.system_messages == [COMMON]
     assert [t["role"] for t in turns] == ["user"]
@@ -487,3 +487,15 @@ def test_truncate_to_zero_keeps_both_instruction_messages():
     ctx.truncate(max_items=0)
 
     assert [m.id for m in ctx.items] == [INSTRUCTIONS_MESSAGE_ID, DYNAMIC_INSTRUCTIONS_MESSAGE_ID]
+
+
+def test_dynamic_message_after_a_leading_user_turn_is_not_merged_into_it():
+    # no preamble: the first item is a user turn, so there is nothing to merge into
+    ctx = ChatContext()
+    ctx.add_message(role="user", content="Hi.")
+    ctx.add_message(role="system", content=DYNAMIC, id=DYNAMIC_INSTRUCTIONS_MESSAGE_ID)
+
+    entries, extra = ctx.to_provider_format("mistralai")
+
+    assert extra.instructions is None
+    assert [e["content"] for e in entries] == ["Hi.", f"<instructions>\n{DYNAMIC}\n</instructions>"]

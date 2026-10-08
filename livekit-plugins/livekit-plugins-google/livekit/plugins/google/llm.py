@@ -503,7 +503,7 @@ class LLMStream(llm.LLMStream):
             turns_dict, extra_data = self._chat_ctx.to_provider_format(
                 format="google",
                 thought_signatures=thought_sigs,
-                fold_dynamic_instructions=not using_cache,
+                merge_dynamic_instructions=not using_cache,
             )
 
             turns = [types.Content.model_validate(turn) for turn in turns_dict]
