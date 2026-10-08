@@ -418,6 +418,8 @@ class _TTSGenerationData:
     # perf_counter when the first text of this segment reached the TTS provider, as stamped
     # by the TTS stream itself; None when a custom tts_node publishes no stamp
     synthesis_started_at: float | None = None
+    # the exception that ended the inference, e.g. a TTS that failed after its retries
+    error: BaseException | None = None
 
 
 def _time_to_first_sentence(
@@ -445,7 +447,11 @@ def perform_tts_inference(
         _tts_inference_task(node, input, model_settings, data, text_transforms, model, provider)
     )
 
-    def _inference_done(_: asyncio.Task[bool]) -> None:
+    def _inference_done(task: asyncio.Task[bool]) -> None:
+        if not task.cancelled():
+            # set before the audio channel closes, so the forwarder sees why it ended
+            data.error = task.exception()
+
         if timed_texts_fut.done() and (timed_text_ch := timed_texts_fut.result()):
             timed_text_ch.close()
 
@@ -591,6 +597,7 @@ def perform_audio_forwarding(
     audio_output: io.AudioOutput,
     tts_output: AsyncIterable[rtc.AudioFrame],
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None = None,
 ) -> tuple[asyncio.Task[None], _AudioOutput]:
     out = _AudioOutput(
         first_frame_fut=asyncio.Future(),
@@ -612,6 +619,7 @@ def perform_audio_forwarding(
             tts_output,
             out,
             reconcile_playout_pause=reconcile_playout_pause,
+            tts_data=tts_data,
         )
     )
     return task, out
@@ -624,6 +632,7 @@ async def _audio_forwarding_task(
     out: _AudioOutput,
     *,
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None,
 ) -> None:
     resampler: rtc.AudioResampler | None = None
 
@@ -670,6 +679,8 @@ async def _audio_forwarding_task(
             except Exception as e:
                 logger.warning("error while closing tts output: %s", e)
 
+        if not cancelled and tts_data is not None and tts_data.error is not None:
+            audio_output._mark_input_truncated()
         audio_output.flush()
         if cancelled:
             audio_output.clear_buffer()
@@ -684,6 +695,8 @@ class _ForwardOutput:
     played: Literal["full", "partial", "skipped"] = "skipped"
     playback_position: float = 0.0
     synchronized_transcript: str | None = None
+    tts_failed: bool = False
+    """The segment's TTS failed; whatever audio it made still played out."""
 
     @property
     def forwarded_text(self) -> str:
@@ -704,13 +717,15 @@ async def forward_generation(
     text_source: AsyncIterable[str] | None,
     on_first_frame: Callable[[asyncio.Future[Any], _AudioOutput | None], None],
     reconcile_playout_pause: Callable[[], None],
+    tts_data: _TTSGenerationData | None = None,
 ) -> _ForwardOutput:
     """Forward one segment's audio/text to the outputs, then wait for its playout.
 
     Returns when the segment has fully played, been interrupted, or never started
-    (e.g. interrupted before the first frame). Callers resolve the audio/text sources
-    and own message creation; this is the shared core between the pipeline and realtime
-    generation paths.
+    (e.g. interrupted before the first frame). A segment whose ``tts_data`` failed ends as
+    ``"partial"``, or ``"skipped"`` if none of its audio played. Callers resolve the
+    audio/text sources and own message creation; this is the shared core between the
+    pipeline and realtime generation paths.
     """
     out = _ForwardOutput()
     forward_tasks: list[asyncio.Task[Any]] = []
@@ -721,6 +736,7 @@ async def forward_generation(
                 audio_output=audio_output,
                 tts_output=audio_source,
                 reconcile_playout_pause=reconcile_playout_pause,
+                tts_data=tts_data,
             )
             forward_tasks.append(forward_audio_task)
             audio_out.first_frame_fut.add_done_callback(lambda fut: on_first_frame(fut, audio_out))
@@ -773,8 +789,12 @@ async def forward_generation(
 
         if audio_output is not None:
             assert playout_fut is not None
+            out.tts_failed = tts_data is not None and tts_data.error is not None
+            if out.tts_failed and (audio_out is None or not audio_out.has_captured_own_frame):
+                # none of its audio played, so the playout event belongs to an earlier segment
+                return out
             playback_ev = playout_fut.result()
-            out.played = "full"
+            out.played = "partial" if out.tts_failed else "full"
             out.playback_position = playback_ev.playback_position
             out.synchronized_transcript = playback_ev.synchronized_transcript
         elif text_out is not None and text_out.text:

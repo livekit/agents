@@ -626,6 +626,7 @@ class _SyncedAudioOutput(io.AudioOutput):
         )
         self._synchronizer = synchronizer
         self._pushed_duration: float = 0.0
+        self._input_truncated = False
 
     @property
     def sample_rate(self) -> int | None:
@@ -679,6 +680,7 @@ class _SyncedAudioOutput(io.AudioOutput):
         if not self._pushed_duration:
             # in case there is no audio after text was pushed, rotate the segment
             self._synchronizer.rotate_segment()
+            self._input_truncated = False
             return
 
         self._synchronizer._impl.end_audio_input()
@@ -686,6 +688,10 @@ class _SyncedAudioOutput(io.AudioOutput):
     def clear_buffer(self) -> None:
         if self.next_in_chain:
             self.next_in_chain.clear_buffer()
+
+    def _mark_input_truncated(self) -> None:
+        self._input_truncated = True
+        super()._mark_input_truncated()
 
     # this is going to be automatically called by the next_in_chain
     def on_playback_started(self, *, created_at: float) -> None:
@@ -706,10 +712,13 @@ class _SyncedAudioOutput(io.AudioOutput):
                 interrupted=interrupted,
                 synchronized_transcript=synchronized_transcript,
             )
+            self._input_truncated = False
             return
 
+        # a truncated input keeps the transcript to what played, as an interruption does
         self._synchronizer._impl.mark_playback_finished(
-            playback_position=playback_position, interrupted=interrupted
+            playback_position=playback_position,
+            interrupted=interrupted or self._input_truncated,
         )
         super().on_playback_finished(
             playback_position=playback_position,
@@ -719,6 +728,7 @@ class _SyncedAudioOutput(io.AudioOutput):
 
         self._synchronizer.rotate_segment()
         self._pushed_duration = 0.0
+        self._input_truncated = False
 
     def on_attached(self) -> None:
         super().on_attached()
