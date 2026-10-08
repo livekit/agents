@@ -1,0 +1,25 @@
+tests/test_amd_silence.py
+  s_aaf78334cb7322::t_45c68bc92d6512 637-638,642,645
+tests/test_amd_detector.py
+  s_aaf78334cb7322::t_eb3748603d516a 1204-1327
+examples/telephony/amd.md
+  s_aaf78334cb7322::t_6b6d9b0f310c23 172-186,304-305
+livekit-agents/livekit/agents/voice/amd/detector.py
+  s_aaf78334cb7322::t_6298bfee7c7df2 304,306-307,553-555,577,602-604,636,753-760,763-784,786-789,791-807,1042,1074,1093-1094
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a95ea2bfb59bec78f325029871527cdca20caa0c",
+  "prompts": {},
+  "sessions": {
+    "s_aaf78334cb7322": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d2193486-0057-4a50-bb24-44082ff248d9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
