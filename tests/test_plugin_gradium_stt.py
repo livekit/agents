@@ -12,7 +12,7 @@ import aiohttp
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions, APIStatusError
+from livekit.agents import APIConnectOptions, APIStatusError, APITimeoutError
 from livekit.agents.stt import SpeechEventType
 from livekit.plugins.gradium.stt import DEFAULT_DELAY_IN_FRAMES
 
@@ -855,3 +855,24 @@ async def test_interim_transcripts_are_cumulative():
     assert [alt.text for alt in interims] == ["hello", "hello world"]
     # both carry the start of the utterance, not of the latest word
     assert [alt.start_time for alt in interims] == pytest.approx([0.1, 0.1], abs=0.05)
+
+
+class HangingSession:
+    """A server that never completes the websocket handshake."""
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def test_stream_times_out_on_hung_connect():
+    from livekit.plugins.gradium import STT
+
+    stt = STT(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    stream = stt.stream(conn_options=APIConnectOptions(max_retry=0, timeout=0.2))
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APITimeoutError):
+            await _collect_until(stream, lambda ev: False)
+    finally:
+        await stream.aclose()
