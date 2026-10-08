@@ -12,16 +12,23 @@
 
 """AssemblyAI plugin for LiveKit Agents
 
+Streaming speech-to-text and streaming text-to-speech from AssemblyAI.
+
 See https://docs.livekit.io/agents/integrations/stt/assemblyai/ for more information.
 """
 
 from .log import logger
 from .stt import STT, SpeechStream
+from .tts import TTS, SynthesizeStream, TTSLanguages, TTSVoices
 from .version import __version__
 
 __all__ = [
     "STT",
     "SpeechStream",
+    "TTS",
+    "SynthesizeStream",
+    "TTSLanguages",
+    "TTSVoices",
     "logger",
     "__version__",
 ]
