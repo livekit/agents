@@ -343,13 +343,13 @@ def _legacy_transcription_needed(room: rtc.Room) -> bool:
     reach ``remote_participants``.
     """
     local_identity = room.local_participant.identity
-   return any(
-    p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
-    and p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS
-    # not an avatar worker of ours that joined as STANDARD rather than AGENT
-    and p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) != local_identity
-    for p in room.remote_participants.values()
-)
+    return any(
+        p.kind == rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+        and p._info.client_protocol < CLIENT_PROTOCOL_TRANSCRIPTION_STREAMS
+        # not an avatar worker of ours that joined as STANDARD rather than AGENT
+        and p.attributes.get(ATTRIBUTE_PUBLISH_ON_BEHALF) != local_identity
+        for p in room.remote_participants.values()
+    )
 
 
 class _ParticipantLegacyTranscriptionOutput:
