@@ -131,17 +131,8 @@ class TTS(tts.TTS):
     def provider(self) -> str:
         return "Gradium"
 
-    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        return await asyncio.wait_for(
-            self._ensure_session().ws_connect(
-                self._model_endpoint,
-                headers={"x-api-key": self._api_key, "x-api-source": "livekit"},
-            ),
-            timeout,
-        )
-
-    async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.close()
+    def _ws_headers(self) -> dict[str, str]:
+        return {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -209,7 +200,7 @@ class ChunkedStream(tts.ChunkedStream):
         try:
             async with self._tts._ensure_session().ws_connect(
                 self._tts._model_endpoint,
-                headers={"x-api-key": self._tts._api_key},
+                headers=self._tts._ws_headers(),
                 timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
             ) as ws:
                 output_emitter.initialize(
@@ -406,7 +397,7 @@ class SynthesizeStream(tts.SynthesizeStream):
 
         async with self._tts._ensure_session().ws_connect(
             self._tts._model_endpoint,
-            headers={"x-api-key": self._tts._api_key},
+            headers=self._tts._ws_headers(),
             timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
         ) as ws:
             tasks = [
