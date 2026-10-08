@@ -216,9 +216,10 @@ class SpeechStream(stt.SpeechStream):
         self._ready_msg: dict[str, Any] | None = None
 
     @property
-    def delay_in_tokens(self) -> int:
+    def delay_in_frames(self) -> int:
+        """Steps the model lags behind the audio, from the server's ready message."""
         if self._ready_msg is not None:
-            return int(self._ready_msg.get("delay_in_tokens", 6))
+            return int(self._ready_msg.get("delay_in_frames", 6))
         return 6
 
     @property
@@ -334,9 +335,9 @@ class SpeechStream(stt.SpeechStream):
                             )
                             if positive_vad:
                                 if remaining_vad_steps is None:
-                                    remaining_vad_steps = self.delay_in_tokens
+                                    remaining_vad_steps = self.delay_in_frames
                                     if self._opts.vad_flush:
-                                        samples_per_channel = self.frame_size * self.delay_in_tokens
+                                        samples_per_channel = self.frame_size * self.delay_in_frames
                                         zeros = AudioFrame.create(
                                             sample_rate=self._opts.sample_rate,
                                             num_channels=1,
