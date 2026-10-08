@@ -399,13 +399,14 @@ class SpeechStream(stt.SpeechStream):
             buffered_text: list[str] = []
             speech_end = 0.0
             speaking = False
+            utterance_start = 0.0
             remaining_vad_steps: int | None = None
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
 
             def _finalize() -> None:
-                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end
+                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end, utterance_start
                 if not speaking:
                     return
                 speaking = False
@@ -416,6 +417,7 @@ class SpeechStream(stt.SpeechStream):
                         stt.SpeechData(
                             text=" ".join(buffered_text),
                             language=self._opts.language,
+                            start_time=utterance_start,
                             end_time=timeline.remove_padding(speech_end) + self.start_time_offset
                             if speech_end > 0
                             else 0.0,
@@ -424,6 +426,7 @@ class SpeechStream(stt.SpeechStream):
                 )
                 self._event_ch.send_nowait(event)
                 buffered_text = []
+                utterance_start = 0.0
                 self._event_ch.send_nowait(
                     stt.SpeechEvent(
                         type=stt.SpeechEventType.END_OF_SPEECH,
@@ -493,19 +496,24 @@ class SpeechStream(stt.SpeechStream):
                 try:
                     if type_ == "text":
                         speech_end = 0.0
+                        if not buffered_text:
+                            utterance_start = (
+                                timeline.remove_padding(data["start_s"]) + self.start_time_offset
+                            )
                         if speaking is False:
                             speaking = True
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
                         buffered_text.append(data["text"])
+                        # The agent treats an interim as the whole partial utterance (it
+                        # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[
                                 stt.SpeechData(
-                                    text=data["text"],
+                                    text=" ".join(buffered_text),
                                     language=self._opts.language,
-                                    start_time=timeline.remove_padding(data["start_s"])
-                                    + self.start_time_offset,
+                                    start_time=utterance_start,
                                 )
                             ],
                         )
