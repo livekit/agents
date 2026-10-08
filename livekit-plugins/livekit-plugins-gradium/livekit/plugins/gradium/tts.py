@@ -26,6 +26,7 @@ import aiohttp
 from livekit.agents import (
     APIConnectionError,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     APITimeoutError,
     tokenize,
@@ -38,6 +39,17 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (invalid voice, no credits, worker failure, ...)
+    shows up.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return APIError(f"Gradium returned error: {message}", body=msg_data)
 
 
 @dataclass
@@ -233,9 +245,11 @@ class ChunkedStream(tts.ChunkedStream):
                         aiohttp.WSMsgType.CLOSED,
                         aiohttp.WSMsgType.CLOSING,
                     ):
-                        # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                        # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                        break
+                        raise APIStatusError(
+                            "Gradium connection closed unexpectedly",
+                            status_code=ws.close_code or -1,
+                            body=f"{msg.data=} {msg.extra=}",
+                        )
 
                     if msg.type == aiohttp.WSMsgType.TEXT:
                         msg_data = json.loads(msg.data)
@@ -250,12 +264,16 @@ class ChunkedStream(tts.ChunkedStream):
                             output_emitter.push(audio)
                         elif type_ == "end_of_stream":
                             break
+                        elif type_ == "error":
+                            raise _api_error(msg_data)
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=None, body=None
@@ -311,6 +329,8 @@ class SynthesizeStream(tts.SynthesizeStream):
             await asyncio.gather(*tasks)
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
+        except APIError:
+            raise
         except aiohttp.ClientResponseError as e:
             raise APIStatusError(
                 message=e.message, status_code=e.status, request_id=request_id, body=None
@@ -359,10 +379,11 @@ class SynthesizeStream(tts.SynthesizeStream):
                     aiohttp.WSMsgType.CLOSED,
                     aiohttp.WSMsgType.CLOSING,
                 ):
-                    # TODO(laurent): once we support returning eos in the api, we should enable this back.
-                    # raise APIStatusError("Gradium websocket connection closed unexpectedly")
-                    output_emitter.end_segment()
-                    break
+                    raise APIStatusError(
+                        "Gradium connection closed unexpectedly",
+                        status_code=ws.close_code or -1,
+                        body=f"{msg.data=} {msg.extra=}",
+                    )
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     msg_data = json.loads(msg.data)
@@ -378,6 +399,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     elif type_ == "end_of_stream":
                         output_emitter.end_segment()
                         break
+                    elif type_ == "error":
+                        raise _api_error(msg_data)
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
