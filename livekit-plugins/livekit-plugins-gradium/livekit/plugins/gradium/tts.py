@@ -125,7 +125,7 @@ class TTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "unknown"
+        return self._model_name
 
     @property
     def provider(self) -> str:
