@@ -335,3 +335,25 @@ async def test_final_end_of_stream_send_on_a_closed_socket_is_not_an_error():
         ev.alternatives[0].text for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT
     ]
     assert finals == ["hello"]
+
+
+async def test_interim_transcripts_are_cumulative():
+    stt, _, _ = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        events = await _collect_until(
+            stream,
+            lambda ev: ev.type == SpeechEventType.INTERIM_TRANSCRIPT
+            and ev.alternatives[0].text.endswith("world"),
+        )
+    finally:
+        await stream.aclose()
+
+    interims = [
+        ev.alternatives[0] for ev in events if ev.type == SpeechEventType.INTERIM_TRANSCRIPT
+    ]
+    assert [alt.text for alt in interims] == ["hello", "hello world"]
+    # both carry the start of the utterance, not of the latest word
+    assert [alt.start_time for alt in interims] == pytest.approx([0.1, 0.1], abs=0.05)

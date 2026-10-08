@@ -294,6 +294,7 @@ class SpeechStream(stt.SpeechStream):
             nonlocal closing_ws
             buffered_text: list[str] = []
             speaking = False
+            utterance_start = 0.0
             remaining_vad_steps: int | None = None
 
             def _finalize() -> None:
@@ -309,6 +310,7 @@ class SpeechStream(stt.SpeechStream):
                             stt.SpeechData(
                                 text=" ".join(buffered_text),
                                 language=self._opts.language,
+                                start_time=utterance_start,
                             )
                         ],
                     )
@@ -375,16 +377,19 @@ class SpeechStream(stt.SpeechStream):
                     if type_ == "text":
                         if speaking is False:
                             speaking = True
+                            utterance_start = data["start_s"] + self.start_time_offset
                             start_event = stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
                             self._event_ch.send_nowait(start_event)
                         buffered_text.append(data["text"])
+                        # The agent treats an interim as the whole partial utterance (it
+                        # replaces the previous one), not as a delta.
                         event = stt.SpeechEvent(
                             type=stt.SpeechEventType.INTERIM_TRANSCRIPT,
                             alternatives=[
                                 stt.SpeechData(
-                                    text=data["text"],
+                                    text=" ".join(buffered_text),
                                     language=self._opts.language,
-                                    start_time=data["start_s"] + self.start_time_offset,
+                                    start_time=utterance_start,
                                 )
                             ],
                         )
