@@ -35,9 +35,11 @@ from ..types import (
 from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
+    Reportable,
     create_access_token,
     get_default_inference_url,
     get_inference_headers,
+    reportable_option_names,
 )
 
 if TYPE_CHECKING:
@@ -81,114 +83,121 @@ GoogleModels = Literal["google/gemini-3.5-transcribe-live",]
 
 
 class CartesiaOptions(TypedDict, total=False):
-    min_volume: float  # ink-whisper only; default: not specified
-    max_silence_duration_secs: float  # ink-whisper only; default: not specified
+    min_volume: Reportable[float]  # ink-whisper only; default: not specified
+    max_silence_duration_secs: Reportable[float]  # ink-whisper only; default: not specified
     # Turn-detection tuning for turn-detecting models (e.g. ink-2). The gateway
     # validates these against Cartesia's documented ranges.
-    turn_start_threshold: float  # range 0.5-0.9, default 0.8
-    turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
-    turn_end_threshold: float  # range 0.05-0.5, default 0.2
-    turn_end_timeout_ms: int  # range 640-11200, default 5600
+    turn_start_threshold: Reportable[float]  # range 0.5-0.9, default 0.8
+    turn_eager_end_threshold: Reportable[float]  # range 0.3-0.6, default 0.4
+    turn_end_threshold: Reportable[float]  # range 0.05-0.5, default 0.2
+    turn_end_timeout_ms: Reportable[int]  # range 640-11200, default 5600
     keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
-    filler_words: bool  # default: True
-    interim_results: bool  # default: True
-    endpointing: int  # default: 25 (ms)
-    punctuate: bool  # default: True
-    smart_format: bool
+    filler_words: Reportable[bool]  # default: True
+    interim_results: Reportable[bool]  # default: True
+    endpointing: Reportable[int]  # default: 25 (ms)
+    punctuate: Reportable[bool]  # default: True
+    smart_format: Reportable[bool]
     keywords: list[tuple[str, float]]
     keyterm: str | list[str]
-    profanity_filter: bool
-    numerals: bool
-    mip_opt_out: bool  # default: False
-    vad_events: bool  # default: False
-    diarize: bool  # when True, enables speaker diarization (default off)
-    dictation: bool
-    detect_language: bool
-    no_delay: bool  # default: True
-    utterance_end: bool
-    redact: str | list[str]
+    profanity_filter: Reportable[bool]
+    numerals: Reportable[bool]
+    mip_opt_out: Reportable[bool]  # default: False
+    vad_events: Reportable[bool]  # default: False
+    diarize: Reportable[bool]  # when True, enables speaker diarization (default off)
+    dictation: Reportable[bool]
+    detect_language: Reportable[bool]
+    no_delay: Reportable[bool]  # default: True
+    utterance_end: Reportable[bool]
+    redact: Reportable[str | list[str]]
     replace: str | list[str]
     search: str | list[str]
     tag: str | list[str]
-    channels: int
-    version: str
+    channels: Reportable[int]
+    version: Reportable[str]
     callback: str
     callback_method: str
     extra: str
 
 
 class DeepgramFluxOptions(TypedDict, total=False):
-    eager_eot_threshold: float  # range 0.3-0.9, default: 0.5
-    eot_threshold: float  # range 0.5-0.9
-    eot_timeout_ms: int
+    eager_eot_threshold: Reportable[float]  # range 0.3-0.9, default: 0.5
+    eot_threshold: Reportable[float]  # range 0.5-0.9
+    eot_timeout_ms: Reportable[int]
     keyterm: str | list[str]
-    mip_opt_out: bool  # default: False
+    mip_opt_out: Reportable[bool]  # default: False
     tag: str | list[str]
-    detect_language: bool
+    detect_language: Reportable[bool]
 
 
 class AssemblyaiOptions(TypedDict, total=False):
-    format_turns: bool  # default: False
-    end_of_turn_confidence_threshold: float  # default: 0.01
-    min_end_of_turn_silence_when_confident: int  # default: 0
-    max_turn_silence: int  # default: not specified
+    format_turns: Reportable[bool]  # default: False
+    end_of_turn_confidence_threshold: Reportable[float]  # default: 0.01
+    min_end_of_turn_silence_when_confident: Reportable[int]  # default: 0
+    max_turn_silence: Reportable[int]  # default: not specified
     keyterms_prompt: list[str]  # default: not specified
-    language_detection: bool
-    inactivity_timeout: float  # seconds
+    language_detection: Reportable[bool]
+    inactivity_timeout: Reportable[float]  # seconds
     prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
-    speaker_labels: bool  # when True, enables speaker diarization (default off)
+    speaker_labels: Reportable[bool]  # when True, enables speaker diarization (default off)
     agent_context: str  # context to bias recognition (u3-rt-pro only, max 1750 chars)
-    previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
-    voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
-    voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
-    mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
+    # prior turns carried as context; 0 disables (u3-rt-pro only)
+    previous_context_n_turns: Reportable[int]
+    # isolate primary voice (u3-rt-pro only)
+    voice_focus: Reportable[Literal["near-field", "far-field"]]
+    voice_focus_threshold: Reportable[float]  # background suppression strength (u3-rt-pro only)
+    # accuracy/latency preset (u3-rt-pro)
+    mode: Reportable[Literal["min_latency", "balanced", "max_accuracy"]]
 
 
 class SpeechmaticsOptions(TypedDict, total=False):
-    domain: str  # e.g. "finance"
-    output_locale: str  # BCP-47 locale for output formatting
-    max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
-    max_delay_mode: str  # "flexible" | "fixed"; RT only
-    diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
-    speaker_sensitivity: float  # 0.0-1.0
-    max_speakers: int
-    prefer_current_speaker: bool
-    enable_partials: bool  # default True (overridden by gateway)
-    enable_entities: bool  # RT only
+    domain: Reportable[str]  # e.g. "finance"
+    output_locale: Reportable[str]  # BCP-47 locale for output formatting
+    max_delay: Reportable[float]  # 0.7-4.0 seconds, default 1.0; RT only
+    max_delay_mode: Reportable[str]  # "flexible" | "fixed"; RT only
+    # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change";
+    # non-"none" enables diarization
+    diarization: Reportable[str]
+    speaker_sensitivity: Reportable[float]  # 0.0-1.0
+    max_speakers: Reportable[int]
+    prefer_current_speaker: Reportable[bool]
+    enable_partials: Reportable[bool]  # default True (overridden by gateway)
+    enable_entities: Reportable[bool]  # RT only
     punctuation_overrides: dict[str, Any]
     additional_vocab: list[dict[str, Any]]  # RT only
-    end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
+    end_of_utterance_silence_trigger: Reportable[float]  # seconds of silence before final; RT only
     audio_filtering_config: dict[str, Any]  # RT only
     transcript_filtering_config: dict[str, Any]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
-    diarize: bool  # when True, enables speaker diarization (default off)
-    endpointing: int  # silence duration in ms before utterance-final (0-5000)
-    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
-    interim_results: bool  # default True; set False to opt out of interim transcripts
+    diarize: Reportable[bool]  # when True, enables speaker diarization (default off)
+    endpointing: Reportable[int]  # silence duration in ms before utterance-final (0-5000)
+    # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100");
+    # requires language
+    format: Reportable[bool]
+    interim_results: Reportable[bool]  # default True; set False to opt out of interim transcripts
 
 
 class InworldOptions(TypedDict, total=False):
-    enable_voice_profile: bool  # default: True
-    voice_profile_top_n: int  # range 1-20, default 10
-    include_word_timestamps: bool  # default: True
-    audio_encoding: Literal["LINEAR16", "AUTO_DETECT"]  # default: LINEAR16
-    inactivity_timeout_seconds: int  # >= 0; 0 disables
-    end_of_turn_confidence_threshold: float  # range 0.0-1.0, default 0.5
-    min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
+    enable_voice_profile: Reportable[bool]  # default: True
+    voice_profile_top_n: Reportable[int]  # range 1-20, default 10
+    include_word_timestamps: Reportable[bool]  # default: True
+    audio_encoding: Reportable[Literal["LINEAR16", "AUTO_DETECT"]]  # default: LINEAR16
+    inactivity_timeout_seconds: Reportable[int]  # >= 0; 0 disables
+    end_of_turn_confidence_threshold: Reportable[float]  # range 0.0-1.0, default 0.5
+    min_end_of_turn_silence_when_confident: Reportable[int]  # >= 0 (ms)
     prompts: list[str]
-    vad_threshold: float  # range 0.0-1.0, default 0.5
+    vad_threshold: Reportable[float]  # range 0.0-1.0, default 0.5
 
 
 class GoogleOptions(TypedDict, total=False):
     # Mirrors the Live API's AudioTranscriptionConfig. Omit language_codes, or pass an
     # empty list, to let the model detect the language itself.
     # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
-    language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
+    language_codes: Reportable[list[str]]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
     custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
 
 
@@ -415,65 +424,15 @@ class STTOptions:
     conn_options: NotGivenOr[APIConnectOptions]
 
 
-_REPORTABLE_EXTRA_OPTIONS = frozenset(
-    {
-        "audio_encoding",
-        "channels",
-        "detect_language",
-        "diarization",
-        "diarize",
-        "dictation",
-        "domain",
-        "eager_eot_threshold",
-        "enable_entities",
-        "enable_partials",
-        "enable_voice_profile",
-        "end_of_turn_confidence_threshold",
-        "end_of_utterance_silence_trigger",
-        "endpointing",
-        "eot_threshold",
-        "eot_timeout_ms",
-        "filler_words",
-        "format",
-        "format_turns",
-        "inactivity_timeout",
-        "inactivity_timeout_seconds",
-        "include_word_timestamps",
-        "interim_results",
-        "language_codes",
-        "language_detection",
-        "max_delay",
-        "max_delay_mode",
-        "max_silence_duration_secs",
-        "max_speakers",
-        "max_turn_silence",
-        "min_end_of_turn_silence_when_confident",
-        "min_volume",
-        "mip_opt_out",
-        "mode",
-        "no_delay",
-        "numerals",
-        "output_locale",
-        "prefer_current_speaker",
-        "previous_context_n_turns",
-        "profanity_filter",
-        "punctuate",
-        "redact",
-        "smart_format",
-        "speaker_labels",
-        "speaker_sensitivity",
-        "turn_eager_end_threshold",
-        "turn_end_threshold",
-        "turn_end_timeout_ms",
-        "turn_start_threshold",
-        "utterance_end",
-        "vad_events",
-        "vad_threshold",
-        "version",
-        "voice_focus",
-        "voice_focus_threshold",
-        "voice_profile_top_n",
-    }
+_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(
+    CartesiaOptions,
+    DeepgramOptions,
+    DeepgramFluxOptions,
+    AssemblyaiOptions,
+    SpeechmaticsOptions,
+    XaiOptions,
+    InworldOptions,
+    GoogleOptions,
 )
 
 

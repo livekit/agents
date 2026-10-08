@@ -33,10 +33,12 @@ from ..types import (
 from ..utils import is_given
 from ._utils import (
     HEADER_SESSION_ID,
+    Reportable,
     create_access_token,
     create_inference_request_id,
     get_default_inference_url,
     get_inference_headers,
+    reportable_option_names,
 )
 
 CartesiaModels = Literal[
@@ -144,18 +146,18 @@ def _normalize_fallback(
 
 
 class CartesiaOptions(TypedDict, total=False):
-    emotion: str
-    speed: Literal["slow", "normal", "fast"] | float
-    volume: float
-    duration: float
-    max_buffer_delay_ms: int
-    add_timestamps: bool
-    add_phoneme_timestamps: bool
-    use_normalized_timestamps: bool
+    emotion: Reportable[str]
+    speed: Reportable[Literal["slow", "normal", "fast"] | float]
+    volume: Reportable[float]
+    duration: Reportable[float]
+    max_buffer_delay_ms: Reportable[int]
+    add_timestamps: Reportable[bool]
+    add_phoneme_timestamps: Reportable[bool]
+    use_normalized_timestamps: Reportable[bool]
 
 
 class DeepgramOptions(TypedDict, total=False):
-    mip_opt_out: bool  # default: False
+    mip_opt_out: Reportable[bool]  # default: False
 
 
 class RimeOptions(TypedDict, total=False):
@@ -163,43 +165,48 @@ class RimeOptions(TypedDict, total=False):
     See: https://docs.rime.ai/api-reference/endpoint/websockets-json
     """
 
-    speed_alpha: float  # default 1.0, <1 = faster, >1 = slower
-    pause_between_brackets: bool  # default False
-    phonemize_between_brackets: bool  # default False
-    inline_speed_alpha: str  # comma-separated speed factors for [bracketed] words
-    no_text_normalization: bool  # default False
+    speed_alpha: Reportable[float]  # default 1.0, <1 = faster, >1 = slower
+    pause_between_brackets: Reportable[bool]  # default False
+    phonemize_between_brackets: Reportable[bool]  # default False
+    inline_speed_alpha: Reportable[str]  # comma-separated speed factors for [bracketed] words
+    no_text_normalization: Reportable[bool]  # default False
 
 
 class InworldOptions(TypedDict, total=False):
-    speaking_rate: float  # range >0.5, <=1.5
-    temperature: float  # range 0-2
+    speaking_rate: Reportable[float]  # range >0.5, <=1.5
+    temperature: Reportable[float]  # range 0-2
     # inworld-tts-2 only; temperature is ignored on that model, use this to steer variation
-    delivery_mode: Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
-    timestamp_type: Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]
-    apply_text_normalization: Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+    delivery_mode: Reportable[
+        Literal["DELIVERY_MODE_UNSPECIFIED", "STABLE", "BALANCED", "CREATIVE"]
+    ]
+    timestamp_type: Reportable[Literal["TIMESTAMP_TYPE_UNSPECIFIED", "WORD", "CHARACTER"]]
+    apply_text_normalization: Reportable[
+        Literal["APPLY_TEXT_NORMALIZATION_UNSPECIFIED", "ON", "OFF"]
+    ]
 
 
 class XaiOptions(TypedDict, total=False):
-    bit_rate: Literal[32000, 64000, 96000, 128000, 192000]
-    speed: float  # speaking-rate multiplier, default 1.0
-    optimize_streaming_latency: Literal[0, 1, 2]  # latency optimization level, default 0
+    bit_rate: Reportable[Literal[32000, 64000, 96000, 128000, 192000]]
+    speed: Reportable[float]  # speaking-rate multiplier, default 1.0
+    # latency optimization level, default 0
+    optimize_streaming_latency: Reportable[Literal[0, 1, 2]]
 
 
 class FishAudioOptions(TypedDict, total=False):
     """See https://docs.fish.audio/api-reference/endpoint/websocket/tts-live"""
 
-    speed: float  # prosody speaking-rate multiplier, 1.0 is natural
-    volume: float  # prosody loudness adjustment in dB, 0 is natural
-    normalize_loudness: bool  # consistent output loudness; S2-Pro family only
-    temperature: float  # range 0-1, higher is more varied/expressive
-    top_p: float  # nucleus sampling probability mass, range 0-1
-    normalize: bool  # normalize numbers/dates/abbreviations before synthesis
-    latency: Literal["normal", "balanced", "low"]  # streaming latency mode
-    chunk_length: int  # characters buffered before auto-synthesis, range 100-300
-    max_new_tokens: int  # max audio tokens per text chunk, default 1024
-    min_chunk_length: int  # min characters before splitting a new chunk, range 0-100
-    condition_on_previous_chunks: bool  # use prior audio as context for consistency
-    early_stop_threshold: float  # early-stopping threshold for batching, range 0-1
+    speed: Reportable[float]  # prosody speaking-rate multiplier, 1.0 is natural
+    volume: Reportable[float]  # prosody loudness adjustment in dB, 0 is natural
+    normalize_loudness: Reportable[bool]  # consistent output loudness; S2-Pro family only
+    temperature: Reportable[float]  # range 0-1, higher is more varied/expressive
+    top_p: Reportable[float]  # nucleus sampling probability mass, range 0-1
+    normalize: Reportable[bool]  # normalize numbers/dates/abbreviations before synthesis
+    latency: Reportable[Literal["normal", "balanced", "low"]]  # streaming latency mode
+    chunk_length: Reportable[int]  # characters buffered before auto-synthesis, range 100-300
+    max_new_tokens: Reportable[int]  # max audio tokens per text chunk, default 1024
+    min_chunk_length: Reportable[int]  # min characters before splitting a new chunk, range 0-100
+    condition_on_previous_chunks: Reportable[bool]  # use prior audio as context for consistency
+    early_stop_threshold: Reportable[float]  # early-stopping threshold for batching, range 0-1
 
 
 TTSEncoding = Literal["pcm_s16le"]
@@ -229,39 +236,13 @@ class _TTSConnection:
     session_id: str | None
 
 
-_REPORTABLE_EXTRA_OPTIONS = frozenset(
-    {
-        "add_phoneme_timestamps",
-        "add_timestamps",
-        "apply_text_normalization",
-        "bit_rate",
-        "chunk_length",
-        "condition_on_previous_chunks",
-        "delivery_mode",
-        "duration",
-        "early_stop_threshold",
-        "emotion",
-        "inline_speed_alpha",
-        "latency",
-        "max_buffer_delay_ms",
-        "max_new_tokens",
-        "min_chunk_length",
-        "mip_opt_out",
-        "no_text_normalization",
-        "normalize",
-        "normalize_loudness",
-        "optimize_streaming_latency",
-        "pause_between_brackets",
-        "phonemize_between_brackets",
-        "speaking_rate",
-        "speed",
-        "speed_alpha",
-        "temperature",
-        "timestamp_type",
-        "top_p",
-        "use_normalized_timestamps",
-        "volume",
-    }
+_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(
+    CartesiaOptions,
+    DeepgramOptions,
+    RimeOptions,
+    InworldOptions,
+    XaiOptions,
+    FishAudioOptions,
 )
 
 

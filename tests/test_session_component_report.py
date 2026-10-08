@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 from unittest.mock import MagicMock
 
 import pytest
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
+from livekit.agents.inference._utils import Reportable, reportable_option_names
 from livekit.agents.telemetry.traces import _serialize_session_components
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.report import SessionReport
@@ -27,6 +28,15 @@ def _report(session: AgentSession) -> SessionReport:
     return JobContext.make_session_report(ctx, session)
 
 
+def test_reportable_options_require_explicit_opt_in() -> None:
+    class Options(TypedDict):
+        speed: Reportable[float]
+        prompt: str
+        future_setting: float
+
+    assert reportable_option_names(Options) == {"speed"}
+
+
 def test_report_snapshots_inference_settings_without_credentials() -> None:
     vad = inference.VAD(activation_threshold=0.7, min_silence_duration=0.4)
     stt_model = inference.STT(
@@ -35,10 +45,18 @@ def test_report_snapshots_inference_settings_without_credentials() -> None:
         api_key="secret-key",
         api_secret="secret-value",
         base_url="https://private-endpoint.example.com",
-        extra_kwargs={"endpointing": 50, "keyterm": ["private-customer"]},
+        extra_kwargs={
+            "endpointing": 50,
+            "keyterm": ["private-customer"],
+            "future_setting": "private-future-setting",
+        },
         fallback={
             "model": "cartesia/ink-whisper",
-            "extra_kwargs": {"min_volume": 0.2, "callback": "private-callback"},
+            "extra_kwargs": {
+                "min_volume": 0.2,
+                "callback": "private-callback",
+                "future_setting": "private-future-setting",
+            },
         },
     )
     tts_model = inference.TTS(
@@ -47,11 +65,15 @@ def test_report_snapshots_inference_settings_without_credentials() -> None:
         language="de",
         api_key="secret-key",
         api_secret="secret-value",
-        extra_kwargs={"speed": 1.2},
+        extra_kwargs={"speed": 1.2, "future_setting": "private-future-setting"},
         fallback={
             "model": "inworld/inworld-tts-1.5-max",
             "voice": "fallback-voice",
-            "extra_kwargs": {"speaking_rate": 0.9, "api_key": "private-api-key"},
+            "extra_kwargs": {
+                "speaking_rate": 0.9,
+                "api_key": "private-api-key",
+                "future_setting": "private-future-setting",
+            },
         },
     )
     session = AgentSession(vad=vad, stt=stt_model, tts=tts_model)
@@ -86,6 +108,7 @@ def test_report_snapshots_inference_settings_without_credentials() -> None:
         "private-customer",
         "private-callback",
         "private-api-key",
+        "private-future-setting",
     ):
         assert sensitive not in encoded
 
