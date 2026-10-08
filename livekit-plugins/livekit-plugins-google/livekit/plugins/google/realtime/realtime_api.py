@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents.llm._provider_format.utils import _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -84,7 +85,8 @@ KNOWN_GEMINI_API_MODELS: frozenset[str] = frozenset(
 
 
 # generate_reply() appends a "." user turn so Gemini sees a completed turn. These models
-# answer that placeholder with an empty turn instead, so they must not get it.
+# answer that placeholder with an empty turn instead, so they must not get it, and take
+# reply instructions as a user turn instead.
 MODELS_WITHOUT_REPLY_PLACEHOLDER: tuple[str, ...] = ("3.1", "3.8")
 
 
@@ -874,9 +876,16 @@ class RealtimeSession(llm.RealtimeSession):
             self._in_user_activity = False
 
         turns = []
+        placeholder = _needs_reply_placeholder(self._opts.model)
         if is_given(instructions):
-            turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
-        if _needs_reply_placeholder(self._opts.model):
+            if placeholder:
+                turns.append(types.Content(parts=[types.Part(text=instructions)], role="model"))
+            else:
+                # a trailing model turn is continued: these models speak their reasoning
+                # or stay silent. Unwrapped, they later quote it back as the user's words.
+                text = _DEFAULT_INLINE_INSTRUCTIONS_TEMPLATE.format(content=instructions)
+                turns.append(types.Content(parts=[types.Part(text=text)], role="user"))
+        if placeholder:
             turns.append(types.Content(parts=[types.Part(text=".")], role="user"))
         self._send_client_event(types.LiveClientContent(turns=turns, turn_complete=True))
 
