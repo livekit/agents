@@ -39,6 +39,7 @@ from livekit.agents.utils import is_given
 from .log import logger
 
 SUPPORTED_SAMPLE_RATE = 48000
+DEFAULT_VOICE_ID = "4SZHfMpw-p46Ywgs"
 
 
 def _api_error(msg_data: dict[str, Any]) -> APIError:
@@ -69,7 +70,7 @@ class TTS(tts.TTS):
         model_endpoint: str | None = None,
         model_name: str = "default",
         voice: str | None = None,
-        voice_id: str | None = "4SZHfMpw-p46Ywgs",
+        voice_id: str | None = None,
         pronunciation_id: str | None = None,
         json_config: dict[str, Any] | None = None,
         http_session: aiohttp.ClientSession | None = None,
@@ -82,8 +83,9 @@ class TTS(tts.TTS):
             api_key (str): Gradium API key, or `GRADIUM_API_KEY` env var.
             model_endpoint (str): Gradium model endpoint, or `GRADIUM_MODEL_ENDPOINT` env var.
             model_name (str): Model name.
-            voice (str): Speaker voice.
-            voice_id (str): Speaker voice ID.
+            voice (str): Speaker voice name. Mutually exclusive with `voice_id`.
+            voice_id (str): Speaker voice ID. Mutually exclusive with `voice`; used by
+                default (`DEFAULT_VOICE_ID`) when neither is given.
             pronunciation_id (str): Optional pronunciation ID for controlling TTS pronunciation.
             word_tokenizer (tokenize.WordTokenizer): Tokenizer for processing text. Defaults to basic WordTokenizer.
         """
@@ -111,6 +113,13 @@ class TTS(tts.TTS):
         self._api_key = api_key
         self._model_endpoint = model_endpoint
         self._model_name = model_name
+
+        # The server resolves `voice_id` to an embedding and then ignores `voice`, so
+        # sending both would silently discard the voice name.
+        if voice is not None and voice_id is not None:
+            raise ValueError("`voice` and `voice_id` are mutually exclusive")
+        if voice is None and voice_id is None:
+            voice_id = DEFAULT_VOICE_ID
 
         if not word_tokenizer:
             word_tokenizer = tokenize.basic.WordTokenizer(ignore_punctuation=False)
@@ -147,10 +156,14 @@ class TTS(tts.TTS):
         voice_id: NotGivenOr[str] = NOT_GIVEN,
         json_config: NotGivenOr[dict[str, Any]] = NOT_GIVEN,
     ) -> None:
+        if is_given(voice) and is_given(voice_id):
+            raise ValueError("`voice` and `voice_id` are mutually exclusive")
         if is_given(voice):
             self._opts.voice = voice
+            self._opts.voice_id = None
         if is_given(voice_id):
             self._opts.voice_id = voice_id
+            self._opts.voice = None
         if is_given(json_config):
             self._opts.json_config = json_config
 

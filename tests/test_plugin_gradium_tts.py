@@ -172,3 +172,48 @@ async def test_stream_raises_on_close_before_eos():
             async for _ in stream:
                 pass
     assert excinfo.value.status_code == 1011
+
+
+async def _setup_sent(tts, ws) -> dict[str, Any]:
+    async for _ in tts.synthesize("hi", conn_options=CONN_OPTS):
+        pass
+    return ws.sent[0]
+
+
+async def test_default_voice_id_when_no_voice_given():
+    from livekit.plugins.gradium.tts import DEFAULT_VOICE_ID
+
+    tts, _, ws = _make_tts([READY, AUDIO, EOS])
+    setup = await _setup_sent(tts, ws)
+    assert setup["voice_id"] == DEFAULT_VOICE_ID
+    assert "voice" not in setup
+
+
+async def test_voice_name_is_sent_without_voice_id():
+    tts, _, ws = _make_tts([READY, AUDIO, EOS], voice="narrator")
+    setup = await _setup_sent(tts, ws)
+    assert setup["voice"] == "narrator"
+    assert "voice_id" not in setup
+
+
+def test_voice_and_voice_id_are_exclusive():
+    from livekit.plugins.gradium import TTS
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        TTS(api_key="test-key", voice="narrator", voice_id="abc")
+
+
+async def test_update_options_voice_clears_voice_id():
+    tts, _, ws = _make_tts([READY, AUDIO, EOS])
+    tts.update_options(voice="narrator")
+    setup = await _setup_sent(tts, ws)
+    assert setup["voice"] == "narrator"
+    assert "voice_id" not in setup
+
+
+async def test_update_options_voice_id_clears_voice():
+    tts, _, ws = _make_tts([READY, AUDIO, EOS], voice="narrator")
+    tts.update_options(voice_id="abc")
+    setup = await _setup_sent(tts, ws)
+    assert setup["voice_id"] == "abc"
+    assert "voice" not in setup
