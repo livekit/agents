@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from livekit import rtc
-from livekit.agents import APIConnectOptions
+from livekit.agents import APIConnectOptions, APIError
 from livekit.agents.stt import SpeechEventType
 
 pytestmark = pytest.mark.plugin("gradium")
@@ -240,3 +240,35 @@ async def test_final_transcript_uses_delay_in_frames_from_ready():
     assert types[0] == SpeechEventType.START_OF_SPEECH
     assert types[-1] == SpeechEventType.FINAL_TRANSCRIPT
     assert events[-1].alternatives[0].text == "hello"
+
+
+async def test_end_input_sends_eos_and_finalizes_pending_text():
+    """Closing the input sends end_of_stream; the server's EOS flushes the last words."""
+    stt, _, ws = _make_stt([READY, _text("hello", 0.1), _text("world", 0.4)])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    stream.end_input()
+    try:
+        events = await _collect_until(stream, lambda ev: False, timeout=5.0)
+    finally:
+        await stream.aclose()
+
+    assert ws.sent[0]["type"] == "setup"
+    assert ws.sent[-1] == {"type": "end_of_stream"}
+    finals = [ev for ev in events if ev.type == SpeechEventType.FINAL_TRANSCRIPT]
+    assert [ev.alternatives[0].text for ev in finals] == ["hello world"]
+    assert events[-1].type == SpeechEventType.END_OF_SPEECH
+
+
+async def test_error_frame_raises_api_error():
+    error = {"type": "error", "message": "Unsupported language 'xx'.", "code": 1011}
+    stt, _, _ = _make_stt([READY, error, "close"])
+
+    stream = stt.stream(conn_options=CONN_OPTS)
+    stream.push_frame(_audio_frame())
+    try:
+        with pytest.raises(APIError, match="Unsupported language"):
+            await _collect_until(stream, lambda ev: False)
+    finally:
+        await stream.aclose()
