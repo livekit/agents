@@ -3243,6 +3243,7 @@ class AgentActivity(RecognitionHooks):
                     audio_output=audio_output,
                     tts_output=tts_gen_data.audio_ch,
                     reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                    tts_data=tts_gen_data,
                 )
             else:
                 # use the provided audio
