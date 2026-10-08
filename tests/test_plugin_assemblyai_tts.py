@@ -58,6 +58,7 @@ class _FakeServer:
         cancelled_delay: float = 0.0,
         late_word_boundaries: bool = False,
         error_after_flush_dones: tuple[int, int, str] | None = None,
+        begin_delay: float = 0.0,
     ) -> None:
         self.frames_per_request = frames_per_request
         self.frame_delay = frame_delay
@@ -73,6 +74,7 @@ class _FakeServer:
         self.late_word_boundaries = late_word_boundaries
         # (count, code, text): Error + close after that many FlushDone frames
         self.error_after_flush_dones = error_after_flush_dones
+        self.begin_delay = begin_delay
         self.sessions: list[_Session] = []
         # audio of every request, in order, for asserting what reached the client
         self.audio_by_request: list[bytes] = []
@@ -112,6 +114,8 @@ class _FakeServer:
             await ws.close(code=code, message=b"See Error message for details")
             return ws
 
+        if self.begin_delay:
+            await asyncio.sleep(self.begin_delay)
         await ws.send_json(
             {
                 "type": "Begin",
@@ -573,7 +577,8 @@ async def test_next_holder_waits_for_cancelled_and_drops_the_tail() -> None:
 
 async def test_cancel_after_some_requests_completed() -> None:
     """FlushDone(0) arrives before the Cancel retires request 1; the next reply maps to id 2."""
-    async with _FakeServer(frames_per_request=10, frame_delay=0.01) as srv:
+    # request 1 runs until ~0.6s at the fake; the Cancel lands at ~0.4s
+    async with _FakeServer(frames_per_request=10, frame_delay=0.03) as srv:
         tts = _make_tts(srv)
         stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
         stream.push_text("The first sentence finishes playing. The second one is cut off.")
@@ -639,6 +644,27 @@ async def test_missing_word_boundaries_do_not_hold_back_audio() -> None:
 
     assert all_audio_at is not None
     assert all_audio_at < _WORD_BOUNDARIES_GRACE / 2
+
+
+async def test_interrupt_while_connecting_leaks_no_tasks() -> None:
+    async with _FakeServer(begin_delay=0.3) as srv:
+        tts = _make_tts(srv, text_pacing=True)
+        for _ in range(3):
+            stream = tts.stream(conn_options=APIConnectOptions(max_retry=0, timeout=5))
+            stream.push_text("Interrupted before the session opens.")
+            await asyncio.sleep(0.05)
+            await stream.aclose()
+        await tts.aclose()
+        await asyncio.sleep(0)
+
+    leaked = [
+        t.get_name()
+        for t in asyncio.all_tasks()
+        if t is not asyncio.current_task()
+        and not t.done()
+        and ("StreamPacer" in repr(t.get_coro()) or "AssemblyAITTS" in t.get_name())
+    ]
+    assert leaked == []
 
 
 # --- errors ----------------------------------------------------------------------------

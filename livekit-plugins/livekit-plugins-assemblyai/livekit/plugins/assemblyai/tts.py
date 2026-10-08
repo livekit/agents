@@ -434,6 +434,20 @@ class SynthesizeStream(tts.SynthesizeStream):
             stream=True,
         )
 
+        # Acquire before any text arrives, so the handshake overlaps the LLM's first token
+        # (text waits in the input channel meanwhile).
+        try:
+            conn = await self._tts._acquire(timeout=self._conn_options.timeout)
+        except APIError:
+            raise
+        except Exception as e:
+            raise APIConnectionError("failed to acquire an AssemblyAI TTS connection") from e
+
+        self._acquire_time = self._tts._pool.last_acquire_time
+        self._connection_reused = self._tts._pool.last_connection_reused
+        if conn.session_id:
+            output_emitter._note_provider_request_id(conn.session_id)
+
         sent_stream = self._tts._sentence_tokenizer.stream()
         if self._tts._stream_pacer:
             sent_stream = self._tts._stream_pacer.wrap(
@@ -447,21 +461,6 @@ class SynthesizeStream(tts.SynthesizeStream):
                 else:
                     sent_stream.push_text(data)
             sent_stream.end_input()
-
-        # Acquire before any text arrives, so the handshake overlaps the LLM's first token.
-        try:
-            conn = await self._tts._acquire(timeout=self._conn_options.timeout)
-        except APIError:
-            await sent_stream.aclose()
-            raise
-        except Exception as e:
-            await sent_stream.aclose()
-            raise APIConnectionError("failed to acquire an AssemblyAI TTS connection") from e
-
-        self._acquire_time = self._tts._pool.last_acquire_time
-        self._connection_reused = self._tts._pool.last_connection_reused
-        if conn.session_id:
-            output_emitter._note_provider_request_id(conn.session_id)
 
         run = _StreamRun(conn=conn, listener=conn.attach(), emitter=output_emitter, stream=self)
         tasks = [
@@ -780,6 +779,10 @@ class _Connection:
         )
 
     def attach(self) -> _Listener:
+        # While a previous holder's Cancel is unanswered the new holder has no base, so
+        # nothing reaches it until `Cancelled` settles the next flush_id. This relies on
+        # the Cancel being queued, and note_cancel_sent() called, before the socket is put
+        # back in the pool.
         listener = _Listener()
         if self._error is not None:
             listener.push(self._error)
@@ -890,7 +893,14 @@ class _Connection:
 
         if kind == "Cancelled":
             self._num_retired += 1
-            self._cancels_pending = max(0, self._cancels_pending - 1)
+            if self._cancels_pending == 0:
+                # would re-base the current holder; every Cancel we send is counted
+                logger.warning(
+                    "AssemblyAI TTS sent an unexpected Cancelled",
+                    extra={"session_id": self.session_id},
+                )
+                return
+            self._cancels_pending -= 1
             if self._cancels_pending == 0 and self._listener is not None:
                 self._listener.base_flush_id = self._num_retired
             return
