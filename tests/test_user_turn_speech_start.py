@@ -141,8 +141,8 @@ async def test_multi_segment_utterance_keeps_first_segment_start() -> None:
 
 
 async def test_onset_shortly_before_speech_belongs_to_the_utterance() -> None:
-    # a VAD onset less than _UTTERANCE_MAX_PAUSE before the words (a breath, a lip smack)
-    # is treated as the start of the utterance
+    # a known limit: a VAD onset less than _UTTERANCE_MAX_PAUSE before the words (a breath,
+    # a lip smack) can't be told apart from the speech and starts the utterance
     actions = FakeActions()
     actions.add_user_speech(1.0, 1.2, "")
     actions.add_user_speech(2.0, 3.5, "Good morning.")

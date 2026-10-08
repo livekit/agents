@@ -128,6 +128,15 @@ def _compute_end_of_turn_metrics(
 
 
 @dataclass
+class _Utterance:
+    """VAD segments of a user turn separated by pauses shorter than _UTTERANCE_MAX_PAUSE."""
+
+    start: float
+    end: float | None = None
+    """End of the last segment, None while a segment is open."""
+
+
+@dataclass
 class _PreemptiveGenerationInfo:
     new_transcript: str
     transcript_confidence: float
@@ -339,11 +348,9 @@ class AudioRecognition:
 
         self._user_turn_span: trace.Span | None = None
         self._user_turn_start: float | None = None
-        # onset of the current utterance (see _UTTERANCE_MAX_PAUSE) and the end of the last VAD
-        # segment, None while a segment is open
-        self._utterance_start: float | None = None
-        self._last_vad_speech_ended_at: float | None = None
-        # onset of the utterance that produced the turn's first final transcript, reported as
+        # VAD utterances of the open turn
+        self._utterances: list[_Utterance] = []
+        # onset of the utterance that produced the turn's first transcript, reported as
         # started_speaking_at; None falls back to _user_turn_start
         self._transcribed_speech_start: float | None = None
         # eou_wait: one span per user turn, from the last speech anchor to the turn decision
@@ -1022,7 +1029,7 @@ class AudioRecognition:
         self._speech_start_time = None
         self._last_speaking_time = None
         self._vad_speech_started = False
-        self._utterance_start = None
+        self._utterances = []
         self._transcribed_speech_start = None
         self._user_turn_committed = False
         self._last_emitted_prediction = None
@@ -1258,14 +1265,7 @@ class AudioRecognition:
                 extra["transcript_delay"] = time.time() - self._last_speaking_time
             logger.debug("received user transcript", extra=extra)
 
-            if not self._audio_transcript and not (
-                # speech that ended before the current utterance began belongs to an earlier
-                # one, so keep the turn's first onset
-                ev.speech_end_time is not None
-                and self._utterance_start is not None
-                and ev.speech_end_time < self._utterance_start
-            ):
-                self._transcribed_speech_start = self._utterance_start
+            self._select_transcribed_speech_start(ev)
 
             self._last_final_transcript_time = time.time()
             self._audio_transcript += f" {transcript}"
@@ -1367,6 +1367,8 @@ class AudioRecognition:
                         self._vad_stream.flush()
                     else:
                         self._update_vad(self._vad)
+                    # the flush ends the segment without a VAD END_OF_SPEECH
+                    self._end_utterance(time.time())
 
                     logger.warning(
                         "stt end of speech received while vad is still in a speech segment, "
@@ -1422,12 +1424,13 @@ class AudioRecognition:
                 self._speech_start_time = speech_start_time
                 self._vad_speech_started = True
 
-            if self._utterance_start is None or (
-                self._last_vad_speech_ended_at is not None
-                and speech_start_time - self._last_vad_speech_ended_at >= _UTTERANCE_MAX_PAUSE
+            last = self._utterances[-1] if self._utterances else None
+            if last is None or (
+                last.end is not None and speech_start_time - last.end >= _UTTERANCE_MAX_PAUSE
             ):
-                self._utterance_start = speech_start_time
-            self._last_vad_speech_ended_at = None
+                self._utterances.append(_Utterance(start=speech_start_time))
+            else:
+                last.end = None
 
             self._cancel_transcription_timeout()
             self._end_eou_wait_span("user_resumed", end_time=speech_start_time)
@@ -1479,7 +1482,7 @@ class AudioRecognition:
             self._speaking = False
             speech_end_time = time.time() - ev.silence_duration - ev.inference_duration
             self._last_speaking_time = speech_end_time
-            self._last_vad_speech_ended_at = speech_end_time
+            self._end_utterance(speech_end_time)
 
             # A committed turn clears _vad_speech_started before its late VAD EOS arrives.
             if self._stt_pipeline is not None and vad_speech_started:
@@ -1824,7 +1827,7 @@ class AudioRecognition:
                     user_turn_span.end()
                 self._user_turn_span = None
                 self._user_turn_start = None
-                self._utterance_start = None
+                self._utterances = []
                 self._transcribed_speech_start = None
                 self._stt_request_ids = []
                 self._reset_transcription_timeout()
@@ -1861,11 +1864,65 @@ class AudioRecognition:
             _bounce_eou_task(
                 self._last_speaking_time,
                 self._last_final_transcript_time,
-                self._transcribed_speech_start
-                if self._transcribed_speech_start is not None
-                else self._user_turn_start,
+                self._turn_speech_start(),
             )
         )
+
+    def _turn_speech_start(self) -> float | None:
+        """The turn's started_speaking_at, never later than its stop anchor."""
+        start = self._transcribed_speech_start
+        stopped = self._last_speaking_time
+        if start is not None and stopped is not None and start > stopped:
+            # the stop anchor came from STT timing that ends in an earlier utterance; date the
+            # turn from that utterance so the metrics stay ordered
+            start = next((u.start for u in reversed(self._utterances) if u.start <= stopped), None)
+        return start if start is not None else self._user_turn_start
+
+    def _end_utterance(self, end_time: float) -> None:
+        if self._utterances and self._utterances[-1].end is None:
+            self._utterances[-1].end = end_time
+
+    def _select_transcribed_speech_start(self, ev: stt.SpeechEvent) -> None:
+        """Date the turn from the utterance that produced its first transcript.
+
+        A transcript with timing belongs to the utterance its speech falls in, matched on its
+        first word's start when word timings exist (one final can span several utterances),
+        otherwise on its end. Utterances are at least _UTTERANCE_MAX_PAUSE apart, so half of
+        it absorbs clock skew between provider timestamps and VAD. Without timing, or when the
+        timing matches no utterance, the transcript belongs to the current utterance: the
+        turn's first utterance is often the noise that opened it.
+        """
+        if self._audio_transcript or not self._utterances:
+            return
+
+        utterance = self._utterances[-1]
+        anchor = self._transcript_time_anchor(ev)
+        if anchor is not None:
+            tolerance = _UTTERANCE_MAX_PAUSE / 2
+            utterance = next(
+                (
+                    u
+                    for u in reversed(self._utterances)
+                    if u.start - tolerance <= anchor
+                    and (u.end is None or anchor <= u.end + tolerance)
+                ),
+                utterance,
+            )
+        self._transcribed_speech_start = utterance.start
+
+    def _transcript_time_anchor(self, ev: stt.SpeechEvent) -> float | None:
+        alt = ev.alternatives[0] if ev.alternatives else None
+        if (
+            self._stt_aligned_transcript
+            and alt is not None
+            and alt.words
+            and is_given(alt.words[0].start_time)
+            and self._input_started_at is not None
+        ):
+            first_word_start = self._input_started_at + alt.words[0].start_time
+            if first_word_start <= ev.created_at:
+                return first_word_start
+        return ev.speech_end_time
 
     def _check_user_turn_limit(self, transcript: str) -> None:
         """Check if the user turn exceeds configured limits.
@@ -1953,6 +2010,7 @@ class AudioRecognition:
                     self._hooks.on_end_of_speech(None)
                 self._speaking = False
                 self._vad_speech_started = False
+                self._end_utterance(time.time())
             self._active_vad_speech_started_at = None
 
     @utils.log_exceptions(logger=logger)
