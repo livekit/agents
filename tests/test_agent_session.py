@@ -1214,6 +1214,25 @@ def test_explicit_aec_warmup_duration_overrides_outbound_sip_default(
     assert session._aec_warmup_remaining == (duration or 0.0)
 
 
+@pytest.mark.parametrize(
+    ("explicit", "expected_duration"),
+    [(NOT_GIVEN, None), (1.5, 1.5)],
+)
+def test_simulation_has_no_aec_warmup_by_default(
+    explicit: NotGivenOr[float | None], expected_duration: float | None
+) -> None:
+    session = AgentSession(vad=None, aec_warmup_duration=explicit)
+    participant = MagicMock(spec=rtc.RemoteParticipant)
+    participant.kind = rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    participant.attributes = {}
+
+    with patch("livekit.agents.job.current_simulation", return_value=object()):
+        session._on_room_io_participant_linked(participant)
+
+    assert session.options.aec_warmup_duration == expected_duration
+    assert session._aec_warmup_remaining == (expected_duration or 0.0)
+
+
 def test_outbound_sip_cancels_aec_warmup_that_already_started() -> None:
     session = AgentSession(vad=None)
     timer = MagicMock(spec=asyncio.TimerHandle)
