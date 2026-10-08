@@ -30,6 +30,7 @@ import aiohttp
 from livekit.agents import (
     DEFAULT_API_CONNECT_OPTIONS,
     APIConnectOptions,
+    APIError,
     APIStatusError,
     LanguageCode,
     stt,
@@ -51,6 +52,16 @@ bytes_per_frame = {
 
 
 SUPPORTED_SAMPLE_RATE = 24000
+
+
+def _api_error(msg_data: dict[str, Any]) -> APIError:
+    """Build the error for a `{"type": "error"}` frame.
+
+    The server sends it right before closing the socket, so the message is the only
+    place the actual failure reason (unsupported language, no credits, ...) shows up.
+    """
+    message = msg_data.get("message") or "unknown error"
+    return APIError(f"Gradium returned error: {message}", body=msg_data)
 
 
 @dataclass
@@ -260,9 +271,6 @@ class SpeechStream(stt.SpeechStream):
 
         samples_per_channel: int
 
-    # Used to close websocket
-    _CLOSE_MSG: str = json.dumps({"terminate_session": True})
-
     def __init__(
         self,
         *,
@@ -319,6 +327,7 @@ class SpeechStream(stt.SpeechStream):
         timeline = _PaddedTimeline(self._opts.sample_rate)
 
         async def send_task(ws: aiohttp.ClientWebSocketResponse) -> None:
+            nonlocal closing_ws
             samples_per_buffer = 1920
 
             audio_bstream = utils.audio.AudioByteStream(
@@ -353,6 +362,11 @@ class SpeechStream(stt.SpeechStream):
                     }
                     await ws.send_str(json.dumps(audio_msg))
 
+            # Input ended: tell the server, then let recv_task drain the model's last
+            # words until the server replies with its own end_of_stream.
+            closing_ws = True
+            await ws.send_str(json.dumps({"type": "end_of_stream"}))
+
         async def recv_task(ws: aiohttp.ClientWebSocketResponse) -> None:
             nonlocal closing_ws
             buffered_text: list[str] = []
@@ -362,6 +376,35 @@ class SpeechStream(stt.SpeechStream):
             monitor = utils.aio.WebSocketMonitor(
                 ws, liveness_timeout=self._conn_options.liveness_timeout
             )
+
+            def _finalize() -> None:
+                nonlocal speaking, remaining_vad_steps, buffered_text, speech_end
+                if not speaking:
+                    return
+                speaking = False
+                remaining_vad_steps = None
+                event = stt.SpeechEvent(
+                    type=stt.SpeechEventType.FINAL_TRANSCRIPT,
+                    alternatives=[
+                        stt.SpeechData(
+                            text=" ".join(buffered_text),
+                            language=self._opts.language,
+                            end_time=timeline.remove_padding(speech_end) + self.start_time_offset
+                            if speech_end > 0
+                            else 0.0,
+                        )
+                    ],
+                )
+                self._event_ch.send_nowait(event)
+                buffered_text = []
+                self._event_ch.send_nowait(
+                    stt.SpeechEvent(
+                        type=stt.SpeechEventType.END_OF_SPEECH,
+                        alternatives=event.alternatives if speech_end > 0 else [],
+                    )
+                )
+                speech_end = 0.0
+
             while True:
                 try:
                     msg = await asyncio.wait_for(monitor.receive(), timeout=5)
@@ -389,8 +432,20 @@ class SpeechStream(stt.SpeechStream):
 
                 try:
                     data = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    logger.exception("Failed to decode message from Gradium")
+                    continue
 
-                    type_ = data.get("type", "")
+                type_ = data.get("type", "")
+                if type_ == "error":
+                    raise _api_error(data)
+                if type_ == "end_of_stream":
+                    # The model has consumed all the audio: whatever is still buffered
+                    # is the end of the last utterance.
+                    _finalize()
+                    return
+
+                try:
                     if type_ == "text":
                         speech_end = 0.0
                         if speaking is False:
@@ -437,40 +492,14 @@ class SpeechStream(stt.SpeechStream):
                             if positive_vad:
                                 if remaining_vad_steps is None:
                                     remaining_vad_steps = self.delay_in_frames
-                                    if self._opts.vad_flush:
+                                    if self._opts.vad_flush and not self._input_ch.closed:
                                         await self._input_ch.send(
                                             self._VADFlush(self.frame_size * self.delay_in_frames)
                                         )
                                 else:
                                     remaining_vad_steps -= 1
                                     if remaining_vad_steps <= 0:
-                                        speaking = False
-                                        remaining_vad_steps = None
-                                        event = stt.SpeechEvent(
-                                            type=stt.SpeechEventType.FINAL_TRANSCRIPT,
-                                            alternatives=[
-                                                stt.SpeechData(
-                                                    text=" ".join(buffered_text),
-                                                    language=self._opts.language,
-                                                    end_time=timeline.remove_padding(speech_end)
-                                                    + self.start_time_offset
-                                                    if speech_end > 0
-                                                    else 0.0,
-                                                )
-                                            ],
-                                        )
-                                        self._event_ch.send_nowait(event)
-
-                                        buffered_text = []
-                                        self._event_ch.send_nowait(
-                                            stt.SpeechEvent(
-                                                type=stt.SpeechEventType.END_OF_SPEECH,
-                                                alternatives=event.alternatives
-                                                if speech_end > 0
-                                                else [],
-                                            )
-                                        )
-                                        speech_end = 0.0
+                                        _finalize()
                             else:
                                 remaining_vad_steps = None
 
