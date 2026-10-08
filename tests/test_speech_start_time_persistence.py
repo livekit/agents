@@ -14,8 +14,10 @@ clears the per-turn state.
 overwritten by every new SOS) and is used as the start of the per-burst
 `user_speaking` OTEL spans. The new `_user_turn_start` is set alongside
 the `_user_turn_span` on the first SOS of a turn and cleared together with
-the span on EOT cleanup. It is the value passed into `_bounce_eou_task`
-and ultimately ends up as `started_speaking_at` on the EOT metrics report.
+the span on EOT cleanup. `started_speaking_at` on the EOT metrics report
+is `_transcribed_speech_start`, the onset of the utterance that produced the
+turn's first final transcript, and falls back to `_user_turn_start` when it
+is unset.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from livekit.agents import LanguageCode
+from livekit.agents.stt import SpeechData, SpeechEvent, SpeechEventType
 from livekit.agents.vad import VADEvent, VADEventType
 from livekit.agents.voice.audio_recognition import AudioRecognition
 
@@ -51,6 +55,9 @@ class TestUserTurnStartPersistence:
         audio_recognition._end_of_turn_task = None
         audio_recognition._user_turn_span = None
         audio_recognition._user_turn_start = None
+        audio_recognition._utterance_start = None
+        audio_recognition._last_vad_speech_ended_at = None
+        audio_recognition._transcribed_speech_start = None
         audio_recognition._eou_wait_span = None
         audio_recognition._eou_wait_started_at_ns = None
         audio_recognition._eou_wait_rearms = 0
@@ -71,6 +78,14 @@ class TestUserTurnStartPersistence:
         audio_recognition._last_speaking_time = None
         audio_recognition._transcription_timeout_handle = None
         audio_recognition._turn_speech_duration = 0.0
+        # state read/written by the _process_stt_event final transcript branch
+        audio_recognition._vad = MagicMock()
+        audio_recognition._audio_preflight_transcript = ""
+        audio_recognition._final_transcript_received = asyncio.Event()
+        audio_recognition._final_transcript_confidence = []
+        audio_recognition._last_final_transcript_time = None
+        audio_recognition._last_language = None
+        audio_recognition._check_user_turn_limit = MagicMock()  # type: ignore[method-assign]
 
         # collaborators
         audio_recognition._hooks = MagicMock()
@@ -188,3 +203,35 @@ class TestUserTurnStartPersistence:
         # _speech_start_time should now reflect the second burst's start, not the first
         assert audio_recognition._speech_start_time is not None
         assert audio_recognition._speech_start_time > first_burst_speech_start
+
+    @pytest.mark.asyncio
+    async def test_transcript_of_earlier_speech_keeps_user_turn_start(self):
+        """
+        A final transcript whose `speech_end_time` predates the current utterance
+        is a slow transcript of earlier speech. It must not be attributed to the
+        utterance that was active when it arrived, so the turn keeps reporting
+        `_user_turn_start`.
+        """
+        audio_recognition = self._create_audio_recognition()
+        now = time.time()
+
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=10.0)
+        )
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.END_OF_SPEECH, speech_duration=2.0, silence_duration=8.0)
+        )
+        # the user resumes after a long pause before the first speech's transcript lands
+        await audio_recognition._on_vad_event(
+            self._vad_event(VADEventType.START_OF_SPEECH, speech_duration=1.0)
+        )
+        audio_recognition._process_stt_event(
+            SpeechEvent(
+                type=SpeechEventType.FINAL_TRANSCRIPT,
+                alternatives=[SpeechData(language=LanguageCode("en"), text="hello")],
+                speech_end_time=now - 8.0,
+            )
+        )
+
+        assert audio_recognition._transcribed_speech_start is None
+        assert audio_recognition._user_turn_start == pytest.approx(now - 10.0, abs=0.01)
