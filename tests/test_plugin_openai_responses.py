@@ -270,7 +270,7 @@ async def test_responses_prewarm_uses_configured_connect_timeout(connect_timeout
 
 
 @pytest.mark.parametrize("cancel_request", [False, True])
-async def test_responses_acquisition_is_bounded_while_prewarm_holds_lock(
+async def test_responses_acquisition_preserves_shared_prewarm(
     cancel_request: bool,
 ) -> None:
     transport = _ResponsesWebsocket(api_key="test-key", timeout=0.05, model="gpt-4.1")
@@ -298,14 +298,20 @@ async def test_responses_acquisition_is_bounded_while_prewarm_holds_lock(
             with pytest.raises(asyncio.CancelledError):
                 await request
         else:
-            with pytest.raises(APIConnectionError, match="timed out acquiring"):
-                await asyncio.wait_for(asyncio.shield(request), timeout=1.0)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(asyncio.shield(request), timeout=0.1)
+            assert not request.done(), "acquisition should wait for the shared prewarm"
 
         assert not prewarm_task.done(), "a request must not cancel the shared prewarm"
         assert ws.sent is None
         release.set()
         await asyncio.wait_for(asyncio.shield(prewarm_task), timeout=1.0)
-        assert await transport._acquire_and_send("{}") is cast(aiohttp.ClientWebSocketResponse, ws)
+        if cancel_request:
+            acquired = await transport._acquire_and_send("{}")
+        else:
+            acquired = await asyncio.wait_for(request, timeout=1.0)
+        assert acquired is cast(aiohttp.ClientWebSocketResponse, ws)
+        assert transport._pool.last_connection_reused
         transport._pool.put(ws)  # type: ignore[arg-type]
     finally:
         if request is not None and not request.done():
