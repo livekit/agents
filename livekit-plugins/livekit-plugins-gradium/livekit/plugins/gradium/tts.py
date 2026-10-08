@@ -143,6 +143,21 @@ class TTS(tts.TTS):
     def _ws_headers(self) -> dict[str, str]:
         return {"x-api-key": self._api_key, "x-api-source": "livekit"}
 
+    async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
+        """Open the websocket, bounding the handshake by `timeout`.
+
+        The shared aiohttp session has no connect timeout of its own, so a hung
+        handshake would otherwise block for aiohttp's default of five minutes.
+        """
+        return await asyncio.wait_for(
+            self._ensure_session().ws_connect(
+                self._model_endpoint,
+                headers=self._ws_headers(),
+                timeout=aiohttp.ClientWSTimeout(ws_receive=timeout, ws_close=10),
+            ),
+            timeout,
+        )
+
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
             self._session = utils.http_context.http_session()
@@ -211,11 +226,8 @@ class ChunkedStream(tts.ChunkedStream):
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         # TODO(laurent): once we support the POST requests, we should use it here rather than the websocket API.
         try:
-            async with self._tts._ensure_session().ws_connect(
-                self._tts._model_endpoint,
-                headers=self._tts._ws_headers(),
-                timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
-            ) as ws:
+            ws = await self._tts._connect_ws(self._conn_options.timeout)
+            try:
                 output_emitter.initialize(
                     request_id=utils.shortuuid(),
                     sample_rate=SUPPORTED_SAMPLE_RATE,
@@ -273,6 +285,8 @@ class ChunkedStream(tts.ChunkedStream):
                         else:
                             logger.warning(f"unknown message type: {type_}")
                 output_emitter.flush()
+            finally:
+                await ws.close()
 
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
@@ -408,11 +422,8 @@ class SynthesizeStream(tts.SynthesizeStream):
                     else:
                         logger.warning(f"unknown message type: {type_}")
 
-        async with self._tts._ensure_session().ws_connect(
-            self._tts._model_endpoint,
-            headers=self._tts._ws_headers(),
-            timeout=aiohttp.ClientWSTimeout(ws_receive=self._conn_options.timeout, ws_close=10),
-        ) as ws:
+        ws = await self._tts._connect_ws(self._conn_options.timeout)
+        try:
             tasks = [
                 asyncio.create_task(send_task(ws)),
                 asyncio.create_task(recv_task(ws)),
@@ -422,3 +433,5 @@ class SynthesizeStream(tts.SynthesizeStream):
                 await asyncio.gather(*tasks)
             finally:
                 await utils.aio.gracefully_cancel(*tasks)
+        finally:
+            await ws.close()

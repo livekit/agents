@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from livekit.agents import APIConnectOptions, APIError, APIStatusError
+from livekit.agents import APIConnectOptions, APIError, APIStatusError, APITimeoutError
 
 pytestmark = pytest.mark.plugin("gradium")
 
@@ -67,21 +68,23 @@ class FakeWebSocket:
     async def close(self) -> bool:
         return True
 
-    async def __aenter__(self) -> FakeWebSocket:
-        return self
-
-    async def __aexit__(self, *exc: Any) -> None:
-        await self.close()
-
 
 class FakeSession:
     def __init__(self, ws: FakeWebSocket) -> None:
         self.ws = ws
         self.connects: list[tuple[str, dict[str, Any]]] = []
 
-    def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
         self.connects.append((url, kwargs))
         return self.ws
+
+
+class HangingSession:
+    """A server that never completes the websocket handshake."""
+
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 def _make_tts(frames: list[Any], *, close_code: int | None = None, **kwargs: Any):
@@ -217,3 +220,26 @@ async def test_update_options_voice_id_clears_voice():
     setup = await _setup_sent(tts, ws)
     assert setup["voice_id"] == "abc"
     assert "voice" not in setup
+
+
+async def test_synthesize_times_out_on_hung_connect():
+    from livekit.plugins.gradium import TTS
+
+    tts = TTS(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    opts = APIConnectOptions(max_retry=0, timeout=0.2)
+    with pytest.raises(APITimeoutError):
+        async for _ in tts.synthesize("hi", conn_options=opts):
+            pass
+
+
+async def test_stream_times_out_on_hung_connect():
+    from livekit.plugins.gradium import TTS
+
+    tts = TTS(api_key="test-key", http_session=HangingSession())  # type: ignore[arg-type]
+    opts = APIConnectOptions(max_retry=0, timeout=0.2)
+    with pytest.raises(APITimeoutError):
+        async with tts.stream(conn_options=opts) as stream:
+            stream.push_text("hi")
+            stream.end_input()
+            async for _ in stream:
+                pass
