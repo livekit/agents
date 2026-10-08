@@ -522,7 +522,7 @@ ChatItem = Annotated[
 DYNAMIC_INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions.dynamic"  #  value must not change
 """
 The ID of the message holding ``Instructions.dynamic``, kept right after the instructions
-message. Formatters that extract one system preamble fold it back in.
+message. Formatters that extract one system preamble merge it back in.
 """
 
 
@@ -842,7 +842,7 @@ class ChatContext:
         *,
         inject_dummy_user_message: bool = True,
         thought_signatures: dict[str, bytes] | None = None,
-        fold_dynamic_instructions: bool = True,
+        merge_dynamic_instructions: bool = True,
     ) -> tuple[list[dict], _provider_format.google.GoogleFormatData]: ...
 
     @overload

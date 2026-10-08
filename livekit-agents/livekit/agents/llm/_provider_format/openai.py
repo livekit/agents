@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from livekit.agents import llm
 
-from .utils import fold_dynamic_instructions, group_tool_calls
+from .utils import group_tool_calls, merge_dynamic_instructions
 
 _EXTRA_CONTENT_KEYS = ("google", "livekit", "xai")
 
@@ -28,7 +28,7 @@ def to_chat_ctx(
     markers are dropped and the output matches a context that never had them.
     """
     if not prompt_cache_breakpoints:
-        chat_ctx = fold_dynamic_instructions(chat_ctx)
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     messages = []
     for group in item_groups:
@@ -211,7 +211,7 @@ def to_responses_chat_ctx(
     assistant messages never carry one.
     """
     if not prompt_cache_breakpoints:
-        chat_ctx = fold_dynamic_instructions(chat_ctx)
+        chat_ctx = merge_dynamic_instructions(chat_ctx)
     item_groups = group_tool_calls(chat_ctx)
     items = []
     for group in item_groups:
