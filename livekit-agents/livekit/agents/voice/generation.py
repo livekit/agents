@@ -117,9 +117,10 @@ def _strip_assistant_markup(chat_ctx: ChatContext) -> None:
 
     Called when a turn runs with expressive off (toggled off via
     ``session.update_options``, an agent-level override, or a handoff to a TTS
-    without a markup dialect): tags left in history would few-shot the LLM into
-    emitting markup that nothing downstream converts or strips, so an unsupported
-    tag would reach the TTS as literal text and be spoken. Mutates the stored
+    without a markup dialect) after expressive was on: tags left in history would
+    few-shot the LLM into emitting markup that nothing downstream converts or strips,
+    so an unsupported tag would reach the TTS as literal text and be spoken. Not
+    called if expressive never ran, so a developer's own tags stay. Mutates the stored
     history: once a turn runs with expressive off, prior turns' markup is gone
     even if expressive is re-enabled later (the re-injected instructions carry
     the style examples instead).
