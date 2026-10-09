@@ -9,6 +9,7 @@ to 50 distinct terms of 64 characters each. They are only applied for
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
@@ -23,6 +24,7 @@ from livekit.plugins.sarvam.stt import (
     MAX_KEYTERMS,
     STT,
     SarvamSTTOptions,
+    SpeechStream,
     _build_websocket_url,
 )
 from livekit.plugins.sarvam.stt_streaming import (
@@ -249,6 +251,23 @@ def test_update_session_keyterms_caps_overlong_sets() -> None:
     assert instance._opts.keyterms == user_terms
 
 
+def test_update_session_keyterms_does_not_interrupt_a_live_stream() -> None:
+    """Framework keyterms are recorded for the next stream; the live one keeps flowing."""
+    instance = STT(api_key="test-key", model="saaras:v4")
+    stream = SpeechStream.__new__(SpeechStream)
+    stream._opts = SimpleNamespace(keyterms=None)  # type: ignore[attr-defined]
+    stream._logger = MagicMock()  # type: ignore[attr-defined]
+    stream._build_log_context = lambda: {}  # type: ignore[attr-defined]
+    instance._streams = {stream}  # type: ignore[assignment]
+
+    instance._update_session_keyterms(["Sarvam"])
+
+    # Reconnecting would end this single-attempt stream mid-call; a bare
+    # instance has no `_reconnect_event`, so touching it would raise.
+    assert stream._opts.keyterms == ["Sarvam"]
+    assert stream._logger.debug.called
+
+
 def test_update_session_keyterms_ignored_without_capability() -> None:
     instance = STT(api_key="test-key", model="saaras:v3")
 
@@ -263,6 +282,25 @@ def test_realtime_update_options_sets_keyterms_for_new_streams() -> None:
     instance.update_options(keyterms=["Sarvam"])
 
     assert instance._opts.keyterms == ["Sarvam"]
+
+
+def test_realtime_explicit_keyterms_survive_session_updates() -> None:
+    """A session keyterm change must merge with an explicit update, not revert it."""
+    instance = STTRealtime(api_key="test-key", model="saaras:v4")
+
+    instance.update_options(keyterms=["Sarvam"])
+    instance._update_session_keyterms(["New Delhi"])
+
+    assert instance._opts.keyterms == ["Sarvam", "New Delhi"]
+
+
+def test_realtime_explicit_keyterms_merge_with_active_session_terms() -> None:
+    instance = STTRealtime(api_key="test-key", model="saaras:v4")
+
+    instance._update_session_keyterms(["New Delhi"])
+    instance.update_options(keyterms=["Sarvam"])
+
+    assert instance._opts.keyterms == ["Sarvam", "New Delhi"]
 
 
 async def test_realtime_live_stream_retains_keyterms() -> None:

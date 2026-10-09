@@ -1262,11 +1262,20 @@ class SpeechStream(stt.SpeechStream):
         self._reconnect_event.set()
 
     def _update_keyterms(self, keyterms: list[str]) -> None:
-        """Apply framework-managed keyterms, reopening the connection if needed."""
+        """Apply framework-managed keyterms without interrupting the connection.
+
+        Sarvam fixes keyterms when the connection opens, and this stream makes a
+        single connection attempt, so the updated set cannot take effect on the
+        live connection: it is recorded for the next stream and the current
+        audio keeps flowing with the terms this connection was opened with.
+        """
         if keyterms == (self._opts.keyterms or []):
             return
         self._opts.keyterms = keyterms or None
-        self._reconnect_event.set()
+        self._logger.debug(
+            "keyterms updated; the new set applies to the next stream",
+            extra=self._build_log_context(),
+        )
 
     async def _send_initial_config(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Send initial configuration message with prompt for saaras models."""
@@ -1334,7 +1343,8 @@ class SpeechStream(stt.SpeechStream):
 
         self._logger.info(
             "Connecting to STT WebSocket",
-            extra={**self._build_log_context(), "url": ws_url, "user-agent": USER_AGENT},
+            # the URL carries the keyterms (PII), so it is marked for redaction
+            extra={**self._build_log_context(), "lk.pii.url": ws_url, "user-agent": USER_AGENT},
         )
 
         ws = await asyncio.wait_for(

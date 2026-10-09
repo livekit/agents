@@ -345,21 +345,13 @@ class STTRealtime(stt.STT):
         """Name of the speech-to-text provider."""
         return "Sarvam"
 
-    def _update_session_keyterms(self, keyterms: list[str]) -> None:
-        """Apply the framework-managed keyterms merged with the user's own terms.
+    def _merge_keyterms(self, session_keyterms: list[str]) -> list[str]:
+        """Merge the framework session keyterms into the user's set.
 
-        Sarvam fixes keyterms when the connection opens, so already-running
-        streams keep their previous set; the merged set applies to streams
-        created afterwards. The set is capped to Sarvam's limits rather than
-        rejected, so an over-long detected set cannot break the session.
+        Capped to Sarvam's limits rather than rejected, so an over-long
+        detected set cannot break the session.
         """
-        if not self._capabilities.keyterms:
-            super()._update_session_keyterms(keyterms)
-            return
-        if keyterms == self._session_keyterms:
-            return
-        self._session_keyterms = list(keyterms)
-        merged = list(dict.fromkeys([*self._user_keyterms, *keyterms]))
+        merged = list(dict.fromkeys([*self._user_keyterms, *session_keyterms]))
         capped = [term for term in merged if len(term) <= MAX_KEYTERM_LENGTH][:MAX_KEYTERMS]
         if len(capped) != len(merged):
             logger.warning(
@@ -367,7 +359,22 @@ class STTRealtime(stt.STT):
                 f"{MAX_KEYTERM_LENGTH} characters); applying {len(capped)} of "
                 f"{len(merged)} terms"
             )
-        self._opts.keyterms = capped or None
+        return capped
+
+    def _update_session_keyterms(self, keyterms: list[str]) -> None:
+        """Apply the framework-managed keyterms merged with the user's own terms.
+
+        Sarvam fixes keyterms when the connection opens, so already-running
+        streams keep their previous set; the merged set applies to streams
+        created afterwards.
+        """
+        if not self._capabilities.keyterms:
+            super()._update_session_keyterms(keyterms)
+            return
+        if keyterms == self._session_keyterms:
+            return
+        self._session_keyterms = list(keyterms)
+        self._opts.keyterms = self._merge_keyterms(keyterms) or None
         if self._streams:
             logger.info(
                 "Sarvam realtime STT keyterms apply when the connection opens; "
@@ -465,6 +472,13 @@ class STTRealtime(stt.STT):
             if is_given(vad_prefix_padding_ms)
             else self._opts.vad_prefix_padding_ms,
         )
+        if is_given(keyterms):
+            # An explicit update becomes the new user set, so a later
+            # framework-managed session update merges with it instead of
+            # reverting to the constructor's terms.
+            self._user_keyterms = list(opts.keyterms or [])
+            if self._session_keyterms:
+                opts = replace(opts, keyterms=self._merge_keyterms(self._session_keyterms) or None)
         self._opts = opts
         # Forward the given fields only, so a stream created with a per-stream
         # override (e.g. `stream(language=...)`) keeps it through unrelated updates.
@@ -977,7 +991,8 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._logger.error(
                 "Failed to connect to Sarvam realtime STT WebSocket",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                # the URL carries the keyterms (PII), so it is marked for redaction
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise
@@ -988,7 +1003,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
                     **self._build_log_context(),
                     "error": e.message,
                     "status_code": e.status,
-                    "url": ws_url,
+                    "lk.pii.url": ws_url,
                 },
                 exc_info=True,
             )
@@ -996,7 +1011,7 @@ class RealtimeSpeechStream(stt.SpeechStream):
         except Exception as e:
             self._logger.error(
                 "Unexpected Sarvam realtime STT WebSocket connection error",
-                extra={**self._build_log_context(), "error": str(e), "url": ws_url},
+                extra={**self._build_log_context(), "error": str(e), "lk.pii.url": ws_url},
                 exc_info=True,
             )
             raise APIConnectionError("failed to connect to Sarvam realtime STT") from e
