@@ -190,6 +190,12 @@ class RealtimeModelMetrics(_BaseMetrics):
     """The number of input tokens used in the Response, including text and audio tokens."""
     output_tokens: int = 0
     """The number of output tokens sent in the Response, including text and audio tokens."""
+    reasoning_tokens: int | None = None
+    """The number of output tokens spent on hidden reasoning, as reported by the provider.
+
+    Already counted in ``output_tokens``; do not add it to totals. ``None`` means the
+    provider did not report it, preserving the distinction from a reported zero.
+    """
     total_tokens: int = 0
     """The total number of tokens in the Response."""
     tokens_per_second: float = 0.0
