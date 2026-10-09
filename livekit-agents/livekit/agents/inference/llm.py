@@ -251,9 +251,9 @@ class ChatCompletionOptions(TypedDict, total=False):
 class _LLMOptions:
     model: LLMModels | str
     provider: str | None
-    base_url: str
-    api_key: str
-    api_secret: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
 
@@ -339,9 +339,8 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
+            **report_options(self._opts, exclude=["model", "provider"]),
             "inference_provider": self._opts.provider,
-            "inference_class": self._opts.inference_class,
-            "extra_kwargs": report_options(self._opts.extra_kwargs, ChatCompletionOptions),
         }
 
     def chat(

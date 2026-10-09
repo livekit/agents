@@ -20,7 +20,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
-from .._reporting import report_options
+from .._reporting import Sensitive, report_options
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
@@ -217,9 +217,9 @@ class _TTSOptions:
     language: NotGivenOr[LanguageCode]
     encoding: TTSEncoding
     sample_rate: int
-    base_url: str
-    api_key: str
-    api_secret: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
@@ -525,16 +525,7 @@ class TTS(tts.TTS):
         return {
             **report_options(
                 self._opts,
-                exclude=[
-                    "model",
-                    "sample_rate",
-                    "base_url",
-                    "api_key",
-                    "api_secret",
-                    "extra_kwargs",
-                    "fallback",
-                    "conn_options",
-                ],
+                exclude=["model", "sample_rate", "extra_kwargs", "fallback", "conn_options"],
             ),
             "sample_rate": self.sample_rate,
             "num_channels": self.num_channels,

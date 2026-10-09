@@ -28,6 +28,7 @@ def _snapshot(model: llm.LLM | llm.RealtimeModel | llm.DuplexModel) -> dict[str,
 async def test_inference_llm_settings_are_detached_and_exclude_sensitive_options() -> None:
     model = inference.LLM(
         "openai/gpt-4.1",
+        provider="openai",
         api_key="private-key",
         api_secret="private-secret",
         base_url="https://private-endpoint.example.com",
@@ -46,6 +47,7 @@ async def test_inference_llm_settings_are_detached_and_exclude_sensitive_options
         reported = _snapshot(model)
         assert reported["model"] == "openai/gpt-4.1"
         assert reported["provider"] == "livekit"
+        assert reported["inference_provider"] == "openai"
         assert reported["inference_class"] == "standard"
         assert reported["extra_kwargs"] == {"temperature": 0.2, "max_completion_tokens": 64}
         assert "private-" not in json.dumps(reported)
@@ -182,7 +184,11 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
     }
     model = (
         inference.realtime.RealtimeModel(
-            "openai/gpt-realtime", api_secret="private-secret", **kwargs
+            "openai/gpt-realtime",
+            provider="openai",
+            inference_class="standard",
+            api_secret="private-secret",
+            **kwargs,
         )
         if hosted
         else plugin.realtime.RealtimeModel(**kwargs)
@@ -200,6 +206,10 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
         }
         assert reported["reasoning"] == {"effort": "low"}
         assert reported["tool_choice"] == {"type": "function"}
+        if hosted:
+            assert reported["provider"] == "livekit"
+            assert reported["inference_provider"] == "openai"
+            assert reported["inference_class"] == "standard"
         assert "private-" not in json.dumps(reported)
         model.update_options(
             tool_choice="auto", turn_detection=None, input_audio_transcription=None

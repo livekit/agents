@@ -416,9 +416,9 @@ class STTOptions:
     language: NotGivenOr[LanguageCode]
     encoding: STTEncoding
     sample_rate: int
-    base_url: str
-    api_key: str
-    api_secret: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
@@ -741,15 +741,7 @@ class STT(stt.STT):
         return {
             **report_options(
                 self._opts,
-                exclude=[
-                    "model",
-                    "base_url",
-                    "api_key",
-                    "api_secret",
-                    "extra_kwargs",
-                    "fallback",
-                    "conn_options",
-                ],
+                exclude=["model", "extra_kwargs", "fallback", "conn_options"],
             ),
             "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
             "fallback": [

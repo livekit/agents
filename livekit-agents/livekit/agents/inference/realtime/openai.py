@@ -32,6 +32,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils.misc import is_given
 
+from ..._reporting import Sensitive, report_options
 from ...llm._realtime.openai import (
     DEFAULT_VOICE,
     RealtimeModel as _RealtimeModel,
@@ -52,8 +53,8 @@ _XAI_DEFAULT_TURN_DETECTION = ServerVad(
 @dataclass
 class _InferenceOptions:
     provider: str | None
-    api_key: str
-    api_secret: str
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     inference_class: InferenceClass | None
 
 
@@ -146,8 +147,8 @@ class RealtimeModel(_RealtimeModel):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
+            **report_options(self._inference_opts, exclude=["provider"]),
             "inference_provider": self._inference_opts.provider,
-            "inference_class": self._inference_opts.inference_class,
         }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
