@@ -295,12 +295,10 @@ async def test_update_chat_ctx_replaces_history(rt_session: llm.RealtimeSession)
 
     ctx2 = llm.ChatContext()
     ctx2.add_message(role="user", content="Remember: color is blue")
+    ctx2.add_message(role="user", content="What color did I mention?")
     await asyncio.wait_for(rt_session.update_chat_ctx(ctx2), timeout=10)
 
-    gen_ev = await asyncio.wait_for(
-        rt_session.generate_reply(instructions="What color did the user mention?"),
-        timeout=15,
-    )
+    gen_ev = await asyncio.wait_for(rt_session.generate_reply(), timeout=15)
     text = await asyncio.wait_for(_collect_text(gen_ev), timeout=15)
     assert "blue" in text.lower()
 
