@@ -23,6 +23,7 @@ import os
 import time
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
@@ -44,6 +45,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -137,8 +139,8 @@ class _STTOptions:
     languages: list[str]
     detect_language: bool
     turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
-    keywords: list[str] = field(default_factory=list)
-    prompt: NotGivenOr[str] = NOT_GIVEN
+    keywords: Sensitive[list[str]] = field(default_factory=list)
+    prompt: Sensitive[NotGivenOr[str]] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
 
@@ -332,6 +334,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @staticmethod
     def with_azure(

@@ -3,12 +3,17 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+from .._reporting import _serialize_option_value
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
 from .agent_session import AgentSessionOptions
 from .events import AgentEvent
+
+if TYPE_CHECKING:
+    from .agent_session import AgentSession
 
 
 @dataclass
@@ -31,6 +36,8 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
+    models: dict[str, dict[str, Any]] = field(default_factory=dict)
+    """Session VAD, STT, LLM, and TTS settings captured when the report is created."""
 
     def to_dict(self) -> dict:
         events_dict: list[dict] = []
@@ -69,9 +76,23 @@ class SessionReport:
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,
             "sdk_version": self.sdk_version,
+            "models": self.models,
         }
 
     def _usage_to_dict(self) -> list[dict] | None:
         if self.model_usage is None:
             return None
         return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
+
+
+def _serialize_session_models(session: AgentSession) -> dict[str, dict[str, Any]]:
+    return {
+        name: _serialize_option_value(model)
+        for name, model in (
+            ("vad", session.vad),
+            ("stt", session.stt),
+            ("llm", session.llm),
+            ("tts", session.tts),
+        )
+        if model is not None
+    }

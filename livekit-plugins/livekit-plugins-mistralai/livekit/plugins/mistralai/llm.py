@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents._reporting import report_options
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -157,6 +158,9 @@ class LLM(llm.LLM):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(
         self,

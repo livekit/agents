@@ -4,6 +4,7 @@ import asyncio
 import os
 import weakref
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -18,6 +19,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -54,7 +56,7 @@ NUM_CHANNELS: int = 1
 class _STTOptions:
     model: STTModels | str
     language: LanguageCode | None
-    context_bias: list[str] | None
+    context_bias: Sensitive[list[str] | None]
     target_streaming_delay_ms: int | None
 
 
@@ -162,6 +164,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "MistralAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def update_options(
         self,

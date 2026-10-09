@@ -161,6 +161,13 @@ class FallbackAdapter(
     ) -> FallbackSynthesizeStream:
         return FallbackSynthesizeStream(tts=self, conn_options=conn_options)
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "tts": self._tts_instances,
+            "max_retry_per_tts": self._max_retry_per_tts,
+        }
+
     def prewarm(self) -> None:
         if self._tts_instances:
             self._tts_instances[0].prewarm()

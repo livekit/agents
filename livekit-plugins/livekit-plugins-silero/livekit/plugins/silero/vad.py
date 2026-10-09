@@ -19,13 +19,14 @@ import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import onnxruntime  # type: ignore
 
 from livekit import agents, rtc
 from livekit.agents import utils
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -158,6 +159,9 @@ class VAD(agents.vad.VAD):
     @property
     def provider(self) -> str:
         return "ONNX"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     def stream(self) -> VADStream:
         """

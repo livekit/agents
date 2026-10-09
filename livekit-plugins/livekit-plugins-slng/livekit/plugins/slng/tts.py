@@ -37,6 +37,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -204,7 +205,7 @@ def _parse_ws_event(resp: dict[str, object]) -> _ReceivedWsEvent:
 
 @dataclass
 class _TTSOptions:
-    model_endpoint: str
+    model_endpoint: Sensitive[str]
     model: str
     voice: str
     language: str
@@ -212,10 +213,10 @@ class _TTSOptions:
     encoding: Literal["linear16"]
     speed: float
     word_tokenizer: tokenize.WordTokenizer
-    api_key: str
-    model_options: dict[str, object]
-    extra_headers: dict[str, str]
-    runtime_init: dict[str, Any] | None
+    api_key: Sensitive[str]
+    model_options: Sensitive[dict[str, object]]
+    extra_headers: Sensitive[dict[str, str]]
+    runtime_init: Sensitive[dict[str, Any] | None]
     warm_standby_enabled: bool
     text_chunking: Literal["auto", "word", "phrase"]
     phrase_max_chars: int
@@ -500,6 +501,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "SLNG"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
+        }
 
     @property
     def warm_standby_enabled(self) -> bool:

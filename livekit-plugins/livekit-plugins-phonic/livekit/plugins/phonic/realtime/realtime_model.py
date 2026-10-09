@@ -9,10 +9,11 @@ import typing
 import weakref
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from livekit import rtc
 from livekit.agents import llm, utils
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -131,22 +132,22 @@ def to_phonic_tool_definitions(
 
 @dataclass
 class _RealtimeOptions:
-    api_key: str
-    phonic_agent: NotGivenOr[str]
+    api_key: Sensitive[str]
+    phonic_agent: Sensitive[NotGivenOr[str]]
     voice: NotGivenOr[str]
-    welcome_message: NotGivenOr[str | None]
+    welcome_message: Sensitive[NotGivenOr[str | None]]
     generate_welcome_message: NotGivenOr[bool | None]
-    project: NotGivenOr[str | None]
+    project: Sensitive[NotGivenOr[str | None]]
     default_language: NotGivenOr[str]
     additional_languages: NotGivenOr[list[str]]
     multilingual_mode: NotGivenOr[Literal["auto", "request"]]
     audio_speed: NotGivenOr[float]
-    phonic_tools: NotGivenOr[list[str]]
-    boosted_keywords: NotGivenOr[list[str]]
+    phonic_tools: Sensitive[NotGivenOr[list[str]]]
+    boosted_keywords: Sensitive[NotGivenOr[list[str]]]
     min_words_to_interrupt: NotGivenOr[int]
     generate_no_input_poke_text: NotGivenOr[bool]
     no_input_poke_sec: NotGivenOr[float]
-    no_input_poke_text: NotGivenOr[str]
+    no_input_poke_text: Sensitive[NotGivenOr[str]]
     no_input_end_conversation_sec: NotGivenOr[float]
     websocket_timeout_sec: NotGivenOr[int]
     intelligence_level: NotGivenOr[IntelligenceLevel]
@@ -158,18 +159,18 @@ class _RealtimeOptions:
     vad_threshold: NotGivenOr[float]
     enable_assistant_backchannel: NotGivenOr[bool]
     assistant_backchannel_aggressiveness: NotGivenOr[float]
-    pronunciation_dictionary: NotGivenOr[list[PronunciationEntry]]
-    template_variables: NotGivenOr[dict[str, str]]
+    pronunciation_dictionary: Sensitive[NotGivenOr[list[PronunciationEntry]]]
+    template_variables: Sensitive[NotGivenOr[dict[str, str]]]
     enable_redaction: NotGivenOr[bool]
     enable_watermarking: NotGivenOr[bool]
-    mcp_servers: NotGivenOr[list[str]]
-    observability_integrations: NotGivenOr[list[ObservabilityIntegration]]
-    configuration_endpoint: NotGivenOr[ConfigurationEndpoint | None]
-    additional_params: NotGivenOr[dict[str, typing.Any]]
-    configs_for_tools: NotGivenOr[list[PhonicToolConfig]]
-    forbid_speech_after_tool_call: NotGivenOr[list[str]]
+    mcp_servers: Sensitive[NotGivenOr[list[str]]]
+    observability_integrations: Sensitive[NotGivenOr[list[ObservabilityIntegration]]]
+    configuration_endpoint: Sensitive[NotGivenOr[ConfigurationEndpoint | None]]
+    additional_params: Sensitive[NotGivenOr[dict[str, typing.Any]]]
+    configs_for_tools: Sensitive[NotGivenOr[list[PhonicToolConfig]]]
+    forbid_speech_after_tool_call: Sensitive[NotGivenOr[list[str]]]
     conn_options: APIConnectOptions
-    instructions: NotGivenOr[str] = NOT_GIVEN
+    instructions: Sensitive[NotGivenOr[str]] = NOT_GIVEN
 
 
 @dataclass
@@ -405,6 +406,9 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "phonic"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts, exclude=["conn_options"])
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # disabling server-side turn detection is unsupported (can_disable_turn_detection=False)

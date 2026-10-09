@@ -25,6 +25,7 @@ import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree
 
 import aiohttp
@@ -37,6 +38,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from ._http import Configuration, HTTPClient, positive_timeout, status_error
@@ -232,6 +234,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Microsoft AI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -207,6 +208,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Speechify"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def prewarm(self) -> None:
         """Open the HTTPS connection to the Speechify API ahead of the first request.

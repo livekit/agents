@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -51,7 +52,7 @@ API_AUTH_HEADER = "api-key"
 
 @dataclass
 class _TTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     locale: TTSLocales | str | None
     model: TTSModels | str
     voice: str
@@ -60,7 +61,7 @@ class _TTSOptions:
     pitch: int | None
     sample_rate: int
     encoding: TTSEncoding
-    base_url: str
+    base_url: Sensitive[str]
     min_buffer_size: int
     max_buffer_delay_in_ms: int
 
@@ -168,6 +169,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Murf"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

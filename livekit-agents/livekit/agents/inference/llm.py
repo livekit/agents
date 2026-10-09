@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+from .._reporting import Sensitive, report_options
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -215,30 +216,30 @@ LLMModels = OpenAIModels | GoogleModels | KimiModels | DeepSeekModels | ZAIModel
 
 class ChatCompletionOptions(TypedDict, total=False):
     frequency_penalty: float | None
-    logit_bias: dict[str, int] | None
+    logit_bias: Sensitive[dict[str, int] | None]
     logprobs: bool | None
     max_completion_tokens: int | None
     max_tokens: int | None
-    metadata: Metadata | None
+    metadata: Sensitive[Metadata | None]
     modalities: list[Literal["text", "audio"]] | None
     n: int | None
     parallel_tool_calls: bool
-    prediction: ChatCompletionPredictionContentParam | None
+    prediction: Sensitive[ChatCompletionPredictionContentParam | None]
     presence_penalty: float | None
-    prompt_cache_key: str
+    prompt_cache_key: Sensitive[str]
     prompt_cache_retention: Literal["in_memory", "24h"] | None
     reasoning_effort: ReasoningEffort | None
-    safety_identifier: str
+    safety_identifier: Sensitive[str]
     seed: int | None
     service_tier: Literal["auto", "default", "flex", "scale", "priority"] | None
-    stop: str | None | list[str] | None
+    stop: Sensitive[str | None | list[str] | None]
     store: bool | None
     temperature: float | None
     top_logprobs: int | None
     top_p: float | None
-    user: str
+    user: Sensitive[str]
     verbosity: Literal["low", "medium", "high"] | None
-    web_search_options: completion_create_params.WebSearchOptions
+    web_search_options: Sensitive[completion_create_params.WebSearchOptions]
 
     # livekit-typed arguments
     tool_choice: ToolChoice
@@ -249,10 +250,10 @@ class ChatCompletionOptions(TypedDict, total=False):
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
-    provider: str | None
-    base_url: str
-    api_key: str
-    api_secret: str
+    inference_provider: str | None
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     inference_class: InferenceClass | None
     extra_kwargs: ChatCompletionOptions | dict[str, Any]
 
@@ -277,7 +278,7 @@ class LLM(llm.LLM):
 
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            inference_provider=provider,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -336,6 +337,9 @@ class LLM(llm.LLM):
     def provider(self) -> str:
         return "livekit"
 
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
+
     def chat(
         self,
         *,
@@ -389,7 +393,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            provider=self._opts.provider,
+            provider=self._opts.inference_provider,
             inference_class=effective_inference_class,
             strict_tool_schema=True,
             client=self._client,

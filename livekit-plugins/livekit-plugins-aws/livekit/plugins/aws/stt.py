@@ -28,6 +28,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -188,6 +189,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Amazon Transcribe"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._config)
 
     async def aclose(self) -> None:
         await super().aclose()

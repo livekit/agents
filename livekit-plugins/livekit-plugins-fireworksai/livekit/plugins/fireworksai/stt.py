@@ -21,6 +21,7 @@ import os
 import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlencode
 
 import aiohttp
@@ -33,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -82,14 +84,14 @@ class STTOptions:
     model: NotGivenOr[str]
     sample_rate: int
     language: NotGivenOr[LanguageCode] = NOT_GIVEN
-    prompt: NotGivenOr[str] = NOT_GIVEN
+    prompt: Sensitive[NotGivenOr[str]] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
     skip_vad: NotGivenOr[bool] = NOT_GIVEN
-    vad_kwargs: NotGivenOr[dict] = NOT_GIVEN
+    vad_kwargs: Sensitive[NotGivenOr[dict]] = NOT_GIVEN
     text_timeout_seconds: float = 1.0
     response_format: str = "verbose_json"
     timestamp_granularities: NotGivenOr[list[str]] = NOT_GIVEN
-    base_url: NotGivenOr[str] = NOT_GIVEN
+    base_url: Sensitive[NotGivenOr[str]] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -180,6 +182,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "FireworksAI"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

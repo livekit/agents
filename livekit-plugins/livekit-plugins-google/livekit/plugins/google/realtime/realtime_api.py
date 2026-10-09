@@ -8,7 +8,7 @@ import time
 import weakref
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -160,13 +161,13 @@ class InputTranscription:
 @dataclass
 class _RealtimeOptions:
     model: LiveAPIModels | str
-    api_key: str | None
+    api_key: Sensitive[str | None]
     voice: Voice | str
     language: NotGivenOr[LanguageCode]
     response_modalities: list[types.Modality]
     vertexai: bool
-    project: str | None
-    location: str | None
+    project: Sensitive[str | None]
+    location: Sensitive[str | None]
     candidate_count: int
     temperature: NotGivenOr[float]
     max_output_tokens: NotGivenOr[int]
@@ -174,12 +175,12 @@ class _RealtimeOptions:
     top_k: NotGivenOr[int]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
-    instructions: NotGivenOr[str]
+    instructions: Sensitive[NotGivenOr[str]]
     input_audio_transcription: types.AudioTranscriptionConfig | None
     output_audio_transcription: types.AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
-    http_options: NotGivenOr[types.HttpOptions]
+    http_options: Sensitive[NotGivenOr[types.HttpOptions]]
     media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
@@ -190,8 +191,8 @@ class _RealtimeOptions:
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
-    session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
-    credentials: google.auth.credentials.Credentials | None = None
+    session_resumption: Sensitive[NotGivenOr[types.SessionResumptionConfig]] = NOT_GIVEN
+    credentials: Sensitive[google.auth.credentials.Credentials | None] = None
 
 
 @dataclass
@@ -451,6 +452,17 @@ class RealtimeModel(llm.RealtimeModel):
             return "Vertex AI"
         else:
             return "Gemini"
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(
+            self._opts,
+            exclude={
+                "image_encode_options": True,
+                "conn_options": True,
+                "input_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
+                "output_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
+            },
+        )
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,

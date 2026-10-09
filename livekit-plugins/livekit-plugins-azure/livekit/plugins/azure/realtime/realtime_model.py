@@ -9,7 +9,7 @@ import weakref
 from collections import deque
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from azure.ai.voicelive.aio import VoiceLiveConnection, connect
 from azure.ai.voicelive.models import (
@@ -53,6 +53,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -102,7 +103,7 @@ _MAX_RESENT_AUDIO_CHUNKS = 300
 
 @dataclass
 class _RealtimeOptions:
-    endpoint: str
+    endpoint: Sensitive[str]
     model: str
     voice: str | AzureStandardVoice
     input_audio_transcription: AudioInputTranscriptionOptions | None
@@ -113,7 +114,7 @@ class _RealtimeOptions:
     modalities: Sequence[Modality | str]
     temperature: float
     max_output_tokens: int
-    api_key: str | None
+    api_key: Sensitive[str | None]
     use_default_credential: bool
     conn_options: APIConnectOptions
 
@@ -345,6 +346,47 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "azure-voicelive"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(
+                self._opts,
+                exclude=[
+                    "voice",
+                    "input_audio_transcription",
+                    "turn_detection",
+                    "use_default_credential",
+                    "conn_options",
+                ],
+            ),
+            "voice": self._opts.voice
+            if isinstance(self._opts.voice, str)
+            else self._opts.voice.name,
+            "input_audio_transcription": {
+                key: value
+                for key, value in self._opts.input_audio_transcription.as_dict().items()
+                if key in {"model", "language"}
+            }
+            if self._opts.input_audio_transcription is not None
+            else None,
+            "turn_detection": {
+                key: value
+                for key, value in self._opts.turn_detection.as_dict().items()
+                if key
+                in {
+                    "type",
+                    "threshold",
+                    "prefix_padding_ms",
+                    "silence_duration_ms",
+                    "create_response",
+                    "interrupt_response",
+                    "eagerness",
+                    "auto_truncate",
+                }
+            }
+            if self._opts.turn_detection is not None
+            else None,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # manual turn-taking is unsupported (can_disable_turn_detection=False)

@@ -32,6 +32,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -136,13 +137,15 @@ class STTOptions:
     turn_detection_mode: TurnDetectionMode = DEFAULT_TURN_DETECTION_MODE
 
     # Output formatting
-    speaker_format: str | None = None
+    speaker_format: Sensitive[str | None] = None
 
     # Speakers
-    known_speakers: list[SpeakerIdentifier] = dataclasses.field(default_factory=list)
+    known_speakers: Sensitive[list[SpeakerIdentifier]] = dataclasses.field(default_factory=list)
 
     # Custom dictionary
-    additional_vocab: list[AdditionalVocabEntry] = dataclasses.field(default_factory=list)
+    additional_vocab: Sensitive[list[AdditionalVocabEntry]] = dataclasses.field(
+        default_factory=list
+    )
 
     # -------------------
     # Advanced features
@@ -363,6 +366,13 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Speechmatics"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._stt_options),
+            "sample_rate": self._sample_rate,
+            "encoding": self._audio_encoding,
+        }
 
     @property
     def model(self) -> str:

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import aiohttp
@@ -28,6 +28,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -111,16 +112,16 @@ class StyleConfig:
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    subscription_key: str | None
+    subscription_key: Sensitive[str | None]
     region: str | None
     voice: str
     language: LanguageCode | None
-    speech_endpoint: str | None
+    speech_endpoint: Sensitive[str | None]
     deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
     style: NotGivenOr[StyleConfig]
-    lexicon_uri: NotGivenOr[str]
-    auth_token: str | None = None
+    lexicon_uri: Sensitive[NotGivenOr[str]]
+    auth_token: Sensitive[str | None] = None
 
     def get_endpoint_url(self) -> str:
         base = (
@@ -216,6 +217,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Azure TTS"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def update_options(
         self,

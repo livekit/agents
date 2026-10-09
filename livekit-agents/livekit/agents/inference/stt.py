@@ -23,6 +23,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
+from .._reporting import Sensitive, report_options
 from ..language import LanguageCode
 from ..log import logger
 from ..types import (
@@ -89,7 +90,7 @@ class CartesiaOptions(TypedDict, total=False):
     turn_eager_end_threshold: float  # range 0.3-0.6, default 0.4
     turn_end_threshold: float  # range 0.05-0.5, default 0.2
     turn_end_timeout_ms: int  # range 640-11200, default 5600
-    keyterm: str | list[str]  # up to 100 terms totaling 1200 characters
+    keyterm: Sensitive[str | list[str]]  # up to 100 terms totaling 1200 characters
 
 
 class DeepgramOptions(TypedDict, total=False):
@@ -98,8 +99,8 @@ class DeepgramOptions(TypedDict, total=False):
     endpointing: int  # default: 25 (ms)
     punctuate: bool  # default: True
     smart_format: bool
-    keywords: list[tuple[str, float]]
-    keyterm: str | list[str]
+    keywords: Sensitive[list[tuple[str, float]]]
+    keyterm: Sensitive[str | list[str]]
     profanity_filter: bool
     numerals: bool
     mip_opt_out: bool  # default: False
@@ -110,23 +111,23 @@ class DeepgramOptions(TypedDict, total=False):
     no_delay: bool  # default: True
     utterance_end: bool
     redact: str | list[str]
-    replace: str | list[str]
-    search: str | list[str]
-    tag: str | list[str]
+    replace: Sensitive[str | list[str]]
+    search: Sensitive[str | list[str]]
+    tag: Sensitive[str | list[str]]
     channels: int
     version: str
-    callback: str
-    callback_method: str
-    extra: str
+    callback: Sensitive[str]
+    callback_method: Sensitive[str]
+    extra: Sensitive[str]
 
 
 class DeepgramFluxOptions(TypedDict, total=False):
     eager_eot_threshold: float  # range 0.3-0.9, default: 0.5
     eot_threshold: float  # range 0.5-0.9
     eot_timeout_ms: int
-    keyterm: str | list[str]
+    keyterm: Sensitive[str | list[str]]
     mip_opt_out: bool  # default: False
-    tag: str | list[str]
+    tag: Sensitive[str | list[str]]
     detect_language: bool
 
 
@@ -135,16 +136,20 @@ class AssemblyaiOptions(TypedDict, total=False):
     end_of_turn_confidence_threshold: float  # default: 0.01
     min_end_of_turn_silence_when_confident: int  # default: 0
     max_turn_silence: int  # default: not specified
-    keyterms_prompt: list[str]  # default: not specified
+    keyterms_prompt: Sensitive[list[str]]  # default: not specified
     language_detection: bool
     inactivity_timeout: float  # seconds
-    prompt: str  # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    # default: not specified (u3-rt-pro only, mutually exclusive with keyterms_prompt)
+    prompt: Sensitive[str]
     speaker_labels: bool  # when True, enables speaker diarization (default off)
-    agent_context: str  # context to bias recognition (u3-rt-pro only, max 1750 chars)
-    previous_context_n_turns: int  # prior turns carried as context; 0 disables (u3-rt-pro only)
-    voice_focus: Literal["near-field", "far-field"]  # isolate primary voice (u3-rt-pro only)
+    agent_context: Sensitive[str]  # context to bias recognition (u3-rt-pro only, max 1750 chars)
+    # prior turns carried as context; 0 disables (u3-rt-pro only)
+    previous_context_n_turns: int
+    # isolate primary voice (u3-rt-pro only)
+    voice_focus: Literal["near-field", "far-field"]
     voice_focus_threshold: float  # background suppression strength (u3-rt-pro only)
-    mode: Literal["min_latency", "balanced", "max_accuracy"]  # accuracy/latency preset (u3-rt-pro)
+    # accuracy/latency preset (u3-rt-pro)
+    mode: Literal["min_latency", "balanced", "max_accuracy"]
 
 
 class SpeechmaticsOptions(TypedDict, total=False):
@@ -152,23 +157,27 @@ class SpeechmaticsOptions(TypedDict, total=False):
     output_locale: str  # BCP-47 locale for output formatting
     max_delay: float  # 0.7-4.0 seconds, default 1.0; RT only
     max_delay_mode: str  # "flexible" | "fixed"; RT only
-    diarization: str  # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change"; non-"none" enables diarization
+    # "none" | "speaker" | "channel" | "channel_and_speaker_change" | "speaker_change";
+    # non-"none" enables diarization
+    diarization: str
     speaker_sensitivity: float  # 0.0-1.0
     max_speakers: int
     prefer_current_speaker: bool
     enable_partials: bool  # default True (overridden by gateway)
     enable_entities: bool  # RT only
-    punctuation_overrides: dict[str, Any]
-    additional_vocab: list[dict[str, Any]]  # RT only
+    punctuation_overrides: Sensitive[dict[str, Any]]
+    additional_vocab: Sensitive[list[dict[str, Any]]]  # RT only
     end_of_utterance_silence_trigger: float  # seconds of silence before final; RT only
-    audio_filtering_config: dict[str, Any]  # RT only
-    transcript_filtering_config: dict[str, Any]  # RT only
+    audio_filtering_config: Sensitive[dict[str, Any]]  # RT only
+    transcript_filtering_config: Sensitive[dict[str, Any]]  # RT only
 
 
 class XaiOptions(TypedDict, total=False):
     diarize: bool  # when True, enables speaker diarization (default off)
     endpointing: int  # silence duration in ms before utterance-final (0-5000)
-    format: bool  # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100"); requires language
+    # enables Inverse Text Normalization (e.g. "one hundred dollars" -> "$100");
+    # requires language
+    format: bool
     interim_results: bool  # default True; set False to opt out of interim transcripts
 
 
@@ -180,7 +189,7 @@ class InworldOptions(TypedDict, total=False):
     inactivity_timeout_seconds: int  # >= 0; 0 disables
     end_of_turn_confidence_threshold: float  # range 0.0-1.0, default 0.5
     min_end_of_turn_silence_when_confident: int  # >= 0 (ms)
-    prompts: list[str]
+    prompts: Sensitive[list[str]]
     vad_threshold: float  # range 0.0-1.0, default 0.5
 
 
@@ -189,7 +198,7 @@ class GoogleOptions(TypedDict, total=False):
     # empty list, to let the model detect the language itself.
     # https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
     language_codes: list[str]  # BCP-47 codes, e.g. ["en-US", "es-ES"]
-    custom_vocabulary: list[str]  # up to 1000 terms that bias recognition
+    custom_vocabulary: Sensitive[list[str]]  # up to 1000 terms that bias recognition
 
 
 # Diarization is requested via different extra_kwargs keys across
@@ -407,12 +416,24 @@ class STTOptions:
     language: NotGivenOr[LanguageCode]
     encoding: STTEncoding
     sample_rate: int
-    base_url: str
-    api_key: str
-    api_secret: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     extra_kwargs: dict[str, Any]
     fallback: NotGivenOr[list[FallbackModel]]
     conn_options: NotGivenOr[APIConnectOptions]
+
+
+_EXTRA_OPTION_TYPES = (
+    CartesiaOptions,
+    DeepgramOptions,
+    DeepgramFluxOptions,
+    AssemblyaiOptions,
+    SpeechmaticsOptions,
+    XaiOptions,
+    InworldOptions,
+    GoogleOptions,
+)
 
 
 class STT(stt.STT):
@@ -715,6 +736,23 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._opts, exclude=["extra_kwargs", "fallback", "conn_options"]),
+            "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
+            "fallback": [
+                {
+                    "model": item["model"],
+                    "extra_kwargs": report_options(
+                        item.get("extra_kwargs", {}), *_EXTRA_OPTION_TYPES
+                    ),
+                }
+                for item in self._opts.fallback
+            ]
+            if is_given(self._opts.fallback)
+            else NOT_GIVEN,
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

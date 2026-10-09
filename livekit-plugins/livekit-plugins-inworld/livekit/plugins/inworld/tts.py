@@ -36,6 +36,7 @@ from livekit.agents._exceptions import (
     APIStatusError,
     APITimeoutError,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -989,6 +990,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Inworld"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     async def _get_pool(self) -> _ConnectionPool:
         """Get the connection pool, creating if needed."""

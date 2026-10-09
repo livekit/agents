@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -15,6 +16,7 @@ from livekit.agents import (
     LanguageCode,
     tts,
 )
+from livekit.agents._reporting import report_options
 from spitch import AsyncSpitch
 
 SAMPLE_RATE = 24_000
@@ -44,6 +46,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Spitch"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def synthesize(
         self,

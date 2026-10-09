@@ -48,6 +48,9 @@ class StreamAdapter(STT):
     def provider(self) -> str:
         return self._stt.provider
 
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), "stt": self._stt, "vad": self._vad}
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)
 

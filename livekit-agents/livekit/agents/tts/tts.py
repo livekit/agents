@@ -5,10 +5,10 @@ import datetime
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Literal, TypeVar
 
 from opentelemetry import trace
 from pydantic import BaseModel, ConfigDict, Field
@@ -221,6 +221,13 @@ class TTS(
     @property
     def num_channels(self) -> int:
         return self._num_channels
+
+    def describe_options(self) -> Mapping[str, Any]:
+        """Return settings to include in session reports, without credentials or user content."""
+        return {
+            "sample_rate": self.sample_rate,
+            "num_channels": self.num_channels,
+        }
 
     @abstractmethod
     def synthesize(

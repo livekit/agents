@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from livekit.agents._reporting import Sensitive
+
 # Speech models supported by Camb.ai MARS series
 SpeechModel = Literal[
     "mars-flash",  # Faster inference, 22.05kHz
@@ -49,7 +51,7 @@ class _TTSOptions:
     language: str
     speech_model: str
     output_format: str
-    user_instructions: str | None
+    user_instructions: Sensitive[str | None]
     enhance_named_entities: bool
 
 

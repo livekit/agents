@@ -36,6 +36,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -65,14 +66,14 @@ class _TTSOptions:
     model: TTSModels | str
     encoding: TTSEncoding
     sample_rate: int
-    voice: str | list[float]
+    voice: Sensitive[str | list[float]]
     speed: TTSVoiceSpeed | float | None
     emotion: list[TTSVoiceEmotion | str] | None
     volume: float | None
     word_timestamps: bool
-    api_key: str
+    api_key: Sensitive[str]
     language: LanguageCode | None
-    base_url: str
+    base_url: Sensitive[str]
     api_version: str
     pronunciation_dict_id: str | None
 
@@ -210,6 +211,13 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Cartesia"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+            "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()

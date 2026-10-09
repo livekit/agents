@@ -147,6 +147,15 @@ class FallbackAdapter(
         """Metadata of the instance that most recently served a request (the primary before any traffic)."""  # noqa: E501
         return self._active_instance.metrics_metadata
 
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            "stt": self._stt_instances,
+            "attempt_timeout": self._attempt_timeout,
+            "max_retry_per_stt": self._max_retry_per_stt,
+            "retry_interval": self._retry_interval,
+        }
+
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         # forward to every underlying STT; unsupported ones warn-and-skip internally
         for stt_instance in self._stt_instances:

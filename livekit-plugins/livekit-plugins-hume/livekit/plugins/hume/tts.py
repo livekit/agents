@@ -32,6 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -89,14 +90,14 @@ DEFAULT_VOICE = VoiceByName(name="Male English Actor", provider=VoiceProvider.hu
 
 @dataclass
 class _TTSOptions:
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
     voice: VoiceById | VoiceByName | None
     model_version: ModelVersion | None
-    description: str | None
+    description: Sensitive[str | None]
     speed: float | None
     trailing_silence: float | None
-    context: str | list[Utterance] | None
+    context: Sensitive[str | list[Utterance] | None]
     instant_mode: bool | None
     audio_format: AudioFormat
 
@@ -182,6 +183,9 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Hume"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

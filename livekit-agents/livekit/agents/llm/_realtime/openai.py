@@ -92,6 +92,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
+from ..._reporting import Sensitive, report_options
 from .openai_types import RealtimeModels
 from .openai_utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -231,14 +232,14 @@ class _RealtimeOptions:
     input_audio_noise_reduction: NoiseReduction | None
     turn_detection: RealtimeAudioInputTurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
-    tracing: Tracing | None
+    tracing: Sensitive[Tracing | None]
     truncation: RealtimeTruncation | None
     reasoning: RealtimeReasoning | None
-    api_key: str | None
-    base_url: str
+    api_key: Sensitive[str | None]
+    base_url: Sensitive[str]
     is_azure: bool
-    azure_deployment: str | None
-    entra_token: str | None
+    azure_deployment: Sensitive[str | None]
+    entra_token: Sensitive[str | None]
     api_version: str | None
     modalities: list[Literal["text", "audio"]]
     max_session_duration: float | None
@@ -577,6 +578,12 @@ class RealtimeModel(llm.RealtimeModel):
         from urllib.parse import urlparse
 
         return urlparse(self._opts.base_url).netloc
+
+    def describe_options(self) -> dict[str, Any]:
+        return report_options(
+            self._opts,
+            exclude={"conn_options": True, "input_audio_transcription": {"prompt", "keywords"}},
+        )
 
     @classmethod
     def with_azure(

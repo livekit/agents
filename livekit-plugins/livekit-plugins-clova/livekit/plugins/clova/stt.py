@@ -20,6 +20,7 @@ import json
 import os
 import time
 import wave
+from typing import Any
 
 import aiohttp
 
@@ -88,6 +89,9 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Clova"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {"language": self._language, "threshold": self.threshold}
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

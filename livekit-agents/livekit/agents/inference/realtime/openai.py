@@ -32,6 +32,7 @@ from livekit.agents.types import (
 )
 from livekit.agents.utils.misc import is_given
 
+from ..._reporting import Sensitive, report_options
 from ...llm._realtime.openai import (
     DEFAULT_VOICE,
     RealtimeModel as _RealtimeModel,
@@ -51,9 +52,9 @@ _XAI_DEFAULT_TURN_DETECTION = ServerVad(
 
 @dataclass
 class _InferenceOptions:
-    provider: str | None
-    api_key: str
-    api_secret: str
+    inference_provider: str | None
+    api_key: Sensitive[str]
+    api_secret: Sensitive[str]
     inference_class: InferenceClass | None
 
 
@@ -127,7 +128,7 @@ class RealtimeModel(_RealtimeModel):
         if is_xai:
             self._capabilities.can_disable_turn_detection = can_disable_turn_detection
         self._inference_opts = _InferenceOptions(
-            provider=provider,
+            inference_provider=provider,
             api_key=resolved_api_key,
             api_secret=resolved_api_secret,
             inference_class=inference_class,
@@ -142,6 +143,12 @@ class RealtimeModel(_RealtimeModel):
     @property
     def provider(self) -> str:
         return "livekit"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._inference_opts),
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         sess = RealtimeSession(self, turn_detection_disabled=turn_detection_disabled)
@@ -164,8 +171,8 @@ class RealtimeSession(_RealtimeSession):
         url, _ = super()._create_ws_url_and_headers()
         headers = get_inference_headers(inference_class=opts.inference_class)
         headers["Authorization"] = f"Bearer {create_access_token(opts.api_key, opts.api_secret)}"
-        if opts.provider:
-            headers[HEADER_INFERENCE_PROVIDER] = opts.provider
+        if opts.inference_provider:
+            headers[HEADER_INFERENCE_PROVIDER] = opts.inference_provider
         return url, headers
 
     def _wrap_session_update(self, event_id: str, session: Any) -> dict[str, Any]:

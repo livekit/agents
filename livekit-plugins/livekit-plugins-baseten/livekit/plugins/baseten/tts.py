@@ -31,6 +31,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -205,6 +206,14 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Baseten"
+
+    def describe_options(self) -> dict[str, Any]:
+        options = (
+            self._qwen3.describe_options()
+            if self._qwen3 is not None
+            else report_options(self._opts)
+        )
+        return {**super().describe_options(), **options}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

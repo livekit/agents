@@ -18,7 +18,7 @@ import asyncio
 import base64
 import json
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 
@@ -30,6 +30,7 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
@@ -76,7 +77,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: str | None
+    instructions: Sensitive[str | None]
     response_format: RESPONSE_FORMATS
 
 
@@ -141,6 +142,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return self._client._base_url.netloc.decode("utf-8")
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def update_options(
         self,

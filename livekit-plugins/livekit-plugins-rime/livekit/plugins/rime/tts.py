@@ -19,7 +19,7 @@ import copy
 import os
 import weakref
 from dataclasses import dataclass
-from typing import overload
+from typing import Any, overload
 from urllib.parse import urlencode
 
 import aiohttp
@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -399,6 +400,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Rime"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

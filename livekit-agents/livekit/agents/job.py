@@ -439,7 +439,7 @@ class JobContext:
         return self._tagger
 
     def make_session_report(self, session: AgentSession | None = None) -> SessionReport:
-        from .voice.report import SessionReport
+        from .voice.report import SessionReport, _serialize_session_models
 
         session = session or self._primary_agent_session
 
@@ -464,6 +464,7 @@ class JobContext:
             events=session._recorded_events,
             chat_history=session.history.copy(),
             model_usage=session.usage.model_usage,
+            models=_serialize_session_models(session),
         )
 
         if recorder_io:

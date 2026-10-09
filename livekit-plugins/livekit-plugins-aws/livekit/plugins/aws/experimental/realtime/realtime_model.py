@@ -16,6 +16,8 @@ from typing import Any, Literal, cast
 
 import boto3
 
+from livekit.agents._reporting import report_options
+
 try:
     from aws_sdk_bedrock_runtime.client import (
         AsyncBedrockRuntimeClient as _BedrockRuntimeClient,
@@ -528,6 +530,12 @@ class RealtimeModel(llm.RealtimeModel):
     @property
     def provider(self) -> str:
         return "Amazon"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._opts),
+            "generate_reply_timeout": self._generate_reply_timeout,
+        }
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         """Return a new RealtimeSession bound to this model instance."""

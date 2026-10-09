@@ -35,6 +35,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -164,6 +165,12 @@ class TTS(tts.TTS):
     @property
     def provider(self) -> str:
         return "Soniox"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **super().describe_options(),
+            **report_options(self._opts),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
@@ -536,8 +543,8 @@ class _TTSOptions:
     sample_rate: int
     bitrate: int | None
     speed: float
-    websocket_url: str
-    api_key: str
+    websocket_url: Sensitive[str]
+    api_key: Sensitive[str]
     stream_idle_timeout: float
 
 

@@ -41,6 +41,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
@@ -105,7 +106,7 @@ class TranslationConfiguration:
     match_original_utterances: bool = True
     lipsync: bool = True
     context_adaptation: bool = False
-    context: str | None = None
+    context: Sensitive[str | None] = None
     informal: bool = False
 
 
@@ -131,8 +132,8 @@ class STTOptions:
         default_factory=TranslationConfiguration
     )
     energy_filter: AudioEnergyFilter | bool = False
-    custom_vocabulary: list[str | dict] | None = None
-    custom_spelling: dict[str, list[str]] | None = None
+    custom_vocabulary: Sensitive[list[str | dict] | None] = None
+    custom_spelling: Sensitive[dict[str, list[str]] | None] = None
     pre_processing: PreProcessingConfiguration = dataclasses.field(
         default_factory=PreProcessingConfiguration
     )
@@ -337,6 +338,12 @@ class STT(stt.STT):
     @property
     def provider(self) -> str:
         return "Gladia"
+
+    def describe_options(self) -> dict[str, Any]:
+        return {
+            **report_options(self._opts, exclude=["energy_filter"]),
+            "energy_filter": bool(self._opts.energy_filter),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
