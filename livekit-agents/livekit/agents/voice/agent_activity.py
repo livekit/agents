@@ -1990,12 +1990,15 @@ class AgentActivity(RecognitionHooks):
                     wait_task = asyncio.current_task()
                     replacement = audio_recognition._end_of_turn_task
                     if (
-                        (wait_task is not None and wait_task.cancelling())
-                        or not eou_task.cancelled()
-                        or replacement is None
-                        or replacement is eou_task
-                        or replacement is previous_eou_task
-                    ):
+                        wait_task is not None and wait_task.cancelling()
+                    ) or not eou_task.cancelled():
+                        raise
+
+                    if replacement is None and audio_recognition._speaking:
+                        await audio_recognition._wait_for_user_silence()
+                        continue
+
+                    if replacement is None or replacement in (eou_task, previous_eou_task):
                         raise
 
                 if audio_recognition._end_of_turn_task is eou_task:
@@ -2771,7 +2774,17 @@ class AgentActivity(RecognitionHooks):
             # is detected. So the previous execution should complete quickly.
             await asyncio.wait({old_task})
             if not old_task.cancelled():
-                old_task.result()
+                previous_speech_handle = old_task.result()
+                if (
+                    previous_speech_handle is not None
+                    and (
+                        previous_message_committed_fut := (
+                            previous_speech_handle._user_message_committed_fut
+                        )
+                    )
+                    is not None
+                ):
+                    await asyncio.shield(previous_message_committed_fut)
 
         self._preemptive_generation_count = 0
 
