@@ -79,6 +79,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         self.config_batches: list[tuple[object, object, object]] = []
         self.appended: list[llm.ChatItem] = []
         self.replies_requested: list[object] = []
+        self.pushed: list[rtc.AudioFrame] = []
         self.fail_instructions = False
 
     @property
@@ -105,7 +106,7 @@ class _FakeDuplexSession(llm.DuplexSession):
         pass
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
-        pass
+        self.pushed.append(frame)
 
     async def aclose(self) -> None:
         await super().aclose()
@@ -998,6 +999,106 @@ async def test_duplex_session_raises_for_a_model_that_is_not_duplex() -> None:
         await session.start(agent)
         with pytest.raises(RuntimeError, match="not running a DuplexModel"):
             _ = agent.duplex_session
+
+
+async def test_a_disabled_input_keeps_feeding_the_model_silence() -> None:
+    """The model speaks on the clock of the audio it is sent, and a disabled input sends none."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        await session.start(Agent(instructions=""))
+        assert model.session_obj is not None
+        pushed = model.session_obj.pushed
+
+        session.input.set_audio_enabled(False)
+        await asyncio.sleep(0.35)
+        assert len(pushed) >= 3
+        assert all(not np.frombuffer(f.data, dtype=np.int16).any() for f in pushed)
+
+        session.input.set_audio_enabled(True)
+        await asyncio.sleep(0)
+        fed = len(pushed)
+        await asyncio.sleep(0.25)
+        assert len(pushed) == fed
+
+
+async def test_an_input_disabled_before_the_agent_starts_is_fed_silence_too() -> None:
+    """The activity picks up an input that was disabled before it started."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        session.input.set_audio_enabled(False)
+        await session.start(Agent(instructions=""))
+        await asyncio.sleep(0.25)
+        assert model.session_obj is not None
+        assert len(model.session_obj.pushed) >= 2
+
+
+async def test_silence_follows_the_audio_input_being_set_and_removed() -> None:
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    model = _FakeDuplexModel()
+    async with AgentSession(llm=model, aec_warmup_duration=None) as session:
+        session.input.set_audio_enabled(False)
+        await session.start(Agent(instructions=""))
+        assert model.session_obj is not None
+        pushed = model.session_obj.pushed
+        await asyncio.sleep(0.15)
+        assert pushed == []
+
+        session.input.audio = FakeAudioInput()
+        await asyncio.sleep(0.25)
+        assert len(pushed) >= 2
+
+        session.input.audio = None
+        await asyncio.sleep(0)
+        fed = len(pushed)
+        await asyncio.sleep(0.25)
+        assert len(pushed) == fed
+
+
+async def test_a_closing_activity_does_not_start_feeding_silence_again() -> None:
+    """Disabling the input while the old realtime session is still closing leaves it alone."""
+    from livekit.agents import Agent, AgentSession
+
+    from .fake_io import FakeAudioInput
+
+    old_model, new_model = _FakeDuplexModel(), _FakeDuplexModel()
+    async with AgentSession(llm=old_model, aec_warmup_duration=None) as session:
+        session.input.audio = FakeAudioInput()
+        await session.start(Agent(instructions=""))
+        old = old_model.session_obj
+        assert old is not None
+
+        closing, release = asyncio.Event(), asyncio.Event()
+        close = old.aclose
+
+        async def _slow_close() -> None:
+            closing.set()
+            await release.wait()
+            await close()
+
+        old.aclose = _slow_close  # type: ignore[method-assign]
+        handoff = asyncio.create_task(
+            session._update_activity(Agent(instructions="", llm=new_model))
+        )
+        await asyncio.wait_for(closing.wait(), 1)
+        session.input.set_audio_enabled(False)
+        await asyncio.sleep(0.25)
+        release.set()
+        await handoff
+        await asyncio.sleep(0.25)
+        assert old.pushed == []
 
 
 async def test_a_failed_audio_stream_reports_an_unrecoverable_error(duplex) -> None:

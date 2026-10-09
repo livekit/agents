@@ -327,11 +327,20 @@ def _record_queue_wait(speech_handle: SpeechHandle) -> None:
         span.set_attribute(trace_types.ATTR_SPEECH_QUEUE_WAIT, queue_wait)
 
 
+# the rate of the silence a duplex model is fed while the input audio is disabled
+_INPUT_SILENCE_SAMPLE_RATE = 24000
+
+
 # NOTE: AgentActivity isn't exposed to the public API
 class AgentActivity(RecognitionHooks):
     def __init__(self, agent: Agent, sess: AgentSession) -> None:
         self._agent, self._session = agent, sess
         self._rt_session: llm.RealtimeSession | None = None
+        # silence fed to a duplex model while the input audio is disabled, and the realtime
+        # session it may go to: set once that session is configured, cleared when it is handed
+        # over or starts closing
+        self._input_silence_atask: asyncio.Task[None] | None = None
+        self._input_silence_rt: llm.RealtimeSession | None = None
         self._realtime_spans: utils.BoundedDict[str, trace.Span] | None = None
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
@@ -1137,6 +1146,8 @@ class AgentActivity(RecognitionHooks):
                     self._rt_session.off("error", self._on_error)
                     if isinstance(self._rt_session, _FallbackRealtimeSession):
                         self._rt_session._agent_session = None
+                    self._input_silence_rt = None
+                    self._stop_input_silence()
                     resources.rt_session = self._rt_session
                     self._rt_session = None  # prevent _close_session from closing it
 
@@ -1270,6 +1281,9 @@ class AgentActivity(RecognitionHooks):
             )
 
             self._realtime_spans = utils.BoundedDict[str, trace.Span](maxsize=100)
+            if isinstance(self.llm, llm.DuplexRealtimeAdapter):
+                self._input_silence_rt = self._rt_session
+                self._sync_input_silence()
             if not capabilities.audio_output and not self.tts and self._session.output.audio:
                 logger.error(
                     "audio output is enabled but RealtimeModel has no audio modality "
@@ -1558,6 +1572,9 @@ class AgentActivity(RecognitionHooks):
     async def _close_session(self) -> None:
         assert self._lock.locked(), "_close_session should only be used when locked."
 
+        self._input_silence_rt = None
+        self._stop_input_silence()
+
         if isinstance(self.llm, llm.LLM):
             self.llm.off("metrics_collected", self._on_metrics_collected)
             self.llm.off("error", self._on_error)
@@ -1684,6 +1701,46 @@ class AgentActivity(RecognitionHooks):
 
         if self._audio_recognition is not None:
             self._audio_recognition._push_audio(frame, stt_frame=stt_frame)
+
+    def _sync_input_silence(self) -> None:
+        """Keep a duplex model's input clock running while the input audio is disabled.
+
+        A duplex model speaks on the clock of the audio it is sent. A disabled input sends none
+        (RoomIO drops the frames while detached), so the model would go quiet mid-sentence;
+        silence keeps the clock running without the model hearing the user.
+        """
+        needed = (
+            self._input_silence_rt is not None
+            and self._session.input.audio is not None
+            and not self._session.input.audio_enabled
+        )
+        if not needed:
+            self._stop_input_silence()
+        elif self._input_silence_atask is None:
+            self._input_silence_atask = asyncio.create_task(
+                self._input_silence_task(), name="AgentActivity._input_silence_task"
+            )
+
+    def _stop_input_silence(self) -> None:
+        if self._input_silence_atask is not None:
+            self._input_silence_atask.cancel()
+            self._input_silence_atask = None
+
+    @utils.log_exceptions(logger=logger)
+    async def _input_silence_task(self) -> None:
+        samples = _INPUT_SILENCE_SAMPLE_RATE // 10
+        frame = rtc.AudioFrame(
+            b"\x00\x00" * samples,
+            sample_rate=_INPUT_SILENCE_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=samples,
+        )
+        next_at = time.monotonic()
+        while (rt_session := self._input_silence_rt) is not None:
+            rt_session.push_audio(frame)
+            # a loop that fell behind resumes from now rather than sending the backlog at once
+            next_at = max(next_at + frame.duration, time.monotonic())
+            await asyncio.sleep(next_at - time.monotonic())
 
     def push_video(self, frame: rtc.VideoFrame) -> None:
         if not self._started:
