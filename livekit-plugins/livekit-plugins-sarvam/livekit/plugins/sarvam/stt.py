@@ -115,6 +115,7 @@ class ModelConfig:
 
     Attributes:
         supports_prompt: Whether the model accepts prompt parameter.
+        supports_keyterms: Whether the model accepts keyterms parameter.
         supports_mode: Whether the model accepts mode parameter.
         supports_language: Whether the model accepts language parameter.
         supports_vad_params: Whether the model accepts fine-grained VAD parameters.
@@ -126,6 +127,7 @@ class ModelConfig:
     """
 
     supports_prompt: bool
+    supports_keyterms: bool
     supports_mode: bool
     supports_language: bool
     supports_vad_params: bool
@@ -139,6 +141,7 @@ class ModelConfig:
 MODEL_CONFIGS: dict[str, ModelConfig] = {
     "saaras:v3": ModelConfig(
         supports_prompt=False,
+        supports_keyterms=False,
         supports_mode=True,
         supports_language=True,
         supports_vad_params=True,
@@ -150,6 +153,7 @@ MODEL_CONFIGS: dict[str, ModelConfig] = {
     ),
     "saaras:v4": ModelConfig(
         supports_prompt=False,
+        supports_keyterms=True,
         supports_mode=True,
         supports_language=True,
         supports_vad_params=True,
@@ -232,6 +236,30 @@ def _model_supports_prompt(model: str) -> bool:
     return model.startswith("saaras")
 
 
+def _model_supports_keyterms(model: str) -> bool:
+    """Check whether the model supports keyterm prompting."""
+    model_config = _get_model_config(model)
+    return bool(model_config and model_config.supports_keyterms)
+
+
+def _validate_keyterms_for_model(model: str, keyterms: list[str] | None) -> list[str] | None:
+    """Validate keyterms and return a defensive copy."""
+    if keyterms is None:
+        return None
+    if keyterms and not _model_supports_keyterms(model):
+        raise ValueError("keyterms are only supported for model saaras:v4")
+    if len(keyterms) > 50:
+        raise ValueError("keyterms must contain at most 50 terms")
+    for keyterm in keyterms:
+        if not isinstance(keyterm, str):
+            raise ValueError("each keyterm must be a string")
+        if len(keyterm) > 64:
+            raise ValueError("each keyterm must be at most 64 characters")
+    if len(set(keyterms)) != len(keyterms):
+        raise ValueError("keyterms must be distinct")
+    return list(keyterms)
+
+
 def _model_supports_mode(model: str) -> bool:
     """Check whether the model supports mode parameter."""
     model_config = _get_model_config(model)
@@ -269,6 +297,7 @@ class SarvamSTTOptions:
         base_url: API endpoint URL (auto-determined from model if not provided)
         streaming_url: WebSocket streaming URL (auto-determined from model if not provided)
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Terms used to bias recognition (saaras:v4 only)
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
@@ -278,6 +307,7 @@ class SarvamSTTOptions:
     base_url: str | None = None
     streaming_url: str | None = None
     prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    keyterms: list[str] | None = None
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -306,6 +336,7 @@ class SarvamSTTOptions:
             self.language = model_config.default_language
         _validate_language_for_model(self.model, self.language)
         self.mode = _validate_mode_for_model(self.model, self.mode)
+        self.keyterms = _validate_keyterms_for_model(self.model, self.keyterms)
         if self.sample_rate <= 0:
             raise ValueError("sample_rate must be greater than zero")
 
@@ -390,6 +421,8 @@ def _build_websocket_url(base_url: str, opts: SarvamSTTOptions) -> str:
         params["mode"] = opts.mode
     if opts.input_audio_codec:
         params["input_audio_codec"] = opts.input_audio_codec
+    if opts.keyterms:
+        params["keyterms"] = json.dumps(opts.keyterms, separators=(",", ":"))
 
     if _model_supports_vad_params(opts.model):
         if opts.positive_speech_threshold is not None:
@@ -462,6 +495,7 @@ class STT(stt.STT):
         base_url: API endpoint URL
         http_session: Optional aiohttp session to use
         prompt: Optional prompt for STT translate (saaras models only)
+        keyterms: Terms used to bias recognition (saaras:v4 only)
     """
 
     def __init__(
@@ -474,6 +508,7 @@ class STT(stt.STT):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         prompt: str | None = None,
+        keyterms: list[str] | None = None,
         high_vad_sensitivity: bool | None = None,
         sample_rate: int = 16000,
         flush_signal: bool | None = None,
@@ -512,6 +547,7 @@ class STT(stt.STT):
             mode=mode,
             base_url=base_url,
             prompt=prompt,
+            keyterms=keyterms,
             high_vad_sensitivity=high_vad_sensitivity,
             sample_rate=sample_rate,
             flush_signal=flush_signal,
@@ -635,6 +671,7 @@ class STT(stt.STT):
             model=model,
             mode=mode,
         )
+        opts_keyterms = _validate_keyterms_for_model(opts_model, self._opts.keyterms)
 
         wav_bytes = rtc.combine_audio_frames(buffer).to_wav_bytes()
 
@@ -648,6 +685,8 @@ class STT(stt.STT):
             form_data.add_field("model", str(opts_model))
         if _model_supports_mode(opts_model):
             form_data.add_field("mode", str(opts_mode))
+        if opts_keyterms:
+            form_data.add_field("keyterms", json.dumps(opts_keyterms, separators=(",", ":")))
 
         if not self._api_key:
             raise ValueError("API key cannot be None")
@@ -735,6 +774,34 @@ class STT(stt.STT):
             self._logger.error(f"Error during Sarvam STT processing: {e}")
             raise APIConnectionError(f"Unexpected error in Sarvam STT: {e}") from e
 
+    def update_options(
+        self,
+        *,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
+    ) -> None:
+        """Update keyterms for recognition and reconnect active streams.
+
+        Args:
+            keyterms: Terms used to bias recognition. ``None`` clears them.
+
+        Raises:
+            ValueError: If keyterms violate Sarvam's limits or the model does not support them.
+        """
+        if not is_given(keyterms):
+            return
+
+        validated_keyterms = _validate_keyterms_for_model(self._opts.model, keyterms)
+        for stream in self._streams:
+            _validate_keyterms_for_model(stream._opts.model, validated_keyterms)
+
+        self._opts.keyterms = validated_keyterms
+        for stream in self._streams:
+            stream.update_options(
+                language=stream._opts.language,
+                model=stream._opts.model,
+                keyterms=validated_keyterms,
+            )
+
     def stream(
         self,
         *,
@@ -743,6 +810,7 @@ class STT(stt.STT):
         mode: NotGivenOr[SarvamSTTModes | str] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         prompt: NotGivenOr[str] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         high_vad_sensitivity: NotGivenOr[bool] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
         flush_signal: NotGivenOr[bool] = NOT_GIVEN,
@@ -767,6 +835,7 @@ class STT(stt.STT):
 
         # Handle prompt conversion from NotGiven to None
         final_prompt = prompt if isinstance(prompt, str) else self._opts.prompt
+        final_keyterms = keyterms if is_given(keyterms) else self._opts.keyterms
 
         opts_high_vad = (
             high_vad_sensitivity
@@ -835,6 +904,7 @@ class STT(stt.STT):
             model=opts_model,
             mode=opts_mode,
             prompt=final_prompt,
+            keyterms=final_keyterms,
             high_vad_sensitivity=opts_high_vad,
             sample_rate=opts_sample_rate,
             flush_signal=opts_flush_signal,
@@ -1136,6 +1206,7 @@ class SpeechStream(stt.SpeechStream):
         model: str,
         prompt: str | None = None,
         mode: str | None = None,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
     ) -> None:
         """Update streaming options."""
         if not language or not language.strip():
@@ -1144,15 +1215,20 @@ class SpeechStream(stt.SpeechStream):
             raise ValueError("Model cannot be empty")
         _warn_if_sunset_stt_model(model)
 
+        resolved_keyterms = keyterms if is_given(keyterms) else self._opts.keyterms
+        validated_keyterms = _validate_keyterms_for_model(model, resolved_keyterms)
+        resolved_mode = _validate_mode_for_model(model, mode)
+        _validate_language_for_model(model, language)
+
         self._opts.language = LanguageCode(language)
         self._opts.model = model
         self._opts.base_url, self._opts.streaming_url = _get_urls_for_model(model)
         if prompt is not None:
             self._opts.prompt = prompt
+        self._opts.keyterms = validated_keyterms
 
         # Use centralised validation
-        self._opts.mode = _validate_mode_for_model(model, mode)
-        _validate_language_for_model(model, self._opts.language)
+        self._opts.mode = resolved_mode
 
         self._logger.info(
             "Options updated, triggering reconnection",

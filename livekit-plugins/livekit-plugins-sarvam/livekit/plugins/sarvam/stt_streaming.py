@@ -45,12 +45,13 @@ from livekit.agents.utils.misc import is_given
 
 from ._utils import PeriodicCollector
 from .log import logger
-from .stt import _looks_like_error_text
+from .stt import _looks_like_error_text, _validate_keyterms_for_model
 
 USER_AGENT = f"Livekit/{livekit_version} Python/{platform.python_version()}"
 
 SARVAM_STT_REALTIME_URL = "wss://api.sarvam.ai/speech-to-text-realtime/ws"
 REALTIME_MODEL = "saaras:v3-realtime"
+RealtimeSTTModels = Literal["saaras:v3-realtime", "saaras:v4"]
 
 RealtimeStreamType = Literal["fast", "balanced", "simulated"]
 RealtimeEndpointing = Literal["vad", "manual"]
@@ -62,6 +63,7 @@ SUPPORTED_STREAM_TYPES = {"fast", "balanced", "simulated"}
 SUPPORTED_ENDPOINTING = {"vad", "manual"}
 SUPPORTED_ENCODINGS = {"linear16", "linear32", "mulaw", "alaw"}
 SUPPORTED_MODES = {"transcribe", "translate", "verbatim", "translit", "codemix"}
+SUPPORTED_MODELS = {"saaras:v3-realtime", "saaras:v4"}
 # How much audio the client buffers before writing a frame. `stream_type` is a
 # server-side latency profile (how often the server flushes to produce a partial),
 # not a send cadence, and the contract sets no client chunk size. Matches the
@@ -150,9 +152,10 @@ class RealtimeSTTOptions:
     endpointing: RealtimeEndpointing | str = "vad"
     encoding: RealtimeEncoding | str = "linear16"
     sample_rate: int = 16000
-    model: str = REALTIME_MODEL
+    model: RealtimeSTTModels | str = REALTIME_MODEL
     base_url: str = SARVAM_STT_REALTIME_URL
     prompt: str | None = None
+    keyterms: list[str] | None = None
     return_timestamps: bool = False
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
@@ -160,8 +163,9 @@ class RealtimeSTTOptions:
     vad_prefix_padding_ms: int | None = None
 
     def __post_init__(self) -> None:
-        if self.model != REALTIME_MODEL:
-            raise ValueError(f"model must be {REALTIME_MODEL}")
+        if self.model not in SUPPORTED_MODELS:
+            raise ValueError(f"model must be one of {', '.join(sorted(SUPPORTED_MODELS))}")
+        self.keyterms = _validate_keyterms_for_model(self.model, self.keyterms)
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"language {self.language} is not supported")
         if self.stream_type not in SUPPORTED_STREAM_TYPES:
@@ -204,6 +208,8 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
     params["return_timestamps"] = str(opts.return_timestamps).lower()
     if opts.prompt is not None:
         params["prompt"] = opts.prompt
+    if opts.keyterms:
+        params["keyterms"] = json.dumps(opts.keyterms, separators=(",", ":"))
 
     if opts.endpointing == "vad":
         if opts.vad_sot_threshold is not None:
@@ -219,11 +225,11 @@ def _build_realtime_ws_url(base_url: str, opts: RealtimeSTTOptions) -> str:
 
 
 class STTRealtime(stt.STT):
-    """Speech-to-text using Sarvam's realtime WebSocket endpoint (``saaras:v3-realtime``).
+    """Speech-to-text using Sarvam's realtime WebSocket endpoint.
 
-    This endpoint streams interim and final transcripts over a single
-    WebSocket connection and supports either server-side VAD or
-    client-driven (manual) turn boundaries.
+    This endpoint supports ``saaras:v3-realtime`` and ``saaras:v4``. It streams
+    interim and final transcripts over a single WebSocket connection and supports
+    either server-side VAD or client-driven (manual) turn boundaries.
     """
 
     def __init__(
@@ -235,7 +241,9 @@ class STTRealtime(stt.STT):
         endpointing: RealtimeEndpointing | str = "vad",
         encoding: RealtimeEncoding | str = "linear16",
         sample_rate: int = 16000,
+        model: RealtimeSTTModels | str = REALTIME_MODEL,
         prompt: str | None = None,
+        keyterms: list[str] | None = None,
         return_timestamps: bool = False,
         api_key: str | None = None,
         base_url: str = SARVAM_STT_REALTIME_URL,
@@ -256,7 +264,9 @@ class STTRealtime(stt.STT):
                 caller delimits turns by flushing the stream.
             encoding: Wire encoding: ``linear16``, ``linear32``, ``mulaw``, or ``alaw``.
             sample_rate: Audio sample rate in Hz; ``8000`` or ``16000``.
+            model: Sarvam realtime model to use.
             prompt: Optional context or terminology hint used to bias decoding.
+            keyterms: Terms used to bias recognition (``saaras:v4`` only).
             return_timestamps: Whether finals should carry segment-level start and end times.
             api_key: Sarvam API key. Falls back to the ``SARVAM_API_KEY`` environment variable.
             base_url: WebSocket URL of the realtime endpoint.
@@ -295,8 +305,10 @@ class STTRealtime(stt.STT):
             endpointing=endpointing,
             encoding=encoding,
             sample_rate=sample_rate,
+            model=model,
             base_url=base_url,
             prompt=prompt,
+            keyterms=keyterms,
             return_timestamps=return_timestamps,
             vad_sot_threshold=vad_sot_threshold,
             vad_min_speech_ms=vad_min_speech_ms,
@@ -310,7 +322,7 @@ class STTRealtime(stt.STT):
     @property
     def model(self) -> str:
         """Name of the Sarvam realtime model backing this instance."""
-        return REALTIME_MODEL
+        return self._opts.model
 
     @property
     def provider(self) -> str:
@@ -345,7 +357,9 @@ class STTRealtime(stt.STT):
         mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        model: NotGivenOr[RealtimeSTTModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
@@ -354,9 +368,9 @@ class STTRealtime(stt.STT):
     ) -> None:
         """Update options for this instance and every stream it created.
 
-        Options that Sarvam only accepts at connection time (``sample_rate``,
-        ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect on
-        newly created streams only.
+        Options that Sarvam only accepts at connection time (``sample_rate``, ``model``,
+        ``keyterms``, ``return_timestamps``, and ``vad_prefix_padding_ms``) take effect
+        on newly created streams only.
         The remaining options are sent to active streams as an in-band
         ``config.update``, and the boundary-gated ones apply from the next
         utterance boundary.
@@ -367,7 +381,9 @@ class STTRealtime(stt.STT):
             mode: Task applied to finals.
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; applies to new streams only.
+            model: Realtime model; applies to new streams only.
             prompt: Context or terminology hint; ``None`` clears it.
+            keyterms: Recognition-biasing terms; applies to new streams only.
             return_timestamps: Segment-level timestamps; applies to new streams only.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
@@ -385,8 +401,10 @@ class STTRealtime(stt.STT):
             endpointing=endpointing if is_given(endpointing) else self._opts.endpointing,
             encoding=self._opts.encoding,
             sample_rate=sample_rate if is_given(sample_rate) else self._opts.sample_rate,
+            model=model if is_given(model) else self._opts.model,
             base_url=self._opts.base_url,
             prompt=prompt if is_given(prompt) else self._opts.prompt,
+            keyterms=keyterms if is_given(keyterms) else self._opts.keyterms,
             return_timestamps=return_timestamps
             if is_given(return_timestamps)
             else self._opts.return_timestamps,
@@ -413,7 +431,11 @@ class STTRealtime(stt.STT):
                 mode=mode,
                 endpointing=endpointing,
                 sample_rate=sample_rate,
+                # Keyterms are validated together with their connection model. An older
+                # active stream may still be on v3 after this instance moved to v4.
+                model=opts.model if is_given(keyterms) else model,
                 prompt=prompt,
+                keyterms=keyterms,
                 return_timestamps=return_timestamps,
                 vad_sot_threshold=vad_sot_threshold,
                 vad_min_speech_ms=vad_min_speech_ms,
@@ -446,8 +468,10 @@ class STTRealtime(stt.STT):
             endpointing=self._opts.endpointing,
             encoding=self._opts.encoding,
             sample_rate=self._opts.sample_rate,
+            model=self._opts.model,
             base_url=self._opts.base_url,
             prompt=self._opts.prompt,
+            keyterms=self._opts.keyterms,
             return_timestamps=self._opts.return_timestamps,
             vad_sot_threshold=self._opts.vad_sot_threshold,
             vad_min_speech_ms=self._opts.vad_min_speech_ms,
@@ -544,7 +568,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
         mode: NotGivenOr[RealtimeMode | str] = NOT_GIVEN,
         endpointing: NotGivenOr[RealtimeEndpointing | str] = NOT_GIVEN,
         sample_rate: NotGivenOr[int] = NOT_GIVEN,
+        model: NotGivenOr[RealtimeSTTModels | str] = NOT_GIVEN,
         prompt: NotGivenOr[str | None] = NOT_GIVEN,
+        keyterms: NotGivenOr[list[str] | None] = NOT_GIVEN,
         return_timestamps: NotGivenOr[bool] = NOT_GIVEN,
         vad_sot_threshold: NotGivenOr[float | None] = NOT_GIVEN,
         vad_min_speech_ms: NotGivenOr[int | None] = NOT_GIVEN,
@@ -566,7 +592,9 @@ class RealtimeSpeechStream(stt.SpeechStream):
             mode: Task applied to finals.
             endpointing: ``vad`` for server-side turn detection, or ``manual``.
             sample_rate: Audio sample rate in Hz; retained on a live stream.
+            model: Realtime model; retained on a live stream.
             prompt: Context or terminology hint; ``None`` clears it.
+            keyterms: Recognition-biasing terms; retained on a live stream.
             return_timestamps: Segment-level timestamps; retained on a live stream.
             vad_sot_threshold: VAD activation threshold (``vad`` endpointing only).
             vad_min_speech_ms: Minimum speech duration in ms (``vad`` endpointing only).
@@ -588,8 +616,12 @@ class RealtimeSpeechStream(stt.SpeechStream):
             requested["endpointing"] = endpointing
         if is_given(sample_rate):
             requested["sample_rate"] = sample_rate
+        if is_given(model):
+            requested["model"] = model
         if is_given(prompt):
             requested["prompt"] = prompt
+        if is_given(keyterms):
+            requested["keyterms"] = keyterms
         if is_given(return_timestamps):
             requested["return_timestamps"] = return_timestamps
         if is_given(vad_sot_threshold):
@@ -606,16 +638,24 @@ class RealtimeSpeechStream(stt.SpeechStream):
 
         opts = replace(previous_opts, **requested)
         connection_only_options: list[str] = []
+        retained: dict[str, Any] = {}
         if opts.sample_rate != previous_opts.sample_rate:
             connection_only_options.append("sample_rate")
-            opts = replace(opts, sample_rate=previous_opts.sample_rate)
+            retained["sample_rate"] = previous_opts.sample_rate
+        if opts.model != previous_opts.model:
+            connection_only_options.append("model")
+            retained["model"] = previous_opts.model
+        if opts.keyterms != previous_opts.keyterms:
+            connection_only_options.append("keyterms")
+            retained["keyterms"] = previous_opts.keyterms
         if opts.return_timestamps != previous_opts.return_timestamps:
             connection_only_options.append("return_timestamps")
-            opts = replace(opts, return_timestamps=previous_opts.return_timestamps)
+            retained["return_timestamps"] = previous_opts.return_timestamps
         if opts.vad_prefix_padding_ms != previous_opts.vad_prefix_padding_ms:
             connection_only_options.append("vad_prefix_padding_ms")
-            opts = replace(opts, vad_prefix_padding_ms=previous_opts.vad_prefix_padding_ms)
+            retained["vad_prefix_padding_ms"] = previous_opts.vad_prefix_padding_ms
         if connection_only_options:
+            opts = replace(opts, **retained)
             self._logger.warning(
                 "Sarvam realtime STT connection-only option updates only apply to new streams",
                 extra={
