@@ -29,7 +29,7 @@ def test_default_preloads_eot_only_without_a_parent_process(
     expected: list[str],
 ) -> None:
     # the forkserver has no parent and shares the weights; a spawned job process would not
-    monkeypatch.delenv(_preload.ENV_PRELOAD_EOT, raising=False)
+    monkeypatch.delenv(_preload.ENV_PRELOAD_LOCAL_INFERENCE, raising=False)
     monkeypatch.setattr("multiprocessing.parent_process", lambda: MagicMock() if spawned else None)
 
     _preload._local_inference_models()
@@ -38,23 +38,22 @@ def test_default_preloads_eot_only_without_a_parent_process(
 
 
 @pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", " off "])
-def test_eot_preload_can_be_disabled(
+def test_local_inference_preload_can_be_disabled(
     monkeypatch: pytest.MonkeyPatch, local_inference_calls: list[str], value: str
 ) -> None:
-    # the expensive half is opt-out; the VAD is cheap and stays either way
-    monkeypatch.setenv(_preload.ENV_PRELOAD_EOT, value)
+    monkeypatch.setenv(_preload.ENV_PRELOAD_LOCAL_INFERENCE, value)
 
     _preload._local_inference_models()
 
-    assert local_inference_calls == ["vad"]
+    assert local_inference_calls == []
 
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", ""])
-def test_truthy_values_keep_the_eot_preload(
+def test_truthy_values_preload_both_models(
     monkeypatch: pytest.MonkeyPatch, local_inference_calls: list[str], value: str
 ) -> None:
     # an explicit value wins over the default, even in a spawned job process
-    monkeypatch.setenv(_preload.ENV_PRELOAD_EOT, value)
+    monkeypatch.setenv(_preload.ENV_PRELOAD_LOCAL_INFERENCE, value)
     monkeypatch.setattr("multiprocessing.parent_process", lambda: MagicMock())
 
     _preload._local_inference_models()
