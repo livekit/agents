@@ -27,9 +27,7 @@ import json
 import os
 import platform
 import re
-import time
 import weakref
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 
 import aiohttp
@@ -328,11 +326,6 @@ def _websocket_url(opts: SarvamTTSOptions) -> str:
     return f"{url}?model={opts.model}&send_completion_event={opts.send_completion_event}"
 
 
-def _handshake_key(opts: SarvamTTSOptions) -> tuple[str, bool]:
-    """The options pinned in the websocket URL, which a socket keeps for its lifetime."""
-    return (opts.model, opts.send_completion_event)
-
-
 _MESSAGE_STATUS_RE = re.compile(r"\s*(\d{3})\s*:")
 _CODE_STATUS_RE = re.compile(r"\s*\d{3}\s*")
 
@@ -505,11 +498,8 @@ class TTS(tts.TTS):
         # the connection sits idle in the pool. Sarvam closes idle connections
         # after 60 s; pinging every 30 s keeps them alive for reuse.
         self._ws_keepalive_tasks: dict[int, asyncio.Task[None]] = {}
-        # Maps id(ws) -> the handshake key that socket was opened with. The pool
-        # opens sockets for whatever options this TTS holds at connect time, while
-        # each stream synthesizes with the options it was created with, so a stream
-        # checks this before using a pooled socket.
-        self._ws_handshakes: dict[int, tuple[str, bool]] = {}
+        # ids of the sockets this TTS has opened and not yet closed
+        self._open_ws_ids: set[int] = set()
         # ids of sockets that were open when update_options last changed a handshake
         # option. The pool will not hand them out again but only closes them on its
         # next acquisition, so a stream returning one closes it instead.
@@ -523,23 +513,15 @@ class TTS(tts.TTS):
         )
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
-        ws = await self._open_ws(self._opts, timeout)
-        # the pool may keep this socket idle until a stream needs it
-        self._start_keepalive(ws)
-        return ws
-
-    async def _open_ws(
-        self, opts: SarvamTTSOptions, timeout: float
-    ) -> aiohttp.ClientWebSocketResponse:
         session = self._ensure_session()
         headers = {
-            "api-subscription-key": opts.api_key,
+            "api-subscription-key": self._opts.api_key,
             "User-Agent": USER_AGENT,
             "Accept": "*/*",
             "Accept-Encoding": "gzip, deflate, br",
         }
         # Add model parameter to URL like the client does
-        ws_url = _websocket_url(opts)
+        ws_url = _websocket_url(self._opts)
 
         logger.info("Connecting to Sarvam TTS WebSocket")
 
@@ -566,22 +548,15 @@ class TTS(tts.TTS):
             )
             raise APIConnectionError(f"WebSocket connection failed: {e}") from e
 
-        self._ws_handshakes[id(ws)] = _handshake_key(opts)
+        self._start_keepalive(ws)
+        self._open_ws_ids.add(id(ws))
         return ws
 
     async def _close_ws(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         await self._stop_keepalive(ws)
-        self._ws_handshakes.pop(id(ws), None)
+        self._open_ws_ids.discard(id(ws))
         self._retired_ws.discard(id(ws))
         await ws.close()
-
-    def _socket_matches(self, ws: aiohttp.ClientWebSocketResponse, opts: SarvamTTSOptions) -> bool:
-        """Whether ``ws`` was opened with the handshake options in ``opts``.
-
-        A socket this TTS did not open is assumed to match.
-        """
-        key = _handshake_key(opts)
-        return self._ws_handshakes.get(id(ws), key) == key
 
     def _start_keepalive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         """Spawn a background task that keeps ``ws`` alive with periodic pings.
@@ -807,7 +782,7 @@ class TTS(tts.TTS):
         )
         self._opts = opts
         if reconnect:
-            self._retired_ws.update(self._ws_handshakes)
+            self._retired_ws.update(self._open_ws_ids)
             self._pool.invalidate()
 
     # Implement the abstract synthesize method
@@ -994,47 +969,6 @@ class SynthesizeStream(tts.SynthesizeStream):
             await utils.aio.gracefully_cancel(*tasks)
             output_emitter.end_input()
 
-    @contextlib.asynccontextmanager
-    async def _connection(self) -> AsyncIterator[aiohttp.ClientWebSocketResponse]:
-        """Yield a socket opened with this stream's model and completion setting.
-
-        The pool opens sockets for the TTS's current options, while this stream
-        synthesizes with the options it was created with: its codec and sample rate
-        were validated against its own model, and the emitter is already initialized
-        from them. Once update_options changes a handshake option, a pooled socket
-        would put this stream on a model those may not stream with, so the stream
-        opens a socket of its own instead and closes it when done.
-
-        A pooled socket's keepalive is paused while the stream holds it, so its pings
-        don't interleave with config, text and flush frames, and resumes once the
-        stream returns it cleanly. A socket update_options retired in the meantime is
-        closed at that point instead.
-        """
-        if _handshake_key(self._opts) == _handshake_key(self._tts._opts):
-            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
-                # update_options can also land while the pool is connecting
-                if self._tts._socket_matches(ws, self._opts):
-                    self._acquire_time = self._tts._pool.last_acquire_time
-                    self._connection_reused = self._tts._pool.last_connection_reused
-                    await self._tts._stop_keepalive(ws)
-                    yield ws
-                    # only reached when the stream finished cleanly; on an exception
-                    # the pool removes the socket and closes it with its next drain
-                    if id(ws) in self._tts._retired_ws:
-                        await self._tts._close_ws(ws)
-                    else:
-                        self._tts._start_keepalive(ws)
-                    return
-
-        started = time.perf_counter()
-        ws = await self._tts._open_ws(self._opts, self._conn_options.timeout)
-        self._acquire_time = time.perf_counter() - started
-        self._connection_reused = False
-        try:
-            yield ws
-        finally:
-            await self._tts._close_ws(ws)
-
     async def _run_ws(
         self, word_stream: tokenize.SentenceStream, output_emitter: tts.AudioEmitter
     ) -> None:
@@ -1202,7 +1136,26 @@ class SynthesizeStream(tts.SynthesizeStream):
                 raise
 
         try:
-            async with self._connection() as ws:
+            async with self._tts._pool.connection(timeout=self._conn_options.timeout) as ws:
+                # Nothing suspends between the pool's get() and here, and every change to a
+                # handshake option invalidates the pool, so this socket was opened with the
+                # TTS's current model and completion setting. Adopt every model-coupled
+                # option at once: update_options validates them as one set, so taking only
+                # some could pair a model with a speaker or language it rejects. Sample
+                # rate and codec stay this stream's own, as the output emitter is already
+                # initialized from them.
+                self._opts = replace(
+                    self._tts._opts,
+                    speech_sample_rate=self._opts.speech_sample_rate,
+                    output_audio_codec=self._opts.output_audio_codec,
+                )
+                self._acquire_time = self._tts._pool.last_acquire_time
+                self._connection_reused = self._tts._pool.last_connection_reused
+                # Pause the keepalive while this stream holds the socket so its pings don't
+                # interleave with config, text and flush frames. It was started by
+                # _connect_ws for a fresh socket, or by the stream that last returned it.
+                await self._tts._stop_keepalive(ws)
+
                 self._ws_conn = ws
                 self._connection_state = ConnectionState.CONNECTED
 
@@ -1224,6 +1177,15 @@ class SynthesizeStream(tts.SynthesizeStream):
                     await utils.aio.gracefully_cancel(*tasks)
                     self._send_task = None
                     self._recv_task = None
+
+                # Only reached when the session completed cleanly; on an exception the
+                # pool removes the socket and closes it with its next drain. A socket that
+                # update_options retired meanwhile would otherwise stay open until the
+                # pool's next acquisition, which may not come, so close it now.
+                if id(ws) in self._tts._retired_ws:
+                    await self._tts._close_ws(ws)
+                else:
+                    self._tts._start_keepalive(ws)
 
         except (aiohttp.ClientConnectorError, asyncio.TimeoutError) as e:
             self._connection_state = ConnectionState.FAILED

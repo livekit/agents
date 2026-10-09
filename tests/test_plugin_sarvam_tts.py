@@ -304,40 +304,43 @@ async def _speak(stream: sarvam_tts.SynthesizeStream) -> None:
     await stream._run_ws(sentences(), MagicMock(spec=AudioEmitter))  # type: ignore[arg-type]
 
 
-async def test_stream_created_before_a_model_switch_keeps_its_model(
+async def test_stream_created_before_a_model_switch_speaks_with_the_new_options(
     socket_tts: _SocketTTS,
 ) -> None:
-    """update_options must not move a stream that already exists onto another model.
+    """A stream adopts the model-coupled options its socket was opened with, all together.
 
-    Its speaker, language and format were chosen together for the model it was
-    created with. Assamese, for one, is a bulbul:v4-flash language that bulbul:v3
-    does not offer, so this stream cannot be spoken by v3.
+    update_options validates model, speaker and language as one set, so taking only some
+    of them could pair a model with a speaker or language it rejects. Sample rate and
+    codec stay the stream's own: its output emitter is already initialized from them.
     """
     tts, session = socket_tts(
         model="bulbul:v4-flash",
         target_language_code="as-IN",
         speaker="kangkana_as_conversational",
+        speech_sample_rate=24000,
+        output_audio_codec="opus",
     )
     stream = _ws_stream(tts)
 
-    tts.update_options(model="bulbul:v3", speaker="shubh", target_language_code="hi-IN")
+    tts.update_options(
+        model="bulbul:v3", speaker="shubh", target_language_code="hi-IN", output_audio_codec="mp3"
+    )
     await _speak(stream)
 
     (ws,) = session.sockets
     assert ws.url == (
-        "wss://api.sarvam.ai/text-to-speech/ws/v2?model=bulbul:v4-flash&send_completion_event=True"
+        "wss://api.sarvam.ai/text-to-speech/ws?model=bulbul:v3&send_completion_event=True"
     )
     (config,) = ws.configs()
     assert (config["model"], config["speaker"], config["target_language_code"]) == (
-        "bulbul:v4-flash",
-        "kangkana_as_conversational",
-        "as-IN",
+        "bulbul:v3",
+        "shubh",
+        "hi-IN",
     )
-    # no later stream can use a socket opened for the old model
-    assert ws.closed
+    assert (config["output_audio_codec"], config["speech_sample_rate"]) == ("opus", 24000)
 
 
-async def test_model_switch_during_the_pool_handshake_still_gets_a_matching_socket(
+async def test_model_switch_during_the_pool_handshake_keeps_config_and_socket_in_step(
     socket_tts: _SocketTTS,
 ) -> None:
     """update_options can land while the pool is connecting for a stream."""
@@ -354,18 +357,24 @@ async def test_model_switch_during_the_pool_handshake_still_gets_a_matching_sock
     session.ws_connect = connect_then_switch  # type: ignore[method-assign]
     await _speak(stream)
 
+    # the pool drops the socket opened with the old options and connects again
     (used,) = [ws for ws in session.sockets if ws.frames]
-    assert "?model=bulbul:v3&" in used.url
-    assert [config["model"] for config in used.configs()] == ["bulbul:v3"]
+    assert "?model=bulbul:v4-flash&" in used.url
+    assert [(config["model"], config["speaker"]) for config in used.configs()] == [
+        ("bulbul:v4-flash", "ritu_hi_medical")
+    ]
 
 
-async def test_config_only_update_reuses_the_pooled_socket(socket_tts: _SocketTTS) -> None:
+async def test_config_only_update_applies_to_a_pending_stream_on_the_same_socket(
+    socket_tts: _SocketTTS,
+) -> None:
     """Speaker and tuning ride in the config frame, so changing them keeps the socket."""
     tts, session = socket_tts()
 
     await _speak(_ws_stream(tts))
+    pending = _ws_stream(tts)
     tts.update_options(speaker="ritu", pace=1.2)
-    await _speak(_ws_stream(tts))
+    await _speak(pending)
 
     (ws,) = session.sockets
     assert [(config["speaker"], config["pace"]) for config in ws.configs()] == [
