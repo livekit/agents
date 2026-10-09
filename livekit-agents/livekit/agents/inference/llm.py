@@ -27,6 +27,7 @@ from ..llm.tool_context import Tool
 from ..log import logger
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..utils import is_given
+from ._realtime_models import is_realtime_model
 from ._utils import (
     HEADER_INFERENCE_PROVIDER,
     InferenceClass,
@@ -71,6 +72,10 @@ _UNSUPPORTED_PARAMS: dict[str, set[str]] = {
     "grok-4.20-multi-agent": _XAI_REASONING_UNSUPPORTED_PARAMS,
 }
 
+# temperature/top_p are accepted by gpt-5.1+ only at reasoning_effort
+# "none"; see the note in drop_unsupported_params.
+_SAMPLING_PARAMS: set[str] = {"temperature", "top_p"}
+
 # models that don't support reasoning_effort when function tools are present
 _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES: set[str] = {"gpt-5.2", "gpt-5.4"}
 
@@ -88,15 +93,38 @@ def drop_unsupported_params(
     matching against known model prefixes.
     """
     model_name = model.split("/")[-1] if "/" in model else model
-    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
-        if model_name.startswith(prefix):
-            params = {k: v for k, v in params.items() if k not in unsupported}
-            break
     if tools and any(
         model_name.startswith(p) for p in _REASONING_EFFORT_TOOL_INCOMPATIBLE_PREFIXES
     ):
         params = {k: v for k, v in params.items() if k != "reasoning_effort"}
+    for prefix, unsupported in _UNSUPPORTED_PARAMS.items():
+        if model_name.startswith(prefix):
+            if (
+                unsupported is _REASONING_UNSUPPORTED_PARAMS
+                and min_reasoning_effort(model_name) == "none"
+                and _reasoning_effort_is_none(params)
+            ):
+                # OpenAI accepts temperature/top_p on gpt-5.1+ models only at
+                # effort "none" (the model's lowest supported effort). Verified
+                # against the API on gpt-5.6-luna (2026-10): "none" +
+                # temperature -> 200, "low" + temperature -> 400, on both the
+                # chat completions and responses APIs. The reasoning guide no
+                # longer documents this restriction. Applies only to models in
+                # _MIN_REASONING_EFFORT — new gpt-5.1+ models must be added
+                # there or temperature stays stripped.
+                unsupported = unsupported - _SAMPLING_PARAMS
+            params = {k: v for k, v in params.items() if k not in unsupported}
+            break
     return params
+
+
+def _reasoning_effort_is_none(params: dict[str, Any]) -> bool:
+    # chat completions sends effort as params["reasoning_effort"]; the
+    # responses plugin sends it as params["reasoning"], an openai Reasoning
+    # object with an .effort attribute
+    if params.get("reasoning_effort") == "none":
+        return True
+    return getattr(params.get("reasoning"), "effort", None) == "none"
 
 
 # lowest supported reasoning effort per model; "none" requires gpt-5.1+
@@ -105,6 +133,11 @@ _MIN_REASONING_EFFORT: dict[str, ReasoningEffort] = {
     "gpt-5.2": "none",
     "gpt-5.4": "none",
     "gpt-5.4-mini": "none",
+    "gpt-5.4-nano": "none",
+    "gpt-5.5": "none",
+    "gpt-5.6-luna": "none",
+    "gpt-5.6-sol": "none",
+    "gpt-5.6-terra": "none",
     "gpt-5": "minimal",
     "gpt-5-mini": "minimal",
     "gpt-5-nano": "minimal",
@@ -138,6 +171,9 @@ OpenAIModels = Literal[
     "openai/gpt-5.4-mini",
     "openai/gpt-5.4-nano",
     "openai/gpt-5.5",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-sol",
+    "openai/gpt-5.6-terra",
     "openai/chat-latest",
     "openai/gpt-oss-120b",
 ]
@@ -588,3 +624,19 @@ class LLMStream(llm.LLMStream):
                 extra=delta_extra,
             ),
         )
+
+
+def llm_from_model_string(model: str) -> llm.LLM | llm.RealtimeModel:
+    """Create the inference model a ``llm=`` string names.
+
+    Realtime (speech-to-speech) model strings resolve to
+    :class:`livekit.agents.inference.RealtimeModel`, every other string to
+    :class:`livekit.agents.inference.LLM`.
+    """
+    if is_realtime_model(model):
+        # imported lazily: the realtime package imports this module
+        from .realtime import RealtimeModel
+
+        return RealtimeModel.from_model_string(model)
+
+    return LLM.from_model_string(model)

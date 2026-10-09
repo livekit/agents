@@ -346,6 +346,7 @@ class AudioRecognition:
         self._eou_wait_floor_ns: int | None = None
         self._eou_detection_span: trace.Span | None = None
         self._stt_request_ids: list[str] = []
+        self._stt_events: list[dict[str, Any]] = []
         self._closing = asyncio.Event()
         self.__stt_context: BaseModel | None = None
 
@@ -1131,6 +1132,19 @@ class AudioRecognition:
         return self._audio_transcript
 
     async def _on_stt_event(self, ev: stt.SpeechEvent) -> None:
+        if ev.type in (
+            stt.SpeechEventType.INTERIM_TRANSCRIPT,
+            stt.SpeechEventType.PREFLIGHT_TRANSCRIPT,
+            stt.SpeechEventType.FINAL_TRANSCRIPT,
+        ):
+            self._stt_events.append(
+                {
+                    "received_at": ev.created_at,
+                    "type": ev.type.value,
+                    "transcript_length": len(ev.alternatives[0].text) if ev.alternatives else 0,
+                }
+            )
+
         if (
             ev.speech_end_time is None
             and self._stt_aligned_transcript
@@ -1773,6 +1787,7 @@ class AudioRecognition:
                     user_turn_span.set_attribute(
                         trace_types.ATTR_PROVIDER_REQUEST_IDS, self._stt_request_ids
                     )
+                self._stamp_stt_events(user_turn_span)
                 self._end_eou_wait_span("committed")
                 self._stamp_user_turn_resumes(user_turn_span)
                 if not end_of_turn.user_turn_span_adopted:
@@ -2005,11 +2020,20 @@ class AudioRecognition:
     def _end_user_turn_span(self) -> None:
         # a wait still open here never reached a decision (teardown, clear_user_turn, ...)
         self._end_eou_wait_span("dropped")
+        if self._stt_events and self._user_turn_span is None:
+            self._ensure_user_turn_span(start_time=self._stt_events[0]["received_at"])
+        if self._user_turn_span is not None:
+            self._stamp_stt_events(self._user_turn_span)
         if self._user_turn_span is not None and self._user_turn_span.is_recording():
             self._stamp_user_turn_resumes(self._user_turn_span)
             self._user_turn_span.end()
         self._user_turn_span = None
         self._user_turn_start = None
+
+    def _stamp_stt_events(self, user_turn_span: trace.Span) -> None:
+        events, self._stt_events = self._stt_events, []
+        if events and user_turn_span.is_recording():
+            user_turn_span.set_attribute(trace_types.ATTR_STT_EVENTS, json.dumps(events))
 
     def _stamp_user_turn_resumes(self, user_turn_span: trace.Span) -> None:
         resumes, self._user_turn_resumes = self._user_turn_resumes, 0

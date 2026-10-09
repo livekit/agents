@@ -110,7 +110,8 @@ Set the `PHONIC_API_KEY` environment variable, or pass `api_key` directly to `Re
 | `no_input_poke_text` | `str` | Poke message text (ignored when `generate_no_input_poke_text` is True) |
 | `no_input_end_conversation_sec` | `float` | Seconds of silence before ending conversation |
 | `websocket_timeout_sec` | `int` | Seconds of inactivity before the Phonic websocket is closed |
-| `intelligence_level` | `"standard"` \| `"high"` | LLM intelligence level |
+| `intelligence_level` | `"standard"` \| `"high"` | Model intelligence level |
+| `phonic_model` | `"phonic_v0_5"` \| `"phonic_v1"` \| `"phonic_v1_1"` | Phonic model version to use |
 | `is_welcome_message_interruptible` | `bool` | When False, the welcome message cannot be interrupted |
 | `vad_prebuffer_duration_ms` | `int` | Voice-activity-detection prebuffer duration (ms) |
 | `vad_min_speech_duration_ms` | `int` | Minimum speech duration for VAD (ms) |

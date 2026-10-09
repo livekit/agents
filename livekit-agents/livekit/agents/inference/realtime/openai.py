@@ -134,6 +134,11 @@ class RealtimeModel(_RealtimeModel):
         )
         self._provider_label = "LiveKit Inference Realtime"
 
+    @classmethod
+    def from_model_string(cls, model: str) -> RealtimeModel:
+        """Create a RealtimeModel instance from a model string"""
+        return cls(model)
+
     @property
     def provider(self) -> str:
         return "livekit"

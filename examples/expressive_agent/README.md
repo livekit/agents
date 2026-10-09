@@ -18,7 +18,7 @@ sounds) that the TTS renders and the transcript never shows.
 - `protocol.py` is the whole frontend contract: the dispatch metadata shape, the
   attributes echoed back, and the voice table those metadata values name.
 
-The pipeline uses LiveKit Inference with Gemma 4 31B, Assembly AI Universal-3.5 Pro, Fish
+The pipeline uses LiveKit Inference with Gemma 4 31B, AssemblyAI Universal-3.6 Pro, Fish
 Audio S2.1 Pro, and the LiveKit turn detector.
 
 ## Run locally

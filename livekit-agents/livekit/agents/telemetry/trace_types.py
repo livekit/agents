@@ -9,8 +9,6 @@ in span names, event names, or log message bodies — those are not redactable.
 
 ATTR_SPEECH_ID = "lk.speech_id"
 ATTR_AGENT_LABEL = "lk.agent_label"
-ATTR_START_TIME = "lk.start_time"
-ATTR_END_TIME = "lk.end_time"
 ATTR_RETRY_COUNT = "lk.retry_count"
 ATTR_PROVIDER_REQUEST_IDS = "lk.provider_request_ids"
 """Provider-known correlation ids associated with this span (list[str]).
@@ -30,7 +28,6 @@ ATTR_AGENT_NAME = "lk.agent_name"
 ATTR_CLOUD_AGENT_ID = "lk.cloud_agent_id"
 ATTR_DEPLOYMENT_ID = "lk.deployment_id"
 ATTR_ROOM_NAME = "lk.pii.room_name"
-ATTR_SESSION_OPTIONS = "lk.session_options"
 
 # join keys shared with the server, SIP, and client traces
 ATTR_ROOM_SID = "lk.room_sid"
@@ -126,6 +123,16 @@ ATTR_RESPONSE_TEXT = "lk.pii.response.text"
 ATTR_RESPONSE_FUNCTION_CALLS = "lk.pii.response.function_calls"
 ATTR_RESPONSE_TTFT = "lk.response.ttft"
 
+# input delta (RecordingOptions.input_delta)
+ATTR_INPUT_DELTA = "lk.input.delta"
+"""The span's record (lk.pii.chat_ctx on llm_node, gen_ai.input.messages on llm_request)
+continues the one on its parent, ``lk.input.base_span_id``. See ``telemetry/input_delta.py``
+for the procedure and the rebuild rule."""
+ATTR_INPUT_BASE_SPAN_ID = "lk.input.base_span_id"
+ATTR_INPUT_DROPPED_FROM_BASE = "lk.input.dropped_from_base"
+"""Rebuild: the parent's full record without its last N entries, followed by this span's.
+Without gen_ai.system_instructions on an llm_request span, the parent's apply."""
+
 # function tool
 ATTR_FUNCTION_TOOL_ID = "lk.function_tool.id"
 ATTR_FUNCTION_TOOL_NAME = "lk.function_tool.name"
@@ -145,6 +152,10 @@ ATTR_EOU_UNLIKELY_THRESHOLD = "lk.eou.unlikely_threshold"
 ATTR_EOU_DELAY = "lk.eou.endpointing_delay"
 ATTR_EOU_LANGUAGE = "lk.eou.language"
 ATTR_USER_TRANSCRIPT = "lk.pii.user_transcript"
+ATTR_STT_EVENTS = "lk.stt.events"
+"""JSON list of transcript events on user_turn, in arrival order. Each entry has
+received_at (SpeechEvent.created_at, Unix seconds), type, and transcript_length
+(characters in the first alternative)."""
 ATTR_TRANSCRIPT_CONFIDENCE = "lk.transcript_confidence"
 ATTR_TRANSCRIPTION_DELAY = "lk.transcription_delay"
 ATTR_END_OF_TURN_DELAY = "lk.end_of_turn_delay"

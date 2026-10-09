@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import bisect
 import copy
 import inspect
 import json
@@ -43,9 +44,14 @@ THINK_TAG_END = "</think>"
 
 def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
     """
-    Standard dynamic-programming LCS to get the common subsequence
-    of IDs (in order) that appear in both old_ids and new_ids.
+    Get the longest common subsequence of IDs (in order) that appear in both
+    old_ids and new_ids.
     """
+    lcs_ids = _compute_unique_ids_lcs(old_ids, new_ids)
+    if lcs_ids is not None:
+        return lcs_ids
+
+    # Standard dynamic-programming LCS, O(n*m), for IDs that repeat.
     n, m = len(old_ids), len(new_ids)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
 
@@ -70,6 +76,42 @@ def _compute_lcs(old_ids: list[str], new_ids: list[str]) -> list[str]:
         else:
             j -= 1
 
+    return list(reversed(lcs_ids))
+
+
+def _compute_unique_ids_lcs(old_ids: list[str], new_ids: list[str]) -> list[str] | None:
+    """
+    LCS in O(n log n) when neither list repeats an ID, else None.
+
+    Without repeats, the LCS is the longest increasing subsequence of the
+    positions in new_ids, taken in the order of old_ids.
+    """
+    new_index = {item_id: i for i, item_id in enumerate(new_ids)}
+    if len(new_index) != len(new_ids) or len(set(old_ids)) != len(old_ids):
+        return None
+
+    positions = [new_index[item_id] for item_id in old_ids if item_id in new_index]
+    # tails[k] is the smallest last position of an increasing run of length
+    # k + 1, and tail_at[k] is the index in `positions` that ends that run
+    tails: list[int] = []
+    tail_at: list[int] = []
+    previous = [-1] * len(positions)
+    for at, position in enumerate(positions):
+        k = bisect.bisect_left(tails, position)
+        if k:
+            previous[at] = tail_at[k - 1]
+        if k == len(tails):
+            tails.append(position)
+            tail_at.append(at)
+        else:
+            tails[k] = position
+            tail_at[k] = at
+
+    lcs_ids: list[str] = []
+    at = tail_at[-1] if tail_at else -1
+    while at != -1:
+        lcs_ids.append(new_ids[positions[at]])
+        at = previous[at]
     return list(reversed(lcs_ids))
 
 
@@ -880,7 +922,7 @@ def make_function_call_output(
 ) -> FunctionCallResult:
     """Create a FunctionCallResult, handling ToolError, StopResponse, and validation."""
     from .chat_context import FunctionCallOutput
-    from .tool_context import StopResponse, ToolError
+    from .tool_context import StopResponse, ToolError, ToolResult
 
     if isinstance(output, BaseException):
         exception = output
@@ -927,6 +969,12 @@ def make_function_call_output(
             raw_exception=exception,
         )
 
+    raw_output = output
+    reply_required = True
+    if isinstance(output, ToolResult):
+        reply_required = output.reply_required
+        output = output.output
+
     if not _is_valid_function_output(output):
         logger.error(
             f"AI function `{fnc_call.name}` returned an invalid output",
@@ -940,7 +988,7 @@ def make_function_call_output(
                 output="the tool returned an invalid output",
                 is_error=True,
             ),
-            raw_output=output,
+            raw_output=raw_output,
             raw_exception=None,
         )
 
@@ -951,8 +999,9 @@ def make_function_call_output(
             call_id=fnc_call.call_id,
             output="" if output is None else str(output),
             is_error=False,
+            reply_required=reply_required,
         ),
-        raw_output=output,
+        raw_output=raw_output,
         raw_exception=None,
     )
 

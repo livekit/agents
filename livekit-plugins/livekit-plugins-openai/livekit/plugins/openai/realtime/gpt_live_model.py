@@ -93,7 +93,7 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
     text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
-    service_tier: Literal["auto", "default", "flex", "priority"]
+    service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
 
@@ -139,6 +139,7 @@ class _LiveOptions:
     voice: str | dict[str, Any]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
+    service_tier: types.ServiceTier | None
     api_key: str | None
     base_url: str
     conn_options: APIConnectOptions
@@ -157,6 +158,7 @@ class GPTLiveModel(llm.DuplexModel):
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         api_key: str | None = None,
         base_url: NotGivenOr[str] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
@@ -177,6 +179,9 @@ class GPTLiveModel(llm.DuplexModel):
                 ``client`` hands it to the application as a ``delegation_created`` event, which
                 no framework tool can answer.
             responses_options: The backend Responses model, under ``delegation="responses"``.
+            service_tier: Processing tier the session runs under, sent as the
+                ``OpenAI-Service-Tier`` header on the connection, for example ``ultrafast``.
+                Unset leaves the header off, and the account's default applies.
             api_key: OpenAI API key. Falls back to ``OPENAI_API_KEY``, or to
                 ``AZURE_OPENAI_API_KEY`` on Azure unless ``entra_token`` is given.
             base_url: HTTP base url of the OpenAI API. On Azure, the resource endpoint, falling
@@ -250,6 +255,7 @@ class GPTLiveModel(llm.DuplexModel):
             voice=voice,
             delegation=delegation,
             responses=responses,
+            service_tier=service_tier if is_given(service_tier) else None,
             api_key=api_key,
             base_url=resolved_base_url,
             conn_options=conn_options,
@@ -273,6 +279,7 @@ class GPTLiveModel(llm.DuplexModel):
         voice: GPTLiveVoices | str | dict[str, Any] = DEFAULT_VOICE,
         delegation: types.DelegationTarget = "responses",
         responses_options: NotGivenOr[ResponsesDelegationOptions] = NOT_GIVEN,
+        service_tier: NotGivenOr[types.ServiceTier] = NOT_GIVEN,
         http_session: aiohttp.ClientSession | None = None,
         max_session_duration: NotGivenOr[float | None] = NOT_GIVEN,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
@@ -292,6 +299,7 @@ class GPTLiveModel(llm.DuplexModel):
             delegation: Where delegated work goes, as in :class:`GPTLiveModel`.
             responses_options: The backend Responses model under ``delegation="responses"``.
                 Its ``model`` is required, and names a deployment in the same resource.
+            service_tier: Processing tier, as in :class:`GPTLiveModel`.
             http_session: Optional shared HTTP session.
             max_session_duration: Seconds before the connection is recycled.
             conn_options: Retry/backoff and connection settings.
@@ -324,6 +332,7 @@ class GPTLiveModel(llm.DuplexModel):
             voice=voice,
             delegation=delegation,
             responses_options=responses_options,
+            service_tier=service_tier,
             api_key=api_key,
             base_url=endpoint if endpoint is not None else NOT_GIVEN,
             http_session=http_session,
@@ -390,6 +399,8 @@ class GPTLiveSession(
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
+        # the mute state the app asked for, re-applied to each session a reconnect opens
+        self._input_muted = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
         self._session_id: str | None = None
@@ -568,6 +579,8 @@ class GPTLiveSession(
             # Azure answers a bearer api key with a redirect to ?api-key=, which aiohttp does not
             # follow for a websocket, so the key goes in its own header
             headers["api-key"] = self._opts.api_key
+        if self._opts.service_tier:
+            headers["OpenAI-Service-Tier"] = self._opts.service_tier
         url = _live_sessions_url(self._opts.base_url, is_azure=self._opts.is_azure)
         if lk_oai_debug:
             logger.debug("connecting to GPT-Live API", extra={"lk.pii.url": url})
@@ -614,6 +627,14 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
+            if self._input_muted:
+                # a new connection is a new session, and a session starts unmuted, so the mute
+                # the app asked for is re-applied before this one can hear anything
+                if not self._session_started_fut.done():
+                    await self._session_started_fut
+                await self._ws_send(
+                    ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
+                )
 
             async for msg in self._msg_ch:
                 # the protocol asks for session.started before any audio or command goes out
@@ -1077,10 +1098,15 @@ class GPTLiveSession(
         )
 
     def mute_input(self) -> None:
-        """Replace microphone input with silence; the model keeps generating and speaking."""
+        """Replace microphone input with silence; the model keeps generating and speaking.
+
+        The state is remembered and re-applied to any session a reconnect opens.
+        """
+        self._input_muted = True
         self.send_event(types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_")))
 
     def unmute_input(self) -> None:
+        self._input_muted = False
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:

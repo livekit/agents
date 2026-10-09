@@ -60,7 +60,28 @@ def _dedup_removal_space(m: re.Match[str], kept: str) -> str:
     return "" if nxt.isspace() else pre
 
 
-def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tuple[str, str]]]:
+def _strip_one(out: list[str], text: str, pos: int, m: re.Match[str], kept: str) -> int:
+    """Append what survives a removal, and return the position to resume scanning from.
+
+    A tag heading a line has no space before it to pair with, so the one after it is the
+    stranded half and goes with it. Anywhere else exactly one separator stays: the space
+    before is dropped when one already follows, kept when none does. Newlines are never
+    touched, so paragraph structure survives.
+    """
+    pre = m.group("pre")
+    if kept:
+        out.append(pre + kept)
+        return pos
+    if not "".join(out) or "".join(out).endswith("\n"):
+        return pos + len(text[pos:]) - len(text[pos:].lstrip(" \t"))
+    if pre and text[pos : pos + 1] not in (" ", "\t"):
+        out.append(pre)
+    return pos
+
+
+def extract_and_strip(
+    text: str, *, xml_tags: list[str], at_line_start: bool = True
+) -> tuple[str, list[tuple[str, str]]]:
     """Strip XML markup tags and collect the stripped tags in a single pass.
 
     One regex scan both removes the markup and records each removed tag, so
@@ -84,6 +105,8 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     Args:
         text: The text containing markup.
         xml_tags: XML tag names to handle (e.g. ``["emotion", "sound"]``).
+        at_line_start: Whether *text* begins a line. ``False`` for a chunk picked up
+            mid-line, where leading whitespace is a real separator between two words.
     """
     if not xml_tags:
         return text, []
@@ -102,21 +125,25 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     )
     tags: list[tuple[str, str]] = []
 
-    def _repl(m: re.Match[str]) -> str:
-        groups = m.groupdict()
-        tag = groups.get("tag")
-        if tag is not None:
+    def _pass(text: str) -> str:
+        out: list[str] = ["" if at_line_start else "\u0000"]
+        pos = 0
+        for m in pattern.finditer(text):
+            out.append(text[pos : m.start()])
+            pos = m.end()
+            groups = m.groupdict()
             inner = groups.get("inner")
-            if inner is not None and inner.strip():
-                value = inner.strip()
-            else:
-                attr_match = _VALUE_ATTR_RE.search(groups.get("attrs") or "")
-                value = attr_match.group(1) if attr_match else ""
-            tags.append((tag, value))
+            if (tag := groups.get("tag")) is not None:
+                if inner is not None and inner.strip():
+                    value = inner.strip()
+                else:
+                    attr_match = _VALUE_ATTR_RE.search(groups.get("attrs") or "")
+                    value = attr_match.group(1) if attr_match else ""
+                tags.append((tag, value))
             # wrapping tags keep their inner content; self-closing/lone tags vanish
-            return _dedup_removal_space(m, inner or "")
-
-        return _dedup_removal_space(m, "")  # lone closing tag
+            pos = _strip_one(out, text, pos, m, inner or "")
+        out.append(text[pos:])
+        return "".join(out)
 
     # iterate to a fixed point so nested wrapping tags are fully removed: a single pass
     # strips only the outer tag (e.g. <excited><loud>hi</loud></excited> -> keeps the
@@ -126,5 +153,5 @@ def extract_and_strip(text: str, *, xml_tags: list[str]) -> tuple[str, list[tupl
     prev = None
     while clean != prev:
         prev = clean
-        clean = pattern.sub(_repl, clean)
+        clean = _pass(clean).lstrip("\u0000")
     return clean, tags

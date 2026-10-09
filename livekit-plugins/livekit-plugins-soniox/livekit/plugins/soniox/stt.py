@@ -267,7 +267,6 @@ class SpeechStream(stt.SpeechStream):
 
         # Create initial config object.
         config: dict[str, Any] = {
-            "api_key": self._stt._api_key,
             "model": self._stt._params.model,
             "audio_format": "pcm_s16le",
             "num_channels": self._stt._params.num_channels or 1,
@@ -298,7 +297,16 @@ class SpeechStream(stt.SpeechStream):
             config["translation"] = translation_dict
         # Connect to the Soniox Speech-to-Text API.
         ws = await asyncio.wait_for(
-            self._ensure_session().ws_connect(self._stt._base_url),
+            self._ensure_session().ws_connect(
+                self._stt._base_url,
+                headers={"Authorization": f"Bearer {self._stt._api_key}"},
+                # Without a heartbeat a silently dropped socket (half-open TCP, no
+                # FIN/RST) is never noticed: `_recv_messages_task` parks on receive
+                # forever and the reconnect in `_run` is only ever triggered by that
+                # task ending. aiohttp closes the socket itself when a ping goes
+                # unanswered, which surfaces as WSMsgType.ERROR in the recv loop.
+                heartbeat=30.0,
+            ),
             timeout=self._conn_options.timeout,
         )
         # Set initial configuration message.
@@ -392,6 +400,17 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.close()
                     self._ws = None
 
+    def _request_reconnect(self, reason: str) -> None:
+        """Ask `_run` to tear down the current socket and open a new one.
+
+        No-op when there is no socket or a reconnect is already in flight; otherwise the
+        `_run` loop would never learn that the connection is gone.
+        """
+        if self._ws is None or self._reconnect_event.is_set():
+            return
+        logger.warning("Soniox STT WebSocket %s; requesting reconnect", reason)
+        self._reconnect_event.set()
+
     async def _keepalive_task(self) -> None:
         """Periodically send keepalive messages (while no audio is being sent)
         to maintain the WebSocket connection."""
@@ -399,6 +418,11 @@ class SpeechStream(stt.SpeechStream):
             while self._ws:
                 await self._ws.send_str(KEEPALIVE_MESSAGE)
                 await asyncio.sleep(5)
+        except (aiohttp.ClientError, ConnectionError) as e:
+            # When no audio is flowing this write is the only thing touching the socket,
+            # so a dropped connection surfaces here first. Swallowing it left the stream
+            # parked on a dead socket with nothing ever logged.
+            self._request_reconnect(f"keepalive write failed ({e!r})")
         except Exception as e:
             logger.error(f"Error while sending keep alive message: {e}")
 
@@ -430,6 +454,9 @@ class SpeechStream(stt.SpeechStream):
                     await self._ws.send_str(data)
             except asyncio.CancelledError:
                 raise
+            except (aiohttp.ClientError, ConnectionError) as e:
+                self._request_reconnect(f"audio write failed ({e!r})")
+                break
             except Exception as e:
                 logger.error(f"Error while sending audio data: {e}")
                 break
@@ -503,6 +530,14 @@ class SpeechStream(stt.SpeechStream):
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSING,
                 ):
+                    break
+
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Treating it as an
+                    # unexpected message type stepped over it and discarded the reason,
+                    # which only survives on `ws.exception()`.
+                    logger.warning("Soniox STT WebSocket error frame: %r", self._ws.exception())
                     break
 
                 if msg.type != aiohttp.WSMsgType.TEXT:
@@ -676,8 +711,10 @@ class _LangStats(NamedTuple):
 class _TokenAccumulator:
     """Accumulates token metadata (text, language, speaker, timing, confidence).
 
-    Tokens are assumed to arrive in chronological order, so start_time is taken
-    from the first token and end_time is continuously overwritten by the latest.
+    Tokens are assumed to arrive in chronological order, but individual tokens
+    may omit timing keys. start_time is the earliest ``start_ms`` seen and
+    end_time the latest ``end_ms`` seen, so a token that carries timing late
+    (or regresses) cannot collapse the span onto itself.
     """
 
     def __init__(self) -> None:
@@ -714,11 +751,13 @@ class _TokenAccumulator:
             self.language = self._get_language()
         if "speaker" in token and self.speaker_id is None:
             self.speaker_id = str(token["speaker"])
-        if "start_ms" in token and not self._has_start_time:
-            self._has_start_time = True
-            self.start_time = float(token["start_ms"])
+        if "start_ms" in token:
+            start_ms = float(token["start_ms"])
+            if not self._has_start_time or start_ms < self.start_time:
+                self._has_start_time = True
+                self.start_time = start_ms
         if "end_ms" in token:
-            self.end_time = float(token["end_ms"])
+            self.end_time = max(self.end_time, float(token["end_ms"]))
         if "confidence" in token:
             self._confidence_sum += token["confidence"]
             self._confidence_count += 1

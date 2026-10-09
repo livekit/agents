@@ -26,6 +26,7 @@ from livekit.plugins.openai.realtime.gpt_live_model import (
     GPTLiveModel,
     GPTLiveSession,
 )
+from livekit.plugins.openai.realtime.gpt_live_types import ServiceTier
 from livekit.plugins.openai.tools import WebSearch
 
 pytestmark = pytest.mark.unit
@@ -384,6 +385,92 @@ async def test_reconnect_discards_partial_input_audio(
         await model.aclose()
 
 
+async def test_the_mute_state_survives_a_reconnect(monkeypatch: pytest.MonkeyPatch) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+
+        session.mute_input()
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in sockets[0].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+        ]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # the replacement session starts unmuted, so the mute has to be sent again, and before
+        # anything the app queued while the old connection was going away
+        assert [event["type"] for event in sockets[1].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+        ]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_an_unmuted_session_is_not_muted_again_on_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sockets = [_LifecycleWS(), _LifecycleWS()]
+    connections = iter(sockets)
+
+    async def connect(self: GPTLiveSession) -> _LifecycleWS:
+        return next(connections)
+
+    monkeypatch.setattr(GPTLiveSession, "_create_ws_conn", connect)
+    model = GPTLiveModel(
+        api_key="sk-test", conn_options=APIConnectOptions(max_retry=1, retry_interval=0)
+    )
+    session = model.session()
+    try:
+        await session._update_session()
+        await asyncio.wait_for(sockets[0].started.wait(), timeout=1)
+        await session._session_started_fut
+
+        session.mute_input()
+        session.unmute_input()
+        await asyncio.sleep(0.05)
+        assert [event["type"] for event in sockets[0].sent] == [
+            "session.start",
+            "session.input_audio.mute",
+            "session.input_audio.unmute",
+        ]
+
+        await sockets[0].close()
+        await asyncio.wait_for(sockets[1].started.wait(), timeout=1)
+        await asyncio.sleep(0.05)
+
+        # what the app asked for last wins: the reconnect must not resurrect a stale mute
+        assert [event["type"] for event in sockets[1].sent] == ["session.start"]
+    finally:
+        for ws in sockets:
+            ws.emit(
+                {"type": "session.closed", "reason": "close_requested", "usage": {"seconds": 0}}
+            )
+        await session.aclose()
+        await model.aclose()
+
+
 async def test_provider_content_is_only_logged_under_pii_fields(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -525,6 +612,24 @@ async def test_first_event_is_a_session_start_carrying_the_whole_configuration(
                 "content": [{"type": "input_text", "text": "a prior turn"}],
             }
         ]
+    finally:
+        await session.aclose()
+        await model.aclose()
+
+
+async def test_the_backend_delegation_accepts_every_service_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A gated tier the wire types don't list would raise while composing session.start."""
+    ws = _connect_hook(monkeypatch)
+
+    model = GPTLiveModel(api_key="sk-test", responses_options={"service_tier": "ultrafast"})
+    session = model.session()
+    try:
+        await session._update_session(instructions="Be concise.")
+        await asyncio.sleep(0.1)
+
+        assert ws.sent[0]["session"]["delegation"]["responses"]["service_tier"] == "ultrafast"
     finally:
         await session.aclose()
         await model.aclose()
@@ -1603,6 +1708,34 @@ async def test_openai_handshake_is_unchanged_by_azure_support(
     assert seen.headers["Authorization"] == "Bearer sk-test"
     assert "api-key" not in seen.headers
     assert seen.start["session"]["model"] == gpt_live_model.DEFAULT_MODEL
+    assert "OpenAI-Service-Tier" not in seen.headers
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+@pytest.mark.parametrize("service_tier", ["ultrafast", "priority"])
+async def test_a_service_tier_rides_on_the_connection_header(service_tier: ServiceTier) -> None:
+    """The tier is asked for at the handshake, not in the session configuration."""
+    async with _live_server() as (base, seen):
+        model = GPTLiveModel(api_key="sk-test", base_url=base, service_tier=service_tier)
+        await _connect(model, seen)
+
+    assert seen.headers["OpenAI-Service-Tier"] == service_tier
+    assert "service_tier" not in seen.start["session"]
+
+
+@pytest.mark.usefixtures("_no_provider_env")
+async def test_azure_carries_the_service_tier_too() -> None:
+    async with _live_server() as (base, seen):
+        model = GPTLiveModel.with_azure(
+            azure_deployment="my-live",
+            azure_endpoint=base,
+            api_key="azure-key",
+            delegation="client",
+            service_tier="ultrafast",
+        )
+        await _connect(model, seen)
+
+    assert seen.headers["OpenAI-Service-Tier"] == "ultrafast"
 
 
 @pytest.mark.parametrize(

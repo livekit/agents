@@ -543,6 +543,25 @@ def test_parse_tool_call_missing() -> None:
     assert _parse_tool_call([bad]) == ([], [], [])
 
 
+def test_parse_tool_call_non_list_term_group() -> None:
+    # a model can answer with null instead of an empty list; that must not raise out of
+    # the detection pass and drop the whole turn's keyterm update
+    nulls = FunctionToolCall(
+        call_id="1",
+        name="record_keyterms",
+        arguments='{"pending": null, "confirm": [], "remove": []}',
+    )
+    assert _parse_tool_call([nulls]) == ([], [], [])
+
+    # nor may a bare string become one keyterm per character
+    string = FunctionToolCall(
+        call_id="2",
+        name="record_keyterms",
+        arguments='{"pending": [], "confirm": "Kubernetes", "remove": []}',
+    )
+    assert _parse_tool_call([string]) == ([], [], [])
+
+
 def test_format_input_splits_applied_and_candidate() -> None:
     text = _format_input(_ctx("hi"), [("Term1", True), ("Term2", False)])
     assert text is not None

@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs, urlparse
 
 import aiohttp
-import cv2
 import numpy as np
 from loguru import logger as _logger
 from PIL import Image
@@ -49,6 +48,13 @@ _logger.add(sys.stdout, level="INFO")
 
 _AVATAR_AGENT_IDENTITY = "bithuman-avatar-agent"
 _AVATAR_AGENT_NAME = "bithuman-avatar-agent"
+
+# The avatar models a cloud session may ask for, in BitHuman's own spelling.
+# "expression"/"essence" are the first-generation names and keep resolving to
+# the first-generation engines; "expression-2"/"essence-2" name the current
+# ones. The server validates this string and refuses an unknown one, so a typo
+# is an error at session start rather than a different engine rendering.
+BitHumanModel = Literal["expression", "essence", "expression-2", "essence-2"]
 
 
 def _is_valid_base64(s: str) -> bool:
@@ -95,7 +101,7 @@ class BitHumanException(Exception):
 
 
 class AvatarSession(BaseAvatarSession):
-    """A Beyond Presence avatar session"""
+    """A bitHuman avatar session"""
 
     def __init__(
         self,
@@ -103,7 +109,7 @@ class AvatarSession(BaseAvatarSession):
         api_url: NotGivenOr[str] = NOT_GIVEN,
         api_secret: NotGivenOr[str] = NOT_GIVEN,
         api_token: NotGivenOr[str] = NOT_GIVEN,
-        model: NotGivenOr[Literal["expression", "essence"]] = "essence",
+        model: NotGivenOr[BitHumanModel] = NOT_GIVEN,
         model_path: NotGivenOr[str | None] = NOT_GIVEN,
         runtime: NotGivenOr[AsyncBithuman | None] = NOT_GIVEN,
         avatar_image: NotGivenOr[Image.Image | str] = NOT_GIVEN,
@@ -113,50 +119,77 @@ class AvatarSession(BaseAvatarSession):
         avatar_participant_name: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
-        Initialize a BitHuman avatar session.
+        Initialize a bitHuman avatar session.
 
         Args:
-            api_url: The BitHuman API URL.
-            api_secret: The BitHuman API secret.
-            api_token: The BitHuman API token.
-            model: The BitHuman model to use.
-            model_path: The path to the BitHuman model.
-            runtime: The BitHuman runtime to use.
-            avatar_image: The avatar image to use.
-            avatar_id: The avatar ID to use.
-            conn_options: The connection options to use.
+            api_url: The bitHuman API URL. Defaults to ``BITHUMAN_API_URL``, then to
+                ``https://auth.api.bithuman.ai/v1/runtime-tokens/request``.
+            api_secret: The bitHuman API secret. Defaults to ``BITHUMAN_API_SECRET``.
+                In cloud mode this value is sent to the avatar in the avatar
+                participant's attributes, which every participant in the room can
+                read: pass a one-hour token minted with
+                ``POST https://api.bithuman.ai/v1/runtime-tokens/mint``
+                (``"scope": "livekit-cloud"``) instead of your account secret.
+            api_token: A bitHuman runtime token. Defaults to ``BITHUMAN_API_TOKEN``.
+                Local mode accepts it in place of ``api_secret``; the default cloud
+                endpoint does not use it.
+            model: The model to pin a cloud session to (see Model Types). Not used in
+                local mode, where the ``.imx`` file determines the model.
+            model_path: Path to a bitHuman ``.imx`` model file, for local mode.
+                Defaults to ``BITHUMAN_MODEL_PATH``.
+            runtime: An existing ``AsyncBithuman`` runtime to reuse in local mode.
+            avatar_image: A portrait for a cloud photo session (Expression 1 only): a
+                PIL image, a local file path, an ``http(s)`` URL or base64-encoded
+                image data.
+            avatar_id: The code of a bitHuman agent to render in cloud mode.
+            conn_options: Retry and timeout options for the cloud session request.
             avatar_participant_identity: The avatar participant identity to use.
             avatar_participant_name: The avatar participant name to use.
 
         Model Types:
-            BitHuman supports two model types with different capabilities:
+            bitHuman has two model families, Essence and Expression, each in two
+            generations. In cloud mode the name is sent to bitHuman with the session, so
+            the model you name is the model that renders:
 
-            - **expression**: Provides dynamic real-time facial expressions and emotional responses.
-              This model can generate live emotional expressions based on the content and context,
-              offering more natural and interactive avatar behavior.
+            - **essence-2** (Essence 2): a photoreal person, created from one portrait.
 
-            - **essence**: Uses predefined actions and expressions. This model provides consistent
-              and predictable avatar behavior with pre-configured gestures and expressions.
+            - **expression-2** (Expression 2): any character, including people, animals
+              and cartoons, created from one portrait.
+
+            - **essence** / **expression**: the first generation, Essence 1 and
+              Expression 1. They keep working unchanged; Expression 1 runs in the
+              bitHuman cloud only.
+
+            Naming a model is OPTIONAL and it is a pin, not a hint: an avatar has to have
+            been prepared for the model you ask for, and bitHuman refuses the session
+            (naming the models that avatar can be served as) if it has not. Leave ``model``
+            unset and nothing is sent, so bitHuman resolves the avatar exactly as it did
+            before this parameter existed — which is why adding it changes nothing for
+            sessions that do not use it.
 
         Parameter Combinations:
             The following parameter combinations determine the avatar mode and behavior:
 
-            1. **Local Mode (model_path provided)**:
-               - `model_path`: Loads the BitHuman SDK locally for processing
-               - Works with both expression and essence models
+            1. **Local Mode (neither avatar_image nor avatar_id provided)**:
+               - `model_path`: an Essence 2, Expression 2 or Essence 1 ``.imx`` file,
+                 rendered inside this process by the bitHuman SDK, with no GPU
+                 required. Expression 2 files need ``pip install "bithuman[expression-2]"``.
+               - `model` is not used: the file determines the model
                - Requires BITHUMAN_API_SECRET or BITHUMAN_API_TOKEN
 
             2. **Cloud Mode with avatar_image**:
-               - `avatar_image`: Custom avatar image for personalization
-               - `model`: Defaults to "expression" for dynamic emotional expressions
-               - Provides real-time expression generation based on the custom image
+               - `avatar_image`: a portrait animated with no agent, on Expression 1 only;
+                 bitHuman refuses a photo session on any other model. To use Essence 2
+                 or Expression 2, create an agent from the photo and pass `avatar_id`.
 
             3. **Cloud Mode with avatar_id**:
-               - `avatar_id`: Pre-configured avatar identifier
-               - `model`: Defaults to "essence" if not specified, but can be set to either:
-                 * "expression" for dynamic emotional responses
-                 * "essence" for predefined actions and expressions
-               - Allows flexibility in choosing the interaction style
+               - `avatar_id`: the code of an existing bitHuman agent
+               - `model`: optional. Name any of the four models above to pin the
+                 session to it; leave it unset and bitHuman picks the model the
+                 avatar is prepared for, exactly as before this parameter existed.
+
+            Cloud mode also needs LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET (or
+            the matching ``start()`` arguments) to create the avatar's room token.
         """
         super().__init__()
         self._api_url = (
@@ -175,6 +208,15 @@ class AvatarSession(BaseAvatarSession):
         self._mode = (
             "cloud" if utils.is_given(avatar_image) or utils.is_given(avatar_id) else "local"
         )
+        # ★KEPT RAW, on purpose. An earlier draft normalised NOT_GIVEN to "essence"
+        # here. That is wrong in a way that only shows up for existing users: the
+        # signature used to default to "essence", so normalising made the plugin
+        # send `model: "essence"` on EVERY session, including ones whose caller
+        # never named a model. Before this PR nothing was sent and the server chose
+        # the generation; after it, an avatar prepared only as essence-2 would be
+        # told "essence" and REFUSED (the API answers 400 naming what the avatar
+        # can be served as). So the sentinel survives to the request, where it
+        # means "do not name a model" — and `str()` is never called on it.
         self._model = model
 
         # validate mode-specific requirements
@@ -212,6 +254,16 @@ class AvatarSession(BaseAvatarSession):
         self._http_session: aiohttp.ClientSession | None = None
         self._avatar_runner: AvatarRunner | None = None
         self._runtime: AsyncBithuman | None = runtime or None
+
+    @property
+    def _is_expression_model(self) -> bool:
+        """True for every generation of the expression family.
+
+        Read in two places — the custom-endpoint request format and the legacy
+        ``mode`` field — and it must give the same answer in both, or a session
+        is dispatched one way and billed the other.
+        """
+        return utils.is_given(self._model) and str(self._model).startswith("expression")
 
     @property
     def avatar_identity(self) -> str:
@@ -361,7 +413,7 @@ class AvatarSession(BaseAvatarSession):
         # Custom endpoints use multipart/form-data format for direct avatar worker requests
         is_custom_endpoint = not self._is_default_api_url()
 
-        if is_custom_endpoint and self._model == "expression":
+        if is_custom_endpoint and self._is_expression_model:
             # Use FormData format for custom endpoints
             # Parse async parameter from URL if present
             async_mode = self._parse_async_parameter_from_url()
@@ -406,16 +458,24 @@ class AvatarSession(BaseAvatarSession):
             livekit_token: JWT token for room access
             room_name: Name of the LiveKit room
         """
-        # Prepare JSON data
+        # Prepare JSON data.
+        #
+        # `model` names the avatar model for this session explicitly. Without it the
+        # server falls back to `mode`, which can only distinguish the two
+        # first-generation engines — so which model a second-generation avatar was
+        # served as depended on a server-side default rather than on what the caller
+        # asked for. `mode` is still sent, unchanged, for servers that predate `model`.
         json_data = {
             "livekit_url": livekit_url,
             "livekit_token": livekit_token,
             "room_name": room_name,
             "mode": "gpu"
             if (utils.is_given(self._avatar_image) and self._avatar_image is not None)
-            or self._model == "expression"
+            or self._is_expression_model
             else "cpu",
         }
+        if utils.is_given(self._model):
+            json_data["model"] = str(self._model)
 
         # Handle avatar image - convert to base64 for JSON serialization
         if isinstance(self._avatar_image, Image.Image):
@@ -490,6 +550,14 @@ class AvatarSession(BaseAvatarSession):
         form_data.add_field("livekit_url", livekit_url)
         form_data.add_field("livekit_token", livekit_token)
         form_data.add_field("room_name", room_name)
+        # Name the model here too, for the same reason the JSON request does: this
+        # is the SELF-HOSTED path, and without it a worker cannot tell
+        # `expression` from `expression-2` — the two render differently and meter
+        # on different lines. Workers that predate the field ignore it (they read
+        # the form into a dict and pick the keys they know), so sending it is
+        # additive for every existing deployment.
+        if utils.is_given(self._model):
+            form_data.add_field("model", str(self._model))
 
         # Add async_mode parameter if parsed from URL
         # FastAPI Form bool accepts "true"/"false" strings and converts them to boolean
@@ -659,7 +727,7 @@ class BithumanGenerator(VideoGenerator):
         self,
     ) -> AsyncGenerator[rtc.VideoFrame | rtc.AudioFrame | AudioSegmentEnd, None]:
         def create_video_frame(image: np.ndarray) -> rtc.VideoFrame:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = np.ascontiguousarray(image[:, :, ::-1])  # BGR -> RGB
             return rtc.VideoFrame(
                 width=image.shape[1],
                 height=image.shape[0],
