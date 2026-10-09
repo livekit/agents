@@ -2277,6 +2277,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
 
     def _on_audio_enabled_changed(self, enabled: bool) -> None:
         """End user speaking state when audio is disabled by default."""
+        if self._activity is not None:
+            self._activity._on_input_audio_changed()
+
         if not enabled and self._user_state == "speaking":
             if self._activity is not None:
                 self._activity.on_end_of_speech(None)
@@ -2373,6 +2376,9 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
     def _on_audio_input_changed(self) -> None:
         if not self._started:
             return
+
+        if self._activity is not None:
+            self._activity._on_input_audio_changed()
 
         if self._forward_audio_atask is not None:
             self._forward_audio_atask.cancel()

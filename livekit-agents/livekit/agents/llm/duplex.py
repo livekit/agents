@@ -53,6 +53,8 @@ class DuplexCapabilities:
     """Whether the instructions can be updated mid-session"""
     mutable_tools: bool = False
     """Whether the tools can be updated mid-session"""
+    continuous_input_required: bool = False
+    """Whether the model stops producing output while it receives no input audio"""
 
 
 DuplexEventTypes = Literal[
