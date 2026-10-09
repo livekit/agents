@@ -13,13 +13,16 @@ Where it runs decides how often it costs:
   job is assigned.
 
 The job process always imports it: under a forkserver the module is already in
-``sys.modules`` and the import is a no-op, so there is no start-method check anywhere.
+``sys.modules`` and the import is a no-op. Only the local inference models depend on where
+the module runs and on ``LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE`` (see
+``_local_inference_models``).
 
 Failures are logged at debug level only: the first real use reports a proper error.
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import time
 from collections.abc import Callable
@@ -27,33 +30,19 @@ from typing import Any
 
 from ..log import logger
 
-# The local end-of-turn weights are the only expensive part of this module: measured at
-# ~244 MB RSS (vs ~4 MB for the VAD). They are only touched by a turn detector that runs
-# locally, so a deployment that never constructs one can leave them unmapped.
-ENV_PRELOAD_EOT = "LIVEKIT_AGENTS_PRELOAD_EOT"
+# a falsy value never preloads the local inference models, any other value always preloads both,
+# and unset preloads the VAD always and the end-of-turn weights only where every job shares them
+ENV_PRELOAD_LOCAL_INFERENCE = "LIVEKIT_AGENTS_PRELOAD_LOCAL_INFERENCE"
 
 _FALSY = ("0", "false", "no", "off")
 
 
-def _preload_eot() -> bool:
-    """Whether the local end-of-turn weights take part in the warm-up.
-
-    Defaults to on. ``LIVEKIT_AGENTS_PRELOAD_EOT=0`` skips them for deployments that
-    never construct a local turn detector (a ``vad``-based pipeline, or a cloud-only
-    ``TurnDetector``).
-
-    The default stays on deliberately. Under ``forkserver`` this module runs once in
-    the forkserver and job processes inherit the mapping copy-on-write, so skipping
-    the warm-up and letting the first local detector load the weights instead would
-    give *every* job process a private copy of them.
-    """
-    return os.environ.get(ENV_PRELOAD_EOT, "").strip().lower() not in _FALSY
-
-
 def _step(name: str, fnc: Callable[[], Any]) -> None:
+    # a step returns False when it skipped itself
     started = time.perf_counter()
     try:
-        fnc()
+        if fnc() is False:
+            return
     except Exception:
         logger.debug("could not preload %s", name, exc_info=True)
         return
@@ -64,16 +53,22 @@ def _av() -> None:
     import av  # noqa: F401
 
 
-def _local_inference_models() -> None:
+def _local_inference_models() -> bool:
+    value = os.environ.get(ENV_PRELOAD_LOCAL_INFERENCE)
+    if value is not None and value.strip().lower() in _FALSY:
+        return False
+
     # the VAD and the turn detector's local end-of-turn model: constructing them later in a
-    # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise). The EOT
-    # weights are the expensive half and are only needed by a local turn detector, so they
-    # are opt-out (see _preload_eot).
+    # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise)
     import livekit.local_inference as li
 
     li.init_vad()
-    if _preload_eot():
+
+    # the EOT weights cost ~244 MB: a process without a multiprocessing parent (the forkserver,
+    # a thread executor's worker) shares them across jobs, a spawned job process would not
+    if value is not None or multiprocessing.parent_process() is None:
         li.init_eot()
+    return True
 
 
 def _rtc_native_library() -> None:

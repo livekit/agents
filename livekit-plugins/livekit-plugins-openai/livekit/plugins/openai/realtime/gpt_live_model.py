@@ -418,6 +418,8 @@ class GPTLiveSession(
 
         # session.start opens a connection and carries the config that is immutable after it
         self._session_start_sent = False
+        # the mute state the app asked for, re-applied to each session a reconnect opens
+        self._input_muted = False
         self._session_started_fut: asyncio.Future[None] = asyncio.Future()
         self._session_closed_fut: asyncio.Future[None] = asyncio.Future()
         self._session_id: str | None = None
@@ -644,6 +646,14 @@ class GPTLiveSession(
             start = self._session_start_event()
             self._session_start_sent = True
             await self._ws_send(ws_conn, start)
+            if self._input_muted:
+                # a new connection is a new session, and a session starts unmuted, so the mute
+                # the app asked for is re-applied before this one can hear anything
+                if not self._session_started_fut.done():
+                    await self._session_started_fut
+                await self._ws_send(
+                    ws_conn, types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_"))
+                )
 
             async for msg in self._msg_ch:
                 # the protocol asks for session.started before any audio or command goes out
@@ -1107,10 +1117,15 @@ class GPTLiveSession(
         )
 
     def mute_input(self) -> None:
-        """Replace microphone input with silence; the model keeps generating and speaking."""
+        """Replace microphone input with silence; the model keeps generating and speaking.
+
+        The state is remembered and re-applied to any session a reconnect opens.
+        """
+        self._input_muted = True
         self.send_event(types.InputAudioMuteEvent(event_id=utils.shortuuid("mute_")))
 
     def unmute_input(self) -> None:
+        self._input_muted = False
         self.send_event(types.InputAudioUnmuteEvent(event_id=utils.shortuuid("unmute_")))
 
     async def aclose(self) -> None:
