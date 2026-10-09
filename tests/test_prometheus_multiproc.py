@@ -244,7 +244,16 @@ def test_cleanup_removes_a_stale_file_with_this_pid_in_multiprocess_mode(tmp_pat
 def test_cleanup_removes_files_whose_name_is_not_a_pid(tmp_path) -> None:
     from livekit.agents.telemetry import metrics
 
-    names = ["counter_².db", f"counter_{10**30}.db", "counter_.db", "notes.txt"]
+    live_pid = os.getppid()
+    names = [
+        "counter_².db",
+        f"counter_{10**30}.db",
+        "counter_.db",
+        "notes.txt",
+        f"counter_+{live_pid}.db",
+        f"counter_0{live_pid}.db",
+        f"counter_ {live_pid}.db",
+    ]
     for name in names:
         (tmp_path / name).write_bytes(b"")
 
