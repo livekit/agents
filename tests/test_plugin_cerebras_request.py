@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gzip
 import inspect
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import msgpack
@@ -10,7 +10,7 @@ import pytest
 
 from livekit.agents import llm
 from livekit.agents.types import NOT_GIVEN
-from livekit.plugins.cerebras import LLM
+from livekit.plugins.cerebras import LLM, CerebrasChatModels
 from livekit.plugins.cerebras.llm import _CerebrasClient
 
 pytestmark = pytest.mark.unit
@@ -107,3 +107,9 @@ async def test_omitted_max_completion_tokens_does_not_change_request() -> None:
     assert "max_completion_tokens" not in payload_without_limit
     assert payload_with_limit.pop("max_completion_tokens") == 321
     assert payload_with_limit == payload_without_limit
+
+
+def test_cerebras_chat_models_instantiation() -> None:
+    for model_name in get_args(CerebrasChatModels):
+        model = LLM(model=model_name, api_key="test-key")
+        assert model._opts.model == model_name
