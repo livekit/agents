@@ -37,7 +37,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import reportable_option_names
+from livekit.agents._reporting import report_options
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
@@ -79,9 +79,6 @@ class VADOptions(TypedDict, total=False):
     """Minimum speech duration in milliseconds. Default to 250"""
     min_silence_duration_ms: int | None
     """Minimum silence duration in milliseconds. Default to 2500"""
-
-
-_REPORTABLE_VAD_OPTIONS = reportable_option_names(VADOptions)
 
 
 # https://elevenlabs.io/docs/overview/models#models-overview
@@ -276,24 +273,13 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "model_id": self._opts.model_id,
-            "language_code": self._opts.language_code,
-            "secondary_languages": self._opts.secondary_languages,
-            "include_language_detection": self._opts.include_language_detection,
-            "tag_audio_events": self._opts.tag_audio_events,
-            "include_timestamps": self._opts.include_timestamps,
-            "sample_rate": self._opts.sample_rate,
-            "server_vad": {
-                key: value
-                for key, value in self._opts.server_vad.items()
-                if key in _REPORTABLE_VAD_OPTIONS
-            }
+            **report_options(
+                self._opts,
+                exclude=["api_key", "base_url", "server_vad", "keyterms", "previous_text"],
+            ),
+            "server_vad": report_options(self._opts.server_vad, VADOptions)
             if is_given(self._opts.server_vad) and self._opts.server_vad is not None
             else self._opts.server_vad,
-            "no_verbatim": self._opts.no_verbatim,
-            "enable_logging": self._opts.enable_logging,
-            "audio_chunk_duration_ms": self._opts.audio_chunk_duration_ms,
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

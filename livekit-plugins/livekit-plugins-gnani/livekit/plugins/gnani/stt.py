@@ -40,6 +40,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils.misc import is_given
 
@@ -169,15 +170,7 @@ class STT(stt.STT):
         return "Gnani"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "sample_rate": self._opts.sample_rate,
-            "preferred_language": self._opts.preferred_language,
-            "format": self._opts.format,
-            "itn_native_numerals": self._opts.itn_native_numerals,
-            "use_streaming": self._opts.use_streaming,
-        }
+        return report_options(self._opts, exclude=["api_key", "base_url"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

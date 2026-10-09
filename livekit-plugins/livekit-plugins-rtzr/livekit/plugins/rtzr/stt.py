@@ -34,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -123,18 +124,7 @@ class STT(stt.STT):
         return "RTZR"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "model_name": self._params.model_name,
-            "language": self._params.language,
-            "sample_rate": self._params.sample_rate,
-            "encoding": self._params.encoding,
-            "domain": self._params.domain,
-            "epd_time": self._params.epd_time,
-            "noise_threshold": self._params.noise_threshold,
-            "active_threshold": self._params.active_threshold,
-            "use_punctuation": self._params.use_punctuation,
-        }
+        return report_options(self._params, exclude=["keywords"])
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

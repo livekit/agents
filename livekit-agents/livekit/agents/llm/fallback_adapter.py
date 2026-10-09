@@ -10,7 +10,6 @@ from typing import Any, ClassVar, Literal
 from opentelemetry import trace
 
 from .._exceptions import APIConnectionError, APIError
-from .._reporting import snapshot_component
 from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
@@ -127,7 +126,7 @@ class FallbackAdapter(
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "llm": [snapshot_component(instance) for instance in self._llm_instances],
+            "llm": self._llm_instances,
             "attempt_timeout": self._attempt_timeout,
             "max_retry_per_llm": self._max_retry_per_llm,
             "retry_interval": self._retry_interval,

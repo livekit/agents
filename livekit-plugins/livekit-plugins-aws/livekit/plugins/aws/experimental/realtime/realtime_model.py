@@ -16,6 +16,8 @@ from typing import Any, Literal, cast
 
 import boto3
 
+from livekit.agents._reporting import report_options
+
 try:
     from aws_sdk_bedrock_runtime.client import (
         AsyncBedrockRuntimeClient as _BedrockRuntimeClient,
@@ -531,14 +533,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "temperature": self._opts.temperature,
-            "top_p": self._opts.top_p,
-            "max_tokens": self._opts.max_tokens,
-            "region": self._opts.region,
-            "turn_detection": self._opts.turn_detection,
-            "modalities": self._opts.modalities,
+            **report_options(self._opts, exclude=["tool_choice"]),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

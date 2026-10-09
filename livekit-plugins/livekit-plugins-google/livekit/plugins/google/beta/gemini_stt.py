@@ -32,6 +32,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -146,14 +147,7 @@ class STT(stt.STT):
         return "google"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "language_codes": self._opts.language_codes,
-            "sample_rate": self._opts.sample_rate,
-            "vertexai": self._opts.vertexai,
-            "location": self._opts.location,
-        }
+        return report_options(self._opts, exclude=["model", "custom_vocabulary", "project"])
 
     def stream(
         self,

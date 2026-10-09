@@ -37,6 +37,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -504,13 +505,19 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "encoding": self._opts.encoding,
-            "speed": self._opts.speed,
-            "warm_standby_enabled": self._opts.warm_standby_enabled,
-            "text_chunking": self._opts.text_chunking,
-            "phrase_max_chars": self._opts.phrase_max_chars,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model_endpoint",
+                    "model",
+                    "sample_rate",
+                    "word_tokenizer",
+                    "api_key",
+                    "model_options",
+                    "extra_headers",
+                    "runtime_init",
+                ],
+            ),
         }
 
     @property

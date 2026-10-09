@@ -34,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.rtc import AudioFrame
@@ -139,17 +140,7 @@ class STT(stt.STT):
         return "Gradium"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "sample_rate": self._opts.sample_rate,
-            "buffer_size_seconds": self._opts.buffer_size_seconds,
-            "encoding": self._opts.encoding,
-            "temperature": self._opts.temperature,
-            "language": self._opts.language,
-            "vad_threshold": self._opts.vad_threshold,
-            "vad_bucket": self._opts.vad_bucket,
-            "vad_flush": self._opts.vad_flush,
-        }
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

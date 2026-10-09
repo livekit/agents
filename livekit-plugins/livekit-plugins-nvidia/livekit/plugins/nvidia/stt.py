@@ -18,6 +18,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
@@ -100,17 +101,7 @@ class STT(stt.STT):
         )
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "model": self._opts.model,
-            "function_id": self._opts.function_id,
-            "punctuate": self._opts.punctuate,
-            "language_code": self._opts.language_code,
-            "sample_rate": self._opts.sample_rate,
-            "use_ssl": self._opts.use_ssl,
-            "enable_diarization": self._opts.enable_diarization,
-            "max_speaker_count": self._opts.max_speaker_count,
-        }
+        return report_options(self._opts, exclude=["server"])
 
     def _recognize_impl(
         self,

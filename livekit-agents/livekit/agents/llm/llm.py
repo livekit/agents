@@ -16,7 +16,6 @@ from livekit.agents.metrics.base import Metadata
 
 from .. import utils
 from .._exceptions import APIConnectionError, APIError, APIStatusError
-from .._reporting import component_metadata
 from ..log import logger
 from ..metrics import LLMMetrics
 from ..telemetry import gen_ai as gen_ai_telemetry, input_delta, trace_types, tracer
@@ -148,7 +147,7 @@ class LLM(
 
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
-        return component_metadata(self)
+        return {}
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:

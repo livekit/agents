@@ -31,6 +31,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -172,17 +173,18 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "speech_region": self._config.speech_region,
-            "sample_rate": self._config.sample_rate,
-            "num_channels": self._config.num_channels,
-            "segmentation_silence_timeout_ms": self._config.segmentation_silence_timeout_ms,
-            "segmentation_max_time_ms": self._config.segmentation_max_time_ms,
-            "segmentation_strategy": self._config.segmentation_strategy,
-            "language": self._config.language,
+            **report_options(
+                self._config,
+                exclude=[
+                    "speech_key",
+                    "speech_host",
+                    "speech_auth_token",
+                    "speech_endpoint",
+                    "profanity",
+                    "phrase_list",
+                ],
+            ),
             "profanity": self._config.profanity.name if is_given(self._config.profanity) else None,
-            "explicit_punctuation": self._config.explicit_punctuation,
-            "true_text_post_processing": self._config.true_text_post_processing,
         }
 
     async def _recognize_impl(

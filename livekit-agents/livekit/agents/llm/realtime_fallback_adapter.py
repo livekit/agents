@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from livekit import rtc
 
-from .._reporting import snapshot_component
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import aio, is_given
@@ -137,7 +136,7 @@ class RealtimeModelFallbackAdapter(
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "llm": [snapshot_component(model) for model in self._models],
+            "llm": self._models,
             "cooldown": self._cooldown,
             "regenerate_on_swap": self._regenerate_on_swap,
         }

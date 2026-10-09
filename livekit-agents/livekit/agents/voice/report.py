@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .._reporting import snapshot_component
+from .._reporting import _serialize_option_value
 from ..llm import ChatContext
 from ..metrics import ModelUsage
 from ..version import __version__
@@ -36,7 +36,7 @@ class SessionReport:
     """Usage summaries for the session, one per model/provider combination"""
     sdk_version: str = field(default_factory=lambda: __version__)
     """Version of the agents SDK"""
-    components: dict[str, dict[str, Any]] = field(default_factory=dict)
+    models: dict[str, dict[str, Any]] = field(default_factory=dict)
     """Session VAD, STT, LLM, and TTS settings captured when the report is created."""
 
     def to_dict(self) -> dict:
@@ -76,7 +76,7 @@ class SessionReport:
             "timestamp": self.timestamp,
             "usage": self._usage_to_dict() if self.model_usage else None,
             "sdk_version": self.sdk_version,
-            "components": self.components,
+            "models": self.models,
         }
 
     def _usage_to_dict(self) -> list[dict] | None:
@@ -85,14 +85,14 @@ class SessionReport:
         return [summary.model_dump(exclude_defaults=True) for summary in self.model_usage]
 
 
-def _serialize_session_components(session: AgentSession) -> dict[str, dict[str, Any]]:
+def _serialize_session_models(session: AgentSession) -> dict[str, dict[str, Any]]:
     return {
-        name: snapshot_component(component)
-        for name, component in (
+        name: _serialize_option_value(model)
+        for name, model in (
             ("vad", session.vad),
             ("stt", session.stt),
             ("llm", session.llm),
             ("tts", session.tts),
         )
-        if component is not None
+        if model is not None
     }

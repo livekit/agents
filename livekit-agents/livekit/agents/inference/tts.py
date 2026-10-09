@@ -20,7 +20,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
-from .._reporting import reportable_option_names
+from .._reporting import report_options
 from ..language import LanguageCode
 from ..log import logger
 from ..tts._provider_format import drop_bracket_cues
@@ -231,7 +231,7 @@ class _TTSConnection:
     session_id: str | None
 
 
-_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(
+_EXTRA_OPTION_TYPES = (
     CartesiaOptions,
     DeepgramOptions,
     RimeOptions,
@@ -523,27 +523,29 @@ class TTS(tts.TTS):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            "model": self.model,
-            "provider": self.provider,
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "encoding": self._opts.encoding,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "sample_rate",
+                    "base_url",
+                    "api_key",
+                    "api_secret",
+                    "extra_kwargs",
+                    "fallback",
+                    "conn_options",
+                ],
+            ),
             "sample_rate": self.sample_rate,
             "num_channels": self.num_channels,
-            "extra_kwargs": {
-                key: value
-                for key, value in self._opts.extra_kwargs.items()
-                if key in _REPORTABLE_EXTRA_OPTIONS
-            },
+            "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
             "fallback": [
                 {
                     "model": item["model"],
                     "voice": item["voice"],
-                    "extra_kwargs": {
-                        key: value
-                        for key, value in item.get("extra_kwargs", {}).items()
-                        if key in _REPORTABLE_EXTRA_OPTIONS
-                    },
+                    "extra_kwargs": report_options(
+                        item.get("extra_kwargs", {}), *_EXTRA_OPTION_TYPES
+                    ),
                 }
                 for item in self._opts.fallback
             ]

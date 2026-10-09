@@ -14,6 +14,7 @@
 
 from __future__ import annotations  # noqa: I001
 
+from livekit.agents._reporting import report_options
 from typing import Any
 
 import asyncio
@@ -174,10 +175,10 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "lang_code": self._opts.lang_code,
-            "encoding": self._opts.encoding,
-            "voice_id": self._opts.voice_id,
-            "speed": self._opts.speed,
+            **report_options(
+                self._opts,
+                exclude=["sample_rate", "api_key", "jwt_token", "base_url", "word_tokenizer"],
+            ),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

@@ -23,6 +23,7 @@ from botocore.config import Config  # type: ignore
 from botocore.exceptions import ClientError  # type: ignore
 
 from livekit.agents import APIConnectionError, APIStatusError, llm
+from livekit.agents._reporting import report_options
 from livekit.agents.llm import ChatContext, FunctionToolCall, ToolChoice
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -188,12 +189,9 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "max_output_tokens": self._opts.max_output_tokens,
-            "top_p": self._opts.top_p,
-            "cache_system": self._opts.cache_system,
-            "cache_tools": self._opts.cache_tools,
+            **report_options(
+                self._opts, exclude=["model", "tool_choice", "additional_request_fields"]
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

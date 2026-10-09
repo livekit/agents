@@ -35,6 +35,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -168,12 +169,9 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "language": self._opts.language,
-            "voice": self._opts.voice,
-            "audio_format": self._opts.audio_format,
-            "bitrate": self._opts.bitrate,
-            "speed": self._opts.speed,
-            "stream_idle_timeout": self._opts.stream_idle_timeout,
+            **report_options(
+                self._opts, exclude=["model", "sample_rate", "websocket_url", "api_key"]
+            ),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

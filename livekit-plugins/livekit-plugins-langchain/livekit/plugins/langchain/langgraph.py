@@ -67,11 +67,7 @@ class LLMAdapter(llm.LLM, Generic[ContextT]):
         return "LangChain"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "subgraphs": self._subgraphs,
-            "stream_mode": self._stream_mode,
-        }
+        return {"subgraphs": self._subgraphs, "stream_mode": self._stream_mode}
 
     def chat(
         self,

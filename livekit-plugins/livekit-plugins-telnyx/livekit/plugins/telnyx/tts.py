@@ -67,10 +67,7 @@ class TTS(tts.TTS):
         return "telnyx"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-        }
+        return {**super().describe_options(), "voice": self._opts.voice}
 
     def synthesize(
         self,

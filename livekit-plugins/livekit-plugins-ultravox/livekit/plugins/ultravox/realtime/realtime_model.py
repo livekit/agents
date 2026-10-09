@@ -20,6 +20,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
@@ -237,18 +238,17 @@ class RealtimeModel(llm.RealtimeModel):
         return "Ultravox"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "input_sample_rate": self._opts.input_sample_rate,
-            "output_sample_rate": self._opts.output_sample_rate,
-            "temperature": self._opts.temperature,
-            "language_hint": self._opts.language_hint,
-            "max_duration": self._opts.max_duration,
-            "enable_greeting_prompt": self._opts.enable_greeting_prompt,
-            "first_speaker": self._opts.first_speaker,
-            "output_medium": self._opts.output_medium,
-        }
+        return report_options(
+            self._opts,
+            exclude=[
+                "model_id",
+                "external_voice",
+                "api_key",
+                "base_url",
+                "system_prompt",
+                "time_exceeded_message",
+            ],
+        )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""

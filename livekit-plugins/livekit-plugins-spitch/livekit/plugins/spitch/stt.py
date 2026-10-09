@@ -17,6 +17,7 @@ from livekit.agents import (
     LanguageCode,
     NotGivenOr,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.stt import stt
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.voice.io import TimedString
@@ -51,10 +52,7 @@ class STT(stt.STT):
         return "Spitch"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-        }
+        return report_options(self._opts)
 
     def update_options(self, language: str) -> None:
         self._opts.language = LanguageCode(language) if language else self._opts.language

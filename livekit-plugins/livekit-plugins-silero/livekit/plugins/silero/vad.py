@@ -26,6 +26,7 @@ import onnxruntime  # type: ignore
 
 from livekit import agents, rtc
 from livekit.agents import utils
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -160,17 +161,7 @@ class VAD(agents.vad.VAD):
         return "ONNX"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            "model": self.model,
-            "provider": self.provider,
-            "sample_rate": self._opts.sample_rate,
-            "min_speech_duration": self._opts.min_speech_duration,
-            "min_silence_duration": self._opts.min_silence_duration,
-            "prefix_padding_duration": self._opts.prefix_padding_duration,
-            "max_buffered_speech": self._opts.max_buffered_speech,
-            "activation_threshold": self._opts.activation_threshold,
-            "deactivation_threshold": self._opts.deactivation_threshold,
-        }
+        return report_options(self._opts)
 
     def stream(self) -> VADStream:
         """

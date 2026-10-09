@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from livekit import rtc
 
-from .._reporting import component_metadata
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -124,7 +123,7 @@ class RealtimeModel:
 
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
-        return component_metadata(self)
+        return {}
 
     @property
     def metrics_metadata(self) -> MetricsMetadata:

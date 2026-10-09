@@ -49,6 +49,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -150,13 +151,7 @@ class STT(stt.STT):
         return "Palabra"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "translate_languages": self._opts.translate_languages,
-            "filler_filter": self._opts.filler_filter,
-            "sample_rate": self._opts.sample_rate,
-        }
+        return report_options(self._opts)
 
     def update_options(
         self,

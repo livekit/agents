@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from livekit import rtc
 
-from .._reporting import component_metadata
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
 from .chat_context import ChatContext, ChatItem
@@ -90,7 +89,7 @@ class DuplexModel(ABC):
 
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
-        return component_metadata(self)
+        return {}
 
     @property
     def capabilities(self) -> DuplexCapabilities:

@@ -34,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -183,16 +184,7 @@ class STT(stt.STT):
         return "FireworksAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "sample_rate": self._opts.sample_rate,
-            "language": self._opts.language,
-            "temperature": self._opts.temperature,
-            "skip_vad": self._opts.skip_vad,
-            "text_timeout_seconds": self._opts.text_timeout_seconds,
-            "response_format": self._opts.response_format,
-            "timestamp_granularities": self._opts.timestamp_granularities,
-        }
+        return report_options(self._opts, exclude=["model", "prompt", "vad_kwargs", "base_url"])
 
     @property
     def session(self) -> aiohttp.ClientSession:

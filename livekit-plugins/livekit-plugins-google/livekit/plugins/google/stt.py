@@ -48,6 +48,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -319,24 +320,19 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "languages": self._config.languages,
-            "detect_language": self._config.detect_language,
-            "interim_results": self._config.interim_results,
-            "punctuate": self._config.punctuate,
-            "spoken_punctuation": self._config.spoken_punctuation,
-            "enable_word_time_offsets": self._config.enable_word_time_offsets,
-            "enable_word_confidence": self._config.enable_word_confidence,
-            "enable_voice_activity_events": self._config.enable_voice_activity_events,
-            "sample_rate": self._config.sample_rate,
-            "min_confidence_threshold": self._config.min_confidence_threshold,
-            "profanity_filter": self._config.profanity_filter,
+            **report_options(
+                self._config,
+                exclude=[
+                    "model",
+                    "denoiser_config",
+                    "adaptation",
+                    "keywords",
+                    "custom_prompt_config",
+                ],
+            ),
             "denoiser_config": cloud_speech_v2.DenoiserConfig.to_dict(self._config.denoiser_config)
             if is_given(self._config.denoiser_config)
             else None,
-            "speech_start_timeout": self._config.speech_start_timeout,
-            "speech_end_timeout": self._config.speech_end_timeout,
-            "endpointing_sensitivity": self._config.endpointing_sensitivity,
         }
 
     async def _create_client(self, timeout: float) -> SpeechAsyncClientV2 | SpeechAsyncClientV1:

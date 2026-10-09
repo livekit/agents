@@ -27,6 +27,7 @@ from livekit.agents import (
     LanguageCode,
     tts,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -122,14 +123,7 @@ class TTS(tts.TTS):
         return "Amazon Polly"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "speech_engine": self._opts.speech_engine,
-            "region": self._opts.region,
-            "language": self._opts.language,
-            "text_type": self._opts.text_type,
-        }
+        return {**super().describe_options(), **report_options(self._opts, exclude=["sample_rate"])}
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

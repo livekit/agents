@@ -92,6 +92,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
+from ..._reporting import report_options
 from .openai_types import RealtimeModels
 from .openai_utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -580,14 +581,24 @@ class RealtimeModel(llm.RealtimeModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "modalities": self._opts.modalities,
-            "speed": self._opts.speed,
-            "max_session_duration": self._opts.max_session_duration,
-            "max_response_output_tokens": self._opts.max_response_output_tokens,
-            "is_azure": self._opts.is_azure,
-            "api_version": self._opts.api_version,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "tool_choice",
+                    "input_audio_transcription",
+                    "input_audio_noise_reduction",
+                    "turn_detection",
+                    "tracing",
+                    "truncation",
+                    "reasoning",
+                    "api_key",
+                    "base_url",
+                    "azure_deployment",
+                    "entra_token",
+                    "conn_options",
+                ],
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

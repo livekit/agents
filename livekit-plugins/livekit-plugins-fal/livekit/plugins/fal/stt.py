@@ -8,6 +8,7 @@ import fal_client
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIConnectOptions, LanguageCode, stt
+from livekit.agents._reporting import report_options
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -53,13 +54,7 @@ class WizperSTT(stt.STT):
         return "Fal"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "task": self._opts.task,
-            "chunk_level": self._opts.chunk_level,
-            "version": self._opts.version,
-        }
+        return report_options(self._opts)
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

@@ -23,6 +23,7 @@ import httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents._reporting import report_options
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -152,13 +153,7 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "parallel_tool_calls": self._opts.parallel_tool_calls,
-            "caching": self._opts.caching,
-            "top_k": self._opts.top_k,
-            "max_tokens": self._opts.max_tokens,
-            "strict_tool_schema": self._opts.strict_tool_schema,
+            **report_options(self._opts, exclude=["model", "user", "tool_choice"]),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

@@ -108,10 +108,7 @@ class TTS(tts.TTS):
         return "Groq"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-        }
+        return {**super().describe_options(), "voice": self._opts.voice}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

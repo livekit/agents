@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -403,10 +404,9 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "speaker": self._opts.speaker,
-            "language": self._opts.language,
-            "audio_format": self._opts.audio_format,
-            "time_scale_factor": self._opts.time_scale_factor,
+            **report_options(
+                self._opts, exclude=["model", "sample_rate", "coda_options", "mist_options"]
+            ),
             "coda_options": asdict(self._opts.coda_options)
             if is_given(self._opts.coda_options) and self._opts.coda_options is not None
             else None,

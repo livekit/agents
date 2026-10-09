@@ -41,6 +41,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
@@ -340,18 +341,21 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
             "language_config": asdict(self._opts.language_config)
             if is_given(self._opts.language_config) and self._opts.language_config is not None
             else None,
-            "interim_results": self._opts.interim_results,
-            "sample_rate": self._opts.sample_rate,
-            "bit_depth": self._opts.bit_depth,
-            "channels": self._opts.channels,
-            "endpointing": self._opts.endpointing,
-            "maximum_duration_without_endpointing": self._opts.maximum_duration_without_endpointing,
-            "region": self._opts.region,
-            "encoding": self._opts.encoding,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "language_config",
+                    "translation_config",
+                    "energy_filter",
+                    "custom_vocabulary",
+                    "custom_spelling",
+                    "pre_processing",
+                ],
+            ),
             "translation_config": {
                 "enabled": self._opts.translation_config.enabled,
                 "target_languages": self._opts.translation_config.target_languages,

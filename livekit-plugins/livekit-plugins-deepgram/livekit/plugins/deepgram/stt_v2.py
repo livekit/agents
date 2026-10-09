@@ -34,6 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -198,20 +199,7 @@ class STTv2(stt.STT):
         return "Deepgram"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "sample_rate": self._opts.sample_rate,
-            "language": self._opts.language,
-            "eager_eot_threshold": self._opts.eager_eot_threshold,
-            "eot_threshold": self._opts.eot_threshold,
-            "eot_timeout_ms": self._opts.eot_timeout_ms,
-            "mip_opt_out": self._opts.mip_opt_out,
-            "numerals": self._opts.numerals,
-            "profanity_filter": self._opts.profanity_filter,
-            "redact": self._opts.redact,
-            "tags": self._opts.tags,
-            "language_hint": self._opts.language_hint,
-        }
+        return report_options(self._opts, exclude=["model", "keyterm", "endpoint_url"])
 
     def stream(
         self,

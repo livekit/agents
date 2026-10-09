@@ -39,6 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -193,30 +194,7 @@ class STT(stt.STT):
         return "Simplismart"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "task": self._opts.task,
-            "without_timestamps": self._opts.without_timestamps,
-            "vad_model": self._opts.vad_model,
-            "vad_filter": self._opts.vad_filter,
-            "vad_onset": self._opts.vad_onset,
-            "vad_offset": self._opts.vad_offset,
-            "min_speech_duration_ms": self._opts.min_speech_duration_ms,
-            "max_speech_duration_s": self._opts.max_speech_duration_s,
-            "min_silence_duration_ms": self._opts.min_silence_duration_ms,
-            "speech_pad_ms": self._opts.speech_pad_ms,
-            "num_speakers": self._opts.num_speakers,
-            "compression_ratio_threshold": self._opts.compression_ratio_threshold,
-            "beam_size": self._opts.beam_size,
-            "temperature": self._opts.temperature,
-            "multilingual": self._opts.multilingual,
-            "max_tokens": self._opts.max_tokens,
-            "log_prob_threshold": self._opts.log_prob_threshold,
-            "length_penalty": self._opts.length_penalty,
-            "repetition_penalty": self._opts.repetition_penalty,
-            "strict_hallucination_reduction": self._opts.strict_hallucination_reduction,
-        }
+        return report_options(self._opts, exclude=["initial_prompt", "hotwords"])
 
     @property
     def model(self) -> str:

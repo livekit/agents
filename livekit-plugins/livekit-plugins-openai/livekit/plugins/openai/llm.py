@@ -23,6 +23,7 @@ import httpx
 
 import openai
 from livekit.agents import llm
+from livekit.agents._reporting import report_options
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
@@ -204,16 +205,20 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "top_p": self._opts.top_p,
-            "parallel_tool_calls": self._opts.parallel_tool_calls,
-            "store": self._opts.store,
-            "max_completion_tokens": self._opts.max_completion_tokens,
-            "service_tier": self._opts.service_tier,
-            "reasoning_effort": self._opts.reasoning_effort,
-            "verbosity": self._opts.verbosity,
-            "prompt_cache_retention": self._opts.prompt_cache_retention,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "user",
+                    "safety_identifier",
+                    "prompt_cache_key",
+                    "tool_choice",
+                    "metadata",
+                    "extra_body",
+                    "extra_headers",
+                    "extra_query",
+                ],
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

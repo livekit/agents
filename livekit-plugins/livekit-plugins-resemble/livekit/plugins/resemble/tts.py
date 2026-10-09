@@ -121,10 +121,7 @@ class TTS(tts.TTS):
         return "Resemble"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice_uuid": self._opts.voice_uuid,
-        }
+        return {**super().describe_options(), "voice_uuid": self._opts.voice_uuid}
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(

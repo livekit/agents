@@ -18,6 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -454,24 +455,27 @@ class RealtimeModel(llm.RealtimeModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "response_modalities": self._opts.response_modalities,
-            "vertexai": self._opts.vertexai,
-            "candidate_count": self._opts.candidate_count,
-            "temperature": self._opts.temperature,
-            "max_output_tokens": self._opts.max_output_tokens,
-            "top_p": self._opts.top_p,
-            "top_k": self._opts.top_k,
-            "presence_penalty": self._opts.presence_penalty,
-            "frequency_penalty": self._opts.frequency_penalty,
-            "media_resolution": self._opts.media_resolution,
-            "enable_affective_dialog": self._opts.enable_affective_dialog,
-            "proactivity": self._opts.proactivity,
-            "api_version": self._opts.api_version,
-            "tool_behavior": self._opts.tool_behavior,
-            "tool_response_scheduling": self._opts.tool_response_scheduling,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "api_key",
+                    "project",
+                    "location",
+                    "instructions",
+                    "input_audio_transcription",
+                    "output_audio_transcription",
+                    "image_encode_options",
+                    "conn_options",
+                    "http_options",
+                    "realtime_input_config",
+                    "context_window_compression",
+                    "tool_choice",
+                    "thinking_config",
+                    "session_resumption",
+                    "credentials",
+                ],
+            ),
             "thinking_config": self._opts.thinking_config.model_dump(
                 include={"include_thoughts", "thinking_budget", "thinking_level"}, exclude_none=True
             )

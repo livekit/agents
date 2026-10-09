@@ -5,7 +5,6 @@ from collections.abc import AsyncIterable
 from typing import Any, ClassVar
 
 from .. import tokenize, utils
-from .._reporting import snapshot_component
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .stream_pacer import SentenceStreamPacer
 from .tts import (
@@ -92,7 +91,7 @@ class StreamAdapter(TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "tts": snapshot_component(self._wrapped_tts),
+            "tts": self._wrapped_tts,
             "text_pacing": self._stream_pacer is not None,
         }
 

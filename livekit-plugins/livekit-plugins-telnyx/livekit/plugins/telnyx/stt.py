@@ -23,6 +23,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -81,13 +82,7 @@ class STT(stt.STT):
         return "telnyx"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "transcription_engine": self._opts.transcription_engine,
-            "interim_results": self._opts.interim_results,
-            "sample_rate": self._opts.sample_rate,
-        }
+        return report_options(self._opts, exclude=["api_key", "base_url"])
 
     async def _recognize_impl(
         self,

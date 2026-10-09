@@ -11,7 +11,6 @@ from typing import Any, Literal
 from livekit import rtc
 from livekit.agents.metrics.base import Metadata
 
-from ._reporting import component_metadata
 from .metrics import VADMetrics
 from .utils import aio
 
@@ -94,7 +93,7 @@ class VAD(ABC, rtc.EventEmitter[Literal["metrics_collected"]]):
 
     def describe_options(self) -> Mapping[str, Any]:
         """Return settings to include in session reports, without credentials or user content."""
-        return component_metadata(self)
+        return {}
 
     @abstractmethod
     def stream(self) -> VADStream: ...

@@ -45,6 +45,7 @@ from livekit.agents import (
     utils,
     vad,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -336,9 +337,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "languages": self._opts.languages,
-            "detect_language": self._opts.detect_language,
+            **report_options(self._opts, exclude=["model", "turn_detection", "keywords", "prompt"]),
             "turn_detection": self._opts.turn_detection.model_dump(
                 include={
                     "type",
@@ -354,8 +353,6 @@ class STT(stt.STT):
             )
             if self._opts.turn_detection is not None
             else None,
-            "noise_reduction_type": self._opts.noise_reduction_type,
-            "temperature": self._opts.temperature,
         }
 
     @staticmethod

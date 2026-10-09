@@ -39,6 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -232,22 +233,21 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice_id": self._opts.voice_id,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "api_key",
+                    "voice_settings",
+                    "model",
+                    "base_url",
+                    "sample_rate",
+                    "word_tokenizer",
+                    "pronunciation_dictionary_locators",
+                ],
+            ),
             "voice_settings": asdict(self._opts.voice_settings)
             if is_given(self._opts.voice_settings) and self._opts.voice_settings is not None
             else None,
-            "language": self._opts.language,
-            "encoding": self._opts.encoding,
-            "streaming_latency": self._opts.streaming_latency,
-            "chunk_length_schedule": self._opts.chunk_length_schedule,
-            "enable_ssml_parsing": self._opts.enable_ssml_parsing,
-            "enable_logging": self._opts.enable_logging,
-            "inactivity_timeout": self._opts.inactivity_timeout,
-            "sync_alignment": self._opts.sync_alignment,
-            "apply_text_normalization": self._opts.apply_text_normalization,
-            "apply_language_text_normalization": self._opts.apply_language_text_normalization,
-            "preferred_alignment": self._opts.preferred_alignment,
-            "auto_mode": self._opts.auto_mode,
             "pronunciation_dictionary_locators": [
                 asdict(locator) for locator in self._opts.pronunciation_dictionary_locators
             ]

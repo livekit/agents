@@ -257,7 +257,6 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
             "audio_chunk_duration_ms": self._audio_chunk_duration_ms,
             "final_transcript_mode": self._final_transcript_mode,
             "encoding": self._encoding,

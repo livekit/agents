@@ -28,6 +28,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -190,28 +191,7 @@ class STT(stt.STT):
         return "Amazon Transcribe"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "sample_rate": self._config.sample_rate,
-            "language": self._config.language,
-            "encoding": self._config.encoding,
-            "vocabulary_name": self._config.vocabulary_name,
-            "vocab_filter_method": self._config.vocab_filter_method,
-            "vocab_filter_name": self._config.vocab_filter_name,
-            "show_speaker_label": self._config.show_speaker_label,
-            "enable_channel_identification": self._config.enable_channel_identification,
-            "number_of_channels": self._config.number_of_channels,
-            "enable_partial_results_stabilization": self._config.enable_partial_results_stabilization,
-            "partial_results_stability": self._config.partial_results_stability,
-            "language_model_name": self._config.language_model_name,
-            "region": self._config.region,
-            "identify_language": self._config.identify_language,
-            "identify_multiple_languages": self._config.identify_multiple_languages,
-            "language_options": self._config.language_options,
-            "preferred_language": self._config.preferred_language,
-            "vocabulary_names": self._config.vocabulary_names,
-            "vocabulary_filter_names": self._config.vocabulary_filter_names,
-        }
+        return report_options(self._config, exclude=["session_id"])
 
     async def aclose(self) -> None:
         await super().aclose()

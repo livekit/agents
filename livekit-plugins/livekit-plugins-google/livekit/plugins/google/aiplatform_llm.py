@@ -38,6 +38,7 @@ import google.auth
 import google.auth.credentials
 import google.auth.transport.requests
 from livekit.agents import llm
+from livekit.agents._reporting import report_options
 from livekit.agents.inference.llm import LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
@@ -254,11 +255,10 @@ class AIPlatformLLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "top_p": self._opts.top_p,
-            "max_completion_tokens": self._opts.max_completion_tokens,
-            "parallel_tool_calls": self._opts.parallel_tool_calls,
+            **report_options(
+                self._opts,
+                exclude=["model", "tool_choice", "extra_body", "extra_headers", "extra_query"],
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

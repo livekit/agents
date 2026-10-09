@@ -33,6 +33,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -204,13 +205,7 @@ class TTS(tts.TTS):
         return "Speechify"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice_id": self._opts.voice_id,
-            "language": self._opts.language,
-            "loudness_normalization": self._opts.loudness_normalization,
-            "text_normalization": self._opts.text_normalization,
-        }
+        return {**super().describe_options(), **report_options(self._opts, exclude=["model"])}
 
     async def aclose(self) -> None:
         if self._owns_client:

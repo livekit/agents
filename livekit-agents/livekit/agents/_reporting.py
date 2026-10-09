@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Collection, Mapping, Sequence, Set
+from dataclasses import fields, is_dataclass
 from enum import Enum
 from typing import (
-    TYPE_CHECKING,
     Annotated,
     Any,
     Protocol,
@@ -15,31 +15,40 @@ from typing import (
     runtime_checkable,
 )
 
+from pydantic import BaseModel
+
 from .log import logger
 from .utils import is_given
-
-if TYPE_CHECKING:
-    from .llm import LLM, DuplexModel, RealtimeModel
-    from .stt import STT
-    from .tts import TTS
-    from .vad import VAD
-
 
 _T = TypeVar("_T")
 Sensitive = Annotated[_T, "sensitive"]
 """Marks an option for exclusion from session reports."""
 
 
-def reportable_option_names(*option_types: type) -> frozenset[str]:
-    """Return declared fields, excluding any marked sensitive in the supplied types."""
-    declared: set[str] = set()
+def report_options(
+    config: Any, *option_types: type, exclude: Collection[str] = ()
+) -> dict[str, Any]:
+    """Read declared config fields, excluding sensitive fields and explicit exclusions.
+
+    Dataclasses and Pydantic models carry their schema. Dictionaries require option types.
+    """
+    if is_dataclass(config) and not isinstance(config, type):
+        option_types = (type(config),)
+        values = {field.name: getattr(config, field.name) for field in fields(config)}
+    elif isinstance(config, BaseModel):
+        option_types = (type(config),)
+        values = {name: getattr(config, name) for name in type(config).model_fields}
+    else:
+        values = config
+    names: set[str] = set()
     sensitive: set[str] = set()
     for option_type in option_types:
         for name, annotation in get_type_hints(option_type, include_extras=True).items():
-            declared.add(name)
+            names.add(name)
             if get_origin(annotation) is Annotated and "sensitive" in get_args(annotation)[1:]:
                 sensitive.add(name)
-    return frozenset(declared - sensitive)
+    names -= sensitive
+    return {key: value for key, value in values.items() if key in names and key not in exclude}
 
 
 _SESSION_OPTION_KEY_ALIASES = {
@@ -60,8 +69,8 @@ class DescribesOptions(Protocol):
     """An object that can appear in ``AgentSession`` options (a turn detector, a model) and
     wants the session report to show its configuration.
 
-    Return the options worth reporting, keyed by name; values can be primitives, mappings
-    or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
+    Return the options worth reporting, keyed by name; values can be primitives, models,
+    mappings or sequences of them. Leave secrets and endpoints out: the report is uploaded. Objects
     without this method are reported by class name alone."""
 
     def describe_options(self) -> Mapping[str, Any]: ...
@@ -113,35 +122,30 @@ def _serialize_option_value(value: Any) -> Any:
         # serialize the elements rather than collapsing the container to its class name
         items = sorted(value, key=str) if isinstance(value, Set) else value
         return [_serialize_option_value(v) for v in items]
-    return _describe_option_object(value)
 
+    from .llm import LLM, DuplexModel, RealtimeModel
+    from .stt import STT
+    from .tts import TTS
+    from .vad import VAD
 
-def component_metadata(
-    component: LLM | RealtimeModel | DuplexModel | STT | TTS | VAD,
-) -> dict[str, str]:
-    try:
-        return {"model": component.model, "provider": component.provider}
-    except Exception:
-        logger.debug("component metadata failed on %s", type(component).__name__, exc_info=True)
-        return {}
-
-
-def snapshot_component(
-    component: LLM | RealtimeModel | DuplexModel | STT | TTS | VAD,
-) -> dict[str, Any]:
-    """Snapshot one component without letting its description failure affect siblings."""
-    cls = type(component)
-    options: dict[str, Any] = component_metadata(component)
-    try:
-        options.update(
-            _serialize_option_value(
-                {
-                    key: value
-                    for key, value in component.describe_options().items()
-                    if value is not None and is_given(value)
-                }
+    if isinstance(value, (LLM, RealtimeModel, DuplexModel, STT, TTS, VAD)):
+        cls = type(value)
+        options: dict[str, Any] = {}
+        try:
+            options.update(model=value.model, provider=value.provider)
+        except Exception:
+            logger.debug("model metadata failed on %s", cls.__name__, exc_info=True)
+        try:
+            options.update(
+                _serialize_option_value(
+                    {
+                        key: option
+                        for key, option in value.describe_options().items()
+                        if option is not None and is_given(option)
+                    }
+                )
             )
-        )
-    except Exception:
-        logger.debug("describe_options() failed on %s", cls.__name__, exc_info=True)
-    return {**options, "type": f"{cls.__module__}.{cls.__name__}"}
+        except Exception:
+            logger.debug("describe_options() failed on %s", cls.__name__, exc_info=True)
+        return {**options, "type": f"{cls.__module__}.{cls.__name__}"}
+    return _describe_option_object(value)

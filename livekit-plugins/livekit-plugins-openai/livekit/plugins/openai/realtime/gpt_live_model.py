@@ -15,7 +15,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents._reporting import Sensitive, reportable_option_names
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics import LLMMetrics, RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -97,9 +97,6 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     service_tier: types.ServiceTier
     max_output_tokens: int
     """Upper bound on the tokens one backend response may generate; at least 16."""
-
-
-_REPORTABLE_RESPONSES_OPTIONS = reportable_option_names(ResponsesDelegationOptions)
 
 
 @dataclass
@@ -356,17 +353,20 @@ class GPTLiveModel(llm.DuplexModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "delegation": self._opts.delegation,
-            "service_tier": self._opts.service_tier,
-            "max_session_duration": self._opts.max_session_duration,
-            "is_azure": self._opts.is_azure,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "voice",
+                    "responses",
+                    "api_key",
+                    "base_url",
+                    "conn_options",
+                    "entra_token",
+                ],
+            ),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else None,
-            "responses": {
-                key: value
-                for key, value in self._opts.responses.items()
-                if key in _REPORTABLE_RESPONSES_OPTIONS
-            },
+            "responses": report_options(self._opts.responses, ResponsesDelegationOptions),
         }
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:

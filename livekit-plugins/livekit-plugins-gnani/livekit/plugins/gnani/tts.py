@@ -44,6 +44,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 
 from .log import logger
 from .models import (
@@ -176,13 +177,9 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "encoding": self._opts.encoding,
-            "container": self._opts.container,
-            "sample_width": self._opts.sample_width,
-            "bitrate": self._opts.bitrate,
-            "synthesize_method": self._opts.synthesize_method,
+            **report_options(
+                self._opts, exclude=["api_key", "model", "sample_rate", "num_channels", "base_url"]
+            ),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

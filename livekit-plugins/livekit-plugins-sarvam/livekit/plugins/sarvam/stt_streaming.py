@@ -39,6 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -318,20 +319,7 @@ class STTRealtime(stt.STT):
         return "Sarvam"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "stream_type": self._opts.stream_type,
-            "mode": self._opts.mode,
-            "endpointing": self._opts.endpointing,
-            "encoding": self._opts.encoding,
-            "sample_rate": self._opts.sample_rate,
-            "return_timestamps": self._opts.return_timestamps,
-            "vad_sot_threshold": self._opts.vad_sot_threshold,
-            "vad_min_speech_ms": self._opts.vad_min_speech_ms,
-            "vad_min_silence_ms": self._opts.vad_min_silence_ms,
-            "vad_prefix_padding_ms": self._opts.vad_prefix_padding_ms,
-        }
+        return report_options(self._opts, exclude=["api_key", "model", "base_url", "prompt"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

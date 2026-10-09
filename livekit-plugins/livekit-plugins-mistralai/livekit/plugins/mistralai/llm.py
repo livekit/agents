@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
+from livekit.agents._reporting import report_options
 from livekit.agents.llm import (
     ChatChunk,
     ChatContext,
@@ -160,14 +161,7 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "api_mode": self._opts.api_mode,
-            "max_completion_tokens": self._opts.max_completion_tokens,
-            "temperature": self._opts.temperature,
-            "top_p": self._opts.top_p,
-            "presence_penalty": self._opts.presence_penalty,
-            "frequency_penalty": self._opts.frequency_penalty,
-            "random_seed": self._opts.random_seed,
+            **report_options(self._opts, exclude=["model", "tool_choice"]),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

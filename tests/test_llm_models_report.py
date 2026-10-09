@@ -8,7 +8,7 @@ import pytest
 
 from livekit.agents import AgentSession, inference, llm
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.voice.report import _serialize_session_components
+from livekit.agents.voice.report import _serialize_session_models
 
 from .fake_llm import FakeLLM
 from .fake_realtime import FakeRealtimeModel
@@ -22,7 +22,7 @@ def disable_prewarm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _snapshot(model: llm.LLM | llm.RealtimeModel | llm.DuplexModel) -> dict[str, Any]:
-    return _serialize_session_components(AgentSession(vad=None, llm=model))["llm"]
+    return _serialize_session_models(AgentSession(vad=None, llm=model))["llm"]
 
 
 async def test_inference_llm_settings_are_detached_and_exclude_sensitive_options() -> None:

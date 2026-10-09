@@ -36,6 +36,7 @@ from livekit.agents._exceptions import (
     APIStatusError,
     APITimeoutError,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -993,18 +994,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "encoding": self._opts.encoding,
-            "voice": self._opts.voice,
-            "bit_rate": self._opts.bit_rate,
-            "speaking_rate": self._opts.speaking_rate,
-            "temperature": self._opts.temperature,
-            "language": self._opts.language,
-            "timestamp_type": self._opts.timestamp_type,
-            "text_normalization": self._opts.text_normalization,
-            "delivery_mode": self._opts.delivery_mode,
-            "timestamp_transport_strategy": self._opts.timestamp_transport_strategy,
-            "buffer_char_threshold": self._opts.buffer_char_threshold,
-            "max_buffer_delay_ms": self._opts.max_buffer_delay_ms,
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     async def _get_pool(self) -> _ConnectionPool:

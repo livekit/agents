@@ -32,7 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import reportable_option_names
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -75,8 +75,6 @@ class AudioFormat(str, Enum):
 
 
 ModelVersion = Literal["1", "2"]
-
-_REPORTABLE_VOICE_OPTIONS = reportable_option_names(VoiceById, VoiceByName)
 
 
 DEFAULT_HEADERS = {
@@ -189,18 +187,12 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice": {
-                key: value
-                for key, value in self._opts.voice.items()
-                if key in _REPORTABLE_VOICE_OPTIONS
-            }
+            "voice": report_options(self._opts.voice, VoiceById, VoiceByName)
             if self._opts.voice is not None
             else None,
-            "model_version": self._opts.model_version,
-            "speed": self._opts.speed,
-            "trailing_silence": self._opts.trailing_silence,
-            "instant_mode": self._opts.instant_mode,
-            "audio_format": self._opts.audio_format,
+            **report_options(
+                self._opts, exclude=["api_key", "base_url", "voice", "description", "context"]
+            ),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

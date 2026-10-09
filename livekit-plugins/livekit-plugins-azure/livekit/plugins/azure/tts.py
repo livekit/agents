@@ -28,6 +28,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -220,10 +221,18 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "region": self._opts.region,
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "deployment_id": self._opts.deployment_id,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "sample_rate",
+                    "subscription_key",
+                    "speech_endpoint",
+                    "prosody",
+                    "style",
+                    "lexicon_uri",
+                    "auth_token",
+                ],
+            ),
             "prosody": asdict(self._opts.prosody)
             if is_given(self._opts.prosody) and self._opts.prosody is not None
             else None,

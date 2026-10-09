@@ -166,7 +166,6 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
             "language": self._opts.language,
             "target_streaming_delay_ms": self._opts.target_streaming_delay_ms,
         }

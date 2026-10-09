@@ -205,11 +205,7 @@ class STT(stt.STT):
         return "Microsoft AI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._language,
-            "max_buffered_audio": self._max_buffered_audio,
-        }
+        return {"language": self._language, "max_buffered_audio": self._max_buffered_audio}
 
     async def _recognize_impl(
         self,

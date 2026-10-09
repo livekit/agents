@@ -16,6 +16,7 @@ from livekit.agents import (
     LanguageCode,
     tts,
 )
+from livekit.agents._reporting import report_options
 from spitch import AsyncSpitch
 
 SAMPLE_RATE = 24_000
@@ -47,11 +48,7 @@ class TTS(tts.TTS):
         return "Spitch"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._opts.language,
-            "voice": self._opts.voice,
-        }
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def synthesize(
         self,

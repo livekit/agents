@@ -91,11 +91,7 @@ class STT(stt.STT):
         return "Clova"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "language": self._language,
-            "threshold": self.threshold,
-        }
+        return {"language": self._language, "threshold": self.threshold}
 
     def update_options(self, *, language: NotGivenOr[str] = NOT_GIVEN) -> None:
         if is_given(language):

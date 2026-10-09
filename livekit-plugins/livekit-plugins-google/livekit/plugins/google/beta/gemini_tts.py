@@ -8,6 +8,7 @@ from typing import Any, Literal
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, tts, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.tts._provider_format import split_expr_markup
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -239,10 +240,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice_name": self._opts.voice_name,
-            "vertexai": self._opts.vertexai,
-            "location": self._opts.location,
-            "speaker": self._opts.speaker,
+            **report_options(self._opts, exclude=["model", "project", "instructions", "speakers"]),
         }
 
     def synthesize(

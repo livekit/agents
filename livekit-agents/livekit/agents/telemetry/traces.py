@@ -1234,7 +1234,7 @@ async def _upload_session_report(
             timestamp=int((report.started_at or report.timestamp or 0) * 1e9),
             attributes={
                 "session.options": _serialize_session_options(report.options),
-                "session.components": report.components,
+                "session.models": report.models,
                 "session.report_timestamp": report.timestamp,
                 "session.tags": sorted(tagger.tags) if tagger.tags else None,
                 "agent_name": agent_name,

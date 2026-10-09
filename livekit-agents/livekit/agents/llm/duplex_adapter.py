@@ -12,7 +12,6 @@ import numpy as np
 
 from livekit import rtc
 
-from .._reporting import snapshot_component
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr, TimedString
 from ..utils import aio, is_given, shortuuid
@@ -300,7 +299,7 @@ class DuplexRealtimeAdapter(RealtimeModel):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "llm": snapshot_component(self._duplex_model),
+            "llm": self._duplex_model,
             "audio_timeout": self._audio_timeout,
         }
 

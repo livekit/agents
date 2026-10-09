@@ -27,6 +27,7 @@ from livekit import rtc
 from livekit.local_inference import VAD as _NativeVAD, VAD_WINDOW_SAMPLES
 
 from .. import utils, vad
+from .._reporting import report_options
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from ..utils import is_given
@@ -96,17 +97,7 @@ class VAD(vad.VAD):
         return "livekit-local-inference"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            "model": self.model,
-            "provider": self.provider,
-            "sample_rate": _MODEL_SAMPLE_RATE,
-            "min_speech_duration": self._opts.min_speech_duration,
-            "min_silence_duration": self._opts.min_silence_duration,
-            "prefix_padding_duration": self._opts.prefix_padding_duration,
-            "max_buffered_speech": self._opts.max_buffered_speech,
-            "activation_threshold": self._opts.activation_threshold,
-            "deactivation_threshold": self._opts.deactivation_threshold,
-        }
+        return {"sample_rate": _MODEL_SAMPLE_RATE, **report_options(self._opts)}
 
     def stream(self) -> vad.VADStream:
         # Each stream owns its own _VADOptions snapshot so that

@@ -36,6 +36,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -214,15 +215,10 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "encoding": self._opts.encoding,
+            **report_options(
+                self._opts, exclude=["model", "sample_rate", "voice", "api_key", "base_url"]
+            ),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
-            "speed": self._opts.speed,
-            "emotion": self._opts.emotion,
-            "volume": self._opts.volume,
-            "word_timestamps": self._opts.word_timestamps,
-            "language": self._opts.language,
-            "api_version": self._opts.api_version,
-            "pronunciation_dict_id": self._opts.pronunciation_dict_id,
         }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:

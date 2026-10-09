@@ -112,7 +112,7 @@ def _make_mock_report(recording_options: RecordingOptions | None = None) -> Magi
     report.timestamp = 1010.0
     report.options = MagicMock()
     report.options.recording_options = recording_options or _RECORDING_ALL_ON.copy()
-    report.components = {}
+    report.models = {}
     return report
 
 
@@ -673,7 +673,7 @@ async def test_upload_audio_only_no_file() -> None:
     mock_http.post.assert_not_called()
 
 
-async def test_session_report_components_ignore_agent_overrides(
+async def test_session_report_models_ignore_agent_overrides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _create_simple_session()
@@ -697,18 +697,16 @@ async def test_session_report_components_ignore_agent_overrides(
             "transcript": False,
         }
         report = JobContext.make_session_report(_make_mock_job_ctx(), session)
-        assert set(report.components) == {"vad", "stt", "llm", "tts"}
-        assert all(
-            component["configuration"] == "session" for component in report.components.values()
-        )
-        assert report.to_dict()["components"] == report.components
+        assert set(report.models) == {"vad", "stt", "llm", "tts"}
+        assert all(component["configuration"] == "session" for component in report.models.values())
+        assert report.to_dict()["models"] == report.models
 
         with _patch_upload_deps() as mock_logger:
             await _call_upload(report)
         session_report_call = next(
             c for c in mock_logger.emit.call_args_list if c.kwargs.get("body") == "session report"
         )
-        assert session_report_call.kwargs["attributes"]["session.components"] == report.components
+        assert session_report_call.kwargs["attributes"]["session.models"] == report.models
     finally:
         await _cleanup(session)
 

@@ -21,7 +21,7 @@ from typing_extensions import TypedDict
 
 from .. import llm
 from .._exceptions import APIConnectionError, APIStatusError, APITimeoutError
-from .._reporting import Sensitive, reportable_option_names
+from .._reporting import Sensitive, report_options
 from ..llm import ToolChoice, utils as llm_utils
 from ..llm.chat_context import ChatContext
 from ..llm.tool_context import Tool
@@ -219,9 +219,6 @@ class ChatCompletionOptions(TypedDict, total=False):
     # response_format: completion_create_params.ResponseFormat
 
 
-_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(ChatCompletionOptions)
-
-
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
@@ -314,14 +311,9 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
             "inference_provider": self._opts.provider,
             "inference_class": self._opts.inference_class,
-            "extra_kwargs": {
-                key: value
-                for key, value in self._opts.extra_kwargs.items()
-                if key in _REPORTABLE_EXTRA_OPTIONS
-            },
+            "extra_kwargs": report_options(self._opts.extra_kwargs, ChatCompletionOptions),
         }
 
     def chat(

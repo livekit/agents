@@ -47,6 +47,7 @@ from livekit.agents import (
     tts as tts_module,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -217,16 +218,9 @@ class _Qwen3Backend:
         self._closing = False
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "task_type": self._opts.task_type,
-            "speed": self._opts.speed,
-            "max_new_tokens": self._opts.max_new_tokens,
-            "initial_codec_chunk_frames": self._opts.initial_codec_chunk_frames,
-            "x_vector_only_mode": self._opts.x_vector_only_mode,
-            "word_timestamps": self._opts.word_timestamps,
-        }
+        return report_options(
+            self._opts, exclude=["instructions", "ref_audio", "ref_text", "extra_config"]
+        )
 
     def update_options(
         self,

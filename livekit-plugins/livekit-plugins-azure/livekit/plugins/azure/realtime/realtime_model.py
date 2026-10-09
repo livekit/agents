@@ -53,6 +53,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -348,12 +349,20 @@ class RealtimeModel(llm.RealtimeModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "input_audio_format": self._opts.input_audio_format,
-            "output_audio_format": self._opts.output_audio_format,
-            "modalities": self._opts.modalities,
-            "temperature": self._opts.temperature,
-            "max_output_tokens": self._opts.max_output_tokens,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "endpoint",
+                    "model",
+                    "voice",
+                    "input_audio_transcription",
+                    "tool_choice",
+                    "turn_detection",
+                    "api_key",
+                    "use_default_credential",
+                    "conn_options",
+                ],
+            ),
             "voice": self._opts.voice
             if isinstance(self._opts.voice, str)
             else self._opts.voice.name,

@@ -6,7 +6,6 @@ from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Any
 
 from .. import utils
-from .._reporting import snapshot_component
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from ..vad import VAD, VADEventType
 from .stt import STT, RecognizeStream, SpeechEvent, SpeechEventType, STTCapabilities
@@ -50,11 +49,7 @@ class StreamAdapter(STT):
         return self._stt.provider
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "stt": snapshot_component(self._stt),
-            "vad": snapshot_component(self._vad),
-        }
+        return {**super().describe_options(), "stt": self._stt, "vad": self._vad}
 
     def _update_session_keyterms(self, keyterms: list[str]) -> None:
         self._stt._update_session_keyterms(keyterms)

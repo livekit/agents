@@ -26,6 +26,7 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -307,17 +308,21 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "vertexai": self._opts.vertexai,
-            "max_output_tokens": self._opts.max_output_tokens,
-            "top_p": self._opts.top_p,
-            "top_k": self._opts.top_k,
-            "presence_penalty": self._opts.presence_penalty,
-            "frequency_penalty": self._opts.frequency_penalty,
-            "seed": self._opts.seed,
-            "service_tier": self._opts.service_tier,
-            "media_resolution": self._opts.media_resolution,
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "tool_choice",
+                    "project",
+                    "location",
+                    "thinking_config",
+                    "retrieval_config",
+                    "automatic_function_calling_config",
+                    "http_options",
+                    "safety_settings",
+                    "cached_content",
+                ],
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

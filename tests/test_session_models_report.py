@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 from collections import UserDict
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TypedDict
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
-from livekit.agents._reporting import Sensitive, reportable_option_names
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN
-from livekit.agents.voice.report import SessionReport, _serialize_session_components
+from livekit.agents.voice.report import SessionReport, _serialize_session_models
 
 from .fake_stt import FakeSTT
 from .fake_tts import FakeTTS
@@ -37,8 +39,42 @@ def test_reportable_options_exclude_sensitive_fields() -> None:
     class OtherOptions(TypedDict):
         prompt: str
 
-    assert reportable_option_names(Options) == {"speed", "future_setting"}
-    assert reportable_option_names(Options, OtherOptions) == {"speed", "future_setting"}
+    config = {"speed": 1.0, "prompt": "private-prompt", "future_setting": 2.0, "unknown": "private"}
+    assert report_options(config, Options) == {"speed": 1.0, "future_setting": 2.0}
+    assert report_options(config, Options, OtherOptions, exclude=["speed"]) == {
+        "future_setting": 2.0
+    }
+    assert report_options(config) == {}
+
+
+@pytest.mark.parametrize("pydantic", [False, True])
+def test_report_options_uses_declared_fields_and_exclusions(pydantic: bool) -> None:
+    @dataclass
+    class DataclassOptions:
+        language: str = "en"
+        prompt: Sensitive[str] = "private-prompt"
+        endpoint: str = "private-endpoint"
+
+    class ModelOptions(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        language: str = "en"
+        prompt: Sensitive[str] = "private-prompt"
+        endpoint: str = "private-endpoint"
+
+    config = ModelOptions() if pydantic else DataclassOptions()
+    config.unknown = "private-unknown"
+
+    class CustomSTT(FakeSTT):
+        def describe_options(self) -> dict[str, Any]:
+            return report_options(config, exclude=["endpoint"])
+
+    session = AgentSession(vad=None, stt=CustomSTT())
+    reported = _report(session).models["stt"]
+    assert reported["language"] == "en"
+    assert "private" not in json.dumps(reported)
+    config.language = "fr"
+    assert reported["language"] == "en"
+    assert _report(session).models["stt"]["language"] == "fr"
 
 
 @pytest.mark.parametrize(
@@ -71,8 +107,8 @@ def test_inference_omits_sensitive_primary_and_fallback_options(
         fallback={"model": model, "extra_kwargs": options},
     )
     report = _report(AgentSession(vad=None, stt=component))
-    assert report.components["stt"]["extra_kwargs"] == safe
-    assert report.components["stt"]["fallback"][0]["extra_kwargs"] == safe
+    assert report.models["stt"]["extra_kwargs"] == safe
+    assert report.models["stt"]["fallback"][0]["extra_kwargs"] == safe
     assert "private-" not in json.dumps(report.to_dict())
 
 
@@ -118,26 +154,26 @@ def test_report_snapshots_inference_settings_without_credentials() -> None:
     session = AgentSession(vad=vad, stt=stt_model, tts=tts_model)
     report = _report(session)
 
-    assert set(report.components) == {"vad", "stt", "tts"}
-    assert report.components["vad"]["activation_threshold"] == 0.7
-    assert report.components["vad"]["min_silence_duration"] == 0.4
-    assert report.components["stt"]["model"] == "deepgram/nova-3"
-    assert report.components["stt"]["language"] == "en"
-    assert report.components["stt"]["extra_kwargs"] == {"endpointing": 50}
-    assert report.components["tts"]["voice"] == "voice-1"
-    assert report.components["tts"]["language"] == "de"
-    assert report.components["tts"]["extra_kwargs"] == {"speed": 1.2}
-    assert report.components["stt"]["fallback"] == [
+    assert set(report.models) == {"vad", "stt", "tts"}
+    assert report.models["vad"]["activation_threshold"] == 0.7
+    assert report.models["vad"]["min_silence_duration"] == 0.4
+    assert report.models["stt"]["model"] == "deepgram/nova-3"
+    assert report.models["stt"]["language"] == "en"
+    assert report.models["stt"]["extra_kwargs"] == {"endpointing": 50}
+    assert report.models["tts"]["voice"] == "voice-1"
+    assert report.models["tts"]["language"] == "de"
+    assert report.models["tts"]["extra_kwargs"] == {"speed": 1.2}
+    assert report.models["stt"]["fallback"] == [
         {"model": "cartesia/ink-whisper", "extra_kwargs": {"min_volume": 0.2}}
     ]
-    assert report.components["tts"]["fallback"] == [
+    assert report.models["tts"]["fallback"] == [
         {
             "model": "inworld/inworld-tts-1.5-max",
             "voice": "fallback-voice",
             "extra_kwargs": {"speaking_rate": 0.9},
         }
     ]
-    assert report.to_dict()["components"] == report.components
+    assert report.to_dict()["models"] == report.models
 
     encoded = json.dumps(report.to_dict())
     for sensitive in (
@@ -154,19 +190,19 @@ def test_report_snapshots_inference_settings_without_credentials() -> None:
     vad.update_options(activation_threshold=0.9)
     stt_model.update_options(language="fr", extra={"endpointing": 100})
     tts_model.update_options(voice="voice-2", extra_kwargs={"speed": 1.5})
-    current = _report(session).components
+    current = _report(session).models
     assert current["vad"]["activation_threshold"] == 0.9
     assert current["stt"]["language"] == "fr"
     assert current["tts"]["voice"] == "voice-2"
-    assert report.components["vad"]["activation_threshold"] == 0.7
-    assert report.components["stt"]["language"] == "en"
-    assert report.components["tts"]["voice"] == "voice-1"
-    assert report.components["tts"]["extra_kwargs"] == {"speed": 1.2}
+    assert report.models["vad"]["activation_threshold"] == 0.7
+    assert report.models["stt"]["language"] == "en"
+    assert report.models["tts"]["voice"] == "voice-1"
+    assert report.models["tts"]["extra_kwargs"] == {"speed": 1.2}
 
 
-def test_disabled_components_and_existing_report_constructor() -> None:
+def test_disabled_models_and_existing_report_constructor() -> None:
     session = AgentSession(vad=None)
-    assert _report(session).components == {}
+    assert _report(session).models == {}
     report = SessionReport(
         job_id="job-1",
         room_id="room-1",
@@ -175,18 +211,18 @@ def test_disabled_components_and_existing_report_constructor() -> None:
         events=[],
         chat_history=session.history,
     )
-    assert report.to_dict()["components"] == {}
+    assert report.to_dict()["models"] == {}
 
 
 def test_default_session_reports_vad_settings() -> None:
-    components = _report(AgentSession()).components
-    assert set(components) == {"vad"}
-    assert components["vad"]["model"] == "silero"
-    assert components["vad"]["activation_threshold"] == 0.5
-    assert components["vad"]["sample_rate"] == 16000
+    models = _report(AgentSession()).models
+    assert set(models) == {"vad"}
+    assert models["vad"]["model"] == "silero"
+    assert models["vad"]["activation_threshold"] == 0.5
+    assert models["vad"]["sample_rate"] == 16000
 
 
-def test_custom_component_options_are_normalized() -> None:
+def test_custom_model_options_are_normalized() -> None:
     class Mode(Enum):
         FAST = "fast"
 
@@ -200,35 +236,41 @@ def test_custom_component_options_are_normalized() -> None:
             }
 
     report = _report(AgentSession(vad=CustomVAD()))
-    assert report.components["vad"]["mode"] == "fast"
-    assert report.components["vad"]["thresholds"] == [0.3, 0.7]
-    assert report.components["vad"]["nested"] == {"enabled": True}
-    assert "unset" not in report.components["vad"]
+    assert report.models["vad"]["mode"] == "fast"
+    assert report.models["vad"]["thresholds"] == [0.3, 0.7]
+    assert report.models["vad"]["nested"] == {"enabled": True}
+    assert "unset" not in report.models["vad"]
     json.dumps(report.to_dict())
 
 
-def test_broken_component_description_keeps_identity() -> None:
+def test_broken_model_description_keeps_identity() -> None:
     class BrokenVAD(FakeVAD):
         def describe_options(self) -> dict[str, Any]:
             raise RuntimeError("unavailable")
 
     report = _report(AgentSession(vad=BrokenVAD()))
-    assert report.components["vad"] == {
+    assert report.models["vad"] == {
         "type": f"{__name__}.BrokenVAD",
         "model": "unknown",
         "provider": "unknown",
     }
 
 
-def test_broken_component_metadata_does_not_break_report() -> None:
+def test_broken_model_metadata_does_not_break_report() -> None:
     class BrokenVAD(FakeVAD):
         @property
         def provider(self) -> str:
             raise RuntimeError("unavailable")
 
+        def describe_options(self) -> dict[str, Any]:
+            return {"activation_threshold": 0.6}
+
     report = _report(AgentSession(vad=BrokenVAD(), stt=FakeSTT()))
-    assert report.components["vad"] == {"type": f"{__name__}.BrokenVAD"}
-    assert report.components["stt"]["model"] == "unknown"
+    assert report.models["vad"] == {
+        "type": f"{__name__}.BrokenVAD",
+        "activation_threshold": 0.6,
+    }
+    assert report.models["stt"]["model"] == "unknown"
 
 
 @pytest.mark.parametrize("kind", ["stt", "tts"])
@@ -279,7 +321,7 @@ async def test_adapter_snapshots_isolate_child_failures(
         expected = {"voice": "voice-1"}
 
     try:
-        reported = _report(AgentSession(vad=None, **{kind: adapter})).components[kind]
+        reported = _report(AgentSession(vad=None, **{kind: adapter})).models[kind]
         assert reported[f"max_retry_per_{kind}"] == 3
         broken, healthy = reported[kind]
         if wrap_stream:
@@ -314,12 +356,12 @@ async def test_nested_provider_settings_exclude_unknown_fields(
     component = getattr(plugin, kind.upper())(api_key="private-key", **{nested_key: nested})
     try:
         report = _report(AgentSession(vad=None, **{kind: component}))
-        assert report.components[kind][nested_key][field] == value
-        assert "api_key" not in report.components[kind][nested_key]
-        assert "future_setting" not in report.components[kind][nested_key]
+        assert report.models[kind][nested_key][field] == value
+        assert "api_key" not in report.models[kind][nested_key]
+        assert "future_setting" not in report.models[kind][nested_key]
         assert "private-" not in json.dumps(report.to_dict())
         nested[field] = "changed"
-        assert report.components[kind][nested_key][field] == value
+        assert report.models[kind][nested_key][field] == value
     finally:
         await component.aclose()
 
@@ -342,7 +384,7 @@ async def test_baseten_reports_both_backends_without_customer_content(model: str
     try:
         session = AgentSession(vad=None, tts=component)
         report = _report(session)
-        options = report.components["tts"]
+        options = report.models["tts"]
         assert options["model"] == model
         assert options["voice"] == "voice-1"
         assert options["language"] == "English"
@@ -357,7 +399,7 @@ async def test_baseten_reports_both_backends_without_customer_content(model: str
         assert "private-" not in json.dumps(report.to_dict())
         component.update_options(voice="voice-2")
         assert options["voice"] == "voice-1"
-        assert _report(session).components["tts"]["voice"] == "voice-2"
+        assert _report(session).models["tts"]["voice"] == "voice-2"
     finally:
         await component.aclose()
 
@@ -376,9 +418,9 @@ async def test_adapters_include_underlying_settings() -> None:
     tts_adapter = tts.FallbackAdapter([tts.StreamAdapter(tts=ConfiguredTTS())])
     try:
         report = _report(AgentSession(vad=None, stt=stt_adapter, tts=tts_adapter))
-        assert report.components["stt"]["stt"][0]["stt"]["language"] == "fr"
-        assert report.components["stt"]["stt"][0]["vad"]["activation_threshold"] == 0.6
-        assert report.components["tts"]["tts"][0]["tts"]["voice"] == "test-voice"
+        assert report.models["stt"]["stt"][0]["stt"]["language"] == "fr"
+        assert report.models["stt"]["stt"][0]["vad"]["activation_threshold"] == 0.6
+        assert report.models["tts"]["tts"][0]["tts"]["voice"] == "test-voice"
         json.dumps(report.to_dict())
     finally:
         await stt_adapter.aclose()
@@ -399,14 +441,14 @@ def test_elevenlabs_nested_settings_omit_unset_fields_and_customer_text() -> Non
             voice_settings=elevenlabs.VoiceSettings(stability=0.4, similarity_boost=0.8, speed=1.2),
         ),
     )
-    components = _serialize_session_components(session)
-    assert components["stt"]["server_vad"]["vad_threshold"] == 0.6
-    assert components["tts"]["voice_settings"] == {
+    models = _serialize_session_models(session)
+    assert models["stt"]["server_vad"]["vad_threshold"] == 0.6
+    assert models["tts"]["voice_settings"] == {
         "stability": 0.4,
         "similarity_boost": 0.8,
         "speed": 1.2,
     }
-    encoded = json.dumps(components)
+    encoded = json.dumps(models)
     assert "private-api-key" not in encoded
     assert "private-transcript" not in encoded
     assert "NotGiven" not in encoded
@@ -421,12 +463,12 @@ def test_openai_turn_detection_and_prompt_omission() -> None:
         ),
         tts=openai.TTS(api_key="private-api-key", speed=1.2, instructions="private-instructions"),
     )
-    components = _serialize_session_components(session)
-    assert components["stt"]["languages"] == ["en"]
-    assert components["stt"]["turn_detection"]["threshold"] == 0.8
-    assert components["tts"]["speed"] == 1.2
-    assert components["tts"]["sample_rate"] > 0
-    encoded = json.dumps(components)
+    models = _serialize_session_models(session)
+    assert models["stt"]["languages"] == ["en"]
+    assert models["stt"]["turn_detection"]["threshold"] == 0.8
+    assert models["tts"]["speed"] == 1.2
+    assert models["tts"]["sample_rate"] > 0
+    encoded = json.dumps(models)
     assert "private-" not in encoded
 
 
@@ -436,5 +478,5 @@ def test_silero_reports_updated_thresholds() -> None:
     session = AgentSession(vad=vad)
     report = _report(session)
     vad.update_options(activation_threshold=0.9)
-    assert report.components["vad"]["activation_threshold"] == 0.7
-    assert _report(session).components["vad"]["activation_threshold"] == 0.9
+    assert report.models["vad"]["activation_threshold"] == 0.7
+    assert _report(session).models["vad"]["activation_threshold"] == 0.9

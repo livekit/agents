@@ -23,7 +23,7 @@ from .._exceptions import (
     APITimeoutError,
     create_api_error_from_http,
 )
-from .._reporting import Sensitive, reportable_option_names
+from .._reporting import Sensitive, report_options
 from ..language import LanguageCode
 from ..log import logger
 from ..types import (
@@ -424,7 +424,7 @@ class STTOptions:
     conn_options: NotGivenOr[APIConnectOptions]
 
 
-_REPORTABLE_EXTRA_OPTIONS = reportable_option_names(
+_EXTRA_OPTION_TYPES = (
     CartesiaOptions,
     DeepgramOptions,
     DeepgramFluxOptions,
@@ -739,24 +739,25 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            "model": self.model,
-            "provider": self.provider,
-            "language": self._opts.language,
-            "encoding": self._opts.encoding,
-            "sample_rate": self._opts.sample_rate,
-            "extra_kwargs": {
-                key: value
-                for key, value in self._opts.extra_kwargs.items()
-                if key in _REPORTABLE_EXTRA_OPTIONS
-            },
+            **report_options(
+                self._opts,
+                exclude=[
+                    "model",
+                    "base_url",
+                    "api_key",
+                    "api_secret",
+                    "extra_kwargs",
+                    "fallback",
+                    "conn_options",
+                ],
+            ),
+            "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
             "fallback": [
                 {
                     "model": item["model"],
-                    "extra_kwargs": {
-                        key: value
-                        for key, value in item.get("extra_kwargs", {}).items()
-                        if key in _REPORTABLE_EXTRA_OPTIONS
-                    },
+                    "extra_kwargs": report_options(
+                        item.get("extra_kwargs", {}), *_EXTRA_OPTION_TYPES
+                    ),
                 }
                 for item in self._opts.fallback
             ]

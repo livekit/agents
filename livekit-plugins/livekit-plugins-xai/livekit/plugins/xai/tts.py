@@ -34,6 +34,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -133,14 +134,7 @@ class TTS(tts.TTS):
         return "xAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "language": self._opts.language,
-            "optimize_streaming_latency": self._opts.optimize_streaming_latency,
-            "speed": self._opts.speed,
-            "text_normalization": self._opts.text_normalization,
-        }
+        return {**super().describe_options(), **report_options(self._opts, exclude=["tokenizer"])}
 
     async def _connect_ws(
         self, timeout: float, opts: _TTSOptions

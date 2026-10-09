@@ -36,6 +36,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -401,29 +402,7 @@ class STT(stt.STT):
         return "AssemblyAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "sample_rate": self._opts.sample_rate,
-            "buffer_size_seconds": self._opts.buffer_size_seconds,
-            "encoding": self._opts.encoding,
-            "speech_model": self._opts.speech_model,
-            "language_detection": self._opts.language_detection,
-            "language_codes": self._opts.language_codes,
-            "end_of_turn_confidence_threshold": self._opts.end_of_turn_confidence_threshold,
-            "min_turn_silence": self._opts.min_turn_silence,
-            "max_turn_silence": self._opts.max_turn_silence,
-            "format_turns": self._opts.format_turns,
-            "continuous_partials": self._opts.continuous_partials,
-            "interruption_delay": self._opts.interruption_delay,
-            "previous_context_n_turns": self._opts.previous_context_n_turns,
-            "vad_threshold": self._opts.vad_threshold,
-            "speaker_labels": self._opts.speaker_labels,
-            "max_speakers": self._opts.max_speakers,
-            "domain": self._opts.domain,
-            "voice_focus": self._opts.voice_focus,
-            "voice_focus_threshold": self._opts.voice_focus_threshold,
-            "mode": self._opts.mode,
-        }
+        return report_options(self._opts, exclude=["keyterms_prompt", "prompt", "agent_context"])
 
     @property
     def session(self) -> aiohttp.ClientSession:

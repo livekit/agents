@@ -35,6 +35,7 @@ from livekit.agents import (
     stt,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -133,17 +134,7 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "enable_interim_results": self._opts.enable_interim_results,
-            "sample_rate": self._opts.sample_rate,
-            "enable_diarization": self._opts.enable_diarization,
-            "language": self._opts.language,
-            "endpointing": self._opts.endpointing,
-            "vad_threshold": self._opts.vad_threshold,
-            "smart_turn": self._opts.smart_turn,
-            "smart_turn_timeout": self._opts.smart_turn_timeout,
-        }
+        return report_options(self._opts, exclude=["keyterm"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

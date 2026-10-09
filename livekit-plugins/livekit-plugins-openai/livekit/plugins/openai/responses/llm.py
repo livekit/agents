@@ -13,6 +13,7 @@ from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
+from livekit.agents._reporting import report_options
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
@@ -338,14 +339,9 @@ class LLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **super().describe_options(),
-            "temperature": self._opts.temperature,
-            "parallel_tool_calls": self._opts.parallel_tool_calls,
-            "store": self._opts.store,
-            "service_tier": self._opts.service_tier,
-            "verbosity": self._opts.verbosity,
-            "max_output_tokens": self._opts.max_output_tokens,
-            "use_websocket": self._opts.use_websocket,
+            **report_options(
+                self._opts, exclude=["model", "user", "tool_choice", "reasoning", "metadata"]
+            ),
             "tool_choice": self._opts.tool_choice
             if isinstance(self._opts.tool_choice, str)
             else None,

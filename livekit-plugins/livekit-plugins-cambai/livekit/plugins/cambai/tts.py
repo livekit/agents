@@ -30,6 +30,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -135,11 +136,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice_id": self._opts.voice_id,
-            "language": self._opts.language,
-            "speech_model": self._opts.speech_model,
-            "output_format": self._opts.output_format,
-            "enhance_named_entities": self._opts.enhance_named_entities,
+            **report_options(self._opts, exclude=["user_instructions"]),
         }
 
     def update_options(
