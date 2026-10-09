@@ -1,0 +1,28 @@
+tests/test_plugin_soniox_stt.py
+  s_ccd6db73caf618::t_6fee3914d954d1 20,261-270,272-274
+  s_ccd6db73caf618::t_6980d2d5614eb0 271
+  s_ccd6db73caf618::t_951eef20796edb 275-276
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/stt.py
+  s_ccd6db73caf618::t_ac5846e6aa5df4 302
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/tts.py
+  s_ccd6db73caf618::t_ac5846e6aa5df4 635-638
+tests/test_plugin_soniox_tts.py
+  s_ccd6db73caf618::t_6fee3914d954d1 14,17,19,42-75
+  s_ccd6db73caf618::t_2afee0fc9e0905 76-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b445eae634408844c88889076a53ce5c59cf4fbb",
+  "prompts": {},
+  "sessions": {
+    "s_ccd6db73caf618": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a12168-e36f-74d0-91a1-255139cc2258",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
