@@ -12,7 +12,7 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from time import perf_counter_ns
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, Literal, Protocol, TypeAlias, runtime_checkable
 
 import aiohttp
 import numpy as np
@@ -262,7 +262,23 @@ InterruptionDataFrameType: TypeAlias = (
 )
 
 
-class AdaptiveInterruptionDetector(
+@runtime_checkable
+class InterruptionStream(Protocol):
+    """I/O stream returned by :meth:`InterruptionDetector.stream`.
+
+    The session pushes every user audio frame plus the agent-speech and overlap-speech
+    sentinels, and consumes one :class:`OverlappingSpeechEvent` verdict per overlap.
+    """
+
+    def push_frame(self, frame: InterruptionDataFrameType) -> None: ...
+    def flush(self) -> None: ...
+    def end_input(self) -> None: ...
+    async def aclose(self) -> None: ...
+    def __aiter__(self) -> AsyncIterator[OverlappingSpeechEvent]: ...
+    async def __anext__(self) -> OverlappingSpeechEvent: ...
+
+
+class InterruptionDetector(
     rtc.EventEmitter[
         Literal[
             "overlapping_speech",
@@ -270,7 +286,34 @@ class AdaptiveInterruptionDetector(
             "metrics_collected",
         ]
     ],
+    ABC,
 ):
+    """Base class for detectors that classify user speech overlapping the agent's speech
+    as a genuine interruption or a backchannel.
+
+    Pass an instance as ``interruption={"mode": detector}`` on ``AgentSession`` or ``Agent``
+    to use it instead of the built-in :class:`AdaptiveInterruptionDetector`.
+    """
+
+    @property
+    @abstractmethod
+    def model(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def provider(self) -> str: ...
+
+    @property
+    def label(self) -> str:
+        return f"{type(self).__module__}.{type(self).__name__}"
+
+    @abstractmethod
+    def stream(
+        self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
+    ) -> InterruptionStream: ...
+
+
+class AdaptiveInterruptionDetector(InterruptionDetector):
     def __init__(
         self,
         *,

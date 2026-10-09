@@ -15,13 +15,17 @@
 """Krisp VIVA plugin for LiveKit Agents
 
 This plugin provides real-time noise reduction using Krisp's proprietary
-algorithms. Two authentication backends are supported, exposed under the
-``auth`` sub-namespace:
+algorithms, plus Krisp turn taking (:class:`TurnDetector`) and interruption
+prediction (:class:`InterruptionDetector`). Noise reduction supports two
+authentication backends, exposed under the ``auth`` sub-namespace:
 
 - ``krisp.auth.livekit_cloud()`` (default): LiveKit Cloud-managed auth +
   bundled model. No Krisp env vars required.
 - ``krisp.auth.krisp_license(...)``: Krisp-direct auth using a license key
   and a ``.kef`` model file.
+
+Turn taking and interruption prediction run on the public ``krisp_audio``
+wheel with a Krisp license key and ``.kef`` models.
 
 The PascalCase classes (:class:`LiveKitCloudAuthProvider`,
 :class:`KrispLicenseAuthProvider`) remain available for type annotations.
@@ -31,7 +35,9 @@ from livekit.agents import Plugin
 
 from . import auth
 from .auth import KrispLicenseAuthProvider, LiveKitCloudAuthProvider
+from .interruption import InterruptionDetector, InterruptionDetectorStream
 from .log import logger
+from .turn_detector import TurnDetector, TurnDetectorStream
 from .version import __version__
 from .viva_filter import (
     KrispVivaFilterFrameProcessor,
@@ -45,6 +51,10 @@ __all__ = [
     "voice_isolation_telephony",
     "LiveKitCloudAuthProvider",
     "KrispLicenseAuthProvider",
+    "TurnDetector",
+    "TurnDetectorStream",
+    "InterruptionDetector",
+    "InterruptionDetectorStream",
     "auth",
     "__version__",
 ]

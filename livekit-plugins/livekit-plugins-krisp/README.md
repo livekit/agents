@@ -6,6 +6,9 @@ Real-time noise reduction for LiveKit voice agents using [Krisp's VIVA SDK](http
 
 - **`voice_isolation()`**: Real-time voice isolation and noise reduction `FrameProcessor`
 - **`voice_isolation_telephony()`**: Voice isolation tuned for telephony audio (for example, SIP participants)
+- **`TurnDetector`**: End-of-turn detection with Krisp VIVA Turn Taking *(Krisp license only)*
+- **`InterruptionDetector`**: Tells genuine interruptions from backchannels with Krisp VIVA
+  Interruption Prediction *(Krisp license only)*
 
 ## Installation
 
@@ -127,6 +130,48 @@ noise_cancellation = krisp.voice_isolation(
 ```
 
 `license_key` and `model_path` fall back to the environment variables above when omitted.
+
+## Turn Taking and Interruption Prediction
+
+`krisp.TurnDetector` and `krisp.InterruptionDetector` run in-process on the public
+`krisp_audio` wheel, so they need the same [Krisp license prerequisites](#prerequisites),
+plus Krisp `.kef` models: a TT model, an IP model, and a Krisp VAD model that supplies
+both with per-frame voice activity.
+
+```bash
+export KRISP_VIVA_SDK_LICENSE_KEY=your-license-key-here
+export KRISP_VIVA_TT_MODEL_PATH=/path/to/tt.kef
+export KRISP_VIVA_IP_MODEL_PATH=/path/to/ip.kef
+export KRISP_VIVA_VAD_MODEL_PATH=/path/to/vad.kef
+```
+
+```python
+from livekit.agents import AgentSession, inference
+from livekit.plugins import krisp
+
+session = AgentSession(
+    vad=inference.VAD(),
+    stt=...,
+    llm=...,
+    tts=...,
+    turn_handling={
+        "turn_detection": krisp.TurnDetector(),
+        "interruption": {"mode": krisp.InterruptionDetector()},
+    },
+)
+```
+
+- **`TurnDetector`** is a streaming turn detector. Krisp's turn-shift probability rises while
+  the user stays silent, so when the user pauses it answers as soon as the probability reaches
+  `unlikely_threshold` (default 0.5), or with its latest value after `max_prediction_delay`
+  (default 0.8 s). Below the threshold, the session waits the maximum endpointing delay
+  before replying.
+- **`InterruptionDetector`** scores user speech that overlaps the agent's speech. Speech at
+  or above `threshold` (default 0.5) interrupts the agent. Below that, the overlap is
+  treated as a backchannel ("uh-huh", "yeah") and the agent keeps talking.
+
+Both accept `model_path`, `vad_model_path`, `license_key`, `vad_threshold` and
+`frame_duration_ms` arguments in place of the environment variables.
 
 ## Troubleshooting
 

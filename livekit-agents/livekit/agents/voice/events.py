@@ -11,8 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_serializer
 from typing_extensions import Self
 
 from ..inference.interruption import (
-    AdaptiveInterruptionDetector,
     InterruptionDetectionError,
+    InterruptionDetector,
     OverlappingSpeechEvent,
 )
 from ..language import LanguageCode
@@ -547,12 +547,12 @@ class ErrorEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     type: Literal["error"] = "error"
     error: LLMError | STTError | TTSError | RealtimeModelError | InterruptionDetectionError | Any
-    source: LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector | Any
+    source: LLM | STT | TTS | RealtimeModel | InterruptionDetector | Any
     created_at: float = Field(default_factory=time.time)
 
     @field_serializer("source")
     def _serialize_source(self, source: Any) -> Any:
-        if isinstance(source, LLM | STT | TTS | RealtimeModel | AdaptiveInterruptionDetector):
+        if isinstance(source, LLM | STT | TTS | RealtimeModel | InterruptionDetector):
             return {"model": source.model, "provider": source.provider}
         if isinstance(source, BaseModel):
             return source.model_dump()
