@@ -44,7 +44,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 
 from .log import logger
 from .models import (
@@ -82,7 +82,7 @@ def _check_deprecated_tts_args(kwargs: dict[str, Any], *, caller: str = "TTS.__i
 
 @dataclass
 class GnaniTTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     voice: str = "Pranav"
     model: str = DEFAULT_MODEL
     language: str | None = None
@@ -92,7 +92,7 @@ class GnaniTTSOptions:
     num_channels: int = 1
     sample_width: int = 2
     bitrate: str | None = None
-    base_url: str = GNANI_TTS_BASE_URL
+    base_url: Sensitive[str] = GNANI_TTS_BASE_URL
     synthesize_method: str = "rest"
 
 
@@ -177,9 +177,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts, exclude=["api_key", "model", "sample_rate", "num_channels", "base_url"]
-            ),
+            **report_options(self._opts, exclude=["model", "sample_rate", "num_channels"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

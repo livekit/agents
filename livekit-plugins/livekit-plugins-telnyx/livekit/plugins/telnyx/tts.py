@@ -22,6 +22,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .common import NUM_CHANNELS, SAMPLE_RATE, TTS_ENDPOINT, SessionManager, get_api_key
@@ -30,9 +31,9 @@ from .log import logger
 
 @dataclass
 class _TTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     voice: str
-    base_url: str
+    base_url: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -67,7 +68,7 @@ class TTS(tts.TTS):
         return "telnyx"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), "voice": self._opts.voice}
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def synthesize(
         self,

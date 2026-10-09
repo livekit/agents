@@ -20,7 +20,7 @@ import dataclasses
 import json
 import os
 import weakref
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -41,7 +41,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
 
@@ -106,7 +106,7 @@ class TranslationConfiguration:
     match_original_utterances: bool = True
     lipsync: bool = True
     context_adaptation: bool = False
-    context: str | None = None
+    context: Sensitive[str | None] = None
     informal: bool = False
 
 
@@ -132,8 +132,8 @@ class STTOptions:
         default_factory=TranslationConfiguration
     )
     energy_filter: AudioEnergyFilter | bool = False
-    custom_vocabulary: list[str | dict] | None = None
-    custom_spelling: dict[str, list[str]] | None = None
+    custom_vocabulary: Sensitive[list[str | dict] | None] = None
+    custom_spelling: Sensitive[dict[str, list[str]] | None] = None
     pre_processing: PreProcessingConfiguration = dataclasses.field(
         default_factory=PreProcessingConfiguration
     )
@@ -341,34 +341,8 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            "language_config": asdict(self._opts.language_config)
-            if is_given(self._opts.language_config) and self._opts.language_config is not None
-            else None,
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model",
-                    "language_config",
-                    "translation_config",
-                    "energy_filter",
-                    "custom_vocabulary",
-                    "custom_spelling",
-                    "pre_processing",
-                ],
-            ),
-            "translation_config": {
-                "enabled": self._opts.translation_config.enabled,
-                "target_languages": self._opts.translation_config.target_languages,
-                "model": self._opts.translation_config.model,
-                "match_original_utterances": self._opts.translation_config.match_original_utterances,
-                "lipsync": self._opts.translation_config.lipsync,
-                "context_adaptation": self._opts.translation_config.context_adaptation,
-                "informal": self._opts.translation_config.informal,
-            },
+            **report_options(self._opts, exclude=["model", "energy_filter"]),
             "energy_filter": bool(self._opts.energy_filter),
-            "pre_processing": asdict(self._opts.pre_processing)
-            if is_given(self._opts.pre_processing) and self._opts.pre_processing is not None
-            else None,
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

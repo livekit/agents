@@ -36,6 +36,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -57,10 +58,10 @@ class _TTSOptions:
     model: TTSModels | str
     encoding: TTSEncoding
     sample_rate: int
-    voice: str | list[float]
-    api_key: str
+    voice: Sensitive[str | list[float]]
+    api_key: Sensitive[str]
     language: str | None
-    base_url: str
+    base_url: Sensitive[str]
 
     def get_http_url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -148,9 +149,8 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "encoding": self._opts.encoding,
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
-            "language": self._opts.language,
         }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:

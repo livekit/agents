@@ -45,7 +45,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 
 from .log import logger
 
@@ -407,8 +407,8 @@ class SarvamTTSOptions:
     """
 
     target_language_code: SarvamTTSLanguages | str  # BCP-47 for supported Indian languages
-    api_key: str  # Sarvam.ai API key
-    text: str | None = None  # Will be provided by the stream adapter
+    api_key: Sensitive[str]  # Sarvam.ai API key
+    text: Sensitive[str | None] = None  # Will be provided by the stream adapter
     speaker: SarvamTTSSpeakers | str | None = None
     pitch: float = 0.0
     pace: float = 1.0
@@ -422,8 +422,8 @@ class SarvamTTSOptions:
     dict_id: str | None = None  # Custom pronunciation dictionary (bulbul:v3 only)
     enable_cached_responses: bool | None = None  # Response caching beta (bulbul:v1/v2 only)
     model: SarvamTTSModels | str = "bulbul:v2"  # Default to v2
-    base_url: str = SARVAM_TTS_BASE_URL
-    ws_url: str = SARVAM_TTS_WS_URL
+    base_url: Sensitive[str] = SARVAM_TTS_BASE_URL
+    ws_url: Sensitive[str] = SARVAM_TTS_WS_URL
     word_tokenizer: tokenize.tokenizer.SentenceTokenizer | None = None
     send_completion_event: bool = True
     output_audio_codec: str = "mp3"
@@ -732,10 +732,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=["api_key", "text", "model", "base_url", "ws_url", "word_tokenizer"],
-            ),
+            **report_options(self._opts, exclude=["model", "word_tokenizer"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

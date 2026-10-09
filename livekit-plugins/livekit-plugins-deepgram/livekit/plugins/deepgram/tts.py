@@ -19,7 +19,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -45,8 +45,8 @@ class _TTSOptions:
     encoding: str
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
-    base_url: str
-    api_key: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
     mip_opt_out: bool = False
     bit_rate: int | None = None
     speed: float | None = None
@@ -135,10 +135,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=["model", "sample_rate", "word_tokenizer", "base_url", "api_key"],
-            ),
+            **report_options(self._opts, exclude=["model", "sample_rate", "word_tokenizer"]),
         }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:

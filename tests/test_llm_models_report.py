@@ -118,7 +118,11 @@ async def test_llm_fallback_preserves_healthy_children(
 )
 async def test_llm_plugins_report_generation_settings(provider: str) -> None:
     plugin = pytest.importorskip(f"livekit.plugins.{provider}")
-    kwargs: dict[str, Any] = {"api_key": "private-key", "temperature": 0.25}
+    kwargs: dict[str, Any] = {
+        "api_key": "private-key",
+        "temperature": 0.25,
+        "tool_choice": {"type": "function", "function": {"name": "private-function"}},
+    }
     if provider == "aws":
         kwargs["api_secret"] = "private-secret"
     if provider == "google":
@@ -128,6 +132,7 @@ async def test_llm_plugins_report_generation_settings(provider: str) -> None:
         reported = _snapshot(model)
         assert reported["temperature"] == 0.25
         assert reported["model"] == model.model
+        assert reported["tool_choice"] == {"type": "function"}
         assert "private-" not in json.dumps(reported)
     finally:
         await model.aclose()
@@ -272,7 +277,12 @@ async def test_duplex_model_is_reported_through_session_adapter() -> None:
             "model": "gpt-4.1",
             "max_output_tokens": 64,
             "instructions": "private-prompt",
-            "text": {"format": {"schema": {"private-schema": "private-content"}}},
+            "tool_choice": {"type": "function", "function": {"name": "private-function"}},
+            "reasoning": {"effort": "low", "future_setting": "private-unknown"},
+            "text": {
+                "verbosity": "low",
+                "format": {"schema": {"private-schema": "private-content"}},
+            },
             "future_setting": "private-unknown",
         },
     )
@@ -280,7 +290,13 @@ async def test_duplex_model_is_reported_through_session_adapter() -> None:
         reported = _snapshot(model)
         assert reported["type"].endswith("DuplexRealtimeAdapter")
         assert reported["llm"]["voice"] == "marin"
-        assert reported["llm"]["responses"] == {"model": "gpt-4.1", "max_output_tokens": 64}
+        assert reported["llm"]["responses"] == {
+            "model": "gpt-4.1",
+            "max_output_tokens": 64,
+            "tool_choice": {"type": "function"},
+            "reasoning": {"effort": "low"},
+            "text": {"verbosity": "low"},
+        }
         assert "private-" not in json.dumps(reported)
     finally:
         await model.aclose()

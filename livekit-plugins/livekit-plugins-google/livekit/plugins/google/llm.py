@@ -307,7 +307,7 @@ class LLM(llm.LLM):
             return "Gemini"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude={"model": True, "tool_choice": {"function"}})
+        return report_options(self._opts, exclude=["model"])
 
     def chat(
         self,

@@ -38,6 +38,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from ._http import Configuration, HTTPClient, positive_timeout, status_error
@@ -237,8 +238,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice": self._opts.voice,
-            "language": self._opts.language,
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     def synthesize(

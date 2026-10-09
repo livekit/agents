@@ -34,7 +34,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from livekit.agents.voice.io import TimedString
@@ -57,7 +57,7 @@ _CONTINUATIONS_IDLE_TIMEOUT = 0.6
 @dataclass
 class _TTSOptions:
     model: TTSModels | str
-    api_key: str
+    api_key: Sensitive[str]
     voice_id: str
     sample_rate: int
     speed: float
@@ -67,8 +67,8 @@ class _TTSOptions:
     max_buffer_flush_ms: int
     use_continuations: bool
     max_buffer_delay_ms: int
-    base_url: str
-    ws_url: str
+    base_url: Sensitive[str]
+    ws_url: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -189,9 +189,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts, exclude=["model", "api_key", "sample_rate", "base_url", "ws_url"]
-            ),
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

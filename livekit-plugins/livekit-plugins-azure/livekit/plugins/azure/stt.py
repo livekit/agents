@@ -31,7 +31,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -43,12 +43,12 @@ from .log import logger
 
 @dataclass
 class STTOptions:
-    speech_key: NotGivenOr[str]
+    speech_key: Sensitive[NotGivenOr[str]]
     speech_region: NotGivenOr[str]
     # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-container-stt?tabs=container#use-the-container
-    speech_host: NotGivenOr[str]
+    speech_host: Sensitive[NotGivenOr[str]]
     # for using Microsoft Entra auth (see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-configure-azure-ad-auth?tabs=portal&pivots=programming-language-python)
-    speech_auth_token: NotGivenOr[str]
+    speech_auth_token: Sensitive[NotGivenOr[str]]
     sample_rate: int
     num_channels: int
     segmentation_silence_timeout_ms: NotGivenOr[int]
@@ -57,9 +57,9 @@ class STTOptions:
     language: list[
         str
     ]  # see https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support?tabs=stt
-    speech_endpoint: NotGivenOr[str] = NOT_GIVEN
+    speech_endpoint: Sensitive[NotGivenOr[str]] = NOT_GIVEN
     profanity: NotGivenOr[speechsdk.enums.ProfanityOption] = NOT_GIVEN
-    phrase_list: NotGivenOr[list[str] | None] = NOT_GIVEN
+    phrase_list: Sensitive[NotGivenOr[list[str] | None]] = NOT_GIVEN
     explicit_punctuation: bool = False
     true_text_post_processing: bool = False
 
@@ -173,17 +173,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(
-                self._config,
-                exclude=[
-                    "speech_key",
-                    "speech_host",
-                    "speech_auth_token",
-                    "speech_endpoint",
-                    "profanity",
-                    "phrase_list",
-                ],
-            ),
+            **report_options(self._config, exclude=["profanity"]),
             "profanity": self._config.profanity.name if is_given(self._config.profanity) else None,
         }
 

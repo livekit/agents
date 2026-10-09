@@ -20,7 +20,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
 from .log import logger
@@ -147,8 +147,8 @@ DEFAULT_BASE_URL = (
 
 @dataclass
 class _TTSOptions:
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
     model: TTSModel | str
     voice_id: TTSVoice | str
     sample_rate: TTSSampleRate
@@ -158,7 +158,7 @@ class _TTSOptions:
     vol: float  # (0, 10]
     pitch: int  # [-12, 12]
     text_normalization: bool
-    pronunciation_dict: dict[str, list[str]] | None
+    pronunciation_dict: Sensitive[dict[str, list[str]] | None]
     language_boost: TTSLanguageBoost | None
     # voice_modify
     intensity: int | None
@@ -295,10 +295,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=["api_key", "base_url", "model", "sample_rate", "pronunciation_dict"],
-            ),
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     def update_options(

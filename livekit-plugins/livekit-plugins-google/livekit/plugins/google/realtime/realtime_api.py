@@ -460,7 +460,6 @@ class RealtimeModel(llm.RealtimeModel):
                 "model": True,
                 "image_encode_options": True,
                 "conn_options": True,
-                "tool_choice": {"function"},
                 "input_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
                 "output_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
             },

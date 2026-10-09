@@ -32,7 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -47,7 +47,7 @@ class _TTSOptions:
     voice_id: str | None
     pronunciation_id: str | None
     word_tokenizer: tokenize.WordTokenizer
-    json_config: dict[str, Any] | None = None
+    json_config: Sensitive[dict[str, Any] | None] = None
 
 
 class TTS(tts.TTS):
@@ -123,7 +123,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["word_tokenizer", "json_config"]),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
         }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:

@@ -38,7 +38,7 @@ import google.auth
 import google.auth.credentials
 import google.auth.transport.requests
 from livekit.agents import llm
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.inference.llm import LLMStream
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
@@ -112,9 +112,9 @@ class _AIPlatformOptions:
     max_completion_tokens: NotGivenOr[int]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
-    extra_body: NotGivenOr[dict[str, Any]]
-    extra_headers: NotGivenOr[dict[str, str]]
-    extra_query: NotGivenOr[dict[str, str]]
+    extra_body: Sensitive[NotGivenOr[dict[str, Any]]]
+    extra_headers: Sensitive[NotGivenOr[dict[str, str]]]
+    extra_query: Sensitive[NotGivenOr[dict[str, str]]]
 
 
 class AIPlatformLLM(llm.LLM):
@@ -255,13 +255,7 @@ class AIPlatformLLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(
-                self._opts,
-                exclude=["model", "tool_choice", "extra_body", "extra_headers", "extra_query"],
-            ),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
+            **report_options(self._opts, exclude=["model"]),
             "strict_tool_schema": self._strict_tool_schema,
         }
 

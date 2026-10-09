@@ -34,7 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -61,7 +61,7 @@ class _STTOptions:
     noise_threshold: float = 0.60
     active_threshold: float = 0.80
     use_punctuation: bool = False
-    keywords: list[str] | list[tuple[str, float]] | None = None
+    keywords: Sensitive[list[str] | list[tuple[str, float]] | None] = None
 
 
 class _StreamState(Enum):
@@ -124,7 +124,7 @@ class STT(stt.STT):
         return "RTZR"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._params, exclude=["keywords"])
+        return report_options(self._params)
 
     async def aclose(self) -> None:
         """Close the RTZR client and cleanup resources."""

@@ -23,7 +23,7 @@ import httpx
 
 import anthropic
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext
 from livekit.agents.llm.tool_context import Tool
@@ -50,7 +50,7 @@ def _model_disables_prefill(model: str) -> bool:
 @dataclass
 class _LLMOptions:
     model: str | ChatModels
-    user: NotGivenOr[str]
+    user: Sensitive[NotGivenOr[str]]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
@@ -152,12 +152,7 @@ class LLM(llm.LLM):
         return self._client._base_url.netloc.decode("utf-8")
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(self._opts, exclude=["model", "user", "tool_choice"]),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-        }
+        return report_options(self._opts, exclude=["model"])
 
     def chat(
         self,

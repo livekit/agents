@@ -28,7 +28,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -57,7 +57,7 @@ class _TTSOptions:
     language: LMNTLanguages
     num_channels: int
     voice: str
-    api_key: str
+    api_key: Sensitive[str]
     temperature: float
     top_p: float
 
@@ -146,9 +146,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts, exclude=["sample_rate", "model", "num_channels", "api_key"]
-            ),
+            **report_options(self._opts, exclude=["sample_rate", "model", "num_channels"]),
         }
 
     def synthesize(

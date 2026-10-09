@@ -18,7 +18,7 @@ from livekit.agents import (
     LanguageCode,
     stt,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, is_given
 from livekit.agents.voice.io import TimedString
@@ -36,7 +36,7 @@ class STTOptions:
     language_code: LanguageCode
     sample_rate: int
     use_ssl: bool
-    server: str
+    server: Sensitive[str]
     enable_diarization: bool
     max_speaker_count: int
 
@@ -101,7 +101,7 @@ class STT(stt.STT):
         )
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["server"])
+        return report_options(self._opts)
 
     def _recognize_impl(
         self,

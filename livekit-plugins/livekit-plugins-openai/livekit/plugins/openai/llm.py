@@ -23,7 +23,7 @@ import httpx
 
 import openai
 from livekit.agents import llm
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.inference.llm import LLMStream as _LLMStream
 from livekit.agents.llm import (
     ChatContext,
@@ -67,23 +67,23 @@ PromptCacheRetention = Literal["in_memory", "24h"]
 @dataclass
 class _LLMOptions:
     model: str | ChatModels
-    user: NotGivenOr[str]
-    safety_identifier: NotGivenOr[str]
-    prompt_cache_key: NotGivenOr[str]
+    user: Sensitive[NotGivenOr[str]]
+    safety_identifier: Sensitive[NotGivenOr[str]]
+    prompt_cache_key: Sensitive[NotGivenOr[str]]
     temperature: NotGivenOr[float]
     top_p: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice]
     store: NotGivenOr[bool]
-    metadata: NotGivenOr[dict[str, str]]
+    metadata: Sensitive[NotGivenOr[dict[str, str]]]
     max_completion_tokens: NotGivenOr[int]
     service_tier: NotGivenOr[str]
     reasoning_effort: NotGivenOr[ReasoningEffort]
     verbosity: NotGivenOr[Verbosity]
     prompt_cache_retention: NotGivenOr[PromptCacheRetention]
-    extra_body: NotGivenOr[dict[str, Any]]
-    extra_headers: NotGivenOr[dict[str, str]]
-    extra_query: NotGivenOr[dict[str, str]]
+    extra_body: Sensitive[NotGivenOr[dict[str, Any]]]
+    extra_headers: Sensitive[NotGivenOr[dict[str, str]]]
+    extra_query: Sensitive[NotGivenOr[dict[str, str]]]
 
 
 class LLM(llm.LLM):
@@ -204,25 +204,7 @@ class LLM(llm.LLM):
         return self._client._base_url.netloc.decode("utf-8")
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model",
-                    "user",
-                    "safety_identifier",
-                    "prompt_cache_key",
-                    "tool_choice",
-                    "metadata",
-                    "extra_body",
-                    "extra_headers",
-                    "extra_query",
-                ],
-            ),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-        }
+        return report_options(self._opts, exclude=["model"])
 
     @staticmethod
     def with_azure(

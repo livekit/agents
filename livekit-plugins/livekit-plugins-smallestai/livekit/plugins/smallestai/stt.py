@@ -58,7 +58,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr, TimedString
 from livekit.agents.utils import AudioBuffer, is_given
 
@@ -111,7 +111,7 @@ class _PeriodicCollector(Generic[T]):
 @dataclass
 class _STTOptions:
     model: STTModels | str
-    api_key: str
+    api_key: Sensitive[str]
     language: str  # BCP-47 code, e.g. "en", "hi"; use "multi" for auto-detection
     sample_rate: int
     encoding: STTEncoding | str
@@ -120,7 +120,7 @@ class _STTOptions:
     format: bool  # punctuation/capitalization; streaming only
     itn_normalize: bool  # spoken -> written numbers ("twenty five" -> "25"); streaming only
     numerals: bool | None  # legacy digits post-pass; None = server default
-    keywords: list[tuple[str, float]]  # (keyword, intensifier) pairs; streaming only
+    keywords: Sensitive[list[tuple[str, float]]]  # (keyword, intensifier) pairs; streaming only
     sentence_timestamps: bool  # include sentence-level "utterances"; streaming only
     redact_pii: bool
     redact_pci: bool
@@ -132,8 +132,8 @@ class _STTOptions:
     finalize_on_words: bool | None  # word-count rollover of long segments; None = server default
     max_words: int | None  # rollover length; None = server default
     keepalive_interval: float | None  # seconds between {"type":"keepalive"} messages; None = off
-    base_url: str
-    stream_path: str
+    base_url: Sensitive[str]
+    stream_path: Sensitive[str]
 
 
 class STT(stt.STT):
@@ -294,9 +294,7 @@ class STT(stt.STT):
         return "SmallestAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(
-            self._opts, exclude=["model", "api_key", "keywords", "base_url", "stream_path"]
-        )
+        return report_options(self._opts, exclude=["model"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

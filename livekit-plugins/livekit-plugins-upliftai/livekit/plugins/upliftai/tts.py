@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 import weakref
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import socketio  # type: ignore[import-not-found]
@@ -24,6 +24,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -80,8 +81,8 @@ class VoiceSettings:
 class _TTSOptions:
     """Internal TTS options"""
 
-    base_url: str
-    api_key: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
     voice_settings: VoiceSettings
     word_tokenizer: tokenize.WordTokenizer | tokenize.SentenceTokenizer
     sample_rate: int
@@ -173,10 +174,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            "voice_settings": asdict(self._opts.voice_settings)
-            if is_given(self._opts.voice_settings) and self._opts.voice_settings is not None
-            else None,
-            "phrase_replacement_config_id": self._opts.phrase_replacement_config_id,
+            **report_options(self._opts, exclude=["sample_rate", "num_channels", "word_tokenizer"]),
         }
 
     def update_options(

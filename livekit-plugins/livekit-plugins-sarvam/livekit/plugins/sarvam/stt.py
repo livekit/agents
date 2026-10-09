@@ -45,7 +45,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -273,12 +273,12 @@ class SarvamSTTOptions:
     """
 
     language: str  # BCP-47 language code, e.g., "hi-IN", "en-IN"
-    api_key: str
+    api_key: Sensitive[str]
     model: SarvamSTTModels | str = "saaras:v4"
     mode: SarvamSTTModes | str = "transcribe"
-    base_url: str | None = None
-    streaming_url: str | None = None
-    prompt: str | None = None  # Optional prompt for STT translate (saaras models only)
+    base_url: Sensitive[str | None] = None
+    streaming_url: Sensitive[str | None] = None
+    prompt: Sensitive[str | None] = None  # Optional prompt for STT translate (saaras models only)
     high_vad_sensitivity: bool | None = None
     sample_rate: int = 16000
     flush_signal: bool | None = None
@@ -545,9 +545,7 @@ class STT(stt.STT):
         return "Sarvam"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(
-            self._opts, exclude=["api_key", "model", "base_url", "streaming_url", "prompt"]
-        )
+        return report_options(self._opts, exclude=["model"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

@@ -242,7 +242,7 @@ class ChatCompletionOptions(TypedDict, total=False):
     web_search_options: Sensitive[completion_create_params.WebSearchOptions]
 
     # livekit-typed arguments
-    tool_choice: Sensitive[ToolChoice]
+    tool_choice: ToolChoice
     # TODO(theomonnomn): support repsonse format
     # response_format: completion_create_params.ResponseFormat
 

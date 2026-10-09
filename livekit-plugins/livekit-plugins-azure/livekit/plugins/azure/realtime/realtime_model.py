@@ -53,7 +53,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.identity.aio import DefaultAzureCredential
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -103,7 +103,7 @@ _MAX_RESENT_AUDIO_CHUNKS = 300
 
 @dataclass
 class _RealtimeOptions:
-    endpoint: str
+    endpoint: Sensitive[str]
     model: str
     voice: str | AzureStandardVoice
     input_audio_transcription: AudioInputTranscriptionOptions | None
@@ -114,7 +114,7 @@ class _RealtimeOptions:
     modalities: Sequence[Modality | str]
     temperature: float
     max_output_tokens: int
-    api_key: str | None
+    api_key: Sensitive[str | None]
     use_default_credential: bool
     conn_options: APIConnectOptions
 
@@ -352,13 +352,10 @@ class RealtimeModel(llm.RealtimeModel):
             **report_options(
                 self._opts,
                 exclude=[
-                    "endpoint",
                     "model",
                     "voice",
                     "input_audio_transcription",
-                    "tool_choice",
                     "turn_detection",
-                    "api_key",
                     "use_default_credential",
                     "conn_options",
                 ],
@@ -366,9 +363,6 @@ class RealtimeModel(llm.RealtimeModel):
             "voice": self._opts.voice
             if isinstance(self._opts.voice, str)
             else self._opts.voice.name,
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
             "input_audio_transcription": {
                 key: value
                 for key, value in self._opts.input_audio_transcription.as_dict().items()

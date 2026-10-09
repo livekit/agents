@@ -22,7 +22,7 @@ import sphn  # type: ignore[import-untyped]
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 
@@ -47,9 +47,9 @@ INITIAL_RETRY_DELAY = 1.0
 
 @dataclass
 class _PersonaplexOptions:
-    base_url: str
+    base_url: Sensitive[str]
     voice: str
-    text_prompt: str
+    text_prompt: Sensitive[str]
     seed: int | None
     silence_threshold_ms: int
     use_ssl: bool = False
@@ -150,7 +150,7 @@ class RealtimeModel(llm.RealtimeModel):
         return "nvidia"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["base_url", "text_prompt"])
+        return report_options(self._opts)
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None:

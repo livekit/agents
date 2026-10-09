@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -28,7 +28,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -112,16 +112,16 @@ class StyleConfig:
 @dataclass
 class _TTSOptions:
     sample_rate: int
-    subscription_key: str | None
+    subscription_key: Sensitive[str | None]
     region: str | None
     voice: str
     language: LanguageCode | None
-    speech_endpoint: str | None
+    speech_endpoint: Sensitive[str | None]
     deployment_id: str | None
     prosody: NotGivenOr[ProsodyConfig]
     style: NotGivenOr[StyleConfig]
-    lexicon_uri: NotGivenOr[str]
-    auth_token: str | None = None
+    lexicon_uri: Sensitive[NotGivenOr[str]]
+    auth_token: Sensitive[str | None] = None
 
     def get_endpoint_url(self) -> str:
         base = (
@@ -219,27 +219,7 @@ class TTS(tts.TTS):
         return "Azure TTS"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=[
-                    "sample_rate",
-                    "subscription_key",
-                    "speech_endpoint",
-                    "prosody",
-                    "style",
-                    "lexicon_uri",
-                    "auth_token",
-                ],
-            ),
-            "prosody": asdict(self._opts.prosody)
-            if is_given(self._opts.prosody) and self._opts.prosody is not None
-            else None,
-            "style": asdict(self._opts.style)
-            if is_given(self._opts.style) and self._opts.style is not None
-            else None,
-        }
+        return {**super().describe_options(), **report_options(self._opts, exclude=["sample_rate"])}
 
     def update_options(
         self,

@@ -37,7 +37,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -205,7 +205,7 @@ def _parse_ws_event(resp: dict[str, object]) -> _ReceivedWsEvent:
 
 @dataclass
 class _TTSOptions:
-    model_endpoint: str
+    model_endpoint: Sensitive[str]
     model: str
     voice: str
     language: str
@@ -213,10 +213,10 @@ class _TTSOptions:
     encoding: Literal["linear16"]
     speed: float
     word_tokenizer: tokenize.WordTokenizer
-    api_key: str
-    model_options: dict[str, object]
-    extra_headers: dict[str, str]
-    runtime_init: dict[str, Any] | None
+    api_key: Sensitive[str]
+    model_options: Sensitive[dict[str, object]]
+    extra_headers: Sensitive[dict[str, str]]
+    runtime_init: Sensitive[dict[str, Any] | None]
     warm_standby_enabled: bool
     text_chunking: Literal["auto", "word", "phrase"]
     phrase_max_chars: int
@@ -505,19 +505,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model_endpoint",
-                    "model",
-                    "sample_rate",
-                    "word_tokenizer",
-                    "api_key",
-                    "model_options",
-                    "extra_headers",
-                    "runtime_init",
-                ],
-            ),
+            **report_options(self._opts, exclude=["model", "sample_rate", "word_tokenizer"]),
         }
 
     @property

@@ -18,7 +18,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -48,8 +48,8 @@ class _TTSOptions:
     output_format: OutputFormat
     sample_rate: int
     voice_id: NotGivenOr[str]
-    base_url: str
-    api_key: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
     latency_mode: LatencyMode
     chunk_length: int
     speed: NotGivenOr[float]
@@ -242,7 +242,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["model", "sample_rate", "base_url", "api_key"]),
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     @property

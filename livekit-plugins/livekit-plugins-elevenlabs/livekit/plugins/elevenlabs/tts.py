@@ -22,7 +22,7 @@ import json
 import os
 import time
 import weakref
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import Any, Literal
 
@@ -39,7 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.tokenize.basic import split_words
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
@@ -233,26 +233,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=[
-                    "api_key",
-                    "voice_settings",
-                    "model",
-                    "base_url",
-                    "sample_rate",
-                    "word_tokenizer",
-                    "pronunciation_dictionary_locators",
-                ],
-            ),
-            "voice_settings": asdict(self._opts.voice_settings)
-            if is_given(self._opts.voice_settings) and self._opts.voice_settings is not None
-            else None,
-            "pronunciation_dictionary_locators": [
-                asdict(locator) for locator in self._opts.pronunciation_dictionary_locators
-            ]
-            if is_given(self._opts.pronunciation_dictionary_locators)
-            else None,
+            **report_options(self._opts, exclude=["model", "sample_rate", "word_tokenizer"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
@@ -650,12 +631,12 @@ class SynthesizeStream(tts.SynthesizeStream):
 
 @dataclass
 class _TTSOptions:
-    api_key: str
+    api_key: Sensitive[str]
     voice_id: str
     voice_settings: NotGivenOr[VoiceSettings]
     model: TTSModels | str
     language: NotGivenOr[LanguageCode]
-    base_url: str
+    base_url: Sensitive[str]
     encoding: TTSEncoding
     sample_rate: int
     streaming_latency: NotGivenOr[int]

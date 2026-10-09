@@ -408,6 +408,46 @@ async def test_adapter_snapshots_isolate_child_failures(
         await adapter.aclose()
 
 
+@pytest.mark.parametrize("version", [1, 2])
+async def test_deepgram_reports_settings_without_tags_or_keyterms(version: int) -> None:
+    deepgram = pytest.importorskip("livekit.plugins.deepgram")
+    factory = deepgram.STT if version == 1 else deepgram.STTv2
+    model = factory(
+        api_key="private-key",
+        tags=["private-customer"],
+        keyterm=["private-name"],
+        sample_rate=24000,
+    )
+    try:
+        reported = _report(AgentSession(vad=None, stt=model)).models["stt"]
+        assert reported["model"] == model.model
+        assert reported["sample_rate"] == 24000
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
+async def test_gladia_reports_nested_settings_without_customer_content() -> None:
+    gladia = pytest.importorskip("livekit.plugins.gladia")
+    model = gladia.STT(
+        api_key="private-key",
+        translation_enabled=True,
+        translation_target_languages=["fr"],
+        translation_context="private-context",
+        custom_vocabulary=["private-name"],
+        custom_spelling={"private-term": ["private-spelling"]},
+        pre_processing_speech_threshold=0.8,
+    )
+    try:
+        reported = _report(AgentSession(vad=None, stt=model)).models["stt"]
+        assert reported["translation_config"]["enabled"] is True
+        assert reported["translation_config"]["target_languages"] == ["fr"]
+        assert reported["pre_processing"]["speech_threshold"] == 0.8
+        assert "private-" not in json.dumps(reported)
+    finally:
+        await model.aclose()
+
+
 @pytest.mark.parametrize(
     "provider, kind, nested_key, field, value",
     [

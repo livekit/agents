@@ -39,7 +39,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -61,11 +61,11 @@ class _TTSOptions:
     speaking_rate: float
     tokenizer: tokenize.SentenceTokenizer
     volume_gain_db: float
-    custom_pronunciations: CustomPronunciations | None
+    custom_pronunciations: Sensitive[CustomPronunciations | None]
     enable_ssml: bool
     use_markup: bool
     model_name: str | None
-    prompt: str | None
+    prompt: Sensitive[str | None]
 
 
 class TTS(tts.TTS):
@@ -218,17 +218,7 @@ class TTS(tts.TTS):
                 "ssml_gender": self._opts.voice.ssml_gender.name,
             },
             "encoding": self._opts.encoding.name,
-            **report_options(
-                self._opts,
-                exclude=[
-                    "voice",
-                    "encoding",
-                    "sample_rate",
-                    "tokenizer",
-                    "custom_pronunciations",
-                    "prompt",
-                ],
-            ),
+            **report_options(self._opts, exclude=["voice", "encoding", "sample_rate", "tokenizer"]),
         }
 
     def update_options(

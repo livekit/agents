@@ -17,6 +17,7 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
@@ -46,7 +47,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str | None
     response_format: RESPONSE_FORMAT
-    ref_audio: str | None
+    ref_audio: Sensitive[str | None]
 
 
 class TTS(tts.TTS):
@@ -101,11 +102,7 @@ class TTS(tts.TTS):
         return "MistralAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **super().describe_options(),
-            "voice": self._opts.voice,
-            "response_format": self._opts.response_format,
-        }
+        return {**super().describe_options(), **report_options(self._opts, exclude=["model"])}
 
     def update_options(
         self,

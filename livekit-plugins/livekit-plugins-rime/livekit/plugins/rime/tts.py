@@ -18,7 +18,7 @@ import asyncio
 import copy
 import os
 import weakref
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, overload
 from urllib.parse import urlencode
 
@@ -404,15 +404,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts, exclude=["model", "sample_rate", "coda_options", "mist_options"]
-            ),
-            "coda_options": asdict(self._opts.coda_options)
-            if is_given(self._opts.coda_options) and self._opts.coda_options is not None
-            else None,
-            "mist_options": asdict(self._opts.mist_options)
-            if is_given(self._opts.mist_options) and self._opts.mist_options is not None
-            else None,
+            **report_options(self._opts, exclude=["model", "sample_rate"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

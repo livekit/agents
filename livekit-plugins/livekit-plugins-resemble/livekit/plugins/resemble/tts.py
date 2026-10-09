@@ -34,6 +34,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from .log import logger
@@ -121,7 +122,10 @@ class TTS(tts.TTS):
         return "Resemble"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), "voice_uuid": self._opts.voice_uuid}
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["model", "sample_rate", "tokenizer"]),
+        }
 
     async def _connect_ws(self, timeout: float) -> aiohttp.ClientWebSocketResponse:
         return await asyncio.wait_for(

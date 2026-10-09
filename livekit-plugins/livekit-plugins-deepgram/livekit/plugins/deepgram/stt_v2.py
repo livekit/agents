@@ -34,7 +34,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -53,8 +53,8 @@ FluxRedaction = Literal["numbers", "aggressive_numbers"]
 class STTOptions:
     model: V2Models | str
     sample_rate: int
-    keyterm: str | Sequence[str]
-    endpoint_url: str
+    keyterm: Sensitive[str | Sequence[str]]
+    endpoint_url: Sensitive[str]
     language: str = "en"
     eager_eot_threshold: NotGivenOr[float] = NOT_GIVEN
     eot_threshold: NotGivenOr[float] = NOT_GIVEN
@@ -63,7 +63,7 @@ class STTOptions:
     numerals: bool = False
     profanity_filter: bool = False
     redact: NotGivenOr[FluxRedaction] = NOT_GIVEN
-    tags: NotGivenOr[list[str]] = NOT_GIVEN
+    tags: Sensitive[NotGivenOr[list[str]]] = NOT_GIVEN
     language_hint: NotGivenOr[list[str]] = NOT_GIVEN
 
 
@@ -199,7 +199,7 @@ class STTv2(stt.STT):
         return "Deepgram"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model", "keyterm", "endpoint_url"])
+        return report_options(self._opts, exclude=["model"])
 
     def stream(
         self,

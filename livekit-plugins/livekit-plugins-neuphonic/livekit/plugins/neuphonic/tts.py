@@ -14,7 +14,7 @@
 
 from __future__ import annotations  # noqa: I001
 
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from typing import Any
 
 import asyncio
@@ -61,9 +61,9 @@ class _TTSOptions:
     sample_rate: int
     voice_id: str
     speed: float | None
-    api_key: str | None
-    jwt_token: str | None
-    base_url: str
+    api_key: Sensitive[str | None]
+    jwt_token: Sensitive[str | None]
+    base_url: Sensitive[str]
     word_tokenizer: tokenize.WordTokenizer
 
     def get_http_url(self, path: str) -> str:
@@ -175,10 +175,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=["sample_rate", "api_key", "jwt_token", "base_url", "word_tokenizer"],
-            ),
+            **report_options(self._opts, exclude=["sample_rate", "word_tokenizer"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

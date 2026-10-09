@@ -39,7 +39,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer
 from livekit.agents.utils.misc import is_given
@@ -145,15 +145,15 @@ class RealtimeSTTOptions:
     """
 
     language: str
-    api_key: str
+    api_key: Sensitive[str]
     stream_type: RealtimeStreamType | str = "balanced"
     mode: RealtimeMode | str = "transcribe"
     endpointing: RealtimeEndpointing | str = "vad"
     encoding: RealtimeEncoding | str = "linear16"
     sample_rate: int = 16000
     model: str = REALTIME_MODEL
-    base_url: str = SARVAM_STT_REALTIME_URL
-    prompt: str | None = None
+    base_url: Sensitive[str] = SARVAM_STT_REALTIME_URL
+    prompt: Sensitive[str | None] = None
     return_timestamps: bool = False
     vad_sot_threshold: float | None = None
     vad_min_speech_ms: int | None = None
@@ -319,7 +319,7 @@ class STTRealtime(stt.STT):
         return "Sarvam"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["api_key", "model", "base_url", "prompt"])
+        return report_options(self._opts, exclude=["model"])
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

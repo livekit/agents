@@ -533,10 +533,7 @@ class RealtimeModel(llm.RealtimeModel):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(self._opts, exclude=["tool_choice"]),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
+            **report_options(self._opts),
             "generate_reply_timeout": self._generate_reply_timeout,
         }
 

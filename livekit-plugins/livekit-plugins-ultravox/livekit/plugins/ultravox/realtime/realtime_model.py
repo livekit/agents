@@ -20,7 +20,7 @@ import aiohttp
 
 from livekit import rtc
 from livekit.agents import APIConnectionError, APIError, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm.realtime import InputSpeechStartedEvent, InputSpeechStoppedEvent
 from livekit.agents.llm.utils import compute_chat_ctx_diff
 from livekit.agents.metrics.base import Metadata, RealtimeModelMetrics
@@ -64,16 +64,16 @@ class _UltravoxOptions:
 
     model_id: str
     voice: str
-    external_voice: NotGivenOr[dict[str, Any]]
-    api_key: str
-    base_url: str
-    system_prompt: str
+    external_voice: Sensitive[NotGivenOr[dict[str, Any]]]
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
+    system_prompt: Sensitive[str]
     input_sample_rate: int
     output_sample_rate: int
     temperature: NotGivenOr[float]
     language_hint: NotGivenOr[str]
     max_duration: NotGivenOr[str]
-    time_exceeded_message: NotGivenOr[str]
+    time_exceeded_message: Sensitive[NotGivenOr[str]]
     enable_greeting_prompt: NotGivenOr[bool]
     first_speaker: NotGivenOr[str]
     output_medium: Literal["text", "voice"]
@@ -238,17 +238,7 @@ class RealtimeModel(llm.RealtimeModel):
         return "Ultravox"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(
-            self._opts,
-            exclude=[
-                "model_id",
-                "external_voice",
-                "api_key",
-                "base_url",
-                "system_prompt",
-                "time_exceeded_message",
-            ],
-        )
+        return report_options(self._opts, exclude=["model_id"])
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
         """Ensure HTTP session is available."""

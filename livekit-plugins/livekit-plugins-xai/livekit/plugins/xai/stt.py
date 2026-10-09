@@ -35,7 +35,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     NOT_GIVEN,
@@ -63,7 +63,7 @@ class STTOptions:
     vad_threshold: NotGivenOr[float] = NOT_GIVEN
     smart_turn: NotGivenOr[float] = NOT_GIVEN
     smart_turn_timeout: NotGivenOr[int] = NOT_GIVEN
-    keyterm: NotGivenOr[list[str]] = NOT_GIVEN
+    keyterm: Sensitive[NotGivenOr[list[str]]] = NOT_GIVEN
 
 
 class STT(stt.STT):
@@ -134,7 +134,7 @@ class STT(stt.STT):
         self._streams = weakref.WeakSet[SpeechStream]()
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["keyterm"])
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

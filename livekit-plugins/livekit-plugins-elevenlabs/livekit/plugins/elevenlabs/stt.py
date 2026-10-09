@@ -37,7 +37,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
@@ -88,8 +88,8 @@ ElevenLabsSTTModels = Literal["scribe_v1", "scribe_v2", "scribe_v2_realtime"]
 @dataclass
 class STTOptions:
     model_id: ElevenLabsSTTModels | str
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
     language_code: LanguageCode | None
     secondary_languages: NotGivenOr[list[LanguageCode]]
     include_language_detection: NotGivenOr[bool]
@@ -97,10 +97,10 @@ class STTOptions:
     include_timestamps: bool
     sample_rate: STTRealtimeSampleRates
     server_vad: NotGivenOr[VADOptions | None]
-    keyterms: NotGivenOr[list[str]]
+    keyterms: Sensitive[NotGivenOr[list[str]]]
     no_verbatim: bool
     enable_logging: bool
-    previous_text: str | None
+    previous_text: Sensitive[str | None]
     audio_chunk_duration_ms: int = 50
 
 
@@ -272,15 +272,7 @@ class STT(stt.STT):
         return "ElevenLabs"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts,
-                exclude=["api_key", "base_url", "server_vad", "keyterms", "previous_text"],
-            ),
-            "server_vad": report_options(self._opts.server_vad, VADOptions)
-            if is_given(self._opts.server_vad) and self._opts.server_vad is not None
-            else self._opts.server_vad,
-        }
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

@@ -15,7 +15,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from . import auth
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class TTSOptions:
     voice: str
     function_id: str
-    server: str
+    server: Sensitive[str]
     sample_rate: int
     use_ssl: bool
     language_code: str
@@ -75,7 +75,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["server", "sample_rate", "word_tokenizer"]),
+            **report_options(self._opts, exclude=["sample_rate", "word_tokenizer"]),
         }
 
     def _ensure_session(self) -> riva.client.SpeechSynthesisService:

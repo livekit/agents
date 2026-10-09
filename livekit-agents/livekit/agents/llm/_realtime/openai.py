@@ -585,7 +585,6 @@ class RealtimeModel(llm.RealtimeModel):
             exclude={
                 "model": True,
                 "conn_options": True,
-                "tool_choice": {"function"},
                 "input_audio_transcription": {"prompt", "keywords"},
             },
         )

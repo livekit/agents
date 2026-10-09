@@ -30,6 +30,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -48,8 +49,8 @@ NUM_CHANNELS = 1
 class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
-    api_key: str
-    base_url: str
+    api_key: Sensitive[str]
+    base_url: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -108,7 +109,7 @@ class TTS(tts.TTS):
         return "Groq"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), "voice": self._opts.voice}
+        return {**super().describe_options(), **report_options(self._opts, exclude=["model"])}
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

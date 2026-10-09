@@ -30,7 +30,7 @@ from livekit.agents import (
     APITimeoutError,
     tts,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio, is_given
 
@@ -77,7 +77,7 @@ class _TTSOptions:
     model: TTSModels | str
     voice: TTSVoices | str
     speed: float
-    instructions: str | None
+    instructions: Sensitive[str | None]
     response_format: RESPONSE_FORMATS
 
 
@@ -146,7 +146,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["model", "instructions"]),
+            **report_options(self._opts, exclude=["model"]),
         }
 
     def update_options(

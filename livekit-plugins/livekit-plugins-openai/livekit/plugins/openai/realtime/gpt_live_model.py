@@ -88,11 +88,11 @@ class ResponsesDelegationOptions(TypedDict, total=False):
     deployment in the same resource, which is required there."""
     instructions: Sensitive[str]
     """Instructions for the backend model, distinct from the voice model's."""
-    tool_choice: Sensitive[llm.ToolChoice | None]
+    tool_choice: llm.ToolChoice | None
     parallel_tool_calls: bool
-    reasoning: Sensitive[Reasoning]
+    reasoning: Reasoning
     """Responses reasoning settings, for example ``{"effort": "medium"}``."""
-    text: Sensitive[ResponseTextConfigParam]
+    text: ResponseTextConfigParam
     """Responses text settings, for example ``{"verbosity": "low"}``."""
     service_tier: types.ServiceTier
     max_output_tokens: int
@@ -137,16 +137,16 @@ class _Speech:
 @dataclass
 class _LiveOptions:
     model: str
-    voice: str | dict[str, Any]
+    voice: Sensitive[str | dict[str, Any]]
     delegation: types.DelegationTarget
     responses: ResponsesDelegationOptions
     service_tier: types.ServiceTier | None
-    api_key: str | None
-    base_url: str
+    api_key: Sensitive[str | None]
+    base_url: Sensitive[str]
     conn_options: APIConnectOptions
     max_session_duration: float | None
     is_azure: bool
-    entra_token: str | None
+    entra_token: Sensitive[str | None]
 
 
 class GPTLiveModel(llm.DuplexModel):
@@ -355,18 +355,9 @@ class GPTLiveModel(llm.DuplexModel):
         return {
             **report_options(
                 self._opts,
-                exclude=[
-                    "model",
-                    "voice",
-                    "responses",
-                    "api_key",
-                    "base_url",
-                    "conn_options",
-                    "entra_token",
-                ],
+                exclude={"model": True, "conn_options": True, "responses": {"text": {"format"}}},
             ),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else None,
-            "responses": report_options(self._opts.responses, ResponsesDelegationOptions),
         }
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:

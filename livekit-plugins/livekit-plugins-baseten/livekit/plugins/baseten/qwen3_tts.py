@@ -47,7 +47,7 @@ from livekit.agents import (
     tts as tts_module,
     utils,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -78,14 +78,14 @@ class _TTSOptions:
     task_type: str
     language: str | None
     speed: float
-    instructions: str | None
+    instructions: Sensitive[str | None]
     max_new_tokens: int | None
     initial_codec_chunk_frames: int | None
     x_vector_only_mode: bool | None
-    ref_audio: str | None
-    ref_text: str | None
+    ref_audio: Sensitive[str | None]
+    ref_text: Sensitive[str | None]
     word_timestamps: bool
-    extra_config: dict[str, Any] = field(default_factory=dict)
+    extra_config: Sensitive[dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -218,9 +218,7 @@ class _Qwen3Backend:
         self._closing = False
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(
-            self._opts, exclude=["instructions", "ref_audio", "ref_text", "extra_config"]
-        )
+        return report_options(self._opts)
 
     def update_options(
         self,

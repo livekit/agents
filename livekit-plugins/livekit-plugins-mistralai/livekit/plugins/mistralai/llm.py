@@ -160,12 +160,7 @@ class LLM(llm.LLM):
         return "MistralAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(self._opts, exclude=["model", "tool_choice"]),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-        }
+        return report_options(self._opts, exclude=["model"])
 
     def update_options(
         self,

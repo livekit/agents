@@ -8,7 +8,7 @@ from typing import Any, Literal
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, tts, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.tts._provider_format import split_expr_markup
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -98,11 +98,11 @@ class _TTSOptions:
     model: GEMINI_TTS_MODELS | str
     voice_name: GEMINI_VOICES | str
     vertexai: bool
-    project: str | None
+    project: Sensitive[str | None]
     location: str | None
-    instructions: str | None
-    speakers: dict[str, str] | None
-    speaker: str | None
+    instructions: Sensitive[str | None]
+    speakers: Sensitive[dict[str, str] | None]
+    speaker: Sensitive[str | None]
 
 
 class TTS(tts.TTS):
@@ -240,7 +240,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["model", "project", "instructions", "speakers"]),
+            **report_options(self._opts, exclude=["model"]),
         }
 
     def synthesize(

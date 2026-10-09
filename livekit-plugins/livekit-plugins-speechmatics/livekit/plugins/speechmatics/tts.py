@@ -16,6 +16,7 @@ from livekit.agents import (
     tts,
     utils,
 )
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -35,8 +36,8 @@ class _TTSOptions:
     voice: str
     sample_rate: int
     word_tokenizer: tokenize.WordTokenizer
-    base_url: str
-    api_key: str
+    base_url: Sensitive[str]
+    api_key: Sensitive[str]
 
 
 class TTS(tts.TTS):
@@ -94,7 +95,10 @@ class TTS(tts.TTS):
         return "Speechmatics"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), "voice": self._opts.voice}
+        return {
+            **super().describe_options(),
+            **report_options(self._opts, exclude=["sample_rate", "word_tokenizer"]),
+        }
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
