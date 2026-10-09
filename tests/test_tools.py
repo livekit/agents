@@ -2172,6 +2172,7 @@ def _make_reply_session(speech: Any) -> Any:
     session._global_run_state = None
     activity = MagicMock()
     activity.agent = agent
+    activity.scheduling_paused = False
     session.wait_for_idle = AsyncMock(return_value=activity)
     session.generate_reply = MagicMock(return_value=speech)
     return session

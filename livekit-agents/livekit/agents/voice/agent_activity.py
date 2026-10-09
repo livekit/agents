@@ -342,6 +342,8 @@ class AgentActivity(RecognitionHooks):
         self._started = False
         self._closed = False
         self._scheduling_paused = True
+        # set while scheduling runs, and once the activity has closed
+        self._scheduling_resumed = asyncio.Event()
         self._new_turns_blocked = False
 
         self._current_speech: SpeechHandle | None = None
@@ -1401,6 +1403,7 @@ class AgentActivity(RecognitionHooks):
         await self._session._keyterm_detector.aclose()
 
         self._scheduling_paused = True
+        self._scheduling_resumed.clear()
         # a parked preemptive generation is never scheduled, so the wait below would never
         # end. drop it here rather than in the callers: the flag above is what stops a new
         # one from being created, and it is only true from this point on.
@@ -1490,6 +1493,7 @@ class AgentActivity(RecognitionHooks):
         self._scheduling_atask = asyncio.create_task(
             self._scheduling_task(), name="_scheduling_task"
         )
+        self._scheduling_resumed.set()
 
     async def resume(
         self,
@@ -1621,6 +1625,7 @@ class AgentActivity(RecognitionHooks):
                 return
 
             self._closed = True
+            self._scheduling_resumed.set()
             self._cancel_preemptive_generation()
             await self._session._keyterm_detector.aclose()
 
