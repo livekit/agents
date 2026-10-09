@@ -594,6 +594,7 @@ class _Connection:
         self._close_task: asyncio.Task[None] | None = None
         self._is_current = True
         self._closed = False
+        self._error: BaseException | None = None
 
     @property
     def is_current(self) -> bool:
@@ -657,9 +658,11 @@ class _Connection:
         opts: _TTSOptions,
     ) -> None:
         """Register a new stream and queue its config message."""
-        if self._closed:
+        if self._closed or self._error is not None:
             if not waiter.done():
-                waiter.set_exception(APIConnectionError("Soniox TTS connection is closed"))
+                waiter.set_exception(
+                    self._error or APIConnectionError("Soniox TTS connection is closed")
+                )
             return
 
         if stream_id in self._streams:
@@ -773,13 +776,22 @@ class _Connection:
                 resp = json.loads(msg.data)
                 stream_id = resp.get("stream_id")
 
-                if stream_id is None:
+                if not stream_id:
                     # Connection-level message (only errors are expected here).
                     if resp.get("error_code"):
                         logger.error(
                             f"Soniox TTS connection-level error: "
                             f"{resp.get('error_code')} - {resp.get('error_message')}"
                         )
+                        self._fail_all(
+                            APIStatusError(
+                                message=resp.get("error_message", "Unknown error"),
+                                status_code=resp["error_code"],
+                                request_id=resp.get("request_id"),
+                                body=resp,
+                            )
+                        )
+                        break
                     continue
 
                 stream = self._streams.get(stream_id)
@@ -861,9 +873,10 @@ class _Connection:
 
     def _fail_all(self, err: BaseException) -> None:
         """Fail all registered streams and mark the connection non-current."""
+        self._error = self._error or err
         for stream in list(self._streams.values()):
             if not stream.waiter.done():
-                stream.waiter.set_exception(err)
+                stream.waiter.set_exception(self._error)
         self._streams.clear()
         self._is_current = False
 
