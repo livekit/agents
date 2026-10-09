@@ -27,12 +27,12 @@ def _run(scenario: str, *args: object) -> dict[str, str]:
     return dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
 
 
-def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> None:
+def test_server_run_keeps_the_metric_files_it_has_open(tmp_path) -> None:
     out = _run(
         """
         import asyncio, os, sys, threading, time
 
-        mp_dir, live_pid, dead_pid = sys.argv[1], sys.argv[2], sys.argv[3]
+        mp_dir, dead_pid = sys.argv[1], sys.argv[2]
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = mp_dir
 
         import prometheus_client
@@ -42,8 +42,7 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
         from livekit.agents import AgentServer, JobContext, JobExecutorType
         from livekit.agents.telemetry import metrics as lk_metrics
 
-        for pid in (dead_pid, live_pid):
-            MmapedDict(os.path.join(mp_dir, f"gauge_all_{pid}.db")).close()
+        MmapedDict(os.path.join(mp_dir, f"gauge_all_{dead_pid}.db")).close()
 
         gauge = prometheus_client.Gauge("app_warmup_done", "warm-up finished")
         gauge.set(1)
@@ -99,7 +98,6 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
         asyncio.run(main())
         """,
         tmp_path,
-        os.getpid(),
         _DEAD_PID,
     )
     files = out["FILES"].split()
@@ -107,7 +105,6 @@ def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> Non
     assert f'app_warmup_done{{pid="{out["PID"]}"}} 2.0' in out["METRICS"]
     assert "lk_agents_worker_load{" in out["METRICS"]
     assert f"gauge_all_{out['PID']}.db" in files  # this process
-    assert f"gauge_all_{os.getpid()}.db" in files  # a live process
     assert f"gauge_all_{_DEAD_PID}.db" not in files  # a dead process
 
 
@@ -206,3 +203,36 @@ def test_cleanup_keeps_this_pids_open_files_after_a_directory_switch(tmp_path) -
     )
 
     assert f'app_warmup_done{{pid="{out["PID"]}"}} 2.0' in out["METRICS"]
+
+
+def test_cleanup_removes_a_stale_file_with_this_pid_in_multiprocess_mode(tmp_path) -> None:
+    out = _run(
+        """
+        import os, sys
+
+        mp_dir = sys.argv[1]
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = mp_dir
+
+        import prometheus_client
+        from prometheus_client import CollectorRegistry, generate_latest, multiprocess
+        from prometheus_client.mmap_dict import MmapedDict, mmap_key
+
+        from livekit.agents.telemetry import metrics
+
+        # left by an earlier process with the same pid, as after a container restart
+        stale = MmapedDict(os.path.join(mp_dir, f"counter_{os.getpid()}.db"))
+        key = mmap_key("app_requests", "app_requests_total", [], [], "requests")
+        stale.write_value(key, 41.0, 0.0)
+        stale.close()
+
+        metrics._clean_multiproc_dir(mp_dir)
+        prometheus_client.Counter("app_requests", "requests").inc()
+
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        print("METRICS", generate_latest(registry).decode().replace(chr(10), " | "))
+        """,
+        tmp_path,
+    )
+
+    assert "app_requests_total 1.0" in out["METRICS"]

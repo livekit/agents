@@ -2,7 +2,6 @@ import os
 
 import prometheus_client
 import psutil
-from prometheus_client import values
 
 from .. import utils
 from ..log import logger
@@ -50,34 +49,19 @@ def _update_child_proc_count() -> None:
 
 
 def _clean_multiproc_dir(path: str) -> None:
-    """Remove the metric files of processes that no longer run.
+    """Remove the metric files that this process does not have open.
 
-    prometheus_client names each file ``<kind>_<pid>.db`` and keeps writing to it
-    after it is deleted, so the collector would lose every metric of that kind.
-    The files of running processes stay. In multiprocess mode this process can
-    create a file on any thread at any time, and keeps every file it writes open in
-    whichever directory PROMETHEUS_MULTIPROC_DIR named, so its own files stay too,
-    in every directory. A stale
-    file from an earlier process with the same pid then stays as well; clear the
-    directory before the process starts to drop it. A process that imported
-    prometheus_client before PROMETHEUS_MULTIPROC_DIR was set writes no file, so
-    any file with its pid is stale.
+    prometheus_client keeps each file open and keeps writing to it after it is
+    deleted, so the collector would lose every metric of that kind. The directory
+    is listed before the open files are, so a file created during the cleanup is
+    either not listed or already open.
     """
-    own_pid = os.getpid()
-    writes_files = values.ValueClass is not values.MutexValue
-    for filename in os.listdir(path):
+    filenames = os.listdir(path)
+    open_paths = {os.path.realpath(f.path) for f in psutil.Process().open_files()}
+    for filename in filenames:
         file_path = os.path.join(path, filename)
-        pid_str = filename.removesuffix(".db").rpartition("_")[2]
-        if pid_str.isdigit():
-            pid = int(pid_str)
-            if pid == own_pid:
-                if writes_files:
-                    continue
-            elif psutil.pid_exists(pid):
-                # A live process that reused a dead process's pid keeps its stale
-                # file. prometheus_client's mark_process_dead has the same limit.
-                continue
-
+        if os.path.realpath(file_path) in open_paths:
+            continue
         try:
             if os.path.isfile(file_path):
                 os.unlink(file_path)
