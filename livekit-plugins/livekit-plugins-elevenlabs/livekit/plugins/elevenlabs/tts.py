@@ -19,7 +19,6 @@ import base64
 import contextlib
 import dataclasses
 import json
-import logging
 import os
 import time
 import weakref
@@ -1171,7 +1170,6 @@ class _DialogueConnection(_Connection):
 
     async def _recv_loop(self) -> None:
         """Receive loop - processes messages from WebSocket"""
-        idle_timeout_data: dict[str, Any] | None = None
         try:
             while not self._closed and self._ws and not self._ws.closed:
                 msg = await self._ws.receive()
@@ -1182,16 +1180,6 @@ class _DialogueConnection(_Connection):
                     aiohttp.WSMsgType.CLOSING,
                 ):
                     if not self._closed and len(self._context_data) > 0:
-                        if idle_timeout_data is not None:
-                            # Speech can register after an idle error but before the socket closes.
-                            logger.error(
-                                "elevenlabs text-to-dialogue returned error",
-                                extra={
-                                    "context_id": idle_timeout_data.get("context_id"),
-                                    "lk.pii.error": idle_timeout_data["error"],
-                                    "lk.pii.data": idle_timeout_data,
-                                },
-                            )
                         # websocket will be closed after all contexts are closed
                         raise APIStatusError(
                             "ElevenLabs dialogue websocket connection closed unexpectedly",
@@ -1208,16 +1196,21 @@ class _DialogueConnection(_Connection):
                 ctx = self._context_data.get(context_id) if context_id is not None else None
 
                 if error := data.get("error"):
-                    # Registered streams include speech not yet sent and pending final audio.
-                    is_idle_timeout = (
+                    # the server drops sockets after 20s without input; harmless unless a
+                    # stream is registered, including one that hasn't sent text yet
+                    if (
                         error == "input_timeout_exceeded"
                         and data.get("code") == 1008
                         and context_id is None
                         and not self._context_data
-                    )
-                    idle_timeout_data = data if is_idle_timeout else None
-                    logger.log(
-                        logging.INFO if is_idle_timeout else logging.ERROR,
+                    ):
+                        logger.debug(
+                            "elevenlabs text-to-dialogue socket idle timeout",
+                            extra={"lk.pii.data": data},
+                        )
+                        continue
+
+                    logger.error(
                         "elevenlabs text-to-dialogue returned error",
                         extra={
                             "context_id": context_id,
