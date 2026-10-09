@@ -32,7 +32,7 @@ from livekit.agents import (
     tts,
     utils,
 )
-from livekit.agents._reporting import Reportable, reportable_option_names
+from livekit.agents._reporting import reportable_option_names
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 
@@ -40,13 +40,13 @@ from .version import __version__
 
 
 class VoiceById(TypedDict, total=False):
-    id: Reportable[str]
-    provider: Reportable[VoiceProvider | None]
+    id: str
+    provider: VoiceProvider | None
 
 
 class VoiceByName(TypedDict, total=False):
-    name: Reportable[str]
-    provider: Reportable[VoiceProvider | None]
+    name: str
+    provider: VoiceProvider | None
 
 
 class Utterance(TypedDict, total=False):

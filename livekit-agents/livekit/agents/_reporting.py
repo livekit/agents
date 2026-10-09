@@ -25,17 +25,20 @@ if TYPE_CHECKING:
 
 
 _T = TypeVar("_T")
-Reportable = Annotated[_T, "reportable"]
-"""Marks an option for inclusion in session reports; unmarked fields are omitted."""
+Sensitive = Annotated[_T, "sensitive"]
+"""Marks an option for exclusion from session reports."""
 
 
 def reportable_option_names(*option_types: type) -> frozenset[str]:
-    return frozenset(
-        name
-        for option_type in option_types
-        for name, annotation in get_type_hints(option_type, include_extras=True).items()
-        if get_origin(annotation) is Annotated and "reportable" in get_args(annotation)[1:]
-    )
+    """Return declared fields, excluding any marked sensitive in the supplied types."""
+    declared: set[str] = set()
+    sensitive: set[str] = set()
+    for option_type in option_types:
+        for name, annotation in get_type_hints(option_type, include_extras=True).items():
+            declared.add(name)
+            if get_origin(annotation) is Annotated and "sensitive" in get_args(annotation)[1:]:
+                sensitive.add(name)
+    return frozenset(declared - sensitive)
 
 
 _SESSION_OPTION_KEY_ALIASES = {

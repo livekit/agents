@@ -37,7 +37,7 @@ from livekit.agents import (
     stt,
     utils,
 )
-from livekit.agents._reporting import Reportable, reportable_option_names
+from livekit.agents._reporting import reportable_option_names
 from livekit.agents.stt import SpeechEventType, STTCapabilities
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import AudioBuffer, http_context, is_given
@@ -71,13 +71,13 @@ def _speech_confidence(words: list[dict[str, Any]] | None) -> float:
 
 
 class VADOptions(TypedDict, total=False):
-    vad_silence_threshold_secs: Reportable[float | None]
+    vad_silence_threshold_secs: float | None
     """Silence threshold in seconds for VAD. Default to 1.5"""
-    vad_threshold: Reportable[float | None]
+    vad_threshold: float | None
     """Threshold for voice activity detection. Default to 0.4"""
-    min_speech_duration_ms: Reportable[int | None]
+    min_speech_duration_ms: int | None
     """Minimum speech duration in milliseconds. Default to 250"""
-    min_silence_duration_ms: Reportable[int | None]
+    min_silence_duration_ms: int | None
     """Minimum silence duration in milliseconds. Default to 2500"""
 
 

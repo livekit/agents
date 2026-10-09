@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
-from livekit.agents._reporting import Reportable, reportable_option_names
+from livekit.agents._reporting import Sensitive, reportable_option_names
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.voice.report import SessionReport, _serialize_session_components
 
@@ -28,13 +28,52 @@ def _report(session: AgentSession) -> SessionReport:
     return JobContext.make_session_report(ctx, session)
 
 
-def test_reportable_options_require_explicit_opt_in() -> None:
+def test_reportable_options_exclude_sensitive_fields() -> None:
     class Options(TypedDict):
-        speed: Reportable[float]
-        prompt: str
+        speed: float
+        prompt: Sensitive[str]
         future_setting: float
 
-    assert reportable_option_names(Options) == {"speed"}
+    class OtherOptions(TypedDict):
+        prompt: str
+
+    assert reportable_option_names(Options) == {"speed", "future_setting"}
+    assert reportable_option_names(Options, OtherOptions) == {"speed", "future_setting"}
+
+
+@pytest.mark.parametrize(
+    "model, safe, sensitive",
+    [
+        (
+            "assemblyai/u3-rt-pro",
+            {"format_turns": True},
+            {"prompt": "private-prompt", "keyterms_prompt": ["private-name"]},
+        ),
+        (
+            "speechmatics/enhanced",
+            {"max_delay": 1.0},
+            {
+                "additional_vocab": [{"content": "private-name"}],
+                "transcript_filtering_config": {"payload": "private-payload"},
+            },
+        ),
+    ],
+)
+def test_inference_omits_sensitive_primary_and_fallback_options(
+    model: str, safe: dict[str, Any], sensitive: dict[str, Any]
+) -> None:
+    options = {**safe, **sensitive, "unknown_option": "private-unknown"}
+    component = inference.STT(
+        model,
+        api_key="private-key",
+        api_secret="private-secret",
+        extra_kwargs=options,
+        fallback={"model": model, "extra_kwargs": options},
+    )
+    report = _report(AgentSession(vad=None, stt=component))
+    assert report.components["stt"]["extra_kwargs"] == safe
+    assert report.components["stt"]["fallback"][0]["extra_kwargs"] == safe
+    assert "private-" not in json.dumps(report.to_dict())
 
 
 def test_report_snapshots_inference_settings_without_credentials() -> None:
@@ -267,7 +306,7 @@ async def test_adapter_snapshots_isolate_child_failures(
         ("hume", "tts", "voice", "name", "test-voice"),
     ],
 )
-async def test_nested_provider_settings_require_opt_in(
+async def test_nested_provider_settings_exclude_unknown_fields(
     provider: str, kind: str, nested_key: str, field: str, value: Any
 ) -> None:
     plugin = pytest.importorskip(f"livekit.plugins.{provider}")
