@@ -1725,7 +1725,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
         """Commit the user turn and generate a reply.
 
         Returns a future that resolves with the user's audio transcript once STT
-        is complete and end-of-turn detection has been triggered.
+        and the current turn's end-of-turn processing are complete. At that point,
+        the user message has been committed to the chat context when applicable.
 
         Args:
             transcript_timeout (float, optional): The timeout for the final transcript
@@ -1737,7 +1738,8 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             skip_reply (bool, optional): Whether to skip the reply generation after committing the user turn.
 
         Returns:
-            asyncio.Future[str]: A future that resolves with the audio transcript.
+            asyncio.Future[str]: A future that resolves with the audio transcript after
+                the current turn has been processed.
 
         Raises:
             RuntimeError: If the AgentSession isn't running.

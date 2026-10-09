@@ -1968,12 +1968,29 @@ class AgentActivity(RecognitionHooks):
             skip_reply = True
 
         assert self._audio_recognition is not None
-        return self._audio_recognition._commit_user_turn(
+        previous_eou_task = self._audio_recognition._end_of_turn_task
+        previous_turn_task = self._user_turn_completed_atask
+        transcript_fut = self._audio_recognition._commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
             skip_reply=skip_reply,
         )
+
+        async def _wait_for_turn_commit() -> str:
+            transcript = await asyncio.shield(transcript_fut)
+
+            eou_task = self._audio_recognition._end_of_turn_task
+            if eou_task is not None and eou_task is not previous_eou_task:
+                await asyncio.gather(asyncio.shield(eou_task), return_exceptions=True)
+
+            turn_task = self._user_turn_completed_atask
+            if turn_task is not None and turn_task is not previous_turn_task:
+                await asyncio.gather(asyncio.shield(turn_task), return_exceptions=True)
+
+            return transcript
+
+        return asyncio.ensure_future(_wait_for_turn_commit())
 
     def _schedule_speech(self, speech: SpeechHandle, priority: int, force: bool = False) -> None:
         # when force=True, we still allow to schedule a new speech even if
