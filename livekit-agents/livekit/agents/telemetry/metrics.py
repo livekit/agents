@@ -64,10 +64,14 @@ def _clean_multiproc_dir(path: str) -> None:
         file_path = os.path.join(path, filename)
         if os.path.realpath(file_path) in open_paths:
             continue
-        pid_str = filename.removesuffix(".db").rpartition("_")[2]
-        if pid_str.isdigit() and int(pid_str) != own_pid and psutil.pid_exists(int(pid_str)):
+        try:
+            pid = int(filename.removesuffix(".db").rpartition("_")[2])
             # prometheus_client's mark_process_dead has the same limit: a live process
             # that reused a dead process's pid keeps the dead process's file
+            other_running = pid != own_pid and psutil.pid_exists(pid)
+        except (ValueError, OverflowError):  # not a pid
+            other_running = False
+        if other_running:
             continue
         try:
             if os.path.isfile(file_path):
