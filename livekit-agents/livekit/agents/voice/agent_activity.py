@@ -1967,10 +1967,11 @@ class AgentActivity(RecognitionHooks):
             # but keeps flushing STT transcript into the chat context
             skip_reply = True
 
-        assert self._audio_recognition is not None
-        previous_eou_task = self._audio_recognition._end_of_turn_task
+        audio_recognition = self._audio_recognition
+        assert audio_recognition is not None
+        previous_eou_task = audio_recognition._end_of_turn_task
         previous_turn_task = self._user_turn_completed_atask
-        transcript_fut = self._audio_recognition._commit_user_turn(
+        transcript_fut = audio_recognition._commit_user_turn(
             audio_detached=not self._session.input.audio_enabled,
             transcript_timeout=transcript_timeout,
             stt_flush_duration=stt_flush_duration,
@@ -1980,7 +1981,7 @@ class AgentActivity(RecognitionHooks):
         async def _wait_for_turn_commit() -> str:
             transcript = await asyncio.shield(transcript_fut)
 
-            eou_task = self._audio_recognition._end_of_turn_task
+            eou_task = audio_recognition._end_of_turn_task
             if eou_task is not None and eou_task is not previous_eou_task:
                 await asyncio.gather(asyncio.shield(eou_task), return_exceptions=True)
 
