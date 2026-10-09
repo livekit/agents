@@ -41,8 +41,16 @@ async def test_commit_user_turn_waits_for_current_turn_processing() -> None:
 
     eou_gate = asyncio.Event()
     turn_gate = asyncio.Event()
+    message_committed_fut = loop.create_future()
+    speech_handle = SpeechHandle.create()
+    speech_handle._user_message_committed_fut = message_committed_fut
+
+    async def finish_turn() -> SpeechHandle:
+        await turn_gate.wait()
+        return speech_handle
+
     recognition._end_of_turn_task = asyncio.create_task(eou_gate.wait())
-    activity._user_turn_completed_atask = asyncio.create_task(turn_gate.wait())
+    activity._user_turn_completed_atask = asyncio.create_task(finish_turn())
     transcript_fut.set_result("hello")
 
     await asyncio.sleep(0)
@@ -53,6 +61,10 @@ async def test_commit_user_turn_waits_for_current_turn_processing() -> None:
     assert not commit_fut.done()
 
     turn_gate.set()
+    await asyncio.sleep(0)
+    assert not commit_fut.done()
+
+    message_committed_fut.set_result(None)
     assert await commit_fut == "hello"
 
 
@@ -169,7 +181,7 @@ async def test_commit_user_turn_propagates_turn_processing_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_turn_processing_waits_until_pipeline_commits_user_message(
+async def test_turn_processing_exposes_pipeline_commit_barrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = AgentSession()
@@ -195,6 +207,9 @@ async def test_turn_processing_waits_until_pipeline_commits_user_message(
     activity._user_turn_completed_atask = turn_task
     await asyncio.sleep(0)
 
-    assert not turn_task.done()
+    assert await turn_task is speech_handle
+    assert speech_handle._user_message_committed_fut is not None
+    assert not speech_handle._user_message_committed_fut.done()
+
     activity._mark_user_message_committed(speech_handle)
-    await turn_task
+    await speech_handle._user_message_committed_fut
