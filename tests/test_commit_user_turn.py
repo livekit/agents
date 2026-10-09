@@ -19,6 +19,15 @@ class _AudioRecognitionStub:
     def __init__(self, transcript_fut: asyncio.Future[str]) -> None:
         self._transcript_fut = transcript_fut
         self._end_of_turn_task: asyncio.Task[None] | None = None
+        self._user_silence_ev = asyncio.Event()
+        self._user_silence_ev.set()
+
+    @property
+    def _speaking(self) -> bool:
+        return not self._user_silence_ev.is_set()
+
+    async def _wait_for_user_silence(self) -> None:
+        await self._user_silence_ev.wait()
 
     def _commit_user_turn(self, **_: Any) -> asyncio.Future[str]:
         return self._transcript_fut
@@ -141,6 +150,37 @@ async def test_commit_user_turn_waits_for_replacement_eou_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_commit_user_turn_waits_for_eou_after_user_resumes() -> None:
+    loop = asyncio.get_running_loop()
+    transcript_fut = loop.create_future()
+    recognition = _AudioRecognitionStub(transcript_fut)
+    activity = _create_activity()
+    activity._audio_recognition = cast(Any, recognition)
+
+    commit_fut = activity.commit_user_turn(transcript_timeout=2.0, stt_flush_duration=2.0)
+
+    first_eou_task = asyncio.create_task(asyncio.Event().wait())
+    recognition._end_of_turn_task = first_eou_task
+    transcript_fut.set_result("hello")
+    await asyncio.sleep(0)
+
+    recognition._user_silence_ev.clear()
+    first_eou_task.cancel()
+    recognition._end_of_turn_task = None
+    await asyncio.sleep(0)
+    assert not commit_fut.done()
+
+    replacement_gate = asyncio.Event()
+    recognition._user_silence_ev.set()
+    recognition._end_of_turn_task = asyncio.create_task(replacement_gate.wait())
+    await asyncio.sleep(0)
+    assert not commit_fut.done()
+
+    replacement_gate.set()
+    assert await commit_fut == "hello"
+
+
+@pytest.mark.asyncio
 async def test_commit_user_turn_propagates_eou_failure() -> None:
     loop = asyncio.get_running_loop()
     transcript_fut = loop.create_future()
@@ -213,3 +253,45 @@ async def test_turn_processing_exposes_pipeline_commit_barrier(
 
     activity._mark_user_message_committed(speech_handle)
     await speech_handle._user_message_committed_fut
+
+
+@pytest.mark.asyncio
+async def test_overlapping_turn_waits_for_previous_message_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity = _create_activity()
+    previous_speech_handle = SpeechHandle.create()
+    previous_speech_handle._user_message_committed_fut = asyncio.Future[None]()
+
+    async def previous_turn() -> SpeechHandle:
+        return previous_speech_handle
+
+    previous_turn_task = asyncio.create_task(previous_turn())
+    reached_turn_processing = asyncio.Event()
+
+    def interrupt_background_speeches(*, force: bool) -> list[asyncio.Future[None]]:
+        reached_turn_processing.set()
+        return []
+
+    monkeypatch.setattr(activity, "_interrupt_background_speeches", interrupt_background_speeches)
+    turn_info = _EndOfTurnInfo(
+        skip_reply=False,
+        new_transcript="next turn",
+        transcript_confidence=1.0,
+        metrics=_EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        ),
+    )
+
+    turn_task = asyncio.create_task(
+        activity._user_turn_completed_impl(previous_turn_task, turn_info)
+    )
+    await asyncio.sleep(0)
+    assert not reached_turn_processing.is_set()
+
+    previous_speech_handle._user_message_committed_fut.set_result(None)
+    await turn_task
+    assert reached_turn_processing.is_set()
