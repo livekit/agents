@@ -3243,6 +3243,7 @@ class AgentActivity(RecognitionHooks):
                     audio_output=audio_output,
                     tts_output=tts_gen_data.audio_ch,
                     reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                    tts_data=tts_gen_data,
                 )
             else:
                 # use the provided audio
@@ -3563,6 +3564,11 @@ class AgentActivity(RecognitionHooks):
             tts_text: utils.aio.Chan[str] | None = None
             prev_tts_task: asyncio.Task[bool] | None = None
 
+            def _on_tts_done(task: asyncio.Task[bool]) -> None:
+                # nothing generated past a failed TTS can be spoken, so stop the LLM there
+                if not task.cancelled() and task.exception() is not None:
+                    llm_task.cancel()
+
             async def _start_segment() -> _SpeechSegment:
                 # start this segment's tts; one inference at a time (await the previous),
                 # but the next starts during the previous segment's playout, not after
@@ -3582,6 +3588,7 @@ class AgentActivity(RecognitionHooks):
                         provider=self.tts.provider if self.tts else None,
                     )
                     tasks.append(prev_tts_task)
+                    prev_tts_task.add_done_callback(_on_tts_done)
                 seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
                 segment_ch.send_nowait(seg)
                 return seg
@@ -3808,6 +3815,7 @@ class AgentActivity(RecognitionHooks):
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
                 reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                tts_data=segment.tts,
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -3880,7 +3888,9 @@ class AgentActivity(RecognitionHooks):
                 role="assistant",
                 content=forwarded_text,
                 id=llm_gen_data.id,
-                interrupted=speech_handle.interrupted,
+                # a reply cut short by a failed TTS reads as interrupted to the LLM
+                interrupted=speech_handle.interrupted
+                or any(out.tts_failed for out in segment_outputs),
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
                 **extra_kwargs,
