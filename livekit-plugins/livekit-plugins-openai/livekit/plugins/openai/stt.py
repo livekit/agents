@@ -45,7 +45,7 @@ from livekit.agents import (
     utils,
     vad,
 )
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.types import (
     NOT_GIVEN,
     NotGivenOr,
@@ -139,8 +139,8 @@ class _STTOptions:
     languages: list[str]
     detect_language: bool
     turn_detection: RealtimeTranscriptionSessionAudioInputTurnDetection
-    keywords: list[str] = field(default_factory=list)
-    prompt: NotGivenOr[str] = NOT_GIVEN
+    keywords: Sensitive[list[str]] = field(default_factory=list)
+    prompt: Sensitive[NotGivenOr[str]] = NOT_GIVEN
     noise_reduction_type: NotGivenOr[str] = NOT_GIVEN
     temperature: NotGivenOr[float] = NOT_GIVEN
 
@@ -336,24 +336,7 @@ class STT(stt.STT):
         return self._client._base_url.netloc.decode("utf-8")
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(self._opts, exclude=["model", "turn_detection", "keywords", "prompt"]),
-            "turn_detection": self._opts.turn_detection.model_dump(
-                include={
-                    "type",
-                    "threshold",
-                    "prefix_padding_ms",
-                    "silence_duration_ms",
-                    "create_response",
-                    "interrupt_response",
-                    "idle_timeout_ms",
-                    "eagerness",
-                },
-                exclude_none=True,
-            )
-            if self._opts.turn_detection is not None
-            else None,
-        }
+        return report_options(self._opts, exclude=["model"])
 
     @staticmethod
     def with_azure(

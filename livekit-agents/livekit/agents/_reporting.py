@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping, Sequence, Set
+from collections.abc import Collection, Iterator, Mapping, Sequence, Set
 from dataclasses import fields, is_dataclass
 from enum import Enum
+from types import UnionType
 from typing import (
     Annotated,
     Any,
     Protocol,
     TypeVar,
+    Union,
     get_args,
     get_origin,
     get_type_hints,
@@ -16,6 +18,7 @@ from typing import (
 )
 
 from pydantic import BaseModel
+from typing_extensions import NotRequired, Required, is_typeddict
 
 from .log import logger
 from .utils import is_given
@@ -26,12 +29,16 @@ Sensitive = Annotated[_T, "sensitive"]
 
 
 def report_options(
-    config: Any, *option_types: type, exclude: Collection[str] = ()
+    config: Any, *option_types: type, exclude: Collection[str] | Mapping[str, Any] = ()
 ) -> dict[str, Any]:
-    """Read declared config fields, excluding sensitive fields and explicit exclusions.
+    """Read declared config fields recursively, omitting Sensitive, None and NOT_GIVEN values.
 
-    Dataclasses and Pydantic models carry their schema. Dictionaries require option types.
+    Dataclasses and Pydantic models carry their schema. Dictionaries require TypedDict
+    schemas, supplied explicitly or through a parent field's annotation. Undeclared fields
+    are omitted. Exclusions can be field names or a mapping of nested exclusions.
     """
+    if config is None or not is_given(config):
+        return {}
     if is_dataclass(config) and not isinstance(config, type):
         option_types = (type(config),)
         values = {field.name: getattr(config, field.name) for field in fields(config)}
@@ -40,15 +47,66 @@ def report_options(
         values = {name: getattr(config, name) for name in type(config).model_fields}
     else:
         values = config
-    names: set[str] = set()
-    sensitive: set[str] = set()
+    annotations: dict[str, list[Any]] = {}
     for option_type in option_types:
-        for name, annotation in get_type_hints(option_type, include_extras=True).items():
-            names.add(name)
-            if get_origin(annotation) is Annotated and "sensitive" in get_args(annotation)[1:]:
-                sensitive.add(name)
-    names -= sensitive
-    return {key: value for key, value in values.items() if key in names and key not in exclude}
+        hints = (
+            {name: field.rebuild_annotation() for name, field in option_type.model_fields.items()}
+            if issubclass(option_type, BaseModel)
+            else get_type_hints(option_type, include_extras=True)
+        )
+        for name, annotation in hints.items():
+            annotations.setdefault(name, []).extend(_unwrap_option_types(annotation))
+
+    exclusions = exclude if isinstance(exclude, Mapping) else dict.fromkeys(exclude, True)
+    result: dict[str, Any] = {}
+    for key, value in values.items():
+        if key not in annotations or value is None or not is_given(value):
+            continue
+        if any(
+            get_origin(annotation) is Annotated and "sensitive" in get_args(annotation)[1:]
+            for annotation in annotations[key]
+        ):
+            continue
+        nested_exclude = exclusions.get(key, ())
+        if nested_exclude is True:
+            continue
+        result[key] = _report_option_value(value, annotations[key], exclude=nested_exclude or ())
+    return result
+
+
+def _unwrap_option_types(annotation: Any) -> Iterator[Any]:
+    yield annotation
+    origin = get_origin(annotation)
+    if origin in (Annotated, Required, NotRequired):
+        yield from _unwrap_option_types(get_args(annotation)[0])
+    elif origin in (Union, UnionType):
+        for argument in get_args(annotation):
+            yield from _unwrap_option_types(argument)
+
+
+def _report_option_value(
+    value: Any, annotations: list[Any], *, exclude: Collection[str] | Mapping[str, Any]
+) -> Any:
+    if (is_dataclass(value) and not isinstance(value, type)) or isinstance(value, BaseModel):
+        return report_options(value, exclude=exclude)
+    if isinstance(value, Mapping):
+        schemas = [annotation for annotation in annotations if is_typeddict(annotation)]
+        return report_options(value, *schemas, exclude=exclude)
+    if isinstance(value, (Sequence, Set)) and not isinstance(value, (str, bytes)):
+        item_annotations = [
+            item_type
+            for annotation in annotations
+            if get_origin(annotation) in (list, tuple, set, frozenset, Sequence, Set)
+            for argument in get_args(annotation)
+            for item_type in _unwrap_option_types(argument)
+        ]
+        items = sorted(value, key=str) if isinstance(value, Set) else value
+        return [
+            _report_option_value(item, item_annotations, exclude=exclude)
+            for item in items
+            if item is not None and is_given(item)
+        ]
+    return value
 
 
 _SESSION_OPTION_KEY_ALIASES = {

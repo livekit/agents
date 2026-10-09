@@ -92,7 +92,7 @@ from livekit.agents.types import (
 from livekit.agents.utils import is_given
 from livekit.agents.voice.generation import remove_instructions
 
-from ..._reporting import report_options
+from ..._reporting import Sensitive, report_options
 from .openai_types import RealtimeModels
 from .openai_utils import (
     AZURE_DEFAULT_INPUT_AUDIO_TRANSCRIPTION,
@@ -232,14 +232,14 @@ class _RealtimeOptions:
     input_audio_noise_reduction: NoiseReduction | None
     turn_detection: RealtimeAudioInputTurnDetection | None
     max_response_output_tokens: int | Literal["inf"] | None
-    tracing: Tracing | None
+    tracing: Sensitive[Tracing | None]
     truncation: RealtimeTruncation | None
     reasoning: RealtimeReasoning | None
-    api_key: str | None
-    base_url: str
+    api_key: Sensitive[str | None]
+    base_url: Sensitive[str]
     is_azure: bool
-    azure_deployment: str | None
-    entra_token: str | None
+    azure_deployment: Sensitive[str | None]
+    entra_token: Sensitive[str | None]
     api_version: str | None
     modalities: list[Literal["text", "audio"]]
     max_session_duration: float | None
@@ -580,69 +580,15 @@ class RealtimeModel(llm.RealtimeModel):
         return urlparse(self._opts.base_url).netloc
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model",
-                    "tool_choice",
-                    "input_audio_transcription",
-                    "input_audio_noise_reduction",
-                    "turn_detection",
-                    "tracing",
-                    "truncation",
-                    "reasoning",
-                    "api_key",
-                    "base_url",
-                    "azure_deployment",
-                    "entra_token",
-                    "conn_options",
-                ],
-            ),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-            "input_audio_transcription": self._opts.input_audio_transcription.model_dump(
-                include={"model", "language"}, exclude_none=True
-            )
-            if self._opts.input_audio_transcription is not None
-            else None,
-            "input_audio_noise_reduction": self._opts.input_audio_noise_reduction.model_dump(
-                include={"type"}, exclude_none=True
-            )
-            if self._opts.input_audio_noise_reduction is not None
-            else None,
-            "turn_detection": self._opts.turn_detection.model_dump(
-                include={
-                    "type",
-                    "threshold",
-                    "prefix_padding_ms",
-                    "silence_duration_ms",
-                    "create_response",
-                    "interrupt_response",
-                    "idle_timeout_ms",
-                    "eagerness",
-                },
-                exclude_none=True,
-            )
-            if self._opts.turn_detection is not None
-            else None,
-            "reasoning": self._opts.reasoning.model_dump(include={"effort"}, exclude_none=True)
-            if self._opts.reasoning is not None
-            else None,
-            "truncation": self._opts.truncation
-            if isinstance(self._opts.truncation, str)
-            else self._opts.truncation.model_dump(
-                include={
-                    "type": True,
-                    "retention_ratio": True,
-                    "token_limits": {"post_instructions"},
-                },
-                exclude_none=True,
-            )
-            if self._opts.truncation is not None
-            else None,
-        }
+        return report_options(
+            self._opts,
+            exclude={
+                "model": True,
+                "conn_options": True,
+                "tool_choice": {"function"},
+                "input_audio_transcription": {"prompt", "keywords"},
+            },
+        )
 
     @classmethod
     def with_azure(

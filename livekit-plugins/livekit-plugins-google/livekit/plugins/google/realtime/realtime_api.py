@@ -18,7 +18,7 @@ from google.genai import Client as GenAIClient, types
 from google.genai.live import AsyncSession
 from livekit import rtc
 from livekit.agents import APIConnectionError, LanguageCode, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import (
@@ -161,13 +161,13 @@ class InputTranscription:
 @dataclass
 class _RealtimeOptions:
     model: LiveAPIModels | str
-    api_key: str | None
+    api_key: Sensitive[str | None]
     voice: Voice | str
     language: NotGivenOr[LanguageCode]
     response_modalities: list[types.Modality]
     vertexai: bool
-    project: str | None
-    location: str | None
+    project: Sensitive[str | None]
+    location: Sensitive[str | None]
     candidate_count: int
     temperature: NotGivenOr[float]
     max_output_tokens: NotGivenOr[int]
@@ -175,12 +175,12 @@ class _RealtimeOptions:
     top_k: NotGivenOr[int]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
-    instructions: NotGivenOr[str]
+    instructions: Sensitive[NotGivenOr[str]]
     input_audio_transcription: types.AudioTranscriptionConfig | None
     output_audio_transcription: types.AudioTranscriptionConfig | None
     image_encode_options: NotGivenOr[images.EncodeOptions]
     conn_options: APIConnectOptions
-    http_options: NotGivenOr[types.HttpOptions]
+    http_options: Sensitive[NotGivenOr[types.HttpOptions]]
     media_resolution: NotGivenOr[types.MediaResolution] = NOT_GIVEN
     enable_affective_dialog: NotGivenOr[bool] = NOT_GIVEN
     proactivity: NotGivenOr[bool] = NOT_GIVEN
@@ -191,8 +191,8 @@ class _RealtimeOptions:
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN
     tool_choice: NotGivenOr[llm.ToolChoice | None] = NOT_GIVEN
     thinking_config: NotGivenOr[types.ThinkingConfig] = NOT_GIVEN
-    session_resumption: NotGivenOr[types.SessionResumptionConfig] = NOT_GIVEN
-    credentials: google.auth.credentials.Credentials | None = None
+    session_resumption: Sensitive[NotGivenOr[types.SessionResumptionConfig]] = NOT_GIVEN
+    credentials: Sensitive[google.auth.credentials.Credentials | None] = None
 
 
 @dataclass
@@ -454,82 +454,17 @@ class RealtimeModel(llm.RealtimeModel):
             return "Gemini"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model",
-                    "api_key",
-                    "project",
-                    "location",
-                    "instructions",
-                    "input_audio_transcription",
-                    "output_audio_transcription",
-                    "image_encode_options",
-                    "conn_options",
-                    "http_options",
-                    "realtime_input_config",
-                    "context_window_compression",
-                    "tool_choice",
-                    "thinking_config",
-                    "session_resumption",
-                    "credentials",
-                ],
-            ),
-            "thinking_config": self._opts.thinking_config.model_dump(
-                include={"include_thoughts", "thinking_budget", "thinking_level"}, exclude_none=True
-            )
-            if is_given(self._opts.thinking_config)
-            else None,
-            "realtime_input_config": self._opts.realtime_input_config.model_dump(
-                include={
-                    "activity_handling": True,
-                    "turn_coverage": True,
-                    "automatic_activity_detection": {
-                        "disabled",
-                        "start_of_speech_sensitivity",
-                        "end_of_speech_sensitivity",
-                        "prefix_padding_ms",
-                        "silence_duration_ms",
-                    },
-                },
-                exclude_none=True,
-            )
-            if is_given(self._opts.realtime_input_config)
-            else None,
-            "context_window_compression": self._opts.context_window_compression.model_dump(
-                include={"trigger_tokens": True, "sliding_window": {"target_tokens"}},
-                exclude_none=True,
-            )
-            if is_given(self._opts.context_window_compression)
-            else None,
-            "input_audio_transcription": self._opts.input_audio_transcription.model_dump(
-                include={
-                    "language_codes",
-                    "language_auto",
-                    "language_hints",
-                    "word_timestamp",
-                    "diarization",
-                    "mode",
-                },
-                exclude_none=True,
-            )
-            if self._opts.input_audio_transcription is not None
-            else None,
-            "output_audio_transcription": self._opts.output_audio_transcription.model_dump(
-                include={
-                    "language_codes",
-                    "language_auto",
-                    "language_hints",
-                    "word_timestamp",
-                    "diarization",
-                    "mode",
-                },
-                exclude_none=True,
-            )
-            if self._opts.output_audio_transcription is not None
-            else None,
-        }
+        return report_options(
+            self._opts,
+            exclude={
+                "model": True,
+                "image_encode_options": True,
+                "conn_options": True,
+                "tool_choice": {"function"},
+                "input_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
+                "output_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},
+            },
+        )
 
     def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
         # Gemini drives manual turns via activity_start/activity_end, not commit_audio/clear_audio,

@@ -26,7 +26,7 @@ from google.auth._default_async import default_async
 from google.genai import Client, types
 from google.genai.errors import APIError, ClientError, ServerError
 from livekit.agents import APIConnectionError, APIStatusError, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.llm import ToolChoice, utils as llm_utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
@@ -102,21 +102,21 @@ class _LLMOptions:
     temperature: NotGivenOr[float]
     tool_choice: NotGivenOr[ToolChoice]
     vertexai: NotGivenOr[bool]
-    project: NotGivenOr[str]
-    location: NotGivenOr[str]
+    project: Sensitive[NotGivenOr[str]]
+    location: Sensitive[NotGivenOr[str]]
     max_output_tokens: NotGivenOr[int]
     top_p: NotGivenOr[float]
     top_k: NotGivenOr[float]
     presence_penalty: NotGivenOr[float]
     frequency_penalty: NotGivenOr[float]
     thinking_config: NotGivenOr[types.ThinkingConfigOrDict]
-    retrieval_config: NotGivenOr[types.RetrievalConfigOrDict]
+    retrieval_config: Sensitive[NotGivenOr[types.RetrievalConfigOrDict]]
     automatic_function_calling_config: NotGivenOr[types.AutomaticFunctionCallingConfigOrDict]
-    http_options: NotGivenOr[types.HttpOptions]
+    http_options: Sensitive[NotGivenOr[types.HttpOptions]]
     seed: NotGivenOr[int]
     safety_settings: NotGivenOr[list[types.SafetySettingOrDict]]
     service_tier: NotGivenOr[types.ServiceTier]
-    cached_content: NotGivenOr[str]
+    cached_content: Sensitive[NotGivenOr[str]]
     media_resolution: NotGivenOr[types.MediaResolution]
 
 
@@ -307,49 +307,7 @@ class LLM(llm.LLM):
             return "Gemini"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts,
-                exclude=[
-                    "model",
-                    "tool_choice",
-                    "project",
-                    "location",
-                    "thinking_config",
-                    "retrieval_config",
-                    "automatic_function_calling_config",
-                    "http_options",
-                    "safety_settings",
-                    "cached_content",
-                ],
-            ),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-            "thinking_config": types.ThinkingConfig.model_validate(
-                self._opts.thinking_config
-            ).model_dump(
-                include={"include_thoughts", "thinking_budget", "thinking_level"}, exclude_none=True
-            )
-            if is_given(self._opts.thinking_config)
-            else None,
-            "automatic_function_calling_config": types.AutomaticFunctionCallingConfig.model_validate(
-                self._opts.automatic_function_calling_config
-            ).model_dump(
-                include={"disable", "maximum_remote_calls", "ignore_call_history"},
-                exclude_none=True,
-            )
-            if is_given(self._opts.automatic_function_calling_config)
-            else None,
-            "safety_settings": [
-                types.SafetySetting.model_validate(setting).model_dump(
-                    include={"category", "method", "threshold"}, exclude_none=True
-                )
-                for setting in self._opts.safety_settings
-            ]
-            if is_given(self._opts.safety_settings)
-            else None,
-        }
+        return report_options(self._opts, exclude={"model": True, "tool_choice": {"function"}})
 
     def chat(
         self,

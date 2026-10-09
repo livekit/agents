@@ -13,7 +13,7 @@ from yarl import URL
 
 import openai
 from livekit.agents import APIConnectionError, APIStatusError, APITimeoutError, llm, utils
-from livekit.agents._reporting import report_options
+from livekit.agents._reporting import Sensitive, report_options
 from livekit.agents.inference.llm import drop_unsupported_params
 from livekit.agents.llm import ToolChoice
 from livekit.agents.llm.chat_context import ChatContext, ChatItem
@@ -197,13 +197,13 @@ class _ResponsesWebsocket:
 @dataclass
 class _LLMOptions:
     model: str | ResponsesModel
-    user: NotGivenOr[str]
+    user: Sensitive[NotGivenOr[str]]
     temperature: NotGivenOr[float]
     parallel_tool_calls: NotGivenOr[bool]
     tool_choice: NotGivenOr[ToolChoice | Literal["auto", "required", "none"]]
     store: NotGivenOr[bool]
     reasoning: NotGivenOr[Reasoning]
-    metadata: NotGivenOr[dict[str, str]]
+    metadata: Sensitive[NotGivenOr[dict[str, str]]]
     service_tier: NotGivenOr[ServiceTier]
     verbosity: NotGivenOr[Verbosity]
     max_output_tokens: NotGivenOr[int]
@@ -346,19 +346,7 @@ class LLM(llm.LLM):
         return ""
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(
-                self._opts, exclude=["model", "user", "tool_choice", "reasoning", "metadata"]
-            ),
-            "tool_choice": self._opts.tool_choice
-            if isinstance(self._opts.tool_choice, str)
-            else None,
-            "reasoning": self._opts.reasoning.model_dump(
-                include={"effort", "summary", "generate_summary"}, exclude_none=True
-            )
-            if is_given(self._opts.reasoning)
-            else None,
-        }
+        return report_options(self._opts, exclude={"model": True, "tool_choice": {"function"}})
 
     def chat(
         self,

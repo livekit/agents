@@ -9,10 +9,11 @@ from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import Required
 
 from livekit.agents import AgentSession, JobContext, inference, stt, tts
 from livekit.agents._reporting import Sensitive, report_options
-from livekit.agents.types import NOT_GIVEN
+from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.report import SessionReport, _serialize_session_models
 
 from .fake_stt import FakeSTT
@@ -20,6 +21,37 @@ from .fake_tts import FakeTTS
 from .fake_vad import FakeVAD
 
 pytestmark = pytest.mark.unit
+
+
+class _NestedDictOptions(TypedDict, total=False):
+    language: str
+    prompt: Required[Sensitive[str]]
+    endpoint: str
+    optional: NotGivenOr[str | None]
+
+
+@dataclass
+class _NestedDataclassOptions:
+    language: str = "en"
+    prompt: Sensitive[str] = "private-prompt"
+    optional: NotGivenOr[str | None] = NOT_GIVEN
+
+
+class _NestedModelOptions(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    language: str = "en"
+    prompt: Sensitive[str] = "private-prompt"
+    optional: NotGivenOr[str | None] = None
+
+
+class _NestedOptions(TypedDict):
+    dictionary: _NestedDictOptions | None
+    dataclass: _NestedDataclassOptions
+    model: _NestedModelOptions
+    items: NotGivenOr[list[_NestedDictOptions | None]]
+    untyped: dict[str, Any]
+    optional: str | None
+    unset: NotGivenOr[str]
 
 
 def _report(session: AgentSession) -> SessionReport:
@@ -75,6 +107,42 @@ def test_report_options_uses_declared_fields_and_exclusions(pydantic: bool) -> N
     config.language = "fr"
     assert reported["language"] == "en"
     assert _report(session).models["stt"]["language"] == "fr"
+
+
+@pytest.mark.parametrize("config", [None, NOT_GIVEN])
+def test_report_options_accepts_absent_configs(config: Any) -> None:
+    assert report_options(config) == {}
+
+
+def test_report_options_filters_nested_schemas_and_unset_values() -> None:
+    nested = {
+        "language": "en",
+        "prompt": "private-prompt",
+        "endpoint": "private-endpoint",
+        "unknown": "private-unknown",
+        "optional": NOT_GIVEN,
+    }
+    config = {
+        "dictionary": nested,
+        "dataclass": _NestedDataclassOptions(),
+        "model": _NestedModelOptions(unknown="private-unknown"),
+        "items": [nested, None, NOT_GIVEN],
+        "untyped": {"unknown": "private-unknown"},
+        "optional": None,
+        "unset": NOT_GIVEN,
+    }
+    reported = report_options(
+        config, _NestedOptions, exclude={"dictionary": {"endpoint"}, "items": {"endpoint"}}
+    )
+    assert reported == {
+        "dictionary": {"language": "en"},
+        "dataclass": {"language": "en"},
+        "model": {"language": "en"},
+        "items": [{"language": "en"}],
+        "untyped": {},
+    }
+    nested["language"] = "fr"
+    assert reported["items"] == [{"language": "en"}]
 
 
 @pytest.mark.parametrize(

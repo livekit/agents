@@ -162,8 +162,23 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
             type="server_vad", threshold=0.6, future_setting="private-unknown"
         ),
         "input_audio_transcription": sdk.types.realtime.AudioTranscription(
-            model="whisper-1", language="en", prompt="private-prompt"
+            model="whisper-1",
+            language="en",
+            prompt="private-prompt",
+            keywords=["private-keyword"],
+            future_setting="private-unknown",
         ),
+        "truncation": sdk.types.realtime.realtime_truncation.RealtimeTruncationRetentionRatio(
+            type="retention_ratio",
+            retention_ratio=0.8,
+            token_limits={"post_instructions": 1024, "future_setting": "private-unknown"},
+            future_setting="private-unknown",
+        ),
+        "reasoning": sdk.types.realtime.RealtimeReasoning(
+            effort="low", future_setting="private-unknown"
+        ),
+        "tracing": {"metadata": {"customer": "private-customer"}},
+        "tool_choice": {"type": "function", "function": {"name": "private-function"}},
     }
     model = (
         inference.realtime.RealtimeModel(
@@ -178,7 +193,22 @@ async def test_openai_realtime_reports_safe_nested_settings(hosted: bool) -> Non
         assert reported["speed"] == 1.1
         assert reported["turn_detection"]["threshold"] == 0.6
         assert reported["input_audio_transcription"] == {"model": "whisper-1", "language": "en"}
+        assert reported["truncation"] == {
+            "type": "retention_ratio",
+            "retention_ratio": 0.8,
+            "token_limits": {"post_instructions": 1024},
+        }
+        assert reported["reasoning"] == {"effort": "low"}
+        assert reported["tool_choice"] == {"type": "function"}
         assert "private-" not in json.dumps(reported)
+        model.update_options(
+            tool_choice="auto", turn_detection=None, input_audio_transcription=None
+        )
+        updated = _snapshot(model)
+        assert updated["tool_choice"] == "auto"
+        assert "turn_detection" not in updated
+        assert "input_audio_transcription" not in updated
+        assert reported["turn_detection"]["threshold"] == 0.6
     finally:
         await model.aclose()
 
