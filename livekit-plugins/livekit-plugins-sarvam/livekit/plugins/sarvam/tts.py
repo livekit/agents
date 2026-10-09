@@ -99,6 +99,34 @@ _CODEC_TO_MIME: dict[str, str] = {
 
 _TELEPHONY_CODECS: frozenset[str] = frozenset({"mulaw", "alaw"})
 
+# 32000 / 44100 / 48000 Hz are documented as REST-only; the WebSocket endpoint
+# is capped at 24 kHz. bulbul:v3 / v3-beta reject the higher rates with an error
+# frame, so streaming is restricted to STREAMING_SAMPLE_RATES for every model.
+# See https://docs.sarvam.ai/api/getting-started/models/bulbul
+ALLOWED_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000, 32000, 44100, 48000})
+STREAMING_SAMPLE_RATES: frozenset[int] = frozenset({8000, 16000, 22050, 24000})
+
+
+# ``pace`` is accepted over a narrower range on bulbul:v3 / v3-beta than on
+# bulbul:v2; the server rejects anything outside it. Verified against the live
+# API; see https://docs.sarvam.ai/api/getting-started/models/bulbul
+_V3_PACE_RANGE: tuple[float, float] = (0.5, 2.0)
+_V2_PACE_RANGE: tuple[float, float] = (0.3, 3.0)
+
+
+def pace_range(model: str) -> tuple[float, float]:
+    """Return the inclusive ``(min, max)`` pace accepted by ``model``."""
+    if model.startswith("bulbul:v3"):
+        return _V3_PACE_RANGE
+    return _V2_PACE_RANGE
+
+
+def _validate_pace(pace: float, model: str) -> None:
+    """Raise ``ValueError`` if ``pace`` is outside the range ``model`` accepts."""
+    low, high = pace_range(model)
+    if not low <= pace <= high:
+        raise ValueError(f"Pace must be between {low} and {high} for {model}")
+
 
 def _codec_to_mime_type(codec: str) -> str:
     """Map a Sarvam output_audio_codec value to the MIME type the framework decoder expects."""
@@ -173,16 +201,15 @@ SarvamTTSLanguages = Literal[
 ]
 
 SarvamTTSSpeakers = Literal[
-    # bulbul:v2 Female (lowercase)
+    # bulbul:v2 only
     "anushka",
     "manisha",
     "vidya",
     "arya",
-    # bulbul:v2 Male (lowercase)
     "abhilash",
     "karun",
     "hitesh",
-    # bulbul:v3-beta Customer Care
+    # bulbul:v3 and bulbul:v3-beta
     "shubh",
     "ritu",
     "rahul",
@@ -198,7 +225,6 @@ SarvamTTSSpeakers = Literal[
     "manan",
     "sumit",
     "priya",
-    # bulbul:v3-beta Content Creation
     "aditya",
     "kabir",
     "neha",
@@ -207,150 +233,74 @@ SarvamTTSSpeakers = Literal[
     "aayan",
     "ashutosh",
     "advait",
-    # bulbul:v3-beta International
-    "amelia",
-    "sophia",
-    # bulbul:v3
     "suhani",
     "rupali",
     "tanya",
     "shruti",
     "kavitha",
+    "anand",
+    "tarun",
+    "sunny",
+    "mani",
+    "gokul",
+    "vijay",
+    "mohit",
+    "rehan",
+    "soham",
 ]
 
-# Model-Speaker compatibility mapping
-MODEL_SPEAKER_COMPATIBILITY = {
-    "bulbul:v2": {
-        "female": ["anushka", "manisha", "vidya", "arya"],
-        "male": ["abhilash", "karun", "hitesh"],
-        "all": ["anushka", "manisha", "vidya", "arya", "abhilash", "karun", "hitesh"],
-    },
-    "bulbul:v3-beta": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-        ],
-    },
-    "bulbul:v3": {
-        "female": [
-            "ritu",
-            "pooja",
-            "simran",
-            "kavya",
-            "ishita",
-            "shreya",
-            "priya",
-            "neha",
-            "roopa",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-        "male": [
-            "shubh",
-            "rahul",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "manan",
-            "sumit",
-            "aditya",
-            "kabir",
-            "varun",
-            "aayan",
-            "ashutosh",
-            "advait",
-        ],
-        "all": [
-            "shubh",
-            "ritu",
-            "rahul",
-            "pooja",
-            "simran",
-            "kavya",
-            "amit",
-            "ratan",
-            "rohan",
-            "dev",
-            "ishita",
-            "shreya",
-            "manan",
-            "sumit",
-            "priya",
-            "aditya",
-            "kabir",
-            "neha",
-            "varun",
-            "roopa",
-            "aayan",
-            "ashutosh",
-            "advait",
-            "amelia",
-            "sophia",
-            "suhani",
-            "rupali",
-            "tanya",
-            "shruti",
-            "kavitha",
-        ],
-    },
+# Speakers accepted by each model, verified against the live Sarvam API and
+# https://docs.sarvam.ai/api/getting-started/models/bulbul (the two agree exactly).
+# bulbul:v3 and bulbul:v3-beta share one speaker set; bulbul:v2 has its own.
+_V2_SPEAKERS: frozenset[str] = frozenset(
+    {"anushka", "abhilash", "manisha", "vidya", "arya", "karun", "hitesh"}
+)
+_V3_SPEAKERS: frozenset[str] = frozenset(
+    {
+        "aayan",
+        "aditya",
+        "advait",
+        "amit",
+        "anand",
+        "ashutosh",
+        "dev",
+        "gokul",
+        "ishita",
+        "kabir",
+        "kavitha",
+        "kavya",
+        "manan",
+        "mani",
+        "mohit",
+        "neha",
+        "pooja",
+        "priya",
+        "rahul",
+        "ratan",
+        "rehan",
+        "ritu",
+        "rohan",
+        "roopa",
+        "rupali",
+        "shreya",
+        "shruti",
+        "shubh",
+        "simran",
+        "soham",
+        "suhani",
+        "sumit",
+        "sunny",
+        "tanya",
+        "tarun",
+        "varun",
+        "vijay",
+    }
+)
+
+MODEL_SPEAKER_COMPATIBILITY: dict[str, frozenset[str]] = {
+    "bulbul:v2": _V2_SPEAKERS,
+    "bulbul:v3-beta": _V3_SPEAKERS,
+    "bulbul:v3": _V3_SPEAKERS,
 }
 
 
@@ -363,17 +313,22 @@ class ConnectionState(enum.Enum):
     FAILED = "failed"
 
 
+def compatible_speakers(model: str) -> list[str]:
+    """Return the speakers accepted by ``model``, sorted; empty if the model is unknown."""
+    return sorted(MODEL_SPEAKER_COMPATIBILITY.get(model, frozenset()))
+
+
 def validate_model_speaker_compatibility(model: str, speaker: str) -> bool:
     """Validate that the speaker is compatible with the model version."""
     if model not in MODEL_SPEAKER_COMPATIBILITY:
         logger.warning(f"Unknown model '{model}', skipping compatibility check")
         return True
 
-    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY[model]["all"]
-    if speaker.lower() not in compatible_speakers:
+    if speaker.lower() not in MODEL_SPEAKER_COMPATIBILITY[model]:
+        compatible_speakers_ = compatible_speakers(model)
         logger.error(
             f"Speaker '{speaker}' is not compatible with model '{model}'. "
-            f"Compatible speakers for {model}: {', '.join(compatible_speakers)}"
+            f"Compatible speakers for {model}: {', '.join(compatible_speakers_)}"
         )
         return False
     return True
@@ -389,13 +344,14 @@ class SarvamTTSOptions:
         text: The text to synthesize (will be provided by stream adapter)
         speaker: Voice to use for synthesis
         pitch: Voice pitch adjustment (-0.75 to 0.75)
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 on bulbul:v3 / v3-beta, 0.3 to 3.0 on bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0)
         temperature: Sampling temperature (0.01 to 2.0), used for v3 and v3-beta
         output_audio_bitrate: Output audio bitrate
         min_buffer_size: Minimum character length for flushing
         max_chunk_length: Maximum chunk length for sentence splitting
-        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or 48000)
+        speech_sample_rate: Audio sample rate (8000, 16000, 22050, 24000, 32000, 44100, or
+            48000). 32000 and above are REST-only; stream() requires 24000 or below.
         enable_preprocessing: Whether to use text preprocessing (bulbul:v2 only)
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
         enable_cached_responses: Enable response caching beta feature (bulbul:v1/v2 only)
@@ -438,10 +394,11 @@ class TTS(tts.TTS):
         target_language_code: BCP-47 language code for supported Indian languages
         model: Sarvam TTS model to use (bulbul:v2)
         speaker: Voice to use for synthesis
-        speech_sample_rate: Audio sample rate in Hz
+        speech_sample_rate: Audio sample rate in Hz. Streaming only accepts 8000, 16000,
+            22050 or 24000; 32000, 44100 and 48000 are REST-only.
         num_channels: Number of audio channels (Sarvam outputs mono)
         pitch: Voice pitch adjustment (-0.75 to 0.75) - only supported in v2 for now
-        pace: Speech rate multiplier (0.3 to 3.0)
+        pace: Speech rate multiplier (0.5 to 2.0 on bulbul:v3 / v3-beta, 0.3 to 3.0 on bulbul:v2)
         loudness: Volume multiplier (0.5 to 2.0) - only supported in v2 for now
         temperature: Sampling temperature (0.01 to 2.0), only used in v3 and v3-beta
         dict_id: Custom pronunciation dictionary ID (bulbul:v3 only)
@@ -514,8 +471,7 @@ class TTS(tts.TTS):
                 pitch,
             )
             pitch = max(-0.75, min(0.75, pitch))
-        if not 0.3 <= pace <= 3.0:
-            raise ValueError("Pace must be between 0.3 and 3.0")
+        _validate_pace(pace, model)
         if not 0.5 <= loudness <= 2.0:
             raise ValueError("Loudness must be between 0.5 and 2.0")
         if not 0.01 <= temperature <= 2.0:
@@ -528,9 +484,20 @@ class TTS(tts.TTS):
             raise ValueError("min_buffer_size must be between 30 and 200")
         if not 50 <= max_chunk_length <= 500:
             raise ValueError("max_chunk_length must be between 50 and 500")
-        if speech_sample_rate not in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+        if speech_sample_rate not in ALLOWED_SAMPLE_RATES:
             raise ValueError(
-                "Sample rate must be one of 8000, 16000, 22050, 24000, 32000, 44100, or 48000 Hz"
+                "Sample rate must be one of "
+                f"{', '.join(str(r) for r in sorted(ALLOWED_SAMPLE_RATES))} Hz"
+            )
+        if speech_sample_rate not in STREAMING_SAMPLE_RATES:
+            # Valid for synthesize() but not for stream(); an AgentSession always
+            # streams, so warn now and fail with a clear error in SynthesizeStream
+            # rather than surfacing an opaque server error frame mid-session.
+            logger.warning(
+                "speech_sample_rate %d Hz is only supported over the REST endpoint; "
+                "streaming (stream()) supports %s Hz and will raise if used.",
+                speech_sample_rate,
+                ", ".join(str(r) for r in sorted(STREAMING_SAMPLE_RATES)),
             )
         if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
             raise ValueError(
@@ -539,10 +506,9 @@ class TTS(tts.TTS):
 
         # Validate model-speaker compatibility
         if not validate_model_speaker_compatibility(model, speaker):
-            compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(model, {}).get("all", [])
             raise ValueError(
                 f"Speaker '{speaker}' is not compatible with model '{model}'. "
-                f"Please choose a compatible speaker from: {', '.join(compatible_speakers)}"
+                f"Please choose a compatible speaker from: {', '.join(compatible_speakers(model))}"
             )
 
         # Initialize word tokenizer for streaming
@@ -752,37 +718,46 @@ class TTS(tts.TTS):
         send_completion_event: bool | None = None,
         output_audio_codec: str | None = None,
     ) -> None:
-        """Update TTS options with validation."""
+        """Update TTS options with validation.
+
+        The update is atomic: every value is validated against the *candidate*
+        configuration first, and nothing is assigned unless all checks pass. A
+        ``ValueError`` therefore leaves the current options untouched, instead
+        of half-applying an update that would fail server-side later.
+        """
+        updates: dict[str, object] = {}
+
         if target_language_code is not None:
             if not target_language_code.strip():
                 raise ValueError("Target language code cannot be empty")
-            self._opts.target_language_code = LanguageCode(target_language_code)
+            updates["target_language_code"] = LanguageCode(target_language_code)
 
+        # model, speaker and pace are interdependent, so resolve the candidate
+        # values for all three before validating any of them.
         if model is not None:
             if not model.strip():
                 raise ValueError("Model cannot be empty")
-            self._opts.model = model
-            if speaker is None and self._opts.speaker is not None:
-                if not validate_model_speaker_compatibility(self._opts.model, self._opts.speaker):
-                    compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                        "all", []
-                    )
-                    raise ValueError(
-                        f"Speaker '{self._opts.speaker}' incompatible with {self._opts.model}. "
-                        f"Compatible speakers: {', '.join(compatible_speakers)}"
-                    )
+            updates["model"] = model
         if speaker is not None:
             if not speaker.strip():
                 raise ValueError("Speaker cannot be empty")
-            if not validate_model_speaker_compatibility(self._opts.model, speaker):
-                compatible_speakers = MODEL_SPEAKER_COMPATIBILITY.get(self._opts.model, {}).get(
-                    "all", []
-                )
+            updates["speaker"] = speaker
+
+        candidate_model = model if model is not None else self._opts.model
+        candidate_speaker = speaker if speaker is not None else self._opts.speaker
+
+        if (model is not None or speaker is not None) and candidate_speaker is not None:
+            if not validate_model_speaker_compatibility(candidate_model, candidate_speaker):
                 raise ValueError(
-                    f"Speaker '{speaker}' incompatible with {self._opts.model}. "
-                    f"Compatible speakers: {', '.join(compatible_speakers)}"
+                    f"Speaker '{candidate_speaker}' incompatible with {candidate_model}. "
+                    f"Compatible speakers: {', '.join(compatible_speakers(candidate_model))}"
                 )
-            self._opts.speaker = speaker
+
+        if model is not None or pace is not None:
+            # A new model may narrow the range around the pace already in effect.
+            _validate_pace(pace if pace is not None else self._opts.pace, candidate_model)
+        if pace is not None:
+            updates["pace"] = pace
 
         if pitch is not None:
             if not -0.75 <= pitch <= 0.75:
@@ -792,22 +767,17 @@ class TTS(tts.TTS):
                     pitch,
                 )
                 pitch = max(-0.75, min(0.75, pitch))
-            self._opts.pitch = pitch
-
-        if pace is not None:
-            if not 0.3 <= pace <= 3.0:
-                raise ValueError("Pace must be between 0.3 and 3.0")
-            self._opts.pace = pace
+            updates["pitch"] = pitch
 
         if loudness is not None:
             if not 0.5 <= loudness <= 2.0:
                 raise ValueError("Loudness must be between 0.5 and 2.0")
-            self._opts.loudness = loudness
+            updates["loudness"] = loudness
 
         if temperature is not None:
             if not 0.01 <= temperature <= 2.0:
                 raise ValueError("Temperature must be between 0.01 and 2.0")
-            self._opts.temperature = temperature
+            updates["temperature"] = temperature
 
         if output_audio_bitrate is not None:
             if output_audio_bitrate not in ALLOWED_OUTPUT_AUDIO_BITRATES:
@@ -815,29 +785,29 @@ class TTS(tts.TTS):
                     "output_audio_bitrate must be one of "
                     f"{', '.join(sorted(ALLOWED_OUTPUT_AUDIO_BITRATES))}"
                 )
-            self._opts.output_audio_bitrate = output_audio_bitrate
+            updates["output_audio_bitrate"] = output_audio_bitrate
 
         if min_buffer_size is not None:
             if not 30 <= min_buffer_size <= 200:
                 raise ValueError("min_buffer_size must be between 30 and 200")
-            self._opts.min_buffer_size = min_buffer_size
+            updates["min_buffer_size"] = min_buffer_size
 
         if max_chunk_length is not None:
             if not 50 <= max_chunk_length <= 500:
                 raise ValueError("max_chunk_length must be between 50 and 500")
-            self._opts.max_chunk_length = max_chunk_length
+            updates["max_chunk_length"] = max_chunk_length
 
         if enable_preprocessing is not None:
-            self._opts.enable_preprocessing = enable_preprocessing
+            updates["enable_preprocessing"] = enable_preprocessing
 
         if dict_id is not None:
-            self._opts.dict_id = dict_id
+            updates["dict_id"] = dict_id
 
         if enable_cached_responses is not None:
-            self._opts.enable_cached_responses = enable_cached_responses
+            updates["enable_cached_responses"] = enable_cached_responses
 
         if send_completion_event is not None:
-            self._opts.send_completion_event = send_completion_event
+            updates["send_completion_event"] = send_completion_event
 
         if output_audio_codec is not None:
             if output_audio_codec not in ALLOWED_OUTPUT_AUDIO_CODECS:
@@ -845,7 +815,11 @@ class TTS(tts.TTS):
                     "output_audio_codec must be one of "
                     f"{','.join(sorted(ALLOWED_OUTPUT_AUDIO_CODECS))}"
                 )
-            self._opts.output_audio_codec = output_audio_codec
+            updates["output_audio_codec"] = output_audio_codec
+
+        # Every check passed -- apply the whole update.
+        for field, value in updates.items():
+            setattr(self._opts, field, value)
 
     # Implement the abstract synthesize method
     def synthesize(
@@ -980,6 +954,14 @@ class SynthesizeStream(tts.SynthesizeStream):
         self._ws_conn: aiohttp.ClientWebSocketResponse | None = None
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        if self._opts.speech_sample_rate not in STREAMING_SAMPLE_RATES:
+            raise ValueError(
+                f"speech_sample_rate {self._opts.speech_sample_rate} Hz is not supported over "
+                "the streaming (WebSocket) endpoint; use one of "
+                f"{', '.join(str(r) for r in sorted(STREAMING_SAMPLE_RATES))} Hz, "
+                "or call synthesize() instead."
+            )
+
         self._segments_ch = utils.aio.Chan[tokenize.SentenceStream]()
         request_id = utils.shortuuid()
         self._client_request_id = request_id
