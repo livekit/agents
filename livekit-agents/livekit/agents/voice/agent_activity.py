@@ -2784,7 +2784,10 @@ class AgentActivity(RecognitionHooks):
                     )
                     is not None
                 ):
-                    await asyncio.shield(previous_message_committed_fut)
+                    await asyncio.gather(
+                        asyncio.shield(previous_message_committed_fut),
+                        return_exceptions=True,
+                    )
 
         self._preemptive_generation_count = 0
 
