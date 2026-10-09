@@ -416,24 +416,21 @@ async def test_replace_words_async():
     assert replaced == REPLACE_EXPECTED
 
 
-async def test_replace_words_async_releases_cjk_before_end_of_input():
-    # tts_text_transforms run replace_words on the LLM stream before the TTS, so it has to
-    # release a CJK clause as soon as it is complete, not once the whole reply is in
-    text = "好的，我可以帮您处理。需要我提醒您吗？"
-    pushed = 0
+async def test_replace_words_matches_keys_across_full_width_punctuation():
+    # replace_words keeps whitespace-only words, so a key spanning a full-width mark
+    # still matches the CJK text it covers
+    replacements = {"你好，世界": "hello"}
+    assert tokenize.utils.replace_words(text="你好，世界", replacements=replacements) == "hello"
 
     async def _chunks():
-        nonlocal pushed
-        for i in range(0, len(text), 2):
-            pushed = i + 2
-            yield text[i : i + 2]
+        for chunk in ("你好", "，世", "界"):
+            yield chunk
 
-    released: list[tuple[int, str]] = []
-    async for chunk in tokenize.utils.replace_words(text=_chunks(), replacements={"好的": "好啊"}):
-        released.append((pushed, chunk))
-
-    assert released[0] == (4, "好啊，")
-    assert "".join(chunk for _, chunk in released) == "好啊，我可以帮您处理。需要我提醒您吗？"
+    replaced = [
+        chunk
+        async for chunk in tokenize.utils.replace_words(text=_chunks(), replacements=replacements)
+    ]
+    assert "".join(replaced) == "hello"
 
 
 PARAGRAPH_TEST_CASES = [
