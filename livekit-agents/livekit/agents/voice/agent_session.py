@@ -2038,7 +2038,7 @@ class AgentSession(rtc.EventEmitter[EventTypes], Generic[Userdata_T]):
             return
 
         async for frame in audio_input:
-            if self._activity is not None:
+            if self._activity is not None and self.input.audio_enabled:
                 self._activity.push_audio(frame)
 
     @utils.log_exceptions(logger=logger)
