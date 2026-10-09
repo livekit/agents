@@ -1,0 +1,22 @@
+livekit-plugins/livekit-plugins-soniox/livekit/plugins/soniox/tts.py
+  s_ccd6db73caf618::t_96e289ecbe007b 597,661,663-665,779,786-794,876,879
+tests/test_plugin_soniox_tts.py
+  s_ccd6db73caf618::t_858a40c5d5fe54 25,79-143
+  s_ccd6db73caf618::t_97d5f5de4230be 144-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "21fa05408501266c80c770ea0d15e989082aba39",
+  "prompts": {},
+  "sessions": {
+    "s_ccd6db73caf618": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a12168-e36f-74d0-91a1-255139cc2258",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Chenghao Mou <chenghao.mou@livekit.io>"
+    }
+  }
+}
