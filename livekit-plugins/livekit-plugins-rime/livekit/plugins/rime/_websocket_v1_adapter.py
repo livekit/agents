@@ -142,6 +142,9 @@ class WebSocketV1Adapter:
     def prewarm(self) -> None:
         self._pools.current.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await self._pools.current.release_idle()
+
     def update_endpoint(self, websocket_v1_url: str, *, model_changed: bool) -> None:
         """Update the connection URL after validating its model binding."""
         _websocket_v1.validate_websocket_url(

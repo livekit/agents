@@ -101,6 +101,9 @@ class StreamAdapter(TTS):
     def prewarm(self) -> None:
         self._wrapped_tts.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        await self._wrapped_tts.release_idle_connections()
+
     def _on_metrics_collected(self, *args: Any, **kwargs: Any) -> None:
         self.emit("metrics_collected", *args, **kwargs)
 

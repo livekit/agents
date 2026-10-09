@@ -426,6 +426,12 @@ class TTS(tts.TTS):
         elif self._legacy_websocket_adapter is not None:
             self._legacy_websocket_adapter.prewarm()
 
+    async def release_idle_connections(self) -> None:
+        if self._websocket_v1_adapter is not None:
+            await self._websocket_v1_adapter.release_idle_connections()
+        elif self._legacy_websocket_adapter is not None:
+            await self._legacy_websocket_adapter.release_idle_connections()
+
     def stream(
         self, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS
     ) -> tts.SynthesizeStream:
