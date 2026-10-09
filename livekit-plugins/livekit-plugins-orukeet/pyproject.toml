@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-orukeet"
+dynamic = ["version"]
+description = "Local Orukeet speech recognition for LiveKit Agents"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10.0"
+authors = [{ name = "Oruk AI", email = "access@oruk.ai" }]
+dependencies = [
+    "livekit-agents>=1.8.2",
+    "onnx-asr[cpu]==0.7.0",
+    "huggingface-hub>=0.34,<2",
+]
+
+[project.urls]
+Documentation = "https://docs.livekit.io"
+Source = "https://github.com/livekit/agents"
+
+[tool.hatch.version]
+path = "livekit/plugins/orukeet/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { livekit-agents = "0 days" }
