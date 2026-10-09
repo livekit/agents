@@ -85,7 +85,8 @@ TTSVoiceEmotion = Literal[
 
 
 def _is_sonic_3(model: str) -> bool:
-    return model.startswith("sonic-3")
+    # sonic-latest and sonic-preview point to sonic-3 or newer, so they take generation_config too
+    return model.startswith("sonic-3") or model in ("sonic-latest", "sonic-preview")
 
 
 ###############################################################################
