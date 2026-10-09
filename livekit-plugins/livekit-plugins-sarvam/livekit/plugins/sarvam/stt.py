@@ -545,7 +545,7 @@ class STT(stt.STT):
         return "Sarvam"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:

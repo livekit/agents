@@ -172,10 +172,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(
-                self._opts,
-                exclude=["model", "sample_rate", "allow_insecure_base_url"],
-            ),
+            **report_options(self._opts, exclude=["allow_insecure_base_url"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

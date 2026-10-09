@@ -336,7 +336,7 @@ class STT(stt.STT):
         return self._client._base_url.netloc.decode("utf-8")
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     @staticmethod
     def with_azure(

@@ -218,7 +218,7 @@ class TTS(tts.TTS):
                 "ssml_gender": self._opts.voice.ssml_gender.name,
             },
             "encoding": self._opts.encoding.name,
-            **report_options(self._opts, exclude=["voice", "encoding", "sample_rate", "tokenizer"]),
+            **report_options(self._opts, exclude=["voice", "encoding", "tokenizer"]),
         }
 
     def update_options(

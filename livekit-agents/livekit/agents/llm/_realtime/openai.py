@@ -582,11 +582,7 @@ class RealtimeModel(llm.RealtimeModel):
     def describe_options(self) -> dict[str, Any]:
         return report_options(
             self._opts,
-            exclude={
-                "model": True,
-                "conn_options": True,
-                "input_audio_transcription": {"prompt", "keywords"},
-            },
+            exclude={"conn_options": True, "input_audio_transcription": {"prompt", "keywords"}},
         )
 
     @classmethod

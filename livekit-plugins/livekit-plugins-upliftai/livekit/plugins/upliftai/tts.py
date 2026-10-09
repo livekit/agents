@@ -174,7 +174,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["sample_rate", "num_channels", "word_tokenizer"]),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
         }
 
     def update_options(

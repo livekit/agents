@@ -354,8 +354,7 @@ class GPTLiveModel(llm.DuplexModel):
     def describe_options(self) -> dict[str, Any]:
         return {
             **report_options(
-                self._opts,
-                exclude={"model": True, "conn_options": True, "responses": {"text": {"format"}}},
+                self._opts, exclude={"conn_options": True, "responses": {"text": {"format"}}}
             ),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else None,
         }

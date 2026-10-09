@@ -250,7 +250,7 @@ class ChatCompletionOptions(TypedDict, total=False):
 @dataclass
 class _LLMOptions:
     model: LLMModels | str
-    provider: str | None
+    inference_provider: str | None
     base_url: Sensitive[str]
     api_key: Sensitive[str]
     api_secret: Sensitive[str]
@@ -278,7 +278,7 @@ class LLM(llm.LLM):
 
         self._opts = _LLMOptions(
             model=model,
-            provider=provider,
+            inference_provider=provider,
             base_url=lk_base_url,
             api_key=lk_api_key,
             api_secret=lk_api_secret,
@@ -338,10 +338,7 @@ class LLM(llm.LLM):
         return "livekit"
 
     def describe_options(self) -> dict[str, Any]:
-        return {
-            **report_options(self._opts, exclude=["model", "provider"]),
-            "inference_provider": self._opts.provider,
-        }
+        return report_options(self._opts)
 
     def chat(
         self,
@@ -396,7 +393,7 @@ class LLM(llm.LLM):
         return LLMStream(
             self,
             model=self._opts.model,
-            provider=self._opts.provider,
+            provider=self._opts.inference_provider,
             inference_class=effective_inference_class,
             strict_tool_schema=True,
             client=self._client,

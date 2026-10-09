@@ -146,7 +146,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["sample_rate", "model", "num_channels"]),
+            **report_options(self._opts),
         }
 
     def synthesize(

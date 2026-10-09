@@ -457,7 +457,6 @@ class RealtimeModel(llm.RealtimeModel):
         return report_options(
             self._opts,
             exclude={
-                "model": True,
                 "image_encode_options": True,
                 "conn_options": True,
                 "input_audio_transcription": {"custom_vocabulary", "adaptation_phrases"},

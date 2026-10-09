@@ -324,6 +324,28 @@ def test_broken_model_description_keeps_identity() -> None:
     }
 
 
+def test_model_properties_take_precedence_over_reported_options() -> None:
+    class CustomTTS(FakeTTS):
+        def describe_options(self) -> dict[str, Any]:
+            return {
+                "model": "config-model",
+                "provider": "config-provider",
+                "sample_rate": 8000,
+                "num_channels": 2,
+                "nested": {"model": "nested-model", "provider": "nested-provider"},
+            }
+
+    report = _report(AgentSession(vad=None, tts=CustomTTS()))
+    assert report.models["tts"] == {
+        "type": f"{__name__}.CustomTTS",
+        "model": "unknown",
+        "provider": "unknown",
+        "sample_rate": 24000,
+        "num_channels": 1,
+        "nested": {"model": "nested-model", "provider": "nested-provider"},
+    }
+
+
 def test_broken_model_metadata_does_not_break_report() -> None:
     class BrokenVAD(FakeVAD):
         @property
@@ -394,15 +416,17 @@ async def test_adapter_snapshots_isolate_child_failures(
         broken, healthy = reported[kind]
         if wrap_stream:
             healthy, broken = healthy[kind], broken[kind]
+        metadata = {"model": "unknown", "provider": "unknown"}
+        if kind == "tts":
+            metadata.update(sample_rate=24000, num_channels=1)
         assert healthy == {
             "type": f"{__name__}.Healthy{kind.upper()}",
-            "model": "unknown",
-            "provider": "unknown",
+            **metadata,
             **expected,
         }
         assert broken == {
             "type": f"{__name__}.Broken{kind.upper()}",
-            **({} if broken_metadata else {"model": "unknown", "provider": "unknown"}),
+            **({} if broken_metadata else metadata),
         }
     finally:
         await adapter.aclose()

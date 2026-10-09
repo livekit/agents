@@ -341,7 +341,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(self._opts, exclude=["model", "energy_filter"]),
+            **report_options(self._opts, exclude=["energy_filter"]),
             "energy_filter": bool(self._opts.energy_filter),
         }
 

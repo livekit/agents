@@ -208,7 +208,7 @@ class STT(stt.STT):
         return "Soniox"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._params, exclude=["model"])
+        return report_options(self._params)
 
     async def _recognize_impl(
         self,

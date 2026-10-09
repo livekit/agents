@@ -147,7 +147,7 @@ class STT(stt.STT):
         return "google"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     def stream(
         self,

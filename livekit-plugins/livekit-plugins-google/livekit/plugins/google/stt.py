@@ -320,7 +320,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(self._config, exclude=["model", "denoiser_config"]),
+            **report_options(self._config, exclude=["denoiser_config"]),
             "denoiser_config": cloud_speech_v2.DenoiserConfig.to_dict(self._config.denoiser_config)
             if is_given(self._config.denoiser_config)
             else None,

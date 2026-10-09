@@ -210,7 +210,7 @@ class TTS(tts.TTS):
         return "Speechify"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), **report_options(self._opts, exclude=["model"])}
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def prewarm(self) -> None:
         """Open the HTTPS connection to the Speechify API ahead of the first request.

@@ -100,6 +100,10 @@ class STT(stt.STT):
             max_speaker_count=max_speaker_count,
         )
 
+    @property
+    def model(self) -> str:
+        return self._opts.model
+
     def describe_options(self) -> dict[str, Any]:
         return report_options(self._opts)
 

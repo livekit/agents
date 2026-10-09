@@ -123,7 +123,7 @@ class TTS(tts.TTS):
         return "Amazon Polly"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), **report_options(self._opts, exclude=["sample_rate"])}
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def synthesize(
         self, text: str, *, conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS

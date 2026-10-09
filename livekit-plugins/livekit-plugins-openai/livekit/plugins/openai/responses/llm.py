@@ -346,7 +346,7 @@ class LLM(llm.LLM):
         return ""
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     def chat(
         self,

@@ -255,7 +255,7 @@ class AIPlatformLLM(llm.LLM):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(self._opts, exclude=["model"]),
+            **report_options(self._opts),
             "strict_tool_schema": self._strict_tool_schema,
         }
 

@@ -199,7 +199,7 @@ class STTv2(stt.STT):
         return "Deepgram"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     def stream(
         self,

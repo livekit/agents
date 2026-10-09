@@ -160,7 +160,7 @@ class LLM(llm.LLM):
         return "MistralAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     def update_options(
         self,

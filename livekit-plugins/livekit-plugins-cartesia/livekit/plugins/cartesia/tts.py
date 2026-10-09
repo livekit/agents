@@ -215,7 +215,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["model", "sample_rate"]),
+            **report_options(self._opts),
             "voice": self._opts.voice if isinstance(self._opts.voice, str) else "embedding",
         }
 

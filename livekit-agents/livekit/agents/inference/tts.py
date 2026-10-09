@@ -523,10 +523,7 @@ class TTS(tts.TTS):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(
-                self._opts,
-                exclude=["model", "sample_rate", "extra_kwargs", "fallback", "conn_options"],
-            ),
+            **report_options(self._opts, exclude=["extra_kwargs", "fallback", "conn_options"]),
             "sample_rate": self.sample_rate,
             "num_channels": self.num_channels,
             "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),

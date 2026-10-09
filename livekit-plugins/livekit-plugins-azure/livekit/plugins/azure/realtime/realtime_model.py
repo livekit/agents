@@ -352,7 +352,6 @@ class RealtimeModel(llm.RealtimeModel):
             **report_options(
                 self._opts,
                 exclude=[
-                    "model",
                     "voice",
                     "input_audio_transcription",
                     "turn_detection",

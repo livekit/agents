@@ -369,7 +369,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(self._stt_options, exclude=["model"]),
+            **report_options(self._stt_options),
             "sample_rate": self._sample_rate,
             "encoding": self._audio_encoding,
         }

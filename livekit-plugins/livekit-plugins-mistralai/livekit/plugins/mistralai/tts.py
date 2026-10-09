@@ -102,7 +102,7 @@ class TTS(tts.TTS):
         return "MistralAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return {**super().describe_options(), **report_options(self._opts, exclude=["model"])}
+        return {**super().describe_options(), **report_options(self._opts)}
 
     def update_options(
         self,

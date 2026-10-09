@@ -184,7 +184,7 @@ class STT(stt.STT):
         return "FireworksAI"
 
     def describe_options(self) -> dict[str, Any]:
-        return report_options(self._opts, exclude=["model"])
+        return report_options(self._opts)
 
     @property
     def session(self) -> aiohttp.ClientSession:

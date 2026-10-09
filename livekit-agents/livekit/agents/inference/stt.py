@@ -739,10 +739,7 @@ class STT(stt.STT):
 
     def describe_options(self) -> dict[str, Any]:
         return {
-            **report_options(
-                self._opts,
-                exclude=["model", "extra_kwargs", "fallback", "conn_options"],
-            ),
+            **report_options(self._opts, exclude=["extra_kwargs", "fallback", "conn_options"]),
             "extra_kwargs": report_options(self._opts.extra_kwargs, *_EXTRA_OPTION_TYPES),
             "fallback": [
                 {

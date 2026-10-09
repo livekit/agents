@@ -233,7 +233,7 @@ class TTS(tts.TTS):
     def describe_options(self) -> dict[str, Any]:
         return {
             **super().describe_options(),
-            **report_options(self._opts, exclude=["model", "sample_rate", "word_tokenizer"]),
+            **report_options(self._opts, exclude=["word_tokenizer"]),
         }
 
     def _ensure_session(self) -> aiohttp.ClientSession:

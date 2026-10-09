@@ -190,10 +190,6 @@ def _serialize_option_value(value: Any) -> Any:
         cls = type(value)
         options: dict[str, Any] = {}
         try:
-            options.update(model=value.model, provider=value.provider)
-        except Exception:
-            logger.debug("model metadata failed on %s", cls.__name__, exc_info=True)
-        try:
             options.update(
                 _serialize_option_value(
                     {
@@ -205,5 +201,11 @@ def _serialize_option_value(value: Any) -> Any:
             )
         except Exception:
             logger.debug("describe_options() failed on %s", cls.__name__, exc_info=True)
+        try:
+            options.update(model=value.model, provider=value.provider)
+            if isinstance(value, TTS):
+                options.update(TTS.describe_options(value))
+        except Exception:
+            logger.debug("model metadata failed on %s", cls.__name__, exc_info=True)
         return {**options, "type": f"{cls.__module__}.{cls.__name__}"}
     return _describe_option_object(value)
