@@ -14,7 +14,7 @@ from ..log import logger
 from ..telemetry import trace_types
 from ..types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
 from .chat_context import ChatContext, MetricsMetadata
-from .llm import LLM, ChatChunk, LLMStream
+from .llm import LLM, ChatChunk, LLMStream, ProviderToolCall
 from .tool_context import Tool, ToolChoice
 
 DEFAULT_FALLBACK_API_CONNECT_OPTIONS = APIConnectOptions(
@@ -235,20 +235,24 @@ class FallbackLLMStream(LLMStream):
                           result will not be used. Recovery checks verify if a previously
                           failed LLM has become available again.
         """
+        stream = llm.chat(
+            chat_ctx=self._chat_ctx,
+            tools=self._tools,
+            parallel_tool_calls=self._parallel_tool_calls,
+            tool_choice=self._tool_choice,
+            extra_kwargs=self._extra_kwargs,
+            conn_options=dataclasses.replace(
+                self._conn_options,
+                max_retry=self._fallback_adapter._max_retry_per_llm,
+                timeout=self._fallback_adapter._attempt_timeout,
+                retry_interval=self._fallback_adapter._retry_interval,
+            ),
+        )
+        if not check_recovery:
+            stream.on("provider_tool_call", self._on_provider_tool_call)
+
         try:
-            async with llm.chat(
-                chat_ctx=self._chat_ctx,
-                tools=self._tools,
-                parallel_tool_calls=self._parallel_tool_calls,
-                tool_choice=self._tool_choice,
-                extra_kwargs=self._extra_kwargs,
-                conn_options=dataclasses.replace(
-                    self._conn_options,
-                    max_retry=self._fallback_adapter._max_retry_per_llm,
-                    timeout=self._fallback_adapter._attempt_timeout,
-                    retry_interval=self._fallback_adapter._retry_interval,
-                ),
-            ) as stream:
+            async with stream:
                 if not check_recovery:
                     stream._retry_on_chunk_sent = self._fallback_adapter._retry_on_chunk_sent
                 should_set_current = not check_recovery
@@ -295,6 +299,12 @@ class FallbackLLMStream(LLMStream):
                 f"{llm.label} unexpected error, switching to next LLM",
             )
             raise
+        finally:
+            if not check_recovery:
+                stream.off("provider_tool_call", self._on_provider_tool_call)
+
+    def _on_provider_tool_call(self, call: ProviderToolCall) -> None:
+        self.emit("provider_tool_call", call)
 
     def _try_recovery(self, llm: LLM) -> None:
         llm_status = self._fallback_adapter._status[

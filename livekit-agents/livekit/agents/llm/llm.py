@@ -80,6 +80,27 @@ class ChoiceDelta(BaseModel):
     """Provider-specific extra data (e.g., Google thought signatures)."""
 
 
+class ProviderToolCall(BaseModel):
+    """A provider-executed tool call, surfaced by a plugin as it runs.
+
+    These tools run inside the model provider's own stream (e.g. Mistral web search,
+    xAI WebSearch). A plugin emits the ``provider_tool_call`` event on the
+    :class:`LLMStream` with ``phase="started"`` when the provider begins the call and
+    ``phase="done"`` when it finishes; the framework bridges these to
+    ``provider_tool_execution_updated`` session events. They are never executed locally.
+    """
+
+    type: Literal["provider_tool_call"] = "provider_tool_call"
+    phase: Literal["started", "done"]
+    status: Literal["done", "error", "cancelled"] | None = None
+    """Terminal status when ``phase="done"``; unset for a start update."""
+    name: str
+    arguments: str = ""
+    call_id: str
+    result: str | None = None
+    """Tool result, populated on ``phase="done"`` when the provider returns one."""
+
+
 class ChatChunk(BaseModel):
     id: str
     delta: ChoiceDelta | None = None
@@ -231,7 +252,7 @@ class _LLMEventChannel(aio.Chan[ChatChunk]):
             self.output_sent = True
 
 
-class LLMStream(ABC):
+class LLMStream(ABC, rtc.EventEmitter[Literal["provider_tool_call"]]):
     _llm_request_span_name: ClassVar[str] = "llm_request"
     _genai_operation_name: ClassVar[str | None] = trace_types.GenAIOperationName.CHAT
 
@@ -243,6 +264,7 @@ class LLMStream(ABC):
         tools: list[Tool],
         conn_options: APIConnectOptions,
     ) -> None:
+        super().__init__()
         self._llm = llm
         self._chat_ctx = chat_ctx
         self._tools = tools

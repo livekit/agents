@@ -556,12 +556,12 @@ class Agent:
                     await temporary_adapter.aclose()
 
         @staticmethod
-        async def llm_node(
+        def llm_node(
             agent: Agent,
             chat_ctx: llm.ChatContext,
             tools: list[llm.Tool],
             model_settings: ModelSettings,
-        ) -> AsyncGenerator[llm.ChatChunk | str | FlushSentinel, None]:
+        ) -> llm.LLMStream:
             """Default implementation for `Agent.llm_node`"""
             activity = agent._get_activity_or_raise()
             assert activity.llm is not None, "llm_node called but no LLM node is available"
@@ -573,11 +573,9 @@ class Agent:
             activity_llm = activity.llm
 
             conn_options = activity.session.conn_options.llm_conn_options
-            async with activity_llm.chat(
+            return activity_llm.chat(
                 chat_ctx=chat_ctx, tools=tools, tool_choice=tool_choice, conn_options=conn_options
-            ) as stream:
-                async for chunk in stream:
-                    yield chunk
+            )
 
         @staticmethod
         async def tts_node(
