@@ -27,12 +27,12 @@ def _run(scenario: str, *args: object) -> dict[str, str]:
     return dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
 
 
-def test_server_run_keeps_the_metric_files_it_has_open(tmp_path) -> None:
+def test_server_run_keeps_the_metric_files_of_running_processes(tmp_path) -> None:
     out = _run(
         """
         import asyncio, os, sys, threading, time
 
-        mp_dir, dead_pid = sys.argv[1], sys.argv[2]
+        mp_dir, live_pid, dead_pid = sys.argv[1], sys.argv[2], sys.argv[3]
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = mp_dir
 
         import prometheus_client
@@ -42,7 +42,8 @@ def test_server_run_keeps_the_metric_files_it_has_open(tmp_path) -> None:
         from livekit.agents import AgentServer, JobContext, JobExecutorType
         from livekit.agents.telemetry import metrics as lk_metrics
 
-        MmapedDict(os.path.join(mp_dir, f"gauge_all_{dead_pid}.db")).close()
+        for pid in (dead_pid, live_pid):
+            MmapedDict(os.path.join(mp_dir, f"gauge_all_{pid}.db")).close()
 
         gauge = prometheus_client.Gauge("app_warmup_done", "warm-up finished")
         gauge.set(1)
@@ -98,6 +99,7 @@ def test_server_run_keeps_the_metric_files_it_has_open(tmp_path) -> None:
         asyncio.run(main())
         """,
         tmp_path,
+        os.getpid(),
         _DEAD_PID,
     )
     files = out["FILES"].split()
@@ -105,6 +107,7 @@ def test_server_run_keeps_the_metric_files_it_has_open(tmp_path) -> None:
     assert f'app_warmup_done{{pid="{out["PID"]}"}} 2.0' in out["METRICS"]
     assert "lk_agents_worker_load{" in out["METRICS"]
     assert f"gauge_all_{out['PID']}.db" in files  # this process
+    assert f"gauge_all_{os.getpid()}.db" in files  # a live process
     assert f"gauge_all_{_DEAD_PID}.db" not in files  # a dead process
 
 

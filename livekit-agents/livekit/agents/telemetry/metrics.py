@@ -49,18 +49,25 @@ def _update_child_proc_count() -> None:
 
 
 def _clean_multiproc_dir(path: str) -> None:
-    """Remove the metric files that this process does not have open.
+    """Remove the metric files of processes that no longer run, and the files with
+    this process's pid that it does not have open.
 
     prometheus_client keeps each file open and keeps writing to it after it is
     deleted, so the collector would lose every metric of that kind. The directory
     is listed before the open files are, so a file created during the cleanup is
     either not listed or already open.
     """
+    own_pid = os.getpid()
     filenames = os.listdir(path)
     open_paths = {os.path.realpath(f.path) for f in psutil.Process().open_files()}
     for filename in filenames:
         file_path = os.path.join(path, filename)
         if os.path.realpath(file_path) in open_paths:
+            continue
+        pid_str = filename.removesuffix(".db").rpartition("_")[2]
+        if pid_str.isdigit() and int(pid_str) != own_pid and psutil.pid_exists(int(pid_str)):
+            # prometheus_client's mark_process_dead has the same limit: a live process
+            # that reused a dead process's pid keeps the dead process's file
             continue
         try:
             if os.path.isfile(file_path):
