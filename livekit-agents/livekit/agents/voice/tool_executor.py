@@ -565,12 +565,17 @@ class _ToolExecutor:
                 if activity._closed:
                     raise ActivityClosedError(f"activity {activity.agent.label} is closing")
             except ActivityClosedError:
-                if self._owning_activity is not None or session._closing_task is not None:
+                # a session-scoped reply follows a handoff in flight to the next agent;
+                # anything else (session close included) drops it
+                if (
+                    self._owning_activity is not None
+                    or session._is_closing()
+                    or not session._activity_lock.locked()
+                ):
                     logger.debug("dropping tool reply — owning activity closed")
                     self._pending_updates.clear()
                     return
 
-                # a session-scoped reply follows the handoff to the next agent
                 async with session._activity_lock:
                     pass
 

@@ -138,3 +138,28 @@ async def test_session_scoped_reply_follows_handoff(caplog: pytest.LogCaptureFix
     speakers, current = await _run(first, "handoff", caplog, session_tools=[toolset])
     assert isinstance(current, _Second)
     assert speakers == ["_First", "_Second"]
+
+
+async def test_session_scoped_reply_is_dropped_on_close() -> None:
+    """A session-scoped reply still pending when the session closes is dropped, and the
+    close completes."""
+    calls = [FunctionToolCall(name="send_link", arguments="{}", call_id="call_send_link")]
+    llm = FakeLLM(
+        fake_responses=[
+            FakeLLMResponse(
+                input="go", content="one moment", ttft=0.1, duration=0.1, tool_calls=calls
+            ),
+            # keeps the agent busy past the tool's work, so the reply waits for idle
+            FakeLLMResponse(input="busy", content="still going", ttft=0.1, duration=10.0),
+        ]
+    )
+    toolset = AsyncToolset(id="links", tools=[send_link])
+    sess = AgentSession(llm=llm, tools=[toolset])
+    await sess.start(_First(with_send_link=False))
+    await sess.run(user_input="go")
+    sess.generate_reply(user_input="busy")
+    await asyncio.sleep(TOOL_WORK * 2)  # the tool has finished; its reply waits for idle
+    assert toolset._executor._reply_task is not None
+    assert not toolset._executor._reply_task.done()
+
+    await asyncio.wait_for(sess.aclose(), timeout=5.0)
