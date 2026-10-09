@@ -632,7 +632,10 @@ class _Connection:
             return
 
         try:
-            self._ws = await self._session.ws_connect(self._opts.websocket_url)
+            self._ws = await self._session.ws_connect(
+                self._opts.websocket_url,
+                headers={"Authorization": f"Bearer {self._opts.api_key}"},
+            )
         except Exception:
             self._closed = True
             self._is_current = False
@@ -716,7 +719,6 @@ class _Connection:
 
                 if isinstance(msg, _StartConfig):
                     config: dict[str, Any] = {
-                        "api_key": msg.opts.api_key,
                         "model": msg.opts.model,
                         "language": msg.opts.language,
                         "voice": msg.opts.voice,

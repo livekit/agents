@@ -290,6 +290,33 @@ async def test_endpoint_latency_adjustment_level_websocket_config(level: int | N
         assert ws.config["endpoint_latency_adjustment_level"] == level
 
 
+async def test_connect_ws_sends_api_key_on_the_handshake():
+    stream = _make_stream()
+
+    class FakeWebSocket:
+        async def send_str(self, message: str) -> None:
+            self.config = json.loads(message)
+
+    class FakeSession:
+        def __init__(self, ws: FakeWebSocket) -> None:
+            self.ws = ws
+            self.kwargs: dict[str, Any] = {}
+
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWebSocket:
+            self.kwargs = kwargs
+            return self.ws
+
+    ws = FakeWebSocket()
+    session = FakeSession(ws)
+    stream._stt._http_session = session
+
+    await stream._connect_ws()
+
+    assert session.kwargs["headers"] == {"Authorization": "Bearer test-key"}
+    # The handshake is the only carrier; the config message no longer repeats the key.
+    assert "api_key" not in ws.config
+
+
 async def _drive_recv(
     stream, messages: list[dict[str, Any]], *, expect_events: int, timeout: float = 2.0
 ):
