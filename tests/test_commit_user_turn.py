@@ -295,3 +295,42 @@ async def test_overlapping_turn_waits_for_previous_message_commit(
     previous_speech_handle._user_message_committed_fut.set_result(None)
     await turn_task
     assert reached_turn_processing.is_set()
+
+
+@pytest.mark.asyncio
+async def test_previous_reply_failure_does_not_drop_overlapping_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity = _create_activity()
+    previous_speech_handle = SpeechHandle.create()
+    previous_speech_handle._user_message_committed_fut = asyncio.Future[None]()
+
+    async def previous_turn() -> SpeechHandle:
+        return previous_speech_handle
+
+    previous_turn_task = asyncio.create_task(previous_turn())
+    reached_turn_processing = asyncio.Event()
+
+    def interrupt_background_speeches(*, force: bool) -> list[asyncio.Future[None]]:
+        reached_turn_processing.set()
+        return []
+
+    monkeypatch.setattr(activity, "_interrupt_background_speeches", interrupt_background_speeches)
+    turn_info = _EndOfTurnInfo(
+        skip_reply=False,
+        new_transcript="next turn",
+        transcript_confidence=1.0,
+        metrics=_EndOfTurnMetrics(
+            started_speaking_at=None,
+            stopped_speaking_at=None,
+            transcription_delay=None,
+            end_of_turn_delay=None,
+        ),
+    )
+
+    previous_speech_handle._user_message_committed_fut.set_exception(
+        RuntimeError("previous reply failed")
+    )
+    await activity._user_turn_completed_impl(previous_turn_task, turn_info)
+
+    assert reached_turn_processing.is_set()
