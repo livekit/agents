@@ -41,7 +41,10 @@ recording; or reads a menu. A person who answers for
 someone or for a business and asks who is calling, what it is about, or how to help,
 with no sign of automation, is human. A greeting that only says who was reached, such
 as "you've reached" or "this is" a name, and asks nothing is uncertain, or machine-vm if
-it asks for a message; it is not human. A busy person is human, not machine-unavailable.
+it asks for a message; it is not human. A first turn that is only a greeting word
+ending in a period or exclamation mark is uncertain: recorded greetings and screeners
+start that way, so the next words decide. The same word asked as a question is a person
+answering, so human. A busy person is human, not machine-unavailable.
 A person taking over from a machine is human.
 A "not available", "cannot be reached", "switched off", or "out of the coverage area"
 announcement in any language, or a phone number read aloud, is not enough for
