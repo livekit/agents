@@ -363,8 +363,7 @@ class AgentActivity(RecognitionHooks):
         self._q_updated = asyncio.Event()
 
         self._scheduling_atask: asyncio.Task[None] | None = None
-        self._user_turn_completed_atask: asyncio.Task[None] | None = None
-        self._pending_user_message_commits: dict[str, asyncio.Future[None]] = {}
+        self._user_turn_completed_atask: asyncio.Task[SpeechHandle | None] | None = None
         self._speech_tasks: list[asyncio.Task[Any]] = []
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
@@ -2003,8 +2002,15 @@ class AgentActivity(RecognitionHooks):
                     break
 
             turn_task = self._user_turn_completed_atask
+            speech_handle: SpeechHandle | None = None
             if turn_task is not None and turn_task is not previous_turn_task:
-                await asyncio.shield(turn_task)
+                speech_handle = await asyncio.shield(turn_task)
+
+            if (
+                speech_handle is not None
+                and (message_committed_fut := speech_handle._user_message_committed_fut) is not None
+            ):
+                await asyncio.shield(message_committed_fut)
 
             return transcript
 
@@ -2748,16 +2754,16 @@ class AgentActivity(RecognitionHooks):
 
     @utils.log_exceptions(logger=logger)
     async def _user_turn_completed_task(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
-    ) -> None:
+        self, old_task: asyncio.Task[SpeechHandle | None] | None, info: _EndOfTurnInfo
+    ) -> SpeechHandle | None:
         try:
-            await self._user_turn_completed_impl(old_task, info)
+            return await self._user_turn_completed_impl(old_task, info)
         finally:
             _end_user_turn_span(info)
 
     async def _user_turn_completed_impl(
-        self, old_task: asyncio.Task[None] | None, info: _EndOfTurnInfo
-    ) -> None:
+        self, old_task: asyncio.Task[SpeechHandle | None] | None, info: _EndOfTurnInfo
+    ) -> SpeechHandle | None:
         if old_task is not None:
             # We never cancel user code as this is very confusing.
             # So we wait for the old execution of on_user_turn_completed to finish.
@@ -2933,15 +2939,7 @@ class AgentActivity(RecognitionHooks):
 
         if user_message is not None:
             message_committed_fut = asyncio.Future[None]()
-            self._pending_user_message_commits[speech_handle.id] = message_committed_fut
-            try:
-                await asyncio.shield(message_committed_fut)
-            finally:
-                if (
-                    self._pending_user_message_commits.get(speech_handle.id)
-                    is message_committed_fut
-                ):
-                    del self._pending_user_message_commits[speech_handle.id]
+            speech_handle._user_message_committed_fut = message_committed_fut
 
         if self._user_turn_completed_atask != asyncio.current_task():
             # If a new user turn has already started, interrupt this one since it's now outdated
@@ -2967,6 +2965,7 @@ class AgentActivity(RecognitionHooks):
             metadata=metadata,
         )
         self._session.emit("metrics_collected", MetricsCollectedEvent(metrics=eou_metrics))
+        return speech_handle
 
     def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
         if self._scheduling_paused or self._new_turns_blocked:
@@ -3146,14 +3145,18 @@ class AgentActivity(RecognitionHooks):
         return not self._speech_q and (not self._current_speech or self._current_speech.done())
 
     def _mark_user_message_committed(self, speech_handle: SpeechHandle) -> None:
-        if commit_fut := self._pending_user_message_commits.pop(speech_handle.id, None):
+        if (
+            commit_fut := speech_handle._user_message_committed_fut
+        ) is not None and not commit_fut.done():
             commit_fut.set_result(None)
 
     def _on_pipeline_reply_done(self, task: asyncio.Task[None]) -> None:
         task_info = _get_activity_task_info(task)
         speech_handle = task_info.speech_handle if task_info is not None else None
-        if speech_handle is not None and (
-            commit_fut := self._pending_user_message_commits.pop(speech_handle.id, None)
+        if (
+            speech_handle is not None
+            and (commit_fut := speech_handle._user_message_committed_fut) is not None
+            and not commit_fut.done()
         ):
             if task.cancelled():
                 commit_fut.cancel()
@@ -3163,6 +3166,8 @@ class AgentActivity(RecognitionHooks):
                 commit_fut.set_exception(
                     RuntimeError("reply processing finished before committing the user message")
                 )
+            if not commit_fut.cancelled():
+                commit_fut.exception()  # silence warnings when no caller is waiting
 
         if self._no_pending_speech:
             # a speech awaiting its tool executions keeps the agent busy: stay in
