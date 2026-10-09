@@ -336,6 +336,10 @@ class SpeechStream(stt.SpeechStream):
                 status_code=e.status,
                 retryable=e.status in (408, 429) or 500 <= e.status < 600,
             ) from e
+        except (aiohttp.InvalidURL, aiohttp.TooManyRedirects) as e:
+            # a URL no redial can fix, so this fails fast for the same reason a
+            # rejected handshake does
+            raise APIConnectionError("nabrah STT base_url is not usable", retryable=False) from e
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to nabrah STT") from e
 
@@ -438,8 +442,18 @@ class SpeechStream(stt.SpeechStream):
                     # _maybe_complete_flush commit it once `audio_processed` reaches
                     # there, or the segment closes empty and the speech the caller
                     # flushed opens the next turn instead of ending this one.
+                    if self._pending_flush_position is not None:
+                        # the caller asked for two boundaries; overwriting would
+                        # silently merge them into one
+                        self._flush_eos()
                     self._pending_flush_position = self._audio_position
                     self._pending_flush_deadline = time.monotonic() + _FLUSH_ACK_TIMEOUT
+            # `end_input()` is flush() + close(), so the last sentinel before the
+            # channel closes is the teardown, not a segment the caller wants cut
+            # short: `eof` and _run's finalizer draw that boundary once the
+            # recognizer has actually emitted its trailing text.
+            self._pending_flush_position = None
+            self._pending_flush_deadline = None
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
         except Exception as e:
