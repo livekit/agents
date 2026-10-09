@@ -11,6 +11,7 @@ import pytest
 
 import livekit.agents.inference._utils as inference_utils
 import livekit.agents.job as job_module
+from livekit.agents import inference
 from livekit.agents.inference._utils import (
     HEADER_SESSION_ID,
     create_inference_request_id,
@@ -20,6 +21,15 @@ from livekit.agents.inference._utils import (
 from livekit.agents.inference.llm import LLMStream
 
 pytestmark = pytest.mark.unit
+
+
+def test_inference_class_has_public_import() -> None:
+    assert inference.InferenceClass is inference_utils.InferenceClass
+
+
+def test_public_inference_exports_resolve() -> None:
+    for name in inference.__all__:
+        assert getattr(inference, name) is not None
 
 
 def test_inference_session_id_is_omitted_without_job_context(

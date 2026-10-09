@@ -237,6 +237,11 @@ def check_trace(
         )
 
     for s in spans:
+        if s.end_ns < s.start_ns:
+            # the duration is unsigned on the wire: a backend that subtracts reads 2^64 minus this
+            violations.append(
+                f"{s.name}: ends {(s.start_ns - s.end_ns) / 1e6:.1f} ms before it starts"
+            )
         allowed = SPAN_PARENTS.get(s.name)
         if allowed is None:
             violations.append(f"{s.name}: unknown span, add it to tests.trace_schema.SPAN_PARENTS")

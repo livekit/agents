@@ -47,7 +47,7 @@ from ..log import logger
 from ..models import _supports_reasoning_effort
 from ..tools import OpenAITool
 
-ServiceTier = Literal["auto", "default", "flex", "scale", "priority"]
+ServiceTier = Literal["auto", "default", "flex", "scale", "priority", "ultrafast"]
 Verbosity = Literal["low", "medium", "high"]
 
 OPENAI_RESPONSES_WS_URL = "wss://api.openai.com/v1/responses"
@@ -80,6 +80,7 @@ class _ResponsesWebsocket:
             connect_cb=self._create_ws,
             close_cb=self._close_ws,
             max_session_duration=3600,
+            connect_timeout=self._timeout,
         )
 
     def _ensure_http_session(self) -> aiohttp.ClientSession:
@@ -242,7 +243,16 @@ class LLM(llm.LLM):
         super().__init__()
 
         if not is_given(reasoning) and _supports_reasoning_effort(model):
-            if model in ["gpt-5.1", "gpt-5.2", "gpt-5.4", "gpt-5.4-mini"]:
+            if model in [
+                "gpt-5.1",
+                "gpt-5.2",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.5",
+                "gpt-5.6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+            ]:
                 reasoning = Reasoning(effort="none")
             else:
                 reasoning = Reasoning(effort="minimal")
@@ -307,7 +317,14 @@ class LLM(llm.LLM):
                 ),
             )
 
+    async def _prewarm_impl(self) -> None:
+        if self._ws is not None:
+            self._ws._pool.prewarm()
+        elif self._client is not None:
+            await self._client.models.list()
+
     async def aclose(self) -> None:
+        await super().aclose()
         if self._ws:
             await self._ws.aclose()
         if self._owns_client and self._client:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from opentelemetry import trace
@@ -51,26 +51,59 @@ def capture_content_enabled() -> bool:
 # paths have no nested `llm_request` span to carry the convention's attributes, so the node
 # span records them instead. LLMStream marks the context when it does create one, which is
 # what tells the two cases apart.
-_inference_recorded: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar(
-    "lk_inference_recorded", default=None
+_on_inference_span_created: contextvars.ContextVar[Callable[[], None] | None] = (
+    contextvars.ContextVar("lk_inference_recorded", default=None)
 )
 
 
-def track_inference_span() -> list[bool]:
+def track_inference_span(*, model: str | None = None, provider: str | None = None) -> list[bool]:
     """Start tracking, returning a marker that fills in if an ``llm_request`` span is created.
+
+    Record the node's request identity before a fallback can replace the provider with
+    the instance that served the request.
 
     No reset: the caller runs as its own asyncio task, so the context copy — and this
     variable with it — is discarded when that task finishes.
     """
+    span = trace.get_current_span()
     recorded: list[bool] = []
-    _inference_recorded.set(recorded)
+
+    def on_created() -> None:
+        if not recorded and span.is_recording():
+            if model:
+                span.set_attribute(trace_types.ATTR_GEN_AI_REQUEST_MODEL, model)
+            if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
+                span.set_attribute(trace_types.ATTR_GEN_AI_PROVIDER_NAME, normalized)
+        recorded.append(True)
+
+    _on_inference_span_created.set(on_created)
     return recorded
 
 
 def mark_inference_span_recorded() -> None:
     """Called where an ``llm_request`` span is created, so the enclosing node stands down."""
-    if (recorded := _inference_recorded.get()) is not None:
-        recorded.append(True)
+    if (on_created := _on_inference_span_created.get()) is not None:
+        on_created()
+
+
+def _is_system_message(item: ChatItem) -> bool:
+    return item.type == "message" and item.role in ("system", "developer")
+
+
+def _split_instructions(items: Sequence[ChatItem]) -> tuple[list[ChatItem], list[ChatItem]]:
+    """The agent's instructions are its instructions message. Every other system message
+    (``generate_reply(instructions=...)``, the expressive guide, one added through
+    ``update_chat_ctx``) is sent in place by chat-completion providers, so it belongs to
+    the conversation. A context without that message (a standalone ``llm.chat()``) takes
+    the system message it starts with, if any, as its instructions."""
+    from ..voice.generation import INSTRUCTIONS_MESSAGE_ID
+
+    for i, item in enumerate(items):
+        if item.id == INSTRUCTIONS_MESSAGE_ID and _is_system_message(item):
+            return [item], [*items[:i], *items[i + 1 :]]
+    if items and _is_system_message(items[0]):
+        return [items[0]], list(items[1:])
+    return [], list(items)
 
 
 def _text_part(content: str) -> dict[str, Any]:
@@ -121,6 +154,8 @@ def _message_parts(item: ChatItem) -> list[dict[str, Any]]:
             {
                 "type": "tool_call_response",
                 "id": item.call_id,
+                # Optional extension: the OTel response-part schema permits extra fields.
+                **({"name": item.name} if item.name else {}),
                 "response": _maybe_json(item.output),
             }
         )
@@ -138,50 +173,65 @@ def _maybe_json(raw: str) -> Any:
 
 
 def to_system_instructions(chat_ctx: ChatContext) -> list[dict[str, Any]]:
-    """LiveKit carries an agent's instructions as ``system``/``developer`` messages in
-    the chat context, but they originate from ``Agent(instructions=...)`` rather than
-    from the conversation, so they are reported as instructions rather than history."""
-    parts: list[dict[str, Any]] = []
-    for item in chat_ctx.items:
-        if item.type == "message" and item.role in ("system", "developer"):
-            if (text := item.raw_text_content) is not None:
-                parts.append(_text_part(text))
-    return parts
+    """LiveKit carries an agent's instructions as the ``system``/``developer`` messages the
+    chat context starts with, but they originate from ``Agent(instructions=...)`` rather
+    than from the conversation, so they are reported as instructions rather than history."""
+    return _instruction_parts(_split_instructions(chat_ctx.items)[0])
 
 
 def to_input_messages(chat_ctx: ChatContext) -> list[dict[str, Any]]:
-    """History in the order it was sent. ``system``/``developer`` messages go to
-    ``gen_ai.system_instructions`` instead, and non-conversational items (agent
-    handoffs, config updates) are skipped."""
+    """History in the order it was sent. The leading ``system``/``developer`` messages go
+    to ``gen_ai.system_instructions`` instead; a later one stays in place as a ``system``
+    message. Non-conversational items (agent handoffs, config updates) are skipped."""
+    return _conversation_messages(_split_instructions(chat_ctx.items)[1])
+
+
+def _instruction_parts(items: Sequence[ChatItem]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
+    for item in items:
+        if item.type == "message" and (text := item.raw_text_content) is not None:
+            parts.append(_text_part(text))
+    return parts
+
+
+def _message_role(item: ChatItem) -> str | None:
+    if item.type == "message":
+        return "system" if item.role == "developer" else item.role
+    if item.type == "function_call":
+        return "assistant"
+    if item.type == "function_call_output":
+        return "tool"
+    return None
+
+
+def _conversation_messages(items: Sequence[ChatItem]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    for item in chat_ctx.items:
-        role: str
-        if item.type == "message":
-            if item.role in ("system", "developer"):
-                continue
-            role = item.role
-        elif item.type == "function_call":
-            role = "assistant"
-        elif item.type == "function_call_output":
-            role = "tool"
-        else:
+    for item, placement in zip(items, _message_layout(items), strict=True):
+        if placement == "skipped":
             continue
-
         parts = _message_parts(item)
-        if not parts:
-            continue
-
-        # consecutive tool calls from one assistant turn belong to a single message
-        if (
-            messages
-            and messages[-1]["role"] == role == "assistant"
-            and item.type == "function_call"
-        ):
+        if placement == "merged":
             messages[-1]["parts"].extend(parts)
-            continue
-
-        messages.append({"role": role, "parts": parts})
+        else:
+            messages.append({"role": _message_role(item), "parts": parts})
     return messages
+
+
+def _message_layout(items: Sequence[ChatItem]) -> list[str]:
+    """How each item lands in ``gen_ai.input.messages``: a "new" message, "merged" into the
+    previous one (consecutive tool calls of one assistant turn), or "skipped"."""
+    layout: list[str] = []
+    last_role: str | None = None
+    for item in items:
+        role = _message_role(item)
+        if role is None or not _message_parts(item):
+            layout.append("skipped")
+        elif last_role == role == "assistant" and item.type == "function_call":
+            layout.append("merged")
+        else:
+            layout.append("new")
+            last_role = role
+    return layout
 
 
 def to_output_messages(
@@ -300,17 +350,19 @@ def set_content_attributes(
 def set_request_attributes(
     span: trace.Span,
     *,
-    operation: str,
+    operation: str | None,
     provider: str | None = None,
     model: str | None = None,
     stream: bool | None = None,
     output_type: str | None = None,
 ) -> None:
-    """The attributes the convention asks for at span creation time."""
+    """Request attributes, with no operation name for a delegating span."""
     if not span.is_recording():
         return
 
-    attrs: dict[str, AttributeValue] = {trace_types.ATTR_GEN_AI_OPERATION_NAME: operation}
+    attrs: dict[str, AttributeValue] = {}
+    if operation is not None:
+        attrs[trace_types.ATTR_GEN_AI_OPERATION_NAME] = operation
     if (normalized := trace_types.gen_ai_provider_name(provider)) is not None:
         attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     if model:
@@ -318,8 +370,6 @@ def set_request_attributes(
     if stream:
         # "if and only if the request is streaming; if unset, assumed non-streaming"
         attrs[trace_types.ATTR_GEN_AI_REQUEST_STREAM] = True
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if output_type:
         attrs[trace_types.ATTR_GEN_AI_OUTPUT_TYPE] = output_type
     span.set_attributes(attrs)
@@ -404,11 +454,6 @@ def set_tool_attributes(
     if agent_name:
         # "the human-readable name of the agent executing the tool", conditionally required
         attrs[trace_types.ATTR_GEN_AI_AGENT_NAME] = agent_name
-    # not in the convention's execute_tool table, but Datadog groups a session by this
-    # attribute rather than by trace membership, so a tool span without it drops out of
-    # the session view
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     if _capture_content:
         if description:
             attrs[trace_types.ATTR_GEN_AI_TOOL_DESCRIPTION] = description
@@ -449,8 +494,6 @@ def set_agent_attributes(
         attrs[trace_types.ATTR_GEN_AI_PROVIDER_NAME] = normalized
     if model:
         attrs[trace_types.ATTR_GEN_AI_REQUEST_MODEL] = model
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 
 
@@ -463,8 +506,6 @@ def set_workflow_attributes(span: trace.Span, *, name: str) -> None:
         trace_types.ATTR_GEN_AI_OPERATION_NAME: trace_types.GenAIOperationName.INVOKE_WORKFLOW,
         trace_types.ATTR_GEN_AI_WORKFLOW_NAME: name,
     }
-    if (conv := _conversation_id()) is not None:
-        attrs[trace_types.ATTR_GEN_AI_CONVERSATION_ID] = conv
     span.set_attributes(attrs)
 
 

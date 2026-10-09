@@ -36,6 +36,7 @@ from ..metrics import (
 )
 from ..telemetry import (
     gen_ai as gen_ai_telemetry,
+    input_delta,
     otel_metrics,
     trace_types,
     tracer,
@@ -368,6 +369,8 @@ class AgentActivity(RecognitionHooks):
 
         self._preemptive_generation: _PreemptiveGeneration | None = None
         self._preemptive_generation_count: int = 0
+        # LLM input recorded for the last committed generation (RecordingOptions.input_delta)
+        self._input_delta = input_delta.InputDeltaTracker()
         self._authorization_allowed = asyncio.Event()
         self._authorization_allowed.set()
 
@@ -1451,6 +1454,13 @@ class AgentActivity(RecognitionHooks):
                     # reported to the model as a tool failure, the way a tool awaiting an
                     # inline task through a session close has always been
                     raise ToolError("the activity that awaited the inline task is closing")
+
+                if self._new_turns_blocked:
+                    raise ToolError(
+                        "An agent transition is in progress, so this tool call cannot continue. "
+                        "Wait until the transition is complete before retrying, if the tool is "
+                        "available to the new agent."
+                    )
 
                 # past the queue: a run watching a task still waiting its turn waits for
                 # the user input the task ahead of it needs
@@ -3056,19 +3066,28 @@ class AgentActivity(RecognitionHooks):
         The agent's ``expressive`` overrides the session's when set, matching how the
         agent's ``llm``/``tts`` override the session models.
 
-        Expressive mode requires two things:
-        - the inference gateway TTS (``livekit.agents.inference.TTS``): the markup
-          normalization/conversion and expressive chunking run there, so direct
-          provider plugins would receive unconverted markup.
-        - a TTS that actually declares a markup dialect (``llm_instructions()`` is
-          not ``None``): gateway providers without one (e.g. ``rime``, ``deepgram``)
-          get no markup instructions, so no tags can appear in the stream — leaving
-          it "active" would enable xml-aware chunking with nothing to chunk and
-          re-introduce the stray-``<`` streaming stall.
+        Expressive mode requires two things of the TTS:
+
+        - a markup dialect (``llm_instructions()`` is not ``None``). Without one no
+          markers can appear, and xml-aware chunking would re-introduce the stray-``<``
+          streaming stall for nothing.
+        - something to *lower* those markers, or the TTS speaks them aloud. Guaranteed
+          only where the framework owns the input path: the gateway TTS's own stream, and
+          the ``tts.StreamAdapter`` wrapping every non-streaming TTS. A natively
+          streaming plugin owns its own input task — several declare a dialect today
+          without lowering anything. A ``StreamAdapter`` handed in directly is streaming
+          only at its surface; inside it is that same lowering path, so it is exempt.
         """
         from .agent_session import DEFAULT_EXPRESSIVE_OPTIONS, resolve_expressive_options
 
-        if not isinstance(self.tts, inference.TTS) or self.tts.markup.llm_instructions() is None:
+        if (
+            self.tts is None
+            or self.tts.markup.llm_instructions() is None
+            or (
+                self.tts.capabilities.streaming
+                and not isinstance(self.tts, (inference.TTS, tts.StreamAdapter))
+            )
+        ):
             return None
 
         expr = (
@@ -3288,6 +3307,7 @@ class AgentActivity(RecognitionHooks):
                     audio_output=audio_output,
                     tts_output=tts_gen_data.audio_ch,
                     reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                    tts_data=tts_gen_data,
                 )
             else:
                 # use the provided audio
@@ -3560,14 +3580,24 @@ class AgentActivity(RecognitionHooks):
         )
 
         tasks: list[asyncio.Task[Any]] = []
-        llm_task, llm_gen_data = perform_llm_inference(
-            node=self._agent.llm_node,
-            chat_ctx=chat_ctx,
-            tool_ctx=tool_ctx,
-            model_settings=model_settings,
-            model=self.llm.model if self.llm else None,
-            provider=self.llm.provider if self.llm else None,
+        # the spans of this generation record their input against the last committed one
+        delta_scope = (
+            self._input_delta.begin()
+            if self._session.options.recording_options.get("input_delta")
+            else None
         )
+        input_token = input_delta.set_scope(delta_scope)
+        try:
+            llm_task, llm_gen_data = perform_llm_inference(
+                node=self._agent.llm_node,
+                chat_ctx=chat_ctx,
+                tool_ctx=tool_ctx,
+                model_settings=model_settings,
+                model=self.llm.model if self.llm else None,
+                provider=self.llm.provider if self.llm else None,
+            )
+        finally:
+            input_delta.reset_scope(input_token)
         tasks.append(llm_task)
 
         def _on_llm_task_done(task: asyncio.Task[bool]) -> None:
@@ -3598,6 +3628,11 @@ class AgentActivity(RecognitionHooks):
             tts_text: utils.aio.Chan[str] | None = None
             prev_tts_task: asyncio.Task[bool] | None = None
 
+            def _on_tts_done(task: asyncio.Task[bool]) -> None:
+                # nothing generated past a failed TTS can be spoken, so stop the LLM there
+                if not task.cancelled() and task.exception() is not None:
+                    llm_task.cancel()
+
             async def _start_segment() -> _SpeechSegment:
                 # start this segment's tts; one inference at a time (await the previous),
                 # but the next starts during the previous segment's playout, not after
@@ -3617,6 +3652,7 @@ class AgentActivity(RecognitionHooks):
                         provider=self.tts.provider if self.tts else None,
                     )
                     tasks.append(prev_tts_task)
+                    prev_tts_task.add_done_callback(_on_tts_done)
                 seg = _SpeechSegment(text=utils.aio.Chan[str](), tts=tts_data)
                 segment_ch.send_nowait(seg)
                 return seg
@@ -3662,6 +3698,11 @@ class AgentActivity(RecognitionHooks):
 
         wait_for_scheduled = asyncio.ensure_future(speech_handle._wait_for_scheduled())
         await speech_handle.wait_if_not_interrupted([wait_for_scheduled])
+
+        # a scheduled generation is the one the conversation continues from (a discarded
+        # preemptive generation never gets here)
+        if delta_scope is not None and speech_handle.scheduled:
+            delta_scope.commit()
 
         # add new message to chat context if the speech is scheduled
 
@@ -3838,6 +3879,7 @@ class AgentActivity(RecognitionHooks):
                 text_source=text_source,
                 on_first_frame=_on_first_frame,
                 reconcile_playout_pause=lambda: self._reconcile_playout_pause(speech_handle),
+                tts_data=segment.tts,
             )
             segment_outputs.append(out)
             if speech_handle.interrupted:
@@ -3910,7 +3952,9 @@ class AgentActivity(RecognitionHooks):
                 role="assistant",
                 content=forwarded_text,
                 id=llm_gen_data.id,
-                interrupted=speech_handle.interrupted,
+                # a reply cut short by a failed TTS reads as interrupted to the LLM
+                interrupted=speech_handle.interrupted
+                or any(out.tts_failed for out in segment_outputs),
                 created_at=reply_started_at,
                 metrics=assistant_metrics,
                 **extra_kwargs,
@@ -4005,7 +4049,8 @@ class AgentActivity(RecognitionHooks):
                     ignore_task_switch = True
                     # TODO(long): should we mark the function call as failed to notify the LLM?
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -4690,6 +4735,7 @@ class AgentActivity(RecognitionHooks):
 
         tool_reply_expected = False
         if len(tool_output.output) > 0:
+            max_steps_reached = speech_handle.num_steps >= self._session.options.max_tool_steps + 1
             speech_handle._num_steps += 1
 
             new_fnc_outputs: list[llm.FunctionCallOutput] = []
@@ -4705,9 +4751,13 @@ class AgentActivity(RecognitionHooks):
 
                 new_fnc_outputs.append(sanitized_out.fnc_call_out)
 
-                # add tool output to the chat context
+                # record the call with its output, as the pipeline task does. a call rejected
+                # before execution never reached the started callback
+                self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call)
                 self._agent._chat_ctx._upsert_item(sanitized_out.fnc_call_out)
-                self._session._tool_items_added([sanitized_out.fnc_call_out])
+                self._session._tool_items_added(
+                    [sanitized_out.fnc_call, sanitized_out.fnc_call_out]
+                )
 
                 if new_agent_task is not None and sanitized_out.agent_task is not None:
                     logger.error(
@@ -4715,7 +4765,8 @@ class AgentActivity(RecognitionHooks):
                     )
                     ignore_task_switch = True
 
-                new_agent_task = sanitized_out.agent_task
+                if sanitized_out.agent_task is not None:
+                    new_agent_task = sanitized_out.agent_task
 
             if new_agent_task and not ignore_task_switch:
                 fnc_executed_ev._handoff_required = True
@@ -4787,6 +4838,13 @@ class AgentActivity(RecognitionHooks):
             if tool_reply_expected and not self._rt_session.capabilities.auto_tool_reply_generation:
                 self._rt_session.interrupt()
 
+                if max_steps_reached:
+                    logger.warning(
+                        "maximum number of function calls steps reached, "
+                        "generating final response with tool_choice='none'",
+                        extra={"speech_id": speech_handle.id},
+                    )
+
                 self._create_speech_task(
                     self._realtime_reply_task(
                         speech_handle=speech_handle,
@@ -4794,7 +4852,7 @@ class AgentActivity(RecognitionHooks):
                             # Avoid setting tool_choice to "required" or a specific function when
                             # passing tool response back to the LLM
                             tool_choice="none"
-                            if draining or model_settings.tool_choice == "none"
+                            if max_steps_reached or draining or model_settings.tool_choice == "none"
                             else "auto",
                         ),
                         instructions=instructions,

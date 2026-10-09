@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Set
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+from pydantic.alias_generators import to_camel
 
 from google.genai import types
 from livekit.agents import llm
@@ -33,14 +35,16 @@ def create_tools_config(
     """
     gemini_tools: list[types.Tool] = []
 
-    function_tools = [
-        types.FunctionDeclaration.model_validate(schema)
-        for schema in tool_ctx.parse_function_tools(
-            "google",
-            tool_behavior=tool_behavior.value if tool_behavior else None,
-            use_parameters_json_schema=use_parameters_json_schema,
-        )
-    ]
+    function_tools: list[types.FunctionDeclaration] = []
+    for schema in tool_ctx.parse_function_tools(
+        "google",
+        tool_behavior=tool_behavior.value if tool_behavior else None,
+        use_parameters_json_schema=use_parameters_json_schema,
+    ):
+        try:
+            function_tools.append(types.FunctionDeclaration.model_validate(schema))
+        except ValidationError as e:
+            raise ValueError(f"tool {schema.get('name')} has a schema Gemini rejected") from e
     if function_tools:
         gemini_tools.append(types.Tool(function_declarations=function_tools))
 
@@ -64,18 +68,19 @@ def create_function_response(
     *,
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
+    send_id: bool = True,
 ) -> types.FunctionResponse:
+    # the id is sent on both APIs: gemini-3.8-live on Vertex AI silently drops a response to a
+    # BLOCKING call that carries no id, and never replies. it is left out when the server issued
+    # no id for the call, since one we made up locally would name a call the server never made
     res = types.FunctionResponse(
+        id=output.call_id if send_id else None,
         name=output.name,
         response={"error": output.output} if output.is_error else {"output": output.output},
     )
-    if not vertexai:
-        # vertexai supports neither scheduling nor id in FunctionResponse; the gemini api
-        # defaults scheduling to WHEN_IDLE
-        # see: https://github.com/googleapis/python-genai/blob/85e00bc/google/genai/_live_converters.py#L1435
-        if is_given(tool_response_scheduling):
-            res.scheduling = tool_response_scheduling
-        res.id = output.call_id
+    # vertexai does not support scheduling; the gemini api defaults it to WHEN_IDLE
+    if not vertexai and is_given(tool_response_scheduling):
+        res.scheduling = tool_response_scheduling
     return res
 
 
@@ -85,10 +90,12 @@ def get_tool_results_for_realtime(
     vertexai: bool = False,
     tool_response_scheduling: NotGivenOr[types.FunctionResponseScheduling] = NOT_GIVEN,
     supports_silent_scheduling: bool = False,
+    synthetic_call_ids: Set[str] = frozenset(),
 ) -> types.LiveClientToolResponse | None:
     """Build the tool responses, SILENT for outputs that want no reply.
 
     SILENT is claimed only where the session honours it; see `_RealtimeOptions.tool_behavior`.
+    Calls in `synthetic_call_ids` had no server-issued id, so their responses carry none.
     """
     function_responses = [
         create_function_response(
@@ -99,6 +106,7 @@ def get_tool_results_for_realtime(
                 if supports_silent_scheduling and not msg.reply_required
                 else tool_response_scheduling
             ),
+            send_id=msg.call_id not in synthetic_call_ids,
         )
         for msg in chat_ctx.items
         if msg.type == "function_call_output"
@@ -148,7 +156,23 @@ class _GeminiJsonSchema:
             return None
         return self.schema
 
+    # every key types.Schema accepts (field name plus its camelCase alias), together with
+    # the JSON Schema keywords this transformer still has to read itself. types.Schema is
+    # declared extra="forbid", so any other keyword -- readOnly, deprecated, $comment,
+    # x-google-* and other vendor extensions -- survives simplify() only to fail
+    # validation later when the FunctionDeclaration is built. `const` is kept because the
+    # conversion below turns it into the single-value `enum` Gemini does support.
+    _ALLOWED_KEYS: ClassVar[frozenset[str]] = frozenset(
+        set(types.Schema.model_fields)
+        | {to_camel(name) for name in types.Schema.model_fields}
+        | {"anyOf", "$ref", "prefixItems", "const"}
+    )
+
     def _simplify(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
+        for key in [k for k in schema if k not in self._ALLOWED_KEYS]:
+            logger.debug(f"dropping unsupported JSON Schema keyword: {key}")
+            schema.pop(key, None)
+
         schema.pop("title", None)
         schema.pop("default", None)
         schema.pop("additionalProperties", None)
@@ -246,6 +270,8 @@ class _GeminiJsonSchema:
         if properties := schema.get("properties"):
             for value in properties.values():
                 self._simplify(value, refs_stack)
+            if "property_ordering" not in schema and "propertyOrdering" not in schema:
+                schema["property_ordering"] = list(properties)
 
     def _array(self, schema: dict[str, Any], refs_stack: tuple[str, ...]) -> None:
         if prefix_items := schema.get("prefixItems"):

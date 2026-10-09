@@ -253,6 +253,11 @@ class AudioOutput(
         self.__last_playback_ev = ev
         self.emit("playback_finished", ev)
 
+    def _mark_input_truncated(self) -> None:
+        """Mark the segment about to be flushed as cut short by its source, not by the user."""
+        if self._next_in_chain is not None:
+            self._next_in_chain._mark_input_truncated()
+
     async def wait_for_playout(self) -> PlaybackFinishedEvent:
         """
         Wait for the past audio segments to finish playing out.

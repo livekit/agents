@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import textwrap
 import time
 from collections.abc import Generator, Sequence
@@ -183,7 +185,8 @@ class ImageContent(BaseModel):
 
     id: str = Field(default_factory=lambda: utils.shortuuid("img_"))
     """
-    Unique identifier for the image
+    Unique identifier for the image. Use a new id when replacing inline image data
+    or a video frame; input-delta telemetry uses this id instead of hashing media bytes.
     """
 
     type: Literal["image_content"] = Field(default="image_content")
@@ -307,7 +310,50 @@ class MetricsReport(TypedDict, total=False):
     stt_metadata: MetricsMetadata
 
 
-class ChatMessage(BaseModel):
+class _ChatItemBase(BaseModel):
+    """Shared by every :data:`ChatItem` type; adds no fields."""
+
+    def _essential_fields(self) -> tuple[Any, ...]:
+        """What identifies this item's content beyond its id and type: what
+        :meth:`ChatContext.is_equivalent` compares and :meth:`_fingerprint` hashes.
+        Timestamps, metrics and other metadata are left out."""
+        return ()
+
+    def _fingerprint(self) -> bytes:
+        """A short digest of :meth:`_essential_fields`, to tell whether an item changed
+        without keeping a copy of it."""
+        payload = json.dumps(
+            [type(self).__name__, *self._essential_fields()],
+            ensure_ascii=False,
+            default=_fingerprint_default,
+        )
+        return hashlib.blake2b(payload.encode(), digest_size=8).digest()
+
+
+def _fingerprint_default(value: Any) -> Any:
+    # Avoid hashing inline media payloads. Their object identity detects replacement
+    # within a running session; callers should also give replacements a new image id.
+    if isinstance(value, ImageContent):
+        image_source = (
+            value.image
+            if isinstance(value.image, str) and not value.image.startswith("data:")
+            else id(value.image)
+        )
+        return [
+            "image",
+            value.id,
+            image_source,
+            value.inference_width,
+            value.inference_height,
+            value.inference_detail,
+            value.mime_type,
+        ]
+    if isinstance(value, AudioContent):
+        return ["audio", value.transcript]
+    return str(value)
+
+
+class ChatMessage(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["message"] = "message"
     role: ChatRole
@@ -349,11 +395,14 @@ class ChatMessage(BaseModel):
             return None
         return "\n".join(text_parts)
 
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.role, self.interrupted, self.content)
+
 
 ChatContent: TypeAlias = ImageContent | AudioContent | str
 
 
-class FunctionCall(BaseModel):
+class FunctionCall(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call"] = "function_call"
     call_id: str
@@ -368,8 +417,11 @@ class FunctionCall(BaseModel):
     should be grouped together (e.g., parallel tool calls from a single API response),
     set this to a shared value. If not set, falls back to using id for grouping."""
 
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.name, self.call_id, self.arguments)
 
-class FunctionCallOutput(BaseModel):
+
+class FunctionCallOutput(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["function_call_output"] = Field(default="function_call_output")
     name: str = Field(default="")
@@ -384,8 +436,11 @@ class FunctionCallOutput(BaseModel):
     Realtime models can also use it to schedule their response.
     """
 
+    def _essential_fields(self) -> tuple[Any, ...]:
+        return (self.name, self.call_id, self.output, self.is_error)
 
-class AgentHandoff(BaseModel):
+
+class AgentHandoff(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_handoff"] = Field(default="agent_handoff")
     old_agent_id: str | None = None
@@ -393,7 +448,7 @@ class AgentHandoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
-class AgentConfigUpdate(BaseModel):
+class AgentConfigUpdate(_ChatItemBase):
     id: str = Field(default_factory=lambda: utils.shortuuid("item_"))
     type: Literal["agent_config_update"] = Field(default="agent_config_update")
 
@@ -523,6 +578,13 @@ class ChatContext:
                     continue
 
         valid_tools = set(get_tool_names(tools)) if tools else set()
+        # FunctionCallOutput.name is optional, so an output that has none is paired with its
+        # call by call_id instead
+        valid_call_ids = {
+            item.call_id
+            for item in self.items
+            if item.type == "function_call" and item.name in valid_tools
+        }
         for item in self.items:
             if exclude_function_call and item.type in [
                 "function_call",
@@ -546,12 +608,16 @@ class ChatContext:
             if exclude_config_update and item.type == "agent_config_update":
                 continue
 
-            if (
-                is_given(tools)
-                and (item.type == "function_call" or item.type == "function_call_output")
-                and item.name not in valid_tools
-            ):
-                continue
+            if is_given(tools):
+                if item.type == "function_call" and item.name not in valid_tools:
+                    continue
+
+                if item.type == "function_call_output" and (
+                    item.name not in valid_tools
+                    if item.name
+                    else item.call_id not in valid_call_ids
+                ):
+                    continue
 
             items.append(item)
 
@@ -563,7 +629,13 @@ class ChatContext:
         Removes leading function calls to avoid partial function outputs.
         Preserves the first instruction message (system/developer) by adding it back
         to the beginning.
+
+        A `max_items` of 0 leaves nothing but that instruction: it asks for no conversational
+        items, so none are kept. A negative value is a programming error and raises ValueError.
         """
+
+        if max_items < 0:
+            raise ValueError("max_items must be non-negative")
 
         if len(self._items) <= max_items:
             return self
@@ -577,7 +649,9 @@ class ChatContext:
             None,
         )
 
-        new_items = self._items[-max_items:]
+        # `-0` is `0` and `items[0:]` is the whole list, so a zero budget would otherwise
+        # keep every item.
+        new_items = self._items[-max_items:] if max_items else []
 
         # chat_ctx shouldn't start with function_call or function_call_output
         while new_items and new_items[0].type in [
@@ -925,7 +999,8 @@ class ChatContext:
           - Function calls: compares `name`, `call_id`, and `arguments`.
           - Function call outputs: compares `name`, `call_id`, `output`, and `is_error`.
 
-        Does not consider timestamps or other metadata.
+        Does not consider timestamps or other metadata. Each item type declares its fields
+        in ``_essential_fields``, which item fingerprints hash as well.
         """
         if self is other:
             return True
@@ -933,28 +1008,10 @@ class ChatContext:
         if len(self.items) != len(other.items):
             return False
 
-        for a, b in zip(self.items, other.items, strict=False):
-            if a.id != b.id or a.type != b.type:
-                return False
-
-            if a.type == "message" and b.type == "message":
-                if a.role != b.role or a.interrupted != b.interrupted or a.content != b.content:
-                    return False
-
-            elif a.type == "function_call" and b.type == "function_call":
-                if a.name != b.name or a.call_id != b.call_id or a.arguments != b.arguments:
-                    return False
-
-            elif a.type == "function_call_output" and b.type == "function_call_output":
-                if (
-                    a.name != b.name
-                    or a.call_id != b.call_id
-                    or a.output != b.output
-                    or a.is_error != b.is_error
-                ):
-                    return False
-
-        return True
+        return all(
+            a.id == b.id and a.type == b.type and a._essential_fields() == b._essential_fields()
+            for a, b in zip(self.items, other.items, strict=True)
+        )
 
 
 class _ReadOnlyChatContext(ChatContext):
@@ -971,7 +1028,7 @@ class _ReadOnlyChatContext(ChatContext):
             raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
         # override all mutating methods to raise errors
-        append = extend = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
+        append = extend = insert = pop = remove = clear = sort = reverse = _raise_error  # type: ignore
         __setitem__ = __delitem__ = __iadd__ = __imul__ = _raise_error  # type: ignore
 
         def copy(self) -> list[ChatItem]:
@@ -979,6 +1036,15 @@ class _ReadOnlyChatContext(ChatContext):
 
     def __init__(self, items: list[ChatItem]):
         self._items = self._ImmutableList(items)
+
+    @property
+    def items(self) -> list[ChatItem]:
+        return self._items
+
+    @items.setter
+    def items(self, items: list[ChatItem]) -> None:
+        logger.error(_ReadOnlyChatContext.error_msg)
+        raise RuntimeError(_ReadOnlyChatContext.error_msg)
 
     @property
     def readonly(self) -> bool:

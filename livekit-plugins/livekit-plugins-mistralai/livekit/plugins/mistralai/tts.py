@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import struct
@@ -19,7 +20,7 @@ from livekit.agents import (
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import is_given
 from mistralai.client import Mistral
-from mistralai.client.errors import SDKError
+from mistralai.client.errors import HTTPValidationError, SDKError
 
 from .models import TTSModels, TTSVoices
 
@@ -184,9 +185,14 @@ class ChunkedStream(tts.ChunkedStream):
 
             output_emitter.flush()
 
-        except httpx.TimeoutException as e:
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
             raise APITimeoutError() from e
-        except SDKError as e:
-            raise APIStatusError(e.message, status_code=e.status_code, body=e.body) from e
+        except (SDKError, HTTPValidationError) as e:
+            raise APIStatusError(
+                e.message,
+                status_code=e.status_code,
+                request_id=e.headers.get("x-request-id"),
+                body=e.body,
+            ) from e
         except Exception as e:
             raise APIConnectionError() from e

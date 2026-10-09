@@ -10,7 +10,6 @@ from numpy.typing import DTypeLike
 
 from livekit import rtc
 
-from ..log import logger
 from .aio.utils import cancel_and_wait
 
 # deprecated aliases
@@ -61,10 +60,12 @@ def calculate_audio_duration(frames: AudioBuffer) -> float:
 
 
 class AudioByteStream:
-    """Buffer and chunk audio byte data into frames.
+    """Buffer and chunk audio byte data into fixed-size frames.
 
     Accepts variable-sized byte chunks (e.g. from a network stream or file) and
-    emits ``rtc.AudioFrame`` objects sized by one of three modes:
+    emits consistently-sized ``rtc.AudioFrame`` objects.
+
+    Two modes of operation:
 
     * **Fixed** (``progressive=False``, the default): every emitted frame is
       exactly ``samples_per_channel`` samples long.
@@ -73,11 +74,6 @@ class AudioByteStream:
       ``samples_per_channel`` is reached.  This minimises time-to-first-audio
       while giving the pipeline a brief warm-up before reaching full frame
       sizes.
-    * **Capped** (``min_samples_per_channel`` set): a frame is emitted as soon as
-      that many samples are buffered and packs everything buffered, up to
-      ``samples_per_channel``.  Nothing above the minimum is ever held back
-      waiting for the next chunk, so a realtime-paced source cannot open a
-      playback gap, while the cap bounds how much audio one frame commits.
 
     Example with ``sample_rate=16000, samples_per_channel=3200`` (200 ms) and
     ``progressive=True``::
@@ -99,7 +95,6 @@ class AudioByteStream:
         num_channels: int,
         samples_per_channel: int | None = None,
         progressive: bool = False,
-        min_samples_per_channel: int | None = None,
     ) -> None:
         """
         Args:
@@ -110,9 +105,6 @@ class AudioByteStream:
             progressive: When *True*, start with a small 20 ms frame and double
                 the frame size on each subsequent emission until
                 ``samples_per_channel`` is reached.
-            min_samples_per_channel: When set, emit a frame as soon as this many
-                samples are buffered, packing everything buffered up to
-                ``samples_per_channel``. Cannot be combined with ``progressive``.
         """
         self._sample_rate = sample_rate
         self._num_channels = num_channels
@@ -124,15 +116,7 @@ class AudioByteStream:
         self._target_bytes_per_frame = samples_per_channel * self._bytes_per_sample
         self._buf = bytearray()
 
-        if min_samples_per_channel is not None:
-            if progressive:
-                raise ValueError("progressive and min_samples_per_channel are mutually exclusive")
-            if min_samples_per_channel <= 0:
-                raise ValueError("min_samples_per_channel must be greater than zero")
-            self._initial_bytes_per_frame = min(
-                min_samples_per_channel * self._bytes_per_sample, self._target_bytes_per_frame
-            )
-        elif progressive:
+        if progressive:
             min_samples = sample_rate * self._MIN_PROGRESSIVE_MS // 1000
             self._initial_bytes_per_frame = min(
                 min_samples * self._bytes_per_sample, self._target_bytes_per_frame
@@ -140,8 +124,6 @@ class AudioByteStream:
         else:
             self._initial_bytes_per_frame = self._target_bytes_per_frame
         self._current_bytes_per_frame = self._initial_bytes_per_frame
-        # capped mode packs whatever is buffered; the other modes emit exactly the current size
-        self._pack_buffered = min_samples_per_channel is not None
 
     def push(self, data: bytes | memoryview) -> list[rtc.AudioFrame]:
         """
@@ -166,12 +148,8 @@ class AudioByteStream:
 
         frames = []
         while len(self._buf) >= self._current_bytes_per_frame:
-            n = self._current_bytes_per_frame
-            if self._pack_buffered:
-                whole_samples = len(self._buf) - len(self._buf) % self._bytes_per_sample
-                n = min(self._target_bytes_per_frame, whole_samples)
-            frame_data = self._buf[:n]
-            del self._buf[:n]
+            frame_data = self._buf[: self._current_bytes_per_frame]
+            del self._buf[: self._current_bytes_per_frame]
 
             frames.append(
                 rtc.AudioFrame(
@@ -183,10 +161,7 @@ class AudioByteStream:
             )
 
             # progressively double toward the target frame size
-            if (
-                not self._pack_buffered
-                and self._current_bytes_per_frame < self._target_bytes_per_frame
-            ):
+            if self._current_bytes_per_frame < self._target_bytes_per_frame:
                 self._current_bytes_per_frame = min(
                     self._current_bytes_per_frame * 2, self._target_bytes_per_frame
                 )
@@ -195,39 +170,52 @@ class AudioByteStream:
 
     write = push  # Alias for the push method.
 
+    @property
+    def buffered_duration(self) -> float:
+        """Seconds of audio waiting for the next frame."""
+        return len(self._buf) / self._bytes_per_sample / self._sample_rate
+
     def flush(self) -> list[rtc.AudioFrame]:
-        """
-        Flush the buffer and retrieve any remaining audio data as a frame.
+        """Emit buffered audio that forms complete samples for every channel.
+
+        Retain any trailing partial sample for the next :meth:`push`. A flush
+        can occur mid-stream, and incoming byte chunks can end inside a sample.
+        Discarding those bytes would misalign all subsequent samples.
+
+        This does not reset progressive frame sizing. Use :meth:`reset_progressive`
+        to restart with small frames, or :meth:`clear` to discard buffered audio
+        when abandoning the stream.
 
         Returns:
-            list[rtc.AudioFrame]: A list containing any remaining `AudioFrame` objects.
-
-        This method processes any remaining data in the buffer that does not
-        fill a complete frame. If the remaining data forms a partial frame
-        (i.e., its size is not a multiple of the expected sample size), a warning is
-        logged and an empty list is returned. Otherwise, it returns the final
-        `AudioFrame` containing the remaining data.
-
-        Use this method when you have no more data to push and want to ensure
-        that all buffered audio data has been processed.
+            A frame containing the complete samples, or an empty list if none
+            are available.
         """
         if len(self._buf) == 0:
             return []
 
-        if len(self._buf) % self._bytes_per_sample != 0:
-            logger.warning("AudioByteStream: incomplete frame during flush, dropping")
+        remainder = len(self._buf) % self._bytes_per_sample
+        complete_bytes = len(self._buf) - remainder
+        if complete_bytes == 0:
             return []
 
         frames = [
             rtc.AudioFrame(
-                data=self._buf.copy(),
+                data=self._buf[:complete_bytes],
                 sample_rate=self._sample_rate,
                 num_channels=self._num_channels,
-                samples_per_channel=len(self._buf) // self._bytes_per_sample,
+                samples_per_channel=complete_bytes // self._bytes_per_sample,
             )
         ]
-        self._buf.clear()
+        del self._buf[:complete_bytes]
         return frames
+
+    def reset_progressive(self) -> None:
+        """Reset progressive frame sizing while preserving buffered audio.
+
+        Use this after a mid-stream flush so the next burst starts with small
+        frames without losing the partial sample needed by the next push.
+        """
+        self._current_bytes_per_frame = self._initial_bytes_per_frame
 
     def clear(self) -> None:
         """Discard all buffered data and reset progressive frame sizing.
@@ -235,9 +223,11 @@ class AudioByteStream:
         After clearing, the next :meth:`push` will start from the initial
         (small) frame size again, ensuring low latency on the first frame
         after an interruption.
+
+        Use :meth:`reset_progressive` instead when the byte stream continues.
         """
         self._buf.clear()
-        self._current_bytes_per_frame = self._initial_bytes_per_frame
+        self.reset_progressive()
 
 
 async def audio_frames_from_file(

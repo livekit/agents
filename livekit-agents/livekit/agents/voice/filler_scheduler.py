@@ -5,6 +5,7 @@ from collections.abc import Callable, Generator
 from typing import TYPE_CHECKING
 
 from .. import utils
+from ..log import logger
 from .speech_handle import SpeechHandle
 
 if TYPE_CHECKING:
@@ -104,6 +105,13 @@ class _FillerScheduler:
         finally:
             if not loop_task.done():
                 await utils.aio.cancel_and_wait(loop_task)
+            elif not loop_task.cancelled() and (exc := loop_task.exception()) is not None:
+                # the wait above collects exceptions instead of raising them, so a filler that
+                # dies on its first fire leaves no trace unless it is reported here
+                logger.error(
+                    "filler stopped on an error, no further filler will play for this tool call",
+                    exc_info=exc,
+                )
             self._session.off("agent_state_changed", _on_agent)
             self._session.off("user_state_changed", _on_user)
 

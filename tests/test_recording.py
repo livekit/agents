@@ -1029,12 +1029,12 @@ def test_slot_metadata_follows_job_lifecycle() -> None:
         _setup_cloud_tracer_for_job(job_id="job-1")
         cloud = traces_mod._cloud
         assert cloud._span_metadata_processor is not None
-        assert cloud._span_metadata_processor._metadata["job_id"] == "job-1"
+        assert cloud._span_metadata_processor._fallback_metadata["job_id"] == "job-1"
         assert cloud._log_metadata_processor is not None
         assert cloud._log_metadata_processor._metadata["job_id"] == "job-1"
 
         _shutdown_telemetry("job-1")
-        assert cloud._span_metadata_processor._metadata == {}
+        assert cloud._span_metadata_processor._fallback_metadata == {}
         assert cloud._log_metadata_processor._metadata == {}
 
 
@@ -1259,11 +1259,11 @@ def test_concurrent_jobs_keep_exporting_until_the_last_release() -> None:
 
         _shutdown_telemetry("job-a")  # job A ends; job B is still running
         assert cloud._span_metadata_processor is not None
-        assert cloud._span_metadata_processor._metadata  # slot still stamped
+        assert cloud._span_metadata_processor._fallback_metadata  # slot still stamped
         assert cloud.log_handler is not None and cloud.log_handler in root.handlers
 
         _shutdown_telemetry("job-b")  # job B ends
-        assert cloud._span_metadata_processor._metadata == {}
+        assert cloud._span_metadata_processor._fallback_metadata == {}
         assert cloud.log_handler not in root.handlers
 
 

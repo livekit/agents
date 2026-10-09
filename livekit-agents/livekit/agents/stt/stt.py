@@ -245,7 +245,7 @@ class STT(
 
             except APIError as e:
                 retry_interval = conn_options._interval_for_retry(i)
-                if conn_options.max_retry == 0:
+                if conn_options.max_retry == 0 or not e.retryable:
                     self._emit_error(e, recoverable=False)
                     raise
                 elif i == conn_options.max_retry:
@@ -475,6 +475,11 @@ class RecognizeStream(ABC):
                 last_start_time = time.time()
                 return await self._run()
             except APIError as e:
+                # an attempt that outlived the connect timeout had connected, so this failure
+                # is not consecutive with the previous one and the budget starts over
+                if time.time() - last_start_time > self._conn_options.timeout:
+                    self._num_retries = 0
+
                 if not e.retryable or max_retries == 0:
                     self._emit_error(e, recoverable=False)
                     raise

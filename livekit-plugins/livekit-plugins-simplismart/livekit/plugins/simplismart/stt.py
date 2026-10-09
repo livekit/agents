@@ -385,6 +385,17 @@ class SpeechStream(stt.SpeechStream):
                     self._reconnect_event.set()
                     return
 
+                if msg.type == aiohttp.WSMsgType.ERROR:
+                    if self._session.closed:
+                        return
+                    # The heartbeat closes the socket when a ping goes unanswered, and
+                    # that arrives here rather than as a close frame. Treating it as an
+                    # unexpected message type stepped over it and discarded the reason,
+                    # which only survives on ws.exception().
+                    logger.warning("simplismart connection lost: %r", ws.exception())
+                    self._reconnect_event.set()
+                    return
+
                 if msg.type != aiohttp.WSMsgType.BINARY:
                     logger.warning("unexpected simplismart message type %s", msg.type)
                     continue
@@ -436,6 +447,11 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(
                     self.ws_url,
                     headers={"Authorization": f"Bearer {self._api_key}"},
+                    # Without this a silently dropped socket (half-open TCP, no FIN/RST)
+                    # is never noticed: recv_task parks on ws.receive() forever, and the
+                    # reconnect in _run is only ever triggered by that task ending.
+                    # Matches the Deepgram and Muse STT plugins.
+                    heartbeat=30.0,
                 ),
                 self._conn_options.timeout,
             )

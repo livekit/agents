@@ -181,3 +181,146 @@ async def test_list_tools_rebuilds_per_options() -> None:
     assert blocking[0] is not cancellable[0]
     assert ToolFlag.CANCELLABLE not in blocking[0].info.flags
     assert ToolFlag.CANCELLABLE in cancellable[0].info.flags
+
+
+@pytest.mark.asyncio
+async def test_a_connect_nobody_waits_for_is_stopped_rather_than_finished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling the caller of initialize() used to cancel the connect's own future, and the
+    connect then failed setting a result on it."""
+    import asyncio
+    import contextlib
+
+    from livekit.agents.llm import mcp as mcp_module
+
+    handshaking = asyncio.Event()
+    answer = asyncio.Event()
+
+    class _SlowSession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _SlowSession:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            pass
+
+        async def initialize(self) -> None:
+            handshaking.set()
+            # the server answers regardless of whether anyone is still waiting
+            await asyncio.shield(answer.wait())
+
+    class _Server(MCPServer):
+        def __init__(self) -> None:
+            super().__init__(client_session_timeout_seconds=5)
+
+        @contextlib.asynccontextmanager
+        async def client_streams(self):  # type: ignore[no-untyped-def,override]
+            yield (None, None)
+
+    monkeypatch.setattr(mcp_module, "ClientSession", _SlowSession)
+    server = _Server()
+    connecting = asyncio.create_task(server.initialize())
+    await asyncio.wait_for(handshaking.wait(), timeout=5)
+    connecting.cancel()
+    answer.set()
+    with contextlib.suppress(asyncio.CancelledError):
+        await connecting
+
+    client_task = server._client_task
+    assert client_task is not None
+    await asyncio.wait([client_task], timeout=5)
+    assert client_task.cancelled() or client_task.exception() is None
+    assert not server.initialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", ["first", "second"])
+async def test_a_caller_giving_up_leaves_the_connect_to_the_one_still_waiting(
+    monkeypatch: pytest.MonkeyPatch, cancelled: str
+) -> None:
+    """Two callers share one connect, so cancelling either must not fail the other."""
+    import asyncio
+    import contextlib
+
+    from livekit.agents.llm import mcp as mcp_module
+
+    handshaking = asyncio.Event()
+    answer = asyncio.Event()
+
+    class _SlowSession:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> _SlowSession:
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            pass
+
+        async def initialize(self) -> None:
+            handshaking.set()
+            await answer.wait()
+
+    class _Server(MCPServer):
+        def __init__(self) -> None:
+            super().__init__(client_session_timeout_seconds=5)
+
+        @contextlib.asynccontextmanager
+        async def client_streams(self):  # type: ignore[no-untyped-def,override]
+            yield (None, None)
+
+    monkeypatch.setattr(mcp_module, "ClientSession", _SlowSession)
+    server = _Server()
+    first = asyncio.create_task(server.initialize())
+    await asyncio.wait_for(handshaking.wait(), timeout=5)
+    second = asyncio.create_task(server.initialize())
+    await asyncio.sleep(0)
+
+    gives_up, stays = (first, second) if cancelled == "first" else (second, first)
+    gives_up.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await gives_up
+
+    answer.set()
+    await asyncio.wait_for(stays, timeout=5)
+    assert server.initialized
+    await server.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_call_tells_the_server_to_cancel_it() -> None:
+    """The server's tool keeps running unless the client says the request is cancelled."""
+    import asyncio
+
+    import mcp.types
+
+    calling = asyncio.Event()
+    sent: list[Any] = []
+
+    class _HangingClient(_FakeClient):
+        _request_id = 7
+
+        async def call_tool(self, name: str, arguments: Any, **kwargs: Any) -> Any:
+            self._request_id += 1
+            calling.set()
+            await asyncio.Event().wait()
+
+        async def send_notification(self, notification: Any) -> None:
+            sent.append(notification)
+
+    server = _FakeMCPServer()
+    server._client = _HangingClient(["echo"])  # type: ignore[assignment]
+    tool = _build_mcp_tool(server, MCPToolOptions())
+
+    call = asyncio.create_task(tool({}))
+    await asyncio.wait_for(calling.wait(), timeout=5)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    (notification,) = sent
+    assert isinstance(notification.root, mcp.types.CancelledNotification)
+    assert notification.root.params.requestId == 7

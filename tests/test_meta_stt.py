@@ -330,6 +330,7 @@ async def test_handshake_precedes_audio_and_matches_contract() -> None:
     assert url == "wss://api.meta.ai/v1/asr/realtime"
     assert "explicit-secret" not in url
     assert "explicit-secret" not in repr(kwargs)
+    assert kwargs["heartbeat"] == 30.0
     assert all(event.recognition_usage is None for event in events)
 
     await stream.aclose()
