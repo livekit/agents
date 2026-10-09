@@ -29,6 +29,7 @@ from ..llm.utils import prepare_function_arguments, validated_arguments
 from ..log import logger
 from ..types import NOT_GIVEN, NotGivenOr
 from .events import (
+    FunctionToolsExecutedEvent,
     RunContext,
     ToolCallEnded,
     ToolCallStarted,
@@ -126,7 +127,7 @@ class ToolHandlingOptions(TypedDict, total=False):
             },
         )
 
-    Set on ``AgentSession``, ``Agent``, or ``AsyncToolset`` (most specific wins).
+    ``async_options`` applies to ``AgentSession``, ``Agent``, and ``AsyncToolset``.
     """
 
     async_options: AsyncToolOptions
@@ -241,6 +242,23 @@ def _duplicate_key(
         return (fnc_name, _canonical_args(raw))
 
 
+class _ToolExecutionHandle:
+    """Private two-phase lifecycle for one tool call.
+
+    ``execute`` still resolves at the first progress update for compatibility;
+    dependency scheduling waits on ``terminal`` instead.
+    """
+
+    def __init__(self) -> None:
+        """Create the terminal signal independently of the executor's first visible update."""
+        self.terminal: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    def set_terminal(self) -> None:
+        """Resolve terminal completion once, ignoring repeated settlement requests."""
+        if not self.terminal.done():
+            self.terminal.set_result(None)
+
+
 @dataclass
 class _RunningTask:
     ctx: RunContext
@@ -248,6 +266,8 @@ class _RunningTask:
     executor: _ToolExecutor
     allow_cancellation: bool
     duplicate_key: tuple[str, str | None] | None  # None when the tool is on_duplicate="allow"
+    initial_batch_released: asyncio.Event | None = None
+    initial_delivery: asyncio.Event | None = None
 
 
 @dataclass
@@ -275,6 +295,7 @@ class _ToolExecutor:
     ) -> None:
         self._running_tasks: dict[str, _RunningTask] = {}
         self._duplicate_check_lock = asyncio.Lock()
+        self._reserved_call_ids: set[str] = set()
 
         self._pending_updates: list[_PendingUpdate] = []
         self._reply_task: asyncio.Task[None] | None = None
@@ -304,11 +325,34 @@ class _ToolExecutor:
         run_ctx: RunContext,
         raw_arguments: dict[str, Any],
         mock: Callable[..., Any] | None = None,
+        execution_handle: _ToolExecutionHandle | None = None,
+        initial_batch_released: asyncio.Event | None = None,
+        initial_delivery: asyncio.Event | None = None,
     ) -> Any:
         """Run ``tool``. Returns when the first ``ctx.update()`` lands or the tool returns."""
         call_id = run_ctx.function_call.call_id
         fnc_name = run_ctx.function_call.name
         info = tool.info
+        handle = execution_handle
+
+        def settle_terminal() -> None:
+            if handle is not None:
+                handle.set_terminal()
+
+        def emit_rejected(message: str, *, status: Literal["error", "cancelled"] = "error") -> None:
+            if handle is None:
+                return
+            run_ctx.session._tool_execution_updated(
+                ToolExecutionUpdatedEvent(
+                    update=ToolCallEnded(
+                        id=call_id,
+                        call_id=call_id,
+                        message=message,
+                        status=status,
+                    )
+                )
+            )
+
         on_duplicate: DuplicateMode = info.on_duplicate
         allow_cancellation: bool = ToolFlag.CANCELLABLE in info.flags
 
@@ -327,18 +371,32 @@ class _ToolExecutor:
                 raw_arguments=raw_arguments,
             )
 
-            duplicate_result = await self._check_duplicate(
-                dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
-            )
+            try:
+                duplicate_result = await self._check_duplicate(
+                    dup_key, on_duplicate=on_duplicate, confirm_duplicate=confirm_duplicate
+                )
+            except BaseException as duplicate_error:
+                status: Literal["error", "cancelled"] = (
+                    "cancelled" if isinstance(duplicate_error, asyncio.CancelledError) else "error"
+                )
+                settle_terminal()
+                emit_rejected(str(duplicate_error), status=status)
+                raise
             if duplicate_result is not None:
                 logger.debug(
                     "duplicate tool call rejected",
                     extra={"call_id": call_id, "function": fnc_name},
                 )
+                settle_terminal()
+                emit_rejected(duplicate_result)
                 return duplicate_result
 
-        if call_id in self._running_tasks:
-            raise ValueError(f"Task already running for call_id: {call_id}")
+        if call_id in self._running_tasks or call_id in self._reserved_call_ids:
+            error = ValueError(f"Task already running for call_id: {call_id}")
+            settle_terminal()
+            emit_rejected(str(error))
+            raise error
+        self._reserved_call_ids.add(call_id)
 
         # the future is how RunContext.update() talks back to dispatch
         first_update_fut = asyncio.Future[Any]()
@@ -419,17 +477,19 @@ class _ToolExecutor:
             executor=self,
             allow_cancellation=allow_cancellation,
             duplicate_key=dup_key,
+            initial_batch_released=initial_batch_released,
+            initial_delivery=initial_delivery,
         )
         self._running_tasks[call_id] = running_task
 
         session = run_ctx.session
         _RunningTasks.setdefault(session, {})[call_id] = running_task
-
         session._tool_execution_updated(
             ToolExecutionUpdatedEvent(update=ToolCallStarted(function_call=run_ctx.function_call)),
         )
 
         def _on_done(task: asyncio.Task[Any]) -> None:
+            self._reserved_call_ids.discard(call_id)
             self._running_tasks.pop(call_id, None)
             if (session_tasks := _RunningTasks.get(session)) is not None:
                 session_tasks.pop(call_id, None)
@@ -470,6 +530,7 @@ class _ToolExecutor:
                     )
                 ),
             )
+            settle_terminal()
 
         exe_task.add_done_callback(_on_done)
 
@@ -514,13 +575,48 @@ class _ToolExecutor:
         if tasks:
             await utils.aio.cancel_and_wait(*tasks)
         self._running_tasks.clear()
+        self._reserved_call_ids.clear()
 
     async def drain(self) -> None:
         """Cancel cancellable tools, await the rest. Reply delivery is left running;
         ``_deliver_reply`` drops itself when its target activity closes."""
         await self.cancel_all(cancellable_only=True)
 
-    async def _enqueue_reply(self, ctx: RunContext, items: list[ChatItem]) -> None:
+    async def _enqueue_reply(
+        self,
+        ctx: RunContext,
+        items: list[ChatItem],
+        *,
+        _wait_for_initial_delivery: bool = True,
+    ) -> None:
+        running_task = self._running_tasks.get(ctx.function_call.call_id)
+        if running_task is not None and running_task.initial_batch_released is not None:
+            await running_task.initial_batch_released.wait()
+        if (
+            _wait_for_initial_delivery
+            and running_task is not None
+            and running_task.initial_delivery is not None
+            and len(ctx._updates) > 1
+        ):
+            await running_task.initial_delivery.wait()
+
+        # The first dependent result is reviewed by dispatch. Later progress and
+        # final pairs must offer the same reply veto before provider/history commit.
+        if (
+            _wait_for_initial_delivery
+            and running_task is not None
+            and running_task.initial_delivery is not None
+        ):
+            ctx.session.emit(
+                "function_tools_executed",
+                FunctionToolsExecutedEvent(
+                    function_calls=[item for item in items if item.type == "function_call"],
+                    function_call_outputs=[
+                        item for item in items if item.type == "function_call_output"
+                    ],
+                ),
+            )
+
         # eager insert so a reply firing before delivery sees the items
         target = (
             self._owning_activity.agent
