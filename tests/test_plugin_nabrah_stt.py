@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIStatusError, stt
+from livekit.agents import (
+    DEFAULT_API_CONNECT_OPTIONS,
+    APIConnectionError,
+    APIStatusError,
+    stt,
+)
 from livekit.plugins.nabrah.stt import STT, SpeechStream
 
 pytestmark = pytest.mark.unit
@@ -144,12 +149,107 @@ async def test_malformed_message_does_not_expose_provider_content(
     assert transcript not in caplog.text
 
 
-def test_stream_failure_is_not_retried_after_audio_is_consumed(stream: SpeechStream) -> None:
-    assert stream._stream_failure("failed").retryable is True
+async def test_mid_stream_failure_is_retryable(stream: SpeechStream) -> None:
+    """A socket that drops mid-utterance must not take the session's STT with it."""
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive = AsyncMock(return_value=MagicMock(type=aiohttp.WSMsgType.ERROR))
+    stream._audio_position = 12.5
 
-    stream._audio_position = 0.1
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._recv_task(ws)
 
-    assert stream._stream_failure("failed").retryable is False
+    assert exc_info.value.retryable is True
+
+
+async def test_unexpected_close_after_audio_is_retryable(stream: SpeechStream) -> None:
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.receive = AsyncMock(return_value=MagicMock(type=aiohttp.WSMsgType.CLOSED))
+    stream._audio_position = 12.5
+    stream._input_done = False
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._recv_task(ws)
+
+    assert exc_info.value.retryable is True
+
+
+def test_reset_clears_the_cursors_a_reconnect_would_misread(stream: SpeechStream) -> None:
+    """Flushed cursors index into one socket's cumulative stream."""
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم.", "is_final": False})
+    stream._flush_eos()
+
+    assert stream._utt_flushed_chars > 0
+
+    stream._reset_connection_state()
+
+    assert stream._utt_flushed_clean == ""
+    assert stream._utt_flushed_chars == 0
+    assert stream._utt_flushed_words == 0
+    assert stream._utt_raw == ""
+    assert stream._utt_raw_seen == 0
+    assert stream._is_speaking is False
+
+
+def test_transcript_after_reconnect_is_not_truncated(stream: SpeechStream) -> None:
+    """The replayed utterance must not be sliced at the previous socket's cursor."""
+    stream._stt._end_of_turn_confirm_delay_seconds = None
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم.", "is_final": False})
+    stream._flush_eos()
+
+    stream._reset_connection_state()
+    stream._process_message({"type": "transcript", "text": "مرحبا بكم", "is_final": False})
+
+    assert stream._current_text() == "مرحبا بكم"
+
+
+async def test_flush_commits_the_open_segment(stream: SpeechStream) -> None:
+    """flush() means end of segment; Nabrah has no finalize frame, so commit locally."""
+    stream._process_message({"type": "transcript", "text": "مرحبا", "is_final": False})
+    ws = MagicMock(spec=aiohttp.ClientWebSocketResponse)
+    ws.send_bytes = AsyncMock()
+    ws.send_str = AsyncMock()
+
+    emitted: list[stt.SpeechEvent] = []
+    stream._input_ch.send_nowait(SpeechStream._FlushSentinel())
+    stream._input_ch.close()
+
+    with patch.object(stream, "_emit", side_effect=emitted.append):
+        await stream._send_task(ws)
+
+    finals = [e for e in emitted if e.type == stt.SpeechEventType.FINAL_TRANSCRIPT]
+    assert [e.alternatives[0].text for e in finals] == ["مرحبا"]
+
+
+@pytest.mark.parametrize(
+    ("status", "retryable"),
+    [(401, False), (404, False), (429, True), (503, True)],
+)
+async def test_handshake_status_decides_retryability(
+    stream: SpeechStream, status: int, retryable: bool
+) -> None:
+    """Redialling a URL the server rejected outright only delays the real error."""
+    stream._session.ws_connect = MagicMock(  # type: ignore[method-assign]
+        side_effect=aiohttp.WSServerHandshakeError(
+            MagicMock(), (), status=status, message="rejected"
+        )
+    )
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.status_code == status
+    assert exc_info.value.retryable is retryable
+
+
+async def test_transport_failure_stays_retryable(stream: SpeechStream) -> None:
+    stream._session.ws_connect = MagicMock(  # type: ignore[method-assign]
+        side_effect=aiohttp.ClientOSError("connection reset")
+    )
+
+    with pytest.raises(APIConnectionError) as exc_info:
+        await stream._connect_ws()
+
+    assert exc_info.value.retryable is True
 
 
 @pytest.mark.parametrize(

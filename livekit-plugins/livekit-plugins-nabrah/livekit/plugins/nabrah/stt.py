@@ -226,6 +226,8 @@ class STT(stt.STT):
 
 
 class SpeechStream(stt.SpeechStream):
+    _is_speaking: bool = False
+    _turn_text: str = ""
     _utt_raw: str = ""
     _utt_clean: str = ""
     _utt_closed: bool = False
@@ -236,6 +238,15 @@ class SpeechStream(stt.SpeechStream):
     _utt_words: tuple[TimedString, ...] = ()
     _utt_flushed_words: int = 0
     _utt_raw_seen: int = 0
+    _segment_start_time: float = 0.0
+    _segment_end_time: float = 0.0
+    _request_id: str = ""
+    _last_progress_at: float = 0.0
+    _pending_eot_at: float | None = None
+    _latest_audio_processed: float | None = None
+    _audio_position: float = 0.0
+    _reported_audio_position: float = 0.0
+    _last_message_position: float = 0.0
 
     def __init__(
         self,
@@ -250,6 +261,17 @@ class SpeechStream(stt.SpeechStream):
         self._language = LanguageCode(language)
         self._session = http_session
 
+        self._reset_connection_state()
+
+    def _reset_connection_state(self) -> None:
+        """Clear everything scoped to a single WebSocket connection.
+
+        Every cursor here indexes into one socket's cumulative stream. A
+        reconnect replays the utterance from zero, so a surviving
+        `_utt_flushed_chars` would slice the front off every transcript that
+        follows, and a surviving `_is_speaking` would swallow the
+        `START_OF_SPEECH` that opens the next turn.
+        """
         self._is_speaking = False
 
         self._turn_text = ""
@@ -263,17 +285,18 @@ class SpeechStream(stt.SpeechStream):
         self._utt_flushed_words = 0
         self._utt_raw_seen = 0
 
-        self._segment_start_time: float = 0.0
-        self._segment_end_time: float = 0.0
-        self._request_id: str = ""
+        self._segment_start_time = 0.0
+        self._segment_end_time = 0.0
+        self._request_id = ""
 
-        self._last_progress_at: float = 0.0
-        self._pending_eot_at: float | None = None
+        self._last_progress_at = 0.0
+        self._pending_eot_at = None
 
-        self._latest_audio_processed: float | None = None
-        self._audio_position: float = 0.0
-        self._reported_audio_position: float = 0.0
-        self._last_message_position: float = 0.0
+        self._latest_audio_processed = None
+        self._audio_position = 0.0
+        self._reported_audio_position = 0.0
+        self._last_message_position = 0.0
+        self._input_done = False
 
     def _config_frame(self) -> dict[str, Any]:
         return {
@@ -291,22 +314,20 @@ class SpeechStream(stt.SpeechStream):
                 self._session.ws_connect(self._stt._base_url),
                 self._conn_options.timeout,
             )
-        except (
-            aiohttp.ClientConnectorError,
-            aiohttp.WSServerHandshakeError,
-            asyncio.TimeoutError,
-        ) as e:
+        except aiohttp.WSServerHandshakeError as e:
+            # the upgrade got an HTTP response back, so the status says whether
+            # redialling the same URL could ever succeed: a bad key or a stale
+            # path never will, and retrying only delays the real error.
+            raise APIStatusError(
+                "nabrah STT rejected the connection",
+                status_code=e.status,
+                retryable=e.status in (408, 429) or 500 <= e.status < 600,
+            ) from e
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             raise APIConnectionError("failed to connect to nabrah STT") from e
 
-    def _stream_failure(self, message: str) -> APIConnectionError:
-        return APIConnectionError(message, retryable=self._audio_position == 0.0)
-
     async def _run(self) -> None:
-        self._latest_audio_processed = None
-        self._audio_position = 0.0
-        self._reported_audio_position = 0.0
-        self._last_message_position = 0.0
-        self._input_done = False
+        self._reset_connection_state()
 
         ws = await self._connect_ws()
         try:
@@ -394,17 +415,25 @@ class SpeechStream(stt.SpeechStream):
                     if audio_bytes:
                         self._audio_position += data.samples_per_channel / data.sample_rate
                         await ws.send_bytes(audio_bytes)
+                elif isinstance(data, self._FlushSentinel):
+                    # Nabrah has no finalize frame, so the boundary is drawn locally
+                    # on what the recognizer has sent so far. `flush()` has already
+                    # pushed the caller's remaining audio ahead of this sentinel, so
+                    # only server-side latency is unaccounted for; whatever lands
+                    # afterwards diffs against the cursors _flush_eos just advanced
+                    # and opens the next turn, exactly as a mid-utterance EOT does.
+                    self._flush_eos()
             self._input_done = True
             await ws.send_str(json.dumps({"type": "eof"}))
         except Exception as e:
-            raise self._stream_failure(f"nabrah STT send failed ({type(e).__name__})") from None
+            raise APIConnectionError(f"nabrah STT send failed ({type(e).__name__})") from None
 
     async def _recv_task(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         while True:
             try:
                 msg = await ws.receive()
             except Exception as e:
-                raise self._stream_failure(
+                raise APIConnectionError(
                     f"nabrah STT receive failed ({type(e).__name__})"
                 ) from None
             if msg.type in (
@@ -413,10 +442,10 @@ class SpeechStream(stt.SpeechStream):
                 aiohttp.WSMsgType.CLOSING,
             ):
                 if not self._input_done:
-                    raise self._stream_failure("nabrah STT closed unexpectedly")
+                    raise APIConnectionError("nabrah STT closed unexpectedly")
                 return
             if msg.type == aiohttp.WSMsgType.ERROR:
-                raise self._stream_failure("nabrah STT WebSocket failed")
+                raise APIConnectionError("nabrah STT WebSocket failed")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 continue
             try:
