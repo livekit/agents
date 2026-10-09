@@ -30,7 +30,9 @@ class _FakeProc(SupervisedProc):
     def process_kind(self) -> SupervisedProcKind:
         return SupervisedProcKind.JOB
 
-    def _create_process(self, cch: socket.socket, log_cch: socket.socket):  # pragma: no cover
+    def _create_process(
+        self, cch: socket.socket, log_cch: socket.socket, stdio=None
+    ):  # pragma: no cover
         raise NotImplementedError
 
     async def _main_task(self, ipc_ch):  # pragma: no cover
@@ -153,7 +155,7 @@ def test_process_kind_renders_as_plain_string() -> None:
 
 def test_subclassing_without_process_kind_is_rejected() -> None:
     class _MissingKind(SupervisedProc):
-        def _create_process(self, cch, log_cch):  # pragma: no cover
+        def _create_process(self, cch, log_cch, stdio=None):  # pragma: no cover
             raise NotImplementedError
 
         async def _main_task(self, ipc_ch):  # pragma: no cover
