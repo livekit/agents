@@ -38,9 +38,11 @@ _FALSY = ("0", "false", "no", "off")
 
 
 def _step(name: str, fnc: Callable[[], Any]) -> None:
+    # a step returns False when it skipped itself
     started = time.perf_counter()
     try:
-        fnc()
+        if fnc() is False:
+            return
     except Exception:
         logger.debug("could not preload %s", name, exc_info=True)
         return
@@ -51,10 +53,10 @@ def _av() -> None:
     import av  # noqa: F401
 
 
-def _local_inference_models() -> None:
+def _local_inference_models() -> bool:
     value = os.environ.get(ENV_PRELOAD_LOCAL_INFERENCE)
     if value is not None and value.strip().lower() in _FALSY:
-        return
+        return False
 
     # the VAD and the turn detector's local end-of-turn model: constructing them later in a
     # job is free once these singletons exist (~25 ms of GIL-held CPU otherwise)
@@ -66,6 +68,7 @@ def _local_inference_models() -> None:
     # a thread executor's worker) shares them across jobs, a spawned job process would not
     if value is not None or multiprocessing.parent_process() is None:
         li.init_eot()
+    return True
 
 
 def _rtc_native_library() -> None:
