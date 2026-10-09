@@ -7,16 +7,30 @@ re-issues the call and duplicates side effects.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
 import pytest
 
-from livekit.agents import Agent, AgentSession, function_tool
-from livekit.agents.llm import FunctionToolCall
+from livekit import rtc
+from livekit.agents import Agent, AgentSession, function_tool, utils
+from livekit.agents.llm import (
+    FunctionCall,
+    FunctionToolCall,
+    GenerationCreatedEvent,
+    MessageGeneration,
+)
 from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.agents.voice.events import FunctionToolsExecutedEvent
-from livekit.agents.voice.speech_handle import SpeechHandle
+from livekit.agents.voice.speech_handle import INTERRUPTION_TIMEOUT, SpeechHandle
 
-from .fake_realtime import run_realtime_tool_turn
+from .fake_io import FakeAudioOutput
+from .fake_realtime import (
+    FakeRealtimeModel,
+    _audio_frame,
+    fake_capabilities,
+    run_realtime_tool_turn,
+)
 from .fake_session import FakeActions, create_session, run_session
 
 pytestmark = [pytest.mark.unit, pytest.mark.virtual_time, pytest.mark.no_concurrent]
@@ -298,3 +312,199 @@ async def test_realtime_handoff_tool_reports_its_cancellation_when_interrupted()
         assert outs[0].call_id == "1"
         assert outs[0].is_error
         assert not outs[0].reply_required
+
+
+_INTERRUPTED_INFLIGHT_OUTPUT = "the tool call was interrupted before it finished"
+
+
+class _SlowRealtimeAgent(Agent):
+    def __init__(self, *, tool_sleep: float) -> None:
+        super().__init__(instructions="You are a helpful assistant.")
+        self.tool_sleep = tool_sleep
+        self.tool_started = asyncio.Event()
+        self.tool_finished = asyncio.Event()
+
+    @function_tool
+    async def get_weather(self) -> str:
+        """Called when the user asks about the weather."""
+        self.tool_started.set()
+        await asyncio.sleep(self.tool_sleep)
+        self.tool_finished.set()
+        return "The weather in Tokyo is sunny today."
+
+
+def _fnc_outputs(items: Sequence) -> list:
+    return [item for item in items if item.type == "function_call_output"]
+
+
+@asynccontextmanager
+async def _interrupt_while_realtime_tool_runs(
+    *, tool_sleep: float
+) -> AsyncIterator[tuple[_SlowRealtimeAgent, AgentSession, FakeRealtimeModel]]:
+    """Play a realtime turn, then interrupt it once its tool has started."""
+    model = FakeRealtimeModel(capabilities=fake_capabilities())
+    agent = _SlowRealtimeAgent(tool_sleep=tool_sleep)
+
+    async with AgentSession(llm=model) as session:
+        session.output.audio = FakeAudioOutput()
+        await session.start(agent)
+
+        speech = session.generate_reply()
+        while not model.active_session._reply_futs:
+            await asyncio.sleep(0)
+
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities: asyncio.Future[list[str]] = asyncio.Future()
+        modalities.set_result(["audio", "text"])
+        message_ch.send_nowait(
+            MessageGeneration(
+                message_id="message-id",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("let me check")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(1.0))
+        audio_ch.close()
+        function_ch.send_nowait(FunctionCall(call_id="1", name="get_weather", arguments="{}"))
+        function_ch.close()
+        model.active_session._reply_futs[0].set_result(
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="response-id",
+            )
+        )
+
+        await asyncio.wait_for(agent.tool_started.wait(), timeout=SESSION_TIMEOUT)
+        session.interrupt()
+        await asyncio.wait_for(speech.wait_for_playout(), timeout=SESSION_TIMEOUT)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + tool_sleep + INTERRUPTION_TIMEOUT
+        while loop.time() < deadline and not _fnc_outputs(agent.chat_ctx.items):
+            await asyncio.sleep(0.05)
+        yield agent, session, model
+
+
+async def test_realtime_inflight_tool_keeps_its_result_when_it_finishes_in_time() -> None:
+    """A tool still running at interrupt time, but done before the interruption timeout,
+    keeps the result it returned."""
+    async with _interrupt_while_realtime_tool_runs(tool_sleep=1.0) as (agent, session, model):
+        assert agent.tool_finished.is_set()
+        for label, items in (
+            ("agent chat_ctx", agent.chat_ctx.items),
+            ("session history", session.history.items),
+            ("realtime session", model.active_session.chat_ctx.items),
+        ):
+            outs = _fnc_outputs(items)
+            assert len(outs) == 1, label
+            assert outs[0].call_id == "1"
+            assert outs[0].output == "The weather in Tokyo is sunny today."
+            assert not outs[0].is_error
+            assert not outs[0].reply_required
+
+
+async def test_realtime_tool_running_past_interruption_timeout_is_answered() -> None:
+    """A tool still running when INTERRUPTION_TIMEOUT cancels the generation is answered
+    with one error output, and a later result from that call is not recorded again.
+
+    GPT Live leaves the call in ``_backend_open_calls`` until that output is synced, and
+    refuses every later response while it is open (#7679).
+    """
+    tool_sleep = INTERRUPTION_TIMEOUT + 10.0
+    async with _interrupt_while_realtime_tool_runs(tool_sleep=tool_sleep) as (
+        agent,
+        session,
+        model,
+    ):
+        assert agent.tool_started.is_set()
+        assert not agent.tool_finished.is_set()
+
+        for label, items in (
+            ("agent chat_ctx", agent.chat_ctx.items),
+            ("session history", session.history.items),
+        ):
+            calls = [item for item in items if item.type == "function_call"]
+            outs = _fnc_outputs(items)
+            assert len(calls) == 1, label
+            assert calls[0].call_id == "1"
+            assert len(outs) == 1, f"{label}: the in-flight call must be answered once"
+            assert outs[0].call_id == calls[0].call_id
+            assert outs[0].is_error
+            assert outs[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
+            assert not outs[0].reply_required
+            assert items.index(calls[0]) < items.index(outs[0])
+
+        # the fake session stores whatever update_chat_ctx was given; that output is what
+        # GPT Live appends to close the call in _backend_open_calls
+        synced = _fnc_outputs(model.active_session.chat_ctx.items)
+        assert len(synced) == 1, "the error output was never synced to the realtime session"
+        assert synced[0].call_id == "1"
+        assert synced[0].is_error
+        assert synced[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
+        assert not synced[0].reply_required
+
+        # the tool's own return must not become a second output
+        await asyncio.sleep(tool_sleep)
+        assert agent.tool_finished.is_set()
+        for label, items in (
+            ("agent chat_ctx", agent.chat_ctx.items),
+            ("session history", session.history.items),
+            ("realtime session", model.active_session.chat_ctx.items),
+        ):
+            outs = _fnc_outputs(items)
+            assert len(outs) == 1, f"{label}: the late result must not be recorded again"
+            assert outs[0].output == _INTERRUPTED_INFLIGHT_OUTPUT
+
+        # the activity can still ask the model to speak
+        before = model.active_session.generate_reply_calls
+        follow_up = session.generate_reply(user_input="Thanks")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + INTERRUPTION_TIMEOUT
+        while model.active_session.generate_reply_calls == before and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+        assert model.active_session.generate_reply_calls == before + 1
+
+        message_ch = utils.aio.Chan[MessageGeneration]()
+        function_ch = utils.aio.Chan[FunctionCall]()
+        text_ch = utils.aio.Chan[str]()
+        audio_ch = utils.aio.Chan[rtc.AudioFrame]()
+        modalities: asyncio.Future[list[str]] = asyncio.Future()
+        modalities.set_result(["audio", "text"])
+        message_ch.send_nowait(
+            MessageGeneration(
+                message_id="follow-up",
+                text_stream=text_ch,
+                audio_stream=audio_ch,
+                modalities=modalities,
+            )
+        )
+        message_ch.close()
+        text_ch.send_nowait("You're welcome.")
+        text_ch.close()
+        audio_ch.send_nowait(_audio_frame(0.2))
+        audio_ch.close()
+        function_ch.close()
+        model.active_session._reply_futs[-1].set_result(
+            GenerationCreatedEvent(
+                message_stream=message_ch,
+                function_stream=function_ch,
+                user_initiated=True,
+                response_id="follow-up",
+            )
+        )
+        await asyncio.wait_for(follow_up.wait_for_playout(), timeout=SESSION_TIMEOUT)
+        assert any(
+            item.type == "message"
+            and item.role == "assistant"
+            and "welcome" in (item.text_content or "")
+            for item in agent.chat_ctx.items
+        )

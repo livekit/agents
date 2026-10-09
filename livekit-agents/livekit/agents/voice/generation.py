@@ -1245,6 +1245,21 @@ def _interrupted_tool_output(out: ToolExecutionOutput) -> llm.FunctionCallOutput
     return fnc_call_out
 
 
+def _interrupted_inflight_tool_output(fnc_call: llm.FunctionCall) -> llm.FunctionCallOutput:
+    """An error output for a tool still running when its turn is torn down.
+
+    The call has to be answered exactly once. A realtime model that holds the call
+    open, such as GPT Live, refuses every later response until it is.
+    """
+    return llm.FunctionCallOutput(
+        name=fnc_call.name,
+        call_id=fnc_call.call_id,
+        output="the tool call was interrupted before it finished",
+        is_error=True,
+        reply_required=False,
+    )
+
+
 INSTRUCTIONS_MESSAGE_ID = "lk.agent_task.instructions"  #  value must not change
 """
 The ID of the instructions message in the chat context. (only for stateless LLMs)
