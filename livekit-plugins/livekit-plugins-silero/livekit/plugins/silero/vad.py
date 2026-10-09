@@ -45,8 +45,14 @@ class _VADOptions:
     prefix_padding_duration: float
     max_buffered_speech: float
     activation_threshold: float
-    deactivation_threshold: float
+    explicit_deactivation_threshold: NotGivenOr[float]
     sample_rate: int
+
+    @property
+    def deactivation_threshold(self) -> float:
+        if is_given(self.explicit_deactivation_threshold):
+            return self.explicit_deactivation_threshold
+        return max(self.activation_threshold - 0.15, 0.01)
 
 
 class VAD(agents.vad.VAD):
@@ -138,7 +144,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration=prefix_padding_duration,
             max_buffered_speech=max_buffered_speech,
             activation_threshold=activation_threshold,
-            deactivation_threshold=deactivation_threshold or max(activation_threshold - 0.15, 0.01),
+            explicit_deactivation_threshold=deactivation_threshold,
             sample_rate=sample_rate,
         )
         return cls(session=session, opts=opts)
@@ -265,6 +271,7 @@ class VAD(agents.vad.VAD):
             prefix_padding_duration (float): Duration of padding to add to the beginning of each speech chunk.
             max_buffered_speech (float): Maximum duration of speech to keep in the buffer (in seconds).
             activation_threshold (float): Threshold to consider a frame as speech.
+            deactivation_threshold (float): Negative threshold (noise or exit threshold). If model's current state is SPEECH, values BELOW this value are considered as NON-SPEECH. Until it is set, it follows activation_threshold as max(activation_threshold - 0.15, 0.01).
         """  # noqa: E501
         if is_given(min_speech_duration):
             self._opts.min_speech_duration = min_speech_duration
@@ -277,7 +284,7 @@ class VAD(agents.vad.VAD):
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
-            self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.explicit_deactivation_threshold = deactivation_threshold
 
         for stream in self._streams:
             stream.update_options(
@@ -342,7 +349,7 @@ class VADStream(agents.vad.VADStream):
         if is_given(activation_threshold):
             self._opts.activation_threshold = activation_threshold
         if is_given(deactivation_threshold):
-            self._opts.deactivation_threshold = deactivation_threshold
+            self._opts.explicit_deactivation_threshold = deactivation_threshold
 
         if self._input_sample_rate:
             assert self._speech_buffer is not None
