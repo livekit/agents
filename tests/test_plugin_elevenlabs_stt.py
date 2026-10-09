@@ -730,8 +730,20 @@ async def test_configured_audio_chunks_preserve_audio_and_commit(
         await stream.aclose()
 
 
-@pytest.mark.parametrize("body", ['{"detail": "invalid api key"}', "", "{not json"])
-async def test_recognize_does_not_retry_a_client_error(body: str) -> None:
+_INVALID_KEY = {"detail": {"code": "invalid_api_key", "message": "Invalid API key"}}
+
+
+@pytest.mark.parametrize(
+    ("body", "message", "parsed"),
+    [
+        (json.dumps(_INVALID_KEY), "Invalid API key", _INVALID_KEY),
+        ("", "Unknown ElevenLabs error", ""),
+        ("{not json", "{not json", "{not json"),
+    ],
+)
+async def test_recognize_does_not_retry_a_client_error(
+    body: str, message: str, parsed: Any
+) -> None:
     requests = 0
 
     async def handler(request: web.Request) -> web.Response:
@@ -748,4 +760,6 @@ async def test_recognize_does_not_retry_a_client_error(body: str) -> None:
             await batch_stt.recognize([_frame(100)])
 
     assert exc_info.value.status_code == 401
+    assert exc_info.value.message == message
+    assert exc_info.value.body == parsed
     assert requests == 1

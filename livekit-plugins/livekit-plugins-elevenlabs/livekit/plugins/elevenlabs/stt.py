@@ -307,9 +307,16 @@ class STT(stt.STT):
             ) as response:
                 if response.status != 200:
                     # check the status first: an error body may be empty or not JSON
-                    body = await response.text()
+                    text = await response.text()
+                    try:
+                        body: Any = json.loads(text)
+                    except ValueError:
+                        body = text
+                    detail = body.get("detail") if isinstance(body, dict) else None
+                    if isinstance(detail, dict):
+                        detail = detail.get("message", detail)
                     raise APIStatusError(
-                        message=body or "Unknown ElevenLabs error",
+                        message=str(detail or text or "Unknown ElevenLabs error"),
                         status_code=response.status,
                         request_id=trace_id_from_headers(response.headers),
                         body=body,
