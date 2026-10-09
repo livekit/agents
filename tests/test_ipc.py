@@ -683,6 +683,34 @@ async def test_thread_job_graceful_shutdown():
     assert start_args.shutdown_counter.value == 1
 
 
+_job_loops: list[asyncio.AbstractEventLoop] = []
+
+
+async def _job_entrypoint_records_loop(job_ctx: JobContext) -> None:
+    _job_loops.append(asyncio.get_running_loop())
+    await _job_entrypoint(job_ctx)
+
+
+async def test_thread_job_loop_is_closed_after_the_runner_exits():
+    """The thread runner owns its job loop, so it must close it the way asyncio.run() does.
+    An unclosed loop keeps its selector, self-pipe sockets and scheduled handles until the
+    next full garbage collection of the worker process."""
+    _job_loops.clear()
+    proc, start_args = _create_thread_proc(
+        close_timeout=10.0, job_entrypoint_fnc=_job_entrypoint_records_loop
+    )
+    await proc.start()
+    await proc.initialize()
+
+    await proc.launch_job(_generate_fake_job())
+    await _poll_until(lambda: start_args.entrypoint_counter.value >= 1)
+    await asyncio.wait_for(proc.aclose(), timeout=30.0)
+
+    assert proc.status == ipc.job_executor.JobStatus.SUCCESS
+    assert len(_job_loops) == 1
+    assert _job_loops[0].is_closed()
+
+
 def test_log_queue_drains_before_stop():
     """All log records must be received by the listener even when stop() is
     called right after the sender closes its end.  This reproduces a race where
